@@ -47,6 +47,17 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e . pytest
 
+      # Collection first, and on its own. A collection error makes pytest exit 2 with the reason
+      # buried above a wall of output, and the annotation a reader sees says only "exit code 2" —
+      # which names the symptom and nothing else. Run separately, the failing module is the whole
+      # message.
+      #
+      # It also fails fast: on an import error there is no point running two thousand tests.
+      - name: Import and collect
+        run: |
+          python -c "import db_ops; print('db_ops', db_ops.__version__)"
+          python -m pytest tests --collect-only -q
+
       # The paths this release actually claims: collect metrics from one SQL Server, store them,
       # alert to Telegram. No database, no network, no credentials — the suite is offline by
       # design, and a test that needs any of those has escaped.
