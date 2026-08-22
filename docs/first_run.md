@@ -22,14 +22,23 @@ command finds it — the working directory is the second entry in the resolution
 environment variable is needed. Everything the toolkit writes (`logs/`, `runtime/`) appears there
 and nowhere else, so deleting the directory leaves nothing behind.
 
+**`db-ops init` makes one.** Do not build it by hand:
+
 ```bash
 pip install 'dbabrain[mssql]'      # or [postgres], [oracle], [mysql]
 mkdir my-estate && cd my-estate
-mkdir data secrets
+db-ops init
 ```
 
-<!-- TODO(rename): the distribution is `db_ops` until the rename lands; commands below read
-     `python -m db_ops.<app>.cli` and become `dbabrain` with the package. -->
+It writes nine files and then prints the next six commands. It **never overwrites** — the files it
+writes are the ones you edit immediately afterwards, so a second `init` cannot destroy your work.
+
+One of the nine is **`AGENTS.md`, written into the tool root rather than into any repository**: an
+agent that has just run `init` is standing in that directory, and a guide in a repository it never
+cloned is a guide it will not read.
+
+<!-- TODO(rename): the distribution is `db_ops` until the rename lands. The `db-ops` command
+     below keeps its name; `python -m db_ops.<app>.cli` becomes `python -m dbabrain.<app>.cli`. -->
 
 **One driver is not pip-installable.** SQL Server needs Microsoft's ODBC driver, a system package —
 `pyodbc` is a binding, not a driver. PostgreSQL needs nothing: `pg8000` is pure Python, which is why
@@ -47,26 +56,27 @@ Written as a contract: each step says what to write, what to run, and how to kno
 agent should check the verification of each step before starting the next one, because every
 failure below is silent in a different way.
 
-### 2.1 The nine files
+### 2.1 What `init` wrote, and which two files you edit
 
-Measured from a working install, not listed from the loaders. Seven files to collect a metric, two
-more to deliver it.
+| File | Decides | You edit it |
+| --- | --- | :---: |
+| `AGENTS.md` | how to drive this tool root — written for whatever comes next | — |
+| `config.json` | where logs, runtime and the other config files live | — |
+| `data/store_config.json` | which database holds the results. **SQLite, always, on a first run** | — |
+| `data/db_instances.json` | **the estate**: one record per monitored instance | **yes** |
+| `data/users.json` | credentials by name — never a password, only a `password_ref` | **yes** |
+| `secrets/secret_text.json` | the plaintext passwords, encrypted in 2.3 and then deletable | **yes** |
+| `data/metric_definitions.json` | which metrics exist and how each grades | only to add metrics |
+| `data/telegram_config.json`, `data/telegram_groups.json` | delivery — only if you want alerts | for 2.5 |
 
-| File | Decides |
-| --- | --- |
-| `config.json` | where logs, runtime and the other config files live |
-| `data/store_config.json` | which database holds the results — SQLite or PostgreSQL |
-| `data/db_instances.json` | **the estate**: one record per monitored instance |
-| `data/users.json` | credentials, by name — never a password, only a `password_ref` |
-| `secrets/secret_text.json` | the plaintext passwords, encrypted in step 2.3 and then deletable |
-| `data/metric_definitions.json` | which metrics exist and how each grades |
-| `data/app_commands.json` | what the daemon runs, and how often |
-| `data/telegram_config.json` + `data/bot_telegram.json` + `data/telegram_groups.json` | delivery — only if you want alerts |
-| `data/reports_config.json` | which report turns results into a message |
+**SQLite on a first run is a decision, not a convenience.** Expecting PostgreSQL would mean the
+first thing a new user meets is installing a database to hold the results of monitoring a database.
+The `postgresql` block is written out in full and inert, so moving later is an edit rather than a
+discovery of which fields exist.
 
-Every one has a `*.example.json` beside it in the package with a `notes` array explaining what it
-decides and why. **Copy the example and edit it** — the examples are complete, and a hand-built file
-usually goes wrong by omission rather than by error.
+**A scaffold is not an example.** `init` writes the *least* that is already valid; the
+`data/*.example.json` files in the repository are documentation — every field, with notes. Read the
+example when you want to know what a field is for; edit the scaffold when you want to run.
 
 ### 2.2 Name the instance
 
@@ -144,15 +154,21 @@ and the two that are not guessable on Oracle and MySQL.
 
 ### 2.3 Put the password in the store, not in a file
 
+`secrets/secret_text.json` is a **flat map of reference to secret**, and nothing else:
+
 ```json
-// secrets/secret_text.json
 { "MSSQL_PROD_MONITOR": "the real password" }
 ```
 
+A key beginning with `_` is skipped, so `_notes` is commentary rather than a secret.
+
 ```bash
-export DB_OPS_SECRET_KEY='your passphrase'
-python -m db_ops.control.cli encrypt-secret-text
+db-ops encrypt-secret --key-base64 <your passphrase, base64>
 ```
+
+`encrypt-secret` is a top-level command, so the key flag follows it. **The app CLIs are the other
+way round** — see 2.4. Prefer `--key-base64` on Windows: a passphrase containing `$` or `#` is
+shell-hostile in PowerShell.
 
 That writes `data/encrypted_secret_text.json` — ciphertext, a random per-file salt and the
 key-derivation parameters, and nothing else, which is why it is safe to commit while
@@ -161,20 +177,24 @@ key-derivation parameters, and nothing else, which is why it is safe to commit w
 **Verify before moving on**, because a wrong key produces an empty store rather than an error:
 
 ```bash
-python -m db_ops.common.cli check-secret '{}'
+db-ops check-credentials          # does every configured target resolve to a real login
 ```
 
 ### 2.4 Create the store and collect
 
 ```bash
-python -m db_ops.db.cli --config config.json init
-python -m db_ops.metrics.cli --config config.json collect --dry-run
-python -m db_ops.metrics.cli --config config.json collect
+db-ops metrics collect --dry-run
+db-ops metrics --key-base64 <your passphrase, base64> collect
 ```
+
+**`--key-base64` goes before the subcommand**, not after it. The app parses it, its subparser does
+not, so `metrics collect --key-base64 …` fails with `unrecognized arguments` — which reads like a
+wrong flag rather than a wrong position.
 
 `--dry-run` resolves targets, credentials and metric variants and connects to nothing. Run it first:
 it is where a wrong `server_id`, a missing credential or an unmatched metric variant shows up with
-the name of the thing that is wrong.
+the name of the thing that is wrong. **`0 targets` is the answer to an empty inventory, not an
+error** — it means 2.2 has not been done yet.
 
 A successful run prints one line per metric and a summary:
 
@@ -192,38 +212,46 @@ says a target is misconfigured rather than healthy.
 
 ### 2.5 Deliver it
 
-Three files and two commands. `data/bot_telegram.json` names the token by reference,
-`data/telegram_groups.json` maps a notify level to a chat, `data/telegram_config.json` turns
-delivery on.
+Put the bot token in the secret store the same way the database password went in, name it in
+`data/telegram_config.json`, and put your chat id in `data/telegram_groups.json`. A bot cannot open
+a conversation, so message it once first — then `db-ops telegram get-updates` shows the chat id.
+
+**In `v0.1.0` the alert is built from the collected results and sent:**
 
 ```bash
-python -m db_ops.reports.cli  --config config.json queue-metrics-reports
-python -m db_ops.telegram.cli --config config.json send-queue
+db-ops metrics  alert-summary --include-warning     # the text, from what was just collected
+db-ops telegram send-message --chat-id <id> --text "<that text>"
 ```
 
-The worked version of this, with the three failures a first attempt actually meets, is
-[`examples/sqlserver-quickstart/README.md`](../examples/sqlserver-quickstart/README.md) step 6. The
-one worth knowing in advance: **a queue run consumes the metric rows it read whether or not it
-queued anything**, so an attempt made before the chats exist marks them reported, and the next run
-says "already reported" and delivers nothing. Collect again and re-queue.
+`alert-summary` reads the stored results rather than re-querying anything, so it says what the last
+collection found and costs the monitored instance nothing.
+
+> **The queued path is not in this release.** `queue-metrics-reports` / `send-queue` — the
+> scheduled version that dedupes, splits long messages and routes by severity level — lives in the
+> `reports` app, which `v0.1.0` does not ship. It arrives with `reports` in `v0.2.0`. If you see
+> `No module named 'db_ops.reports'`, that is this, and not a broken install.
+
+The worked version, against a throwaway container, is
+[`examples/sqlserver-quickstart/README.md`](../examples/sqlserver-quickstart/README.md) step 6.
 
 ### 2.6 Put it on a schedule
 
-`data/app_commands.json` is what the daemon runs and how often. Start it last, once the commands
-above work by hand:
+`data/app_commands.json` is what the daemon runs and how often — write it once the commands above
+work by hand, and start the daemon last:
 
 ```bash
-python -m db_ops.jobs.daemon --config config.json --delay-seconds 10
+db-ops daemon --config config.json --delay-seconds 10
 ```
 
 ### 2.7 What an agent should assert at each step
 
 | After | Assert |
 | --- | --- |
-| 2.2 | `collect --dry-run` resolves the target and names a credential |
-| 2.3 | `check-secret` authenticates every ref it was asked about |
+| 2.1 | `db-ops init` reported the files it wrote, and `AGENTS.md` is one of them |
+| 2.2 | `db-ops metrics collect --dry-run` resolves **1 target**, not 0, and names a credential |
+| 2.3 | `db-ops check-credentials` resolves every target to a real login |
 | 2.4 | `error_count: 0`, and `result_count` equals the metrics you expect |
-| 2.5 | `"queued"` is non-zero, then `"sent"` equals `"read"` |
+| 2.5 | `alert-summary` prints the target you configured; the send returns a `message_id` |
 | 2.6 | the daemon logs a run for each app command, and `err=0` |
 
 Each of these fails silently if skipped: a target that cannot be resolved is reported as a target

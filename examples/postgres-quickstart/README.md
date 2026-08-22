@@ -72,7 +72,7 @@ Passwords are never written in configuration. `data/users.json` names a *referen
 
 ```bash
 cp secrets/secret_text.example.json secrets/secret_text.json
-python -m db_ops.control.cli encrypt-secret-text --key-base64 "cXVpY2tzdGFydA=="
+python -m db_ops.cli encrypt-secret --key-base64 "cXVpY2tzdGFydA=="
 ```
 
 - `secrets/secret_text.json` is the plaintext source and is git-ignored. Only the encrypted file
@@ -117,19 +117,29 @@ python -m db_ops.metrics.cli --config config.json summary-latest
 the same table. `summary-latest` collapses the same data to what is critical, what is a warning,
 and what is fine.
 
-## 6. Build a report
+## 6. Read what it found
 
 ```bash
-python -m db_ops.reports.cli --config config.json run-scheduled --summary-limit 50
+python -m db_ops.metrics.cli --key-base64 "cXVpY2tzdGFydA==" alert-summary --include-warning
 ```
 
-```json
-{ "report_code": "rp_metric_daily_logging", "created": 1,
-  "queued": 0, "skipped_reason": "Telegram group not configured for level=logging." }
+```text
+Target: QUICKSTART / 127.0.0.1
+Metric: INSTANCE_CONNECTIONS
+Status: OK
+Importance: 4
+Message: active_sessions=1, running_requests=1, blocked_sessions=0
 ```
 
-The report was built and stored; nothing was sent, and the output says so rather than failing.
-That is the shape of every delivery in the toolkit: producing a finding and delivering it are
+`alert-summary` reads the **stored results** rather than re-querying anything, so it costs the
+instance nothing. It is also what you would send to a chat — see the SQL Server quickstart's
+[step 6](../sqlserver-quickstart/README.md#6-send-it-to-telegram).
+
+> **The scheduled reporting app is `v0.2.0`.** `db_ops.reports.cli run-scheduled` builds and queues
+> reports on a schedule; it is not in this release, and `No module named 'db_ops.reports'` is that
+> rather than a broken install.
+
+Producing a finding and delivering it are
 separate steps, and the second one is optional.
 
 ## 7. Let the scheduler do it

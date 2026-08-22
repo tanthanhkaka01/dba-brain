@@ -85,7 +85,7 @@ report on besides the system databases.
 python -m db_ops.db.cli --config config.json init
 
 cp secrets/secret_text.example.json secrets/secret_text.json
-python -m db_ops.control.cli encrypt-secret-text --key-base64 "cXVpY2tzdGFydA=="
+python -m db_ops.cli encrypt-secret --key-base64 "cXVpY2tzdGFydA=="
 
 export DB_OPS_SECRET_KEY=quickstart     # PowerShell: $env:DB_OPS_SECRET_KEY="quickstart"
 python -m db_ops.metrics.cli --config config.json collect --dry-run
@@ -179,7 +179,7 @@ until you speak to it first there is nowhere for it to reply.
 ```
 
 ```bash
-python -m db_ops.control.cli encrypt-secret-text --key-base64 "cXVpY2tzdGFydA=="
+python -m db_ops.cli encrypt-secret --key-base64 "cXVpY2tzdGFydA=="
 ```
 
 The token never goes in a file under `data/`. `data/bot_telegram.json` names it — that is all it
@@ -203,44 +203,40 @@ and `warning` is the one somebody reads.
 "enabled": true,
 ```
 
-Then run the chain. Collection has already happened; these two steps are what turn results into
-messages:
+Then build the alert out of what was collected, and send it. Collection has already happened, so
+this is two commands:
 
 ```bash
-python -m db_ops.metrics.cli   --config config.json collect
-python -m db_ops.reports.cli   --config config.json queue-metrics-reports
-python -m db_ops.telegram.cli  --config config.json send-queue
+python -m db_ops.metrics.cli  --config config.json alert-summary --include-warning
+python -m db_ops.telegram.cli --config config.json send-message --chat-id <your chat id> --text "<the summary>"
 ```
+
+It reads the **stored results** rather than re-querying anything, so it needs no passphrase, costs
+the instance nothing, and says exactly what the last collection found:
 
 ```text
-{"report_ids": [1, 2], "queued": 2, "queued_ids": [1, 2]}
-{"read": 2, "sent": 2, "failed": 0}
+Target: QUICKSTART / 127.0.0.1
+Metric: BACKUP_AGE
+Status: WARNING
+Importance: 5
+Message: No full or differential backup found for database APPDB.
 ```
 
-What arrives is the finding itself, not a notification that something happened:
+What arrives in the chat is the finding itself, not a notification that something happened — which
+is the whole point: an alert you can act on without opening anything else.
 
-```text
-⚠️ [Warnings]
-Run: 2026-08-22 13:09:12
-Duration: 900 sec
-Raw Warning Rows: 1
-Warning Events: 1
-
-[WARNING EVENTS]
-- QUICKSTART-MSSQL-1433 127.0.0.1 / BACKUP_AGE / APPDB: No full or differential backup found for
-  database APPDB.
-```
-
-The `⚠️` is applied centrally from the message's header line, so a producer never tags its own
-message and two producers cannot disagree about what a warning looks like.
+> **The scheduled path is `v0.2.0`.** `queue-metrics-reports` and `send-queue` — the version that
+> dedupes, splits long messages, routes by severity level and runs unattended — live in the
+> `reports` app, which this release does not ship. `No module named 'db_ops.reports'` is that, not
+> a broken install.
 
 ### Three ways this fails, and what each one says
 
 | What you see | What it means |
 | --- | --- |
-| `Telegram bot token ref 'QUICKSTART_TELEGRAM_BOT_TOKEN' was not found in secret text` | Step 1 was skipped, or `encrypt-secret-text` was not re-run after editing the plaintext file |
-| `"skipped": [{"reason": "Telegram group not configured for level=warning."}]` | Step 2 was skipped. Nothing was queued and nothing was lost |
-| `"queued": 0` with `"reason": "latest metric rows already have daily_report_created=1"` | **The usual one.** A queue run consumes the metric rows it read, whether or not it managed to queue anything — so a first attempt made before the chats existed marks them as reported. Run `collect` again and the next queue run has fresh rows to work with |
+| `Telegram bot token ref 'QUICKSTART_TELEGRAM_BOT_TOKEN' was not found in secret text` | Step 1 was skipped, or `encrypt-secret` was not re-run after editing the plaintext file |
+| `bot token is empty` | The token is in the store but `data/telegram_config.json` does not name its reference |
+| `Bad Request: chat not found` | The chat id is wrong, or you have not messaged the bot yet — a bot cannot open a conversation, so until you speak to it there is nowhere to reply |
 
 ## Clean up
 

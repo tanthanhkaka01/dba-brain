@@ -133,17 +133,19 @@ file works in both.
 The five-minute version, against a throwaway PostgreSQL container, is
 [`examples/postgres-quickstart/`](../examples/postgres-quickstart). Against your own estate:
 
-1. **Create a tool root.** Copy `config.example.json` to `config.json` and the `data/*.example.json`
-   files you need to their real names. A directory holding `data/` or `config.json` *is* a tool
-   root — stand in it, or point `DB_OPS_HOME` at it.
-2. **Declare the store.** `data/store_config.json`, then
-   `python -m db_ops.db.cli --config config.json init`.
-3. **Declare one target and one credential.** `data/db_instances.json` and `data/users.json`.
-4. **Put the password in the secret store.** Write `secrets/secret_text.json`, then
-   `python -m db_ops.control.cli encrypt-secret-text --key-base64 <base64-passphrase>`.
-5. **Collect, dry first.**
-   `python -m db_ops.metrics.cli --config config.json collect --dry-run`, then without it.
+1. **Create a tool root.** `db-ops init` writes one — nine files, and it prints the next six
+   commands. A directory holding `data/` or `config.json` *is* a tool root: stand in it, or point
+   `DB_OPS_HOME` at it. Do not build one by hand.
+2. **Declare one target and one credential.** `data/db_instances.json` and `data/users.json`.
+3. **Put the password in the secret store.** Write `secrets/secret_text.json`, then
+   `db-ops encrypt-secret --key-base64 <base64-passphrase>`.
+4. **Check it resolves before it connects.** `db-ops check-credentials`, then
+   `db-ops metrics collect --dry-run`.
+5. **Collect.** `db-ops metrics --key-base64 <base64-passphrase> collect` — the key goes *before*
+   the subcommand.
 6. **Only then schedule anything.** `data/app_commands.json`, and the daemon.
+
+**Step by step, with what to assert after each one: [`first_run.md`](./first_run.md).**
 
 Steps 3 to 5 are the loop worth repeating per target. A scheduler started before a manual run has
 succeeded turns a configuration mistake into an intermittent one.
