@@ -1,0 +1,162 @@
+---
+# Phase 2 — Oracle DataGuard OS Preparation
+# Targets: oracle_dg group (dg-primary, dg-standby)
+# OS: Oracle Linux R9U6 (RHEL 9.6 based, dnf)
+# Run before oracle-dg-primary.yml
+
+- name: Oracle DataGuard OS preparation
+  hosts: oracle_dg
+  become: true
+  gather_facts: true
+  vars_files:
+    - ../group_vars/oracle_dg.yml
+
+  tasks:
+    - name: Install required OS packages
+      ansible.builtin.dnf:
+        name:
+          - binutils
+          - compat-openssl11
+          - elfutils-libelf
+          - gcc
+          - glibc
+          - glibc-devel
+          - ksh
+          - libaio
+          - libaio-devel
+          - libgcc
+          - libstdc++
+          - libstdc++-devel
+          - libxcrypt-compat
+          - make
+          - nfs-utils
+          - sysstat
+          - unzip
+          - wget
+          - net-tools
+          - bc
+        state: present
+        update_cache: true
+
+    - name: Create OS groups for Oracle
+      ansible.builtin.group:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - oinstall
+        - dba
+        - backupdba
+        - dgdba
+        - kmdba
+
+    - name: Create oracle user
+      ansible.builtin.user:
+        name: oracle
+        group: oinstall
+        groups: dba,backupdba,dgdba,kmdba
+        shell: /bin/bash
+        home: /home/oracle
+        comment: Oracle Database Software Owner
+        create_home: true
+        password: "{{ oracle_oracle_password | password_hash('sha512') }}"
+        state: present
+      no_log: true
+
+    - name: Set kernel parameters for Oracle
+      ansible.posix.sysctl:
+        name: "{{ item.key }}"
+        value: "{{ item.value }}"
+        sysctl_file: /etc/sysctl.d/97-oracle.conf
+        reload: true
+        state: present
+      loop:
+        - { key: "kernel.sem",           value: "250 32000 100 128" }
+        - { key: "kernel.shmall",        value: "1073741824" }
+        - { key: "kernel.shmmax",        value: "4398046511104" }
+        - { key: "kernel.shmmni",        value: "4096" }
+        - { key: "fs.aio-max-nr",        value: "1048576" }
+        - { key: "fs.file-max",          value: "6815744" }
+        - { key: "net.core.rmem_default", value: "262144" }
+        - { key: "net.core.rmem_max",    value: "4194304" }
+        - { key: "net.core.wmem_default", value: "262144" }
+        - { key: "net.core.wmem_max",    value: "1048576" }
+
+    - name: Configure oracle user resource limits
+      community.general.pam_limits:
+        domain: oracle
+        limit_type: "{{ item.type }}"
+        limit_item: "{{ item.item }}"
+        value: "{{ item.value }}"
+      loop:
+        - { type: soft, item: nofile,  value: "1024" }
+        - { type: hard, item: nofile,  value: "65536" }
+        - { type: soft, item: nproc,   value: "16384" }
+        - { type: hard, item: nproc,   value: "16384" }
+        - { type: soft, item: stack,   value: "10240" }
+        - { type: hard, item: stack,   value: "32768" }
+        - { type: soft, item: memlock, value: "unlimited" }
+        - { type: hard, item: memlock, value: "unlimited" }
+
+    - name: Create Oracle directory tree
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: oracle
+        group: oinstall
+        mode: "0775"
+      loop:
+        - "{{ oracle_base }}"
+        - "{{ oracle_db_home }}"
+        - "{{ oracle_inventory_dir }}"
+        - "{{ oracle_install_stage }}"
+        - "{{ oracle_redo_log_dir }}"
+        - "{{ oracle_fra_dir }}"
+
+    - name: Deploy oracle user environment script
+      ansible.builtin.template:
+        src: ../templates/oracle-setenv.sh.j2
+        dest: /home/oracle/.setenv.sh
+        owner: oracle
+        group: oinstall
+        mode: "0644"
+      vars:
+        oracle_user: oracle
+        oracle_db_sid: "{{ hostvars[inventory_hostname].oracle_db_sid }}"
+
+    - name: Source environment in oracle .bash_profile
+      ansible.builtin.lineinfile:
+        path: /home/oracle/.bash_profile
+        line: "[ -f ~/.setenv.sh ] && . ~/.setenv.sh"
+        create: true
+        owner: oracle
+        group: oinstall
+        mode: "0644"
+
+    - name: Disable transparent hugepages at runtime
+      ansible.builtin.shell: |
+        echo never > /sys/kernel/mm/transparent_hugepage/enabled
+        echo never > /sys/kernel/mm/transparent_hugepage/defrag
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Persist transparent hugepages disable via rc.local
+      ansible.builtin.lineinfile:
+        path: /etc/rc.local
+        line: "echo never > /sys/kernel/mm/transparent_hugepage/enabled && echo never > /sys/kernel/mm/transparent_hugepage/defrag"
+        create: true
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Disable firewalld for Oracle DataGuard lab
+      ansible.builtin.service:
+        name: firewalld
+        state: stopped
+        enabled: false
+      ignore_errors: true
+
+    - name: Set SELinux to permissive
+      ansible.posix.selinux:
+        policy: targeted
+        state: permissive

@@ -126,12 +126,13 @@ files.
 
 | | Who configures it | Status |
 | --- | --- | --- |
-| **A person, in a browser** | A web console: add an instance the way a database client does — host, port, user, password — and it collects | **Planned.** The console exists and edits configuration; the add-an-instance flow does not, and `webhost` is not in `v0.1.0` |
+| **A person, in a browser** | A web console: add an instance the way a database client does — host, port, user, password — and it collects | **Planned.** The console ships and edits configuration; the add-an-instance flow does not |
 | **An agent, writing JSON** | Every decision is a file. An agent writes them and runs three commands | **This is the supported path today** |
 
-`v0.1.0` ships the agent path on purpose: the configuration surface has to be settled before
+The agent path is the supported one on purpose: the configuration surface has to be settled before
 something generates it, and a console that writes files nobody has agreed the shape of becomes a
-second source of truth.
+second source of truth. The console itself ships — it serves the reports and edits configuration —
+but adding an instance from a host, a port and a password is not in it yet.
 
 **Both paths are written out step by step, with what to assert after each one, in
 [`docs/first_run.md`](./docs/first_run.md).** It is written to be followed by a program and to be

@@ -1,0 +1,40 @@
+################################################################################
+## Oracle DBCA RAC Database Creation Response File
+## Managed by Ansible — db-sre lab
+## Schema: v23.0.0 (Oracle 23ai)
+################################################################################
+
+responseFileVersion=/oracle/assistants/rspfmt_dbca_response_schema_v23.0.0
+
+gdbName={{ oracle_db_name }}
+sid={{ oracle_db_name }}
+databaseConfigType=RAC
+nodelist={{ groups['oracle_rac'] | join(',') }}
+
+createAsContainerDatabase=true
+pdbName={{ oracle_pdb_name }}
+useLocalUndoForPDBs=true
+pdbAdminPassword={{ oracle_sys_password }}
+
+templateName=General_Purpose.dbc
+sysPassword={{ oracle_sys_password }}
+systemPassword={{ oracle_sys_password }}
+
+storageType=ASM
+diskGroupName={{ oracle_asm_data_group }}
+datafileDestination=+{{ oracle_asm_data_group }}
+recoveryAreaDestination=+{{ oracle_asm_fra_group }}
+recoveryAreaSize={{ oracle_fra_size_mb | default(25600) }}
+
+characterSet={{ oracle_db_charset }}
+nationalCharacterSet={{ oracle_db_ncharset }}
+listeners=LISTENER
+
+totalMemory={{ oracle_sga_mb + oracle_pga_mb }}
+automaticMemoryManagement=false
+initParams=sga_target={{ oracle_sga_mb }}m,pga_aggregate_target={{ oracle_pga_mb }}m,processes={{ oracle_processes }}
+
+redoLogFileSize=200
+emConfiguration=NONE
+
+databaseType=OLTP

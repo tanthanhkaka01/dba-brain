@@ -1,0 +1,16 @@
+mssql_version: "2025"
+mssql_pid: developer
+mssql_port: 1433
+mssql_endpoint_port: 5022
+mssql_apt_key_url: https://packages.microsoft.com/keys/microsoft.asc
+mssql_apt_keyring_path: /usr/share/keyrings/microsoft-prod.gpg
+mssql_apt_repo_url: https://packages.microsoft.com/ubuntu/24.04/mssql-server-2025
+mssql_tools_apt_repo_url: https://packages.microsoft.com/ubuntu/24.04/prod
+mssql_sqlcmd_path: "/opt/mssql-tools18/bin/sqlcmd -C"
+mssql_sqlagent_enabled: true
+mssql_sa_password: ChangeMe_SA_123!
+mssql_ag_name: AG_SQL2025_LAB
+mssql_dbm_cert_subject: dbm-lab
+mssql_dbm_cert_password: ChangeMe_DbmCert_123!
+mssql_replication_network: 192.168.18.0/24
+mssql_ag_force_rebootstrap: false

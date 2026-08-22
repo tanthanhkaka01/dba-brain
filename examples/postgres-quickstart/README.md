@@ -135,9 +135,9 @@ Message: active_sessions=1, running_requests=1, blocked_sessions=0
 instance nothing. It is also what you would send to a chat — see the SQL Server quickstart's
 [step 6](../sqlserver-quickstart/README.md#6-send-it-to-telegram).
 
-> **The scheduled reporting app is `v0.2.0`.** `db_ops.reports.cli run-scheduled` builds and queues
-> reports on a schedule; it is not in this release, and `No module named 'db_ops.reports'` is that
-> rather than a broken install.
+> `db-ops reports run-scheduled` is the scheduled form: it builds the report and queues it for
+> delivery on the interval its `reports_config.json` entry declares. `alert-summary` above is the
+> one to read first, because it shows the finding without involving delivery at all.
 
 Producing a finding and delivering it are
 separate steps, and the second one is optional.

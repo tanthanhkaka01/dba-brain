@@ -1,0 +1,340 @@
+---
+- name: Install and configure SQL Server on all nodes
+  hosts: sqlserver
+  become: true
+  gather_facts: true
+  vars_files:
+    - ../group_vars/sqlserver.yml
+  vars:
+    mssql_primary_inventory_host: "{{ groups['sqlserver'][0] }}"
+    mssql_is_primary: "{{ inventory_hostname == mssql_primary_inventory_host }}"
+  handlers:
+    - name: Restart mssql-server
+      ansible.builtin.service:
+        name: mssql-server
+        state: restarted
+
+  tasks:
+    - name: Install prerequisite packages
+      ansible.builtin.apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+          - python-is-python3
+        state: present
+        update_cache: true
+
+    - name: Download Microsoft repository signing key
+      ansible.builtin.get_url:
+        url: "{{ mssql_apt_key_url }}"
+        dest: /tmp/microsoft-signing-key.asc
+        mode: "0644"
+
+    - name: Install Microsoft repository keyring
+      ansible.builtin.command:
+        cmd: >-
+          gpg --dearmor
+          --yes
+          --output {{ mssql_apt_keyring_path }}
+          /tmp/microsoft-signing-key.asc
+      changed_when: true
+
+    - name: Configure SQL Server APT repository
+      ansible.builtin.apt_repository:
+        repo: >-
+          deb [arch=amd64 signed-by={{ mssql_apt_keyring_path }}]
+          {{ mssql_apt_repo_url }} {{ ansible_distribution_release }} main
+        filename: mssql-server
+        state: present
+
+    - name: Configure mssql-tools APT repository
+      ansible.builtin.apt_repository:
+        repo: >-
+          deb [arch=amd64 signed-by={{ mssql_apt_keyring_path }}]
+          {{ mssql_tools_apt_repo_url }} {{ ansible_distribution_release }} main
+        filename: mssql-tools
+        state: present
+
+    - name: Install SQL Server, tools, and ODBC driver
+      ansible.builtin.apt:
+        name:
+          - mssql-server
+          - mssql-tools18
+          - unixodbc-dev
+        state: present
+        update_cache: true
+      environment:
+        DEBIAN_FRONTEND: noninteractive
+        ACCEPT_EULA: "Y"
+
+    - name: Check if initial SQL Server setup was done
+      ansible.builtin.stat:
+        path: /var/opt/mssql/.db-sre-sa-setup-done
+      register: mssql_setup_done
+
+    - name: Run initial mssql-conf setup with SA password and EULA acceptance
+      ansible.builtin.shell: |
+        MSSQL_SA_PASSWORD="{{ mssql_sa_password }}" MSSQL_PID="{{ mssql_pid }}" \
+        /opt/mssql/bin/mssql-conf -n setup accept-eula
+      args:
+        executable: /bin/bash
+      no_log: true
+      when: not mssql_setup_done.stat.exists
+      changed_when: true
+
+    - name: Write SA setup marker
+      ansible.builtin.copy:
+        dest: /var/opt/mssql/.db-sre-sa-setup-done
+        content: "setup complete\n"
+        owner: mssql
+        group: mssql
+        mode: "0600"
+      when: not mssql_setup_done.stat.exists
+
+    - name: Deploy mssql.conf with HA and Agent settings
+      ansible.builtin.template:
+        src: ../templates/mssql-server.conf.j2
+        dest: /var/opt/mssql/mssql.conf
+        owner: mssql
+        group: mssql
+        mode: "0600"
+      notify: Restart mssql-server
+
+    - name: Reset mssql-server failed state if any
+      ansible.builtin.command: systemctl reset-failed mssql-server
+      changed_when: false
+      failed_when: false
+
+    - name: Ensure mssql-server service is enabled and running
+      ansible.builtin.service:
+        name: mssql-server
+        state: started
+        enabled: true
+
+    - name: Flush handlers before connection test
+      ansible.builtin.meta: flush_handlers
+
+    - name: Wait for SQL Server to accept connections
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: "{{ mssql_port }}"
+        delay: 10
+        timeout: 120
+
+    - name: Verify SQL Server version
+      ansible.builtin.shell: |
+        {{ mssql_sqlcmd_path }} -S localhost -U SA -b -Q "SELECT @@VERSION;"
+      args:
+        executable: /bin/bash
+      environment:
+        SQLCMDPASSWORD: "{{ mssql_sa_password }}"
+      no_log: true
+      register: mssql_version
+      changed_when: false
+
+- name: Configure AG certificates and mirroring endpoints
+  hosts: sqlserver
+  become: true
+  gather_facts: false
+  vars_files:
+    - ../group_vars/sqlserver.yml
+  vars:
+    mssql_primary_inventory_host: "{{ groups['sqlserver'][0] }}"
+    mssql_is_primary: "{{ inventory_hostname == mssql_primary_inventory_host }}"
+
+  tasks:
+    - name: Create master key and certificate on primary
+      ansible.builtin.shell: |
+        {{ mssql_sqlcmd_path }} -S localhost -U SA -b <<'SQLEOF'
+        SET NOCOUNT ON;
+        IF NOT EXISTS (SELECT 1 FROM sys.symmetric_keys WHERE name = '##MS_DatabaseMasterKey##')
+          CREATE MASTER KEY ENCRYPTION BY PASSWORD = '{{ mssql_dbm_cert_password }}';
+        IF NOT EXISTS (SELECT 1 FROM sys.certificates WHERE name = 'dbm_certificate')
+        BEGIN
+          CREATE CERTIFICATE dbm_certificate
+            WITH SUBJECT = '{{ mssql_dbm_cert_subject }}',
+            EXPIRY_DATE = '9999-12-31';
+          BACKUP CERTIFICATE dbm_certificate
+            TO FILE = N'/var/opt/mssql/data/dbm_certificate.cer'
+            WITH PRIVATE KEY (
+              FILE = N'/var/opt/mssql/data/dbm_certificate.pvk',
+              ENCRYPTION BY PASSWORD = '{{ mssql_dbm_cert_password }}');
+        END
+        SQLEOF
+      args:
+        executable: /bin/bash
+      environment:
+        SQLCMDPASSWORD: "{{ mssql_sa_password }}"
+      no_log: true
+      delegate_to: "{{ mssql_primary_inventory_host }}"
+      run_once: true
+      changed_when: false
+
+    - name: Set cert file permissions on primary
+      ansible.builtin.file:
+        path: "{{ item }}"
+        owner: mssql
+        group: mssql
+        mode: "0640"
+      loop:
+        - /var/opt/mssql/data/dbm_certificate.cer
+        - /var/opt/mssql/data/dbm_certificate.pvk
+      delegate_to: "{{ mssql_primary_inventory_host }}"
+      run_once: true
+
+    - name: Fetch certificate files from primary to Ansible controller
+      ansible.builtin.fetch:
+        src: "/var/opt/mssql/data/{{ item }}"
+        dest: "/tmp/db-sre-mssql-cert/{{ item }}"
+        flat: true
+      loop:
+        - dbm_certificate.cer
+        - dbm_certificate.pvk
+      delegate_to: "{{ mssql_primary_inventory_host }}"
+      run_once: true
+
+    - name: Copy certificate files to secondaries
+      ansible.builtin.copy:
+        src: "/tmp/db-sre-mssql-cert/{{ item }}"
+        dest: "/var/opt/mssql/data/{{ item }}"
+        owner: mssql
+        group: mssql
+        mode: "0640"
+      loop:
+        - dbm_certificate.cer
+        - dbm_certificate.pvk
+      when: not mssql_is_primary
+
+    - name: Create master key and import certificate on secondaries
+      ansible.builtin.shell: |
+        {{ mssql_sqlcmd_path }} -S localhost -U SA -b <<'SQLEOF'
+        SET NOCOUNT ON;
+        IF NOT EXISTS (SELECT 1 FROM sys.symmetric_keys WHERE name = '##MS_DatabaseMasterKey##')
+          CREATE MASTER KEY ENCRYPTION BY PASSWORD = '{{ mssql_dbm_cert_password }}';
+        IF NOT EXISTS (SELECT 1 FROM sys.certificates WHERE name = 'dbm_certificate')
+          CREATE CERTIFICATE dbm_certificate
+            FROM FILE = N'/var/opt/mssql/data/dbm_certificate.cer'
+            WITH PRIVATE KEY (
+              FILE = N'/var/opt/mssql/data/dbm_certificate.pvk',
+              DECRYPTION BY PASSWORD = '{{ mssql_dbm_cert_password }}');
+        SQLEOF
+      args:
+        executable: /bin/bash
+      environment:
+        SQLCMDPASSWORD: "{{ mssql_sa_password }}"
+      no_log: true
+      when: not mssql_is_primary
+      changed_when: false
+
+    - name: Create and start Hadr mirroring endpoint on all nodes
+      ansible.builtin.shell: |
+        {{ mssql_sqlcmd_path }} -S localhost -U SA -b <<'SQLEOF'
+        SET NOCOUNT ON;
+        IF NOT EXISTS (SELECT 1 FROM sys.endpoints WHERE name = 'Hadr_endpoint')
+        BEGIN
+          CREATE ENDPOINT [Hadr_endpoint]
+            STATE = STARTED
+            AS TCP (LISTENER_PORT = {{ mssql_endpoint_port }})
+            FOR DATABASE_MIRRORING (
+              ROLE = ALL,
+              AUTHENTICATION = CERTIFICATE dbm_certificate,
+              ENCRYPTION = REQUIRED ALGORITHM AES);
+        END
+        ELSE IF (SELECT state FROM sys.endpoints WHERE name = 'Hadr_endpoint') <> 0
+          ALTER ENDPOINT [Hadr_endpoint] STATE = STARTED;
+        SQLEOF
+      args:
+        executable: /bin/bash
+      environment:
+        SQLCMDPASSWORD: "{{ mssql_sa_password }}"
+      no_log: true
+      changed_when: false
+      register: hadr_endpoint_result
+      retries: 3
+      delay: 5
+      until: hadr_endpoint_result.rc == 0
+
+- name: Bootstrap SQL Server Always On Availability Group
+  hosts: sqlserver
+  become: true
+  gather_facts: false
+  vars_files:
+    - ../group_vars/sqlserver.yml
+  vars:
+    mssql_primary_inventory_host: "{{ groups['sqlserver'][0] }}"
+    mssql_is_primary: "{{ inventory_hostname == mssql_primary_inventory_host }}"
+
+  tasks:
+    - name: Check AG bootstrap marker on primary
+      ansible.builtin.stat:
+        path: /var/opt/mssql/data/.db-sre-ag-ready
+      register: mssql_ag_marker
+      delegate_to: "{{ mssql_primary_inventory_host }}"
+      run_once: true
+
+    - name: Create Availability Group on primary
+      ansible.builtin.shell: |
+        {{ mssql_sqlcmd_path }} -S localhost -U SA -b <<'SQLEOF'
+        SET NOCOUNT ON;
+        IF NOT EXISTS (SELECT 1 FROM sys.availability_groups WHERE name = N'{{ mssql_ag_name }}')
+          CREATE AVAILABILITY GROUP [{{ mssql_ag_name }}]
+            WITH (CLUSTER_TYPE = NONE, DB_FAILOVER = ON)
+            FOR REPLICA ON
+        {% for host in groups['sqlserver'] %}
+              N'{{ host }}' WITH (
+                ENDPOINT_URL = N'tcp://{{ hostvars[host].ansible_host }}:{{ mssql_endpoint_port }}',
+                AVAILABILITY_MODE = SYNCHRONOUS_COMMIT,
+                FAILOVER_MODE = MANUAL,
+                SEEDING_MODE = AUTOMATIC,
+                SECONDARY_ROLE (ALLOW_CONNECTIONS = NO)){{ ',' if not loop.last }}
+        {% endfor %}
+            ;
+        SQLEOF
+      args:
+        executable: /bin/bash
+      environment:
+        SQLCMDPASSWORD: "{{ mssql_sa_password }}"
+      no_log: true
+      delegate_to: "{{ mssql_primary_inventory_host }}"
+      run_once: true
+      when: mssql_ag_force_rebootstrap or not mssql_ag_marker.stat.exists
+      changed_when: true
+
+    - name: Join secondaries to Availability Group
+      ansible.builtin.shell: |
+        {{ mssql_sqlcmd_path }} -S localhost -U SA -b <<'SQLEOF'
+        SET NOCOUNT ON;
+        IF NOT EXISTS (
+          SELECT 1
+          FROM sys.availability_replicas ar
+          JOIN sys.availability_groups ag ON ar.group_id = ag.group_id
+          JOIN sys.dm_hadr_availability_replica_states ars ON ar.replica_id = ars.replica_id
+          WHERE ag.name = N'{{ mssql_ag_name }}'
+            AND ar.replica_server_name = @@SERVERNAME
+            AND ars.is_local = 1)
+        BEGIN
+          ALTER AVAILABILITY GROUP [{{ mssql_ag_name }}] JOIN WITH (CLUSTER_TYPE = NONE);
+          ALTER AVAILABILITY GROUP [{{ mssql_ag_name }}] GRANT CREATE ANY DATABASE;
+        END
+        SQLEOF
+      args:
+        executable: /bin/bash
+      environment:
+        SQLCMDPASSWORD: "{{ mssql_sa_password }}"
+      no_log: true
+      when: not mssql_is_primary and (mssql_ag_force_rebootstrap or not mssql_ag_marker.stat.exists)
+      changed_when: true
+
+    - name: Write AG bootstrap marker on primary
+      ansible.builtin.copy:
+        dest: /var/opt/mssql/data/.db-sre-ag-ready
+        content: "bootstrap complete\n"
+        owner: mssql
+        group: mssql
+        mode: "0640"
+      delegate_to: "{{ mssql_primary_inventory_host }}"
+      run_once: true
+      when: mssql_ag_force_rebootstrap or not mssql_ag_marker.stat.exists

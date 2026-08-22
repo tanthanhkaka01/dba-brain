@@ -1,0 +1,22 @@
+################################################################################
+## Oracle Listener Configuration — DataGuard
+## Managed by Ansible — db-sre lab
+################################################################################
+
+LISTENER =
+  (DESCRIPTION_LIST =
+    (DESCRIPTION =
+      (ADDRESS = (PROTOCOL = TCP)(HOST = {{ ansible_host }})(PORT = {{ oracle_listener_port }}))
+    )
+  )
+
+ADR_BASE_LISTENER = {{ oracle_base }}
+
+SID_LIST_LISTENER =
+  (SID_LIST =
+    (SID_DESC =
+      (GLOBAL_DBNAME = {{ oracle_primary_db_name }})
+      (ORACLE_HOME = {{ oracle_db_home }})
+      (SID_NAME = {{ hostvars[inventory_hostname].oracle_db_sid }})
+    )
+  )

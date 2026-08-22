@@ -1,0 +1,70 @@
+shell.options.useWizards = false;
+
+const clusterName = "{{ mysql_cluster_name }}";
+const adminUser = "{{ mysql_cluster_admin_user }}";
+const adminPassword = os.getenv("MYSQL_CLUSTER_ADMIN_PASSWORD");
+const primaryHost = "{{ hostvars[groups['mysql'][0]].ansible_host }}";
+const replicaHosts = [
+{% for host in groups['mysql'][1:] %}
+  "{{ hostvars[host].ansible_host }}"{% if not loop.last %},{% endif %}
+{% endfor %}
+];
+
+function topologyKey(host) {
+  return `${host}:3306`;
+}
+
+function instanceOptions(host) {
+  return {
+    host: host,
+    password: adminPassword,
+    port: 3306,
+    user: adminUser
+  };
+}
+
+if (!adminPassword) {
+  throw new Error("MYSQL_CLUSTER_ADMIN_PASSWORD is not set.");
+}
+
+replicaHosts.forEach((host) => {
+  dba.configureInstance(instanceOptions(host), {
+    restart: true
+  });
+});
+
+dba.configureInstance(instanceOptions(primaryHost), {
+  restart: true
+});
+
+shell.connect(instanceOptions(primaryHost));
+
+let cluster;
+
+try {
+  cluster = dba.getCluster(clusterName);
+  print(`Cluster ${clusterName} already exists.`);
+} catch (error) {
+  cluster = dba.createCluster(clusterName, {
+    autoRejoinTries: {{ mysql_cluster_auto_rejoin_tries }},
+    communicationStack: "MYSQL",
+    expelTimeout: {{ mysql_cluster_expel_timeout }},
+    exitStateAction: "OFFLINE_MODE",
+    replicationAllowedHost: "{{ mysql_replication_allowed_host }}"
+  });
+  print(`Cluster ${clusterName} created.`);
+}
+
+const status = cluster.status();
+const topology = status.defaultReplicaSet.topology || {};
+
+replicaHosts.forEach((host) => {
+  if (!topology[topologyKey(host)]) {
+    cluster.addInstance(instanceOptions(host), {recoveryMethod: "clone"});
+    print(`Added ${host} to cluster.`);
+  } else {
+    print(`${host} already present in cluster.`);
+  }
+});
+
+print(JSON.stringify(cluster.status(), null, 2));

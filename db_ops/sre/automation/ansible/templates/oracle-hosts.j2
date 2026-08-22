@@ -1,0 +1,22 @@
+127.0.0.1   localhost localhost.localdomain localhost4 localhost4.localdomain4
+::1         localhost localhost.localdomain localhost6 localhost6.localdomain6
+
+# Oracle RAC public IPs
+{% for host in groups['oracle_rac'] %}
+{{ hostvars[host].ansible_host }} {{ host }}
+{% endfor %}
+
+# Oracle RAC private interconnect IPs
+{% for host in groups['oracle_rac'] %}
+{{ oracle_priv_ips[host] }} {{ host }}-priv
+{% endfor %}
+
+# Oracle RAC VIPs
+{% for host in groups['oracle_rac'] %}
+{{ hostvars[host].ansible_host | regex_replace('(\\d+)$', '') }}{{ (loop.index + 50) }} {{ host }}-vip
+{% endfor %}
+
+# Oracle RAC SCAN
+{% for ip in oracle_scan_ips %}
+{{ ip }} {{ oracle_scan_name.split('.')[0] }}
+{% endfor %}

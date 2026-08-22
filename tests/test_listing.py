@@ -94,4 +94,4 @@ def test_the_botfather_block_lists_every_command():
     block = text.split("```")[1]
     in_block = {line.split(" - ")[0].strip() for line in block.splitlines() if " - " in line}
 
-    assert not (configured - in_block), f"thieu trong block BotFather: {sorted(configured - in_block)}"
+    assert not (configured - in_block), f"missing from the BotFather block: {sorted(configured - in_block)}"

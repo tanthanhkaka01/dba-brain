@@ -1,0 +1,235 @@
+---
+# Phase 2 — Oracle DataGuard Primary Database Setup
+# Installs Oracle DB software on ALL dg nodes, creates database on primary only
+# Run after oracle-dg-os-prep.yml and before oracle-dg-standby.yml
+
+- name: Install Oracle Database software on all DataGuard nodes
+  hosts: oracle_dg
+  become: true
+  gather_facts: false
+  vars_files:
+    - ../group_vars/oracle_dg.yml
+
+  tasks:
+    - name: Check if Oracle DB binary exists
+      ansible.builtin.stat:
+        path: "{{ oracle_db_home }}/bin/oracle"
+      register: oracle_binary
+
+    - name: Unzip Oracle Database installer into db home
+      ansible.builtin.unarchive:
+        src: "{{ oracle_install_stage }}/{{ oracle_db_installer_zip }}"
+        dest: "{{ oracle_db_home }}"
+        owner: oracle
+        group: oinstall
+        remote_src: true
+        creates: "{{ oracle_db_home }}/runInstaller"
+      when: not oracle_binary.stat.exists
+
+    - name: Deploy Oracle DB install response file
+      ansible.builtin.template:
+        src: ../templates/oracle-db-install-response.rsp.j2
+        dest: "{{ oracle_install_stage }}/db-install.rsp"
+        owner: oracle
+        group: oinstall
+        mode: "0600"
+      when: not oracle_binary.stat.exists
+
+    - name: Run Oracle DB software-only silent install
+      ansible.builtin.shell: |
+        {{ oracle_db_home }}/runInstaller \
+          -silent \
+          -waitforcompletion \
+          -responseFile {{ oracle_install_stage }}/db-install.rsp \
+          ORACLE_HOME={{ oracle_db_home }} \
+          ORACLE_HOME_NAME=OraDB26cHome \
+          2>&1
+      args:
+        executable: /bin/bash
+      become_user: oracle
+      register: db_install_result
+      failed_when: >
+        db_install_result.rc != 0 and
+        'Successfully Setup Software' not in (db_install_result.stdout | default(''))
+      changed_when: true
+      when: not oracle_binary.stat.exists
+      no_log: true
+
+    - name: Run orainstRoot.sh
+      ansible.builtin.command:
+        cmd: "{{ oracle_inventory_dir }}/orainstRoot.sh"
+      changed_when: true
+      when: not oracle_binary.stat.exists
+
+    - name: Run root.sh for Oracle DB home
+      ansible.builtin.command:
+        cmd: "{{ oracle_db_home }}/root.sh"
+      changed_when: true
+      when: not oracle_binary.stat.exists
+
+    - name: Create Oracle network/admin directory
+      ansible.builtin.file:
+        path: "{{ oracle_db_home }}/network/admin"
+        state: directory
+        owner: oracle
+        group: oinstall
+        mode: "0755"
+
+    - name: Deploy listener.ora on all DG nodes
+      ansible.builtin.template:
+        src: ../templates/oracle-dg-listener.ora.j2
+        dest: "{{ oracle_db_home }}/network/admin/listener.ora"
+        owner: oracle
+        group: oinstall
+        mode: "0644"
+
+    - name: Deploy tnsnames.ora on all DG nodes
+      ansible.builtin.template:
+        src: ../templates/oracle-dg-tnsnames.ora.j2
+        dest: "{{ oracle_db_home }}/network/admin/tnsnames.ora"
+        owner: oracle
+        group: oinstall
+        mode: "0644"
+
+    - name: Start Oracle listener on all nodes
+      ansible.builtin.shell: |
+        {{ oracle_db_home }}/bin/lsnrctl start {{ oracle_listener_name }}
+      args:
+        executable: /bin/bash
+      become_user: oracle
+      environment:
+        ORACLE_HOME: "{{ oracle_db_home }}"
+        PATH: "{{ oracle_db_home }}/bin:{{ ansible_env.PATH }}"
+      register: lsnr_start
+      failed_when: >
+        lsnr_start.rc != 0 and
+        'already running' not in (lsnr_start.stdout | default('')) | lower
+      changed_when: lsnr_start.rc == 0
+
+- name: Create primary database with DBCA
+  hosts: oracle_dg
+  become: true
+  gather_facts: false
+  vars_files:
+    - ../group_vars/oracle_dg.yml
+  vars:
+    dg_primary_host: >-
+      {{ groups['oracle_dg'] | map('extract', hostvars) |
+         selectattr('oracle_dg_role', 'equalto', 'primary') |
+         map(attribute='inventory_hostname') | first }}
+
+  tasks:
+    - name: Check if primary database creation marker exists
+      ansible.builtin.stat:
+        path: "{{ oracle_base }}/.db-sre-dg-primary-ready"
+      register: primary_db_marker
+      delegate_to: "{{ dg_primary_host }}"
+      run_once: true
+
+    - name: Create primary oradata directory
+      ansible.builtin.file:
+        path: "{{ oracle_redo_log_dir }}/{{ oracle_primary_db_unique_name }}/oradata"
+        state: directory
+        owner: oracle
+        group: oinstall
+        mode: "0775"
+      delegate_to: "{{ dg_primary_host }}"
+      run_once: true
+
+    - name: Deploy DBCA primary response file
+      ansible.builtin.template:
+        src: ../templates/oracle-dbca-dg-response.rsp.j2
+        dest: "{{ oracle_install_stage }}/dbca-dg-primary.rsp"
+        owner: oracle
+        group: oinstall
+        mode: "0600"
+      vars:
+        oracle_db_sid: "{{ hostvars[dg_primary_host].oracle_db_sid }}"
+        oracle_db_unique_name: "{{ oracle_primary_db_unique_name }}"
+      delegate_to: "{{ dg_primary_host }}"
+      run_once: true
+      when: not primary_db_marker.stat.exists
+      no_log: true
+
+    - name: Create primary database with DBCA
+      ansible.builtin.shell: |
+        {{ oracle_db_home }}/bin/dbca \
+          -silent \
+          -createDatabase \
+          -responseFile {{ oracle_install_stage }}/dbca-dg-primary.rsp \
+          -ignorePreReqs \
+          2>&1
+      args:
+        executable: /bin/bash
+      become_user: oracle
+      environment:
+        ORACLE_HOME: "{{ oracle_db_home }}"
+        ORACLE_SID: "{{ hostvars[dg_primary_host].oracle_db_sid }}"
+        PATH: "{{ oracle_db_home }}/bin:{{ ansible_env.PATH }}"
+      register: dbca_primary_result
+      failed_when: dbca_primary_result.rc != 0
+      changed_when: true
+      delegate_to: "{{ dg_primary_host }}"
+      run_once: true
+      when: not primary_db_marker.stat.exists
+      no_log: true
+
+    - name: Ensure archivelog mode is enabled on primary
+      ansible.builtin.shell: |
+        {{ oracle_db_home }}/bin/sqlplus -S / as sysdba <<'SQLEOF'
+        WHENEVER SQLERROR EXIT FAILURE;
+        DECLARE
+          v_mode VARCHAR2(20);
+        BEGIN
+          SELECT LOG_MODE INTO v_mode FROM V$DATABASE;
+          IF v_mode != 'ARCHIVELOG' THEN
+            EXECUTE IMMEDIATE 'SHUTDOWN IMMEDIATE';
+            EXECUTE IMMEDIATE 'STARTUP MOUNT';
+            EXECUTE IMMEDIATE 'ALTER DATABASE ARCHIVELOG';
+            EXECUTE IMMEDIATE 'ALTER DATABASE OPEN';
+          END IF;
+        END;
+        /
+        EXIT;
+        SQLEOF
+      args:
+        executable: /bin/bash
+      become_user: oracle
+      environment:
+        ORACLE_HOME: "{{ oracle_db_home }}"
+        ORACLE_SID: "{{ hostvars[dg_primary_host].oracle_db_sid }}"
+        PATH: "{{ oracle_db_home }}/bin:{{ ansible_env.PATH }}"
+      changed_when: false
+      delegate_to: "{{ dg_primary_host }}"
+      run_once: true
+      when: not primary_db_marker.stat.exists
+
+    - name: Enable DataGuard broker on primary
+      ansible.builtin.shell: |
+        {{ oracle_db_home }}/bin/sqlplus -S / as sysdba <<'SQLEOF'
+        WHENEVER SQLERROR EXIT FAILURE;
+        ALTER SYSTEM SET dg_broker_start=TRUE SCOPE=BOTH;
+        EXIT;
+        SQLEOF
+      args:
+        executable: /bin/bash
+      become_user: oracle
+      environment:
+        ORACLE_HOME: "{{ oracle_db_home }}"
+        ORACLE_SID: "{{ hostvars[dg_primary_host].oracle_db_sid }}"
+        PATH: "{{ oracle_db_home }}/bin:{{ ansible_env.PATH }}"
+      changed_when: true
+      delegate_to: "{{ dg_primary_host }}"
+      run_once: true
+      when: not primary_db_marker.stat.exists
+
+    - name: Write primary database ready marker
+      ansible.builtin.copy:
+        dest: "{{ oracle_base }}/.db-sre-dg-primary-ready"
+        content: "primary db created\n"
+        owner: oracle
+        group: oinstall
+        mode: "0640"
+      delegate_to: "{{ dg_primary_host }}"
+      run_once: true
+      when: not primary_db_marker.stat.exists

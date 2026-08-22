@@ -1,0 +1,1559 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Server health — metric history</title>
+<style>
+  /* ============================================================
+     SERVER HEALTH — one page for the whole fleet.
+     Reading order = triage order: verdict -> health areas -> problems ->
+     timeline -> charts. The charts are last because a chart never answers
+     "is this server healthy"; it answers "why", once you already know.
+     The series of the selected server are fetched on demand, so opening the
+     page costs one small JSON, not the whole fleet's history.
+     Charts are hand-drawn SVG: the worker has no internet, so no chart
+     library can be fetched.
+     ============================================================ */
+  :root{
+    --bg:#f5f6f8; --surface:#ffffff; --surface-2:#fafbfc;
+    --ink:#1b2430; --muted:#64748b; --faint:#94a3b8; --line:#e5e9ef;
+    --brand:#0f2540; --brand-2:#1d3b5e;
+    --crit:#dc2626; --crit-bg:#fef2f2; --crit-line:#fecaca;
+    --warn:#c2700a; --warn-bg:#fff8ed; --warn-line:#fde3bf;
+    --ok:#15803d;   --ok-bg:#f0fdf4;   --ok-line:#bbf7d0;
+    --unk:#64748b;  --unk-bg:#f3f4f6;  --unk-line:#d9dde3;
+    --info:#2563eb; --info-bg:#eff6ff; --info-line:#c7dbfd;
+    --mono:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0; background:var(--bg); color:var(--ink); font-family:var(--sans); font-size:14px; line-height:1.5;}
+  .wrap{max-width:1180px; margin:0 auto; padding:0 22px 64px;}
+  header.masthead{background:linear-gradient(135deg,var(--brand),var(--brand-2)); color:#fff; padding:24px 0 20px; margin-bottom:20px;}
+  header .wrap{padding-bottom:0}
+  .eyebrow{font-size:11.5px; letter-spacing:.16em; text-transform:uppercase; color:#9db8d6; font-weight:600; margin:0 0 6px}
+  h1.title{font-size:24px; font-weight:700; margin:0 0 4px; letter-spacing:-.01em}
+  .subtitle{color:#c7d6e8; font-size:13px; margin:0}
+  .back{display:inline-block; margin-top:12px; color:#c7d6e8; font-size:12.5px; text-decoration:none; border-bottom:1px dotted #6f89a8}
+  .back:hover{color:#fff}
+
+  .picker{display:flex; flex-wrap:wrap; gap:6px; margin:14px 0 18px}
+  .picker button{background:var(--surface); border:1px solid var(--line); border-radius:999px; cursor:pointer;
+    padding:5px 12px; font-family:var(--sans); font-size:12px; color:var(--muted);}
+  .picker button:hover{border-color:var(--info); color:var(--info)}
+  .picker button.on{background:var(--brand); border-color:var(--brand); color:#fff; font-weight:600}
+  .picker .dot{display:inline-block; width:6px; height:6px; border-radius:50%; margin-right:6px; vertical-align:middle}
+
+  /* ---------- Verdict ---------- */
+  .verdict{display:grid; grid-template-columns:minmax(230px,1fr) 2fr; gap:14px; margin-bottom:18px}
+  .vcard{border-radius:11px; padding:16px 18px; border:1px solid var(--line); background:var(--surface)}
+  .vcard.crit{background:var(--crit-bg); border-color:var(--crit-line)}
+  .vcard.warn{background:var(--warn-bg); border-color:var(--warn-line)}
+  .vcard.ok{background:var(--ok-bg); border-color:var(--ok-line)}
+  .vcard.unk{background:var(--unk-bg); border-color:var(--unk-line)}
+  .vstatus{font-size:27px; font-weight:800; letter-spacing:-.02em; line-height:1.1}
+  .vstatus.crit{color:var(--crit)} .vstatus.warn{color:var(--warn)}
+  .vstatus.ok{color:var(--ok)} .vstatus.unk{color:var(--unk)}
+  .vsub{color:var(--muted); font-size:12.5px; margin-top:4px}
+  .score{margin-top:12px}
+  .score .bar{height:7px; border-radius:99px; background:#e6e9ee; overflow:hidden}
+  .score .bar i{display:block; height:100%; border-radius:99px}
+  .score .num{font-family:var(--mono); font-size:12px; color:var(--muted); margin-top:4px}
+  .facts{display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:12px}
+  .fact .k{font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em}
+  .fact .v{font-size:18px; font-weight:700; font-family:var(--mono); margin-top:2px}
+  .fact .v.crit{color:var(--crit)} .fact .v.warn{color:var(--warn)} .fact .v.stale{color:var(--crit)}
+
+  h2.sec{font-size:15px; margin:26px 0 3px; letter-spacing:-.01em}
+  .sec-note{color:var(--muted); font-size:12px; margin:0 0 12px}
+  /* Sub-heading inside a folded section, for a block that holds more than one table. */
+  h3.sub{font-size:12.5px; font-weight:650; margin:14px 0 6px; letter-spacing:-.01em}
+
+  /* ---------- Health areas ---------- */
+  .areas{display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); gap:10px}
+  .area{background:var(--surface); border:1px solid var(--line); border-left-width:4px; border-radius:9px; padding:10px 12px}
+  .area.crit{border-left-color:var(--crit)} .area.warn{border-left-color:var(--warn)}
+  .area.ok{border-left-color:var(--ok)} .area.unk{border-left-color:var(--unk)}
+  .area .top{display:flex; justify-content:space-between; align-items:baseline; gap:8px}
+  .area .name{font-weight:650; font-size:13px}
+  .area .val{font-family:var(--mono); font-weight:700; font-size:13.5px}
+  .area .val.crit{color:var(--crit)} .area .val.warn{color:var(--warn)} .area .val.ok{color:var(--ok)} .area .val.unk{color:var(--faint)}
+  .area .thr{font-size:11px; color:var(--muted); font-family:var(--mono); margin-top:3px}
+  .area .why{font-size:11.5px; color:var(--muted); margin-top:5px}
+  .area .src{font-size:10.5px; color:var(--faint); margin-top:4px}
+  /* A tile whose value crossed the rule printed on it, and whose alert config removed. Dashed in
+     the severity it WOULD have been, so it reads as neither "fine" (plain green, which is what it
+     used to look like) nor "broken" (solid red, which would re-raise what somebody deliberately
+     silenced). The badge carries the word, because a border is a hint and not a sentence. */
+  .area.sil{border-left-style:dashed}
+  .area.sil-crit{border-left-color:var(--crit)} .area.sil-warn{border-left-color:var(--warn)}
+  .area .sil-tag{font-family:var(--mono); font-size:9.5px; font-weight:700; letter-spacing:.04em;
+    text-transform:uppercase; border:1px dashed currentColor; border-radius:99px; padding:0 5px;
+    margin-left:6px; white-space:nowrap; vertical-align:1px}
+  .area .sil-tag.crit{color:var(--crit)} .area .sil-tag.warn{color:var(--warn)}
+  .area .sil-why{font-size:11px; margin-top:5px}
+  .area .sil-why.crit{color:var(--crit)} .area .sil-why.warn{color:var(--warn)}
+
+  /* ---------- Compact tables (problems / incidents / status) ----------
+     These three sections were card lists: 48 problem cards, 14 timeline entries and 127
+     status chips on the ERP host — several screens of scrolling to read three facts. A table
+     puts one finding per line with its columns aligned, so the page is scanned, not read. */
+  /* A table never widens the page: see the same note in inventory_report.html. max-width caps
+     the box at the layout's width, overflow-x is the last resort inside it. */
+  .tbl-wrap{overflow-x:auto; max-width:100%; border:1px solid var(--line); border-radius:9px; background:var(--surface)}
+  table.rpt{width:100%; max-width:100%; border-collapse:collapse; font-size:12.5px}
+  table.rpt th{text-align:left; font-size:10.5px; font-weight:700; letter-spacing:.04em; text-transform:uppercase;
+    color:var(--muted); padding:7px 10px; border-bottom:1px solid var(--line); white-space:nowrap; background:var(--surface-2,transparent)}
+  table.rpt td{padding:7px 10px; border-bottom:1px solid var(--line); vertical-align:top}
+  table.rpt tr:last-child td{border-bottom:none}
+  table.rpt tr.crit td{background:var(--crit-bg)}
+  table.rpt tr.warn td{background:var(--warn-bg)}
+  table.rpt .metric{font-weight:650; white-space:nowrap}
+  table.rpt .code{display:block; font-size:10px; color:var(--faint); font-family:var(--mono); font-weight:400}
+  table.rpt .mono{font-family:var(--mono)}
+  table.rpt .nowrap{white-space:nowrap}
+  /* A long server-role list used to sit in a nowrap cell, so the Access table grew past the
+     page and the reader had to scroll sideways to see the flags. The table is the page's
+     width; the long columns wrap inside it. */
+  table.rpt{table-layout:auto; max-width:100%}
+  table.rpt .wrapcell{white-space:normal; overflow-wrap:anywhere; word-break:break-word}
+  table.rpt .rolecell{white-space:normal; overflow-wrap:anywhere; min-width:180px}
+  /* A statement is a paragraph, not a value. Capped in height so one 4000-character PL/SQL block
+     cannot push the rest of the top-SQL table off the screen, and scrollable so it is still all
+     there — truncating would hide the WHERE clause, which is usually the reason it is listed. */
+  table.rpt .sqltext{white-space:pre-wrap; overflow-wrap:anywhere; font-size:11.5px;
+                     max-height:9em; overflow-y:auto; min-width:260px}
+  /* A job step is up to 200 characters of T-SQL or PL/SQL with no spaces to break at. Capped so
+     one long command cannot squeeze the eight columns beside it down to nothing. */
+  table.rpt .cmdcell{white-space:normal; overflow-wrap:anywhere; word-break:break-word;
+                     min-width:190px; max-width:400px; font-family:var(--mono); font-size:11px}
+  table.rpt .muted{color:var(--muted)}
+  /* Fill bar for the Volumes table. Inline with the percentage rather than a column of its own:
+     the pair is one fact, and splitting them puts a bar on one side of the eye and its number on
+     the other. */
+  .vbar{display:inline-block; width:64px; height:6px; border-radius:99px; background:#e6e9ee;
+        overflow:hidden; vertical-align:middle; margin-right:7px}
+  .vbar i{display:block; height:100%; border-radius:99px}
+  table.rpt .detail{font-family:var(--mono); font-size:11px; color:var(--muted); word-break:break-word}
+  table.rpt details summary{cursor:pointer; color:var(--muted); font-size:11.5px; outline:none}
+  table.rpt details ul{margin:5px 0 0 0; padding-left:16px}
+  table.rpt details li{font-size:11.5px; margin-bottom:2px}
+  .sec-tools{float:right; font-size:11.5px; color:var(--muted); font-weight:400}
+
+  /* ---------- Problems ---------- */
+  .prob{display:flex; gap:11px; background:var(--surface); border:1px solid var(--line); border-radius:9px; padding:11px 13px; margin-bottom:7px}
+  .prob.crit{background:var(--crit-bg); border-color:var(--crit-line)}
+  .prob.warn{background:var(--warn-bg); border-color:var(--warn-line)}
+  .sev{flex:0 0 auto; font-size:10px; font-weight:800; letter-spacing:.06em; padding:3px 7px; border-radius:5px; height:fit-content}
+  .sev.crit{background:var(--crit); color:#fff} .sev.warn{background:var(--warn); color:#fff}
+  /* The linked-server table badges a verdict on every row, including the healthy ones — a
+     KEEP has to look like a decision that was made, not like a missing badge. */
+  .sev.ok{background:var(--ok); color:#fff} .sev.unk{background:var(--unk); color:#fff}
+  .prob .body{flex:1; min-width:0}
+  .prob .h{font-weight:650; font-size:13px}
+  .prob .h .val{font-family:var(--mono); color:var(--ink)}
+  .prob .code{font-size:10.5px; color:var(--faint); font-family:var(--mono)}
+  .prob .act{font-size:12.5px; color:var(--muted); margin-top:3px}
+  .all-ok{background:var(--ok-bg); border:1px solid var(--ok-line); color:#166534; border-radius:9px; padding:12px 14px; font-size:13px}
+
+  /* ---------- Timeline ---------- */
+  .tl{border-left:2px solid var(--line); margin-left:6px; padding-left:14px}
+  .tl .ev{position:relative; padding:5px 0 5px 0; font-size:12.5px}
+  .tl .ev::before{content:""; position:absolute; left:-19px; top:11px; width:8px; height:8px; border-radius:50%; background:var(--faint)}
+  .tl .ev.crit::before{background:var(--crit)} .tl .ev.warn::before{background:var(--warn)}
+  .tl .when{font-family:var(--mono); font-size:11px; color:var(--muted)}
+  .tl .ongoing{color:var(--crit); font-weight:650}
+  .tl .cleared{color:var(--ok)}
+
+  /* ---------- Status cards (categorical, never charted) ---------- */
+  .cards{display:flex; flex-wrap:wrap; gap:6px}
+  .chip{background:var(--surface); border:1px solid var(--line); border-radius:7px; padding:6px 10px; font-size:12px}
+  .chip.crit{background:var(--crit-bg); border-color:var(--crit-line); color:#991b1b}
+  .chip.warn{background:var(--warn-bg); border-color:var(--warn-line); color:#92400e}
+  .chip b{font-weight:650}
+  .chip .c{color:var(--faint); font-family:var(--mono); font-size:10.5px}
+
+  /* ---------- Charts ---------- */
+  .grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(330px,1fr)); gap:12px}
+  .card{background:var(--surface); border:1px solid var(--line); border-radius:9px; padding:11px 12px 6px}
+  .card h3{font-size:12.5px; margin:0; font-weight:650; word-break:break-word}
+  .card .meta{color:var(--muted); font-size:11px; font-family:var(--mono); margin:2px 0 6px}
+  .card .code{color:var(--faint); font-size:10px; font-family:var(--mono)}
+  .card.crit{border-color:var(--crit-line); background:var(--crit-bg)}
+  .card.warn{border-color:var(--warn-line); background:var(--warn-bg)}
+  .last{float:right; font-weight:700; font-family:var(--mono); font-size:13px}
+  .last.crit{color:var(--crit)} .last.warn{color:var(--warn)} .last.ok{color:var(--ok)}
+  svg{display:block; width:100%; height:92px; overflow:visible}
+  .axis{fill:var(--faint); font-size:9px; font-family:var(--mono)}
+  .empty{color:var(--faint); font-size:12px; padding:18px 0; text-align:center}
+  details.fold{background:var(--surface); border:1px solid var(--line); border-radius:9px; margin-top:10px; padding:0}
+  details.fold > summary{cursor:pointer; padding:10px 13px; font-size:13px; font-weight:600; list-style:none}
+  details.fold > summary::-webkit-details-marker{display:none}
+  details.fold > summary::before{content:"▶ "; color:var(--faint); font-size:10px}
+  details.fold[open] > summary::before{content:"▼ "}
+  details.fold .in{padding:0 13px 13px}
+  .foot{margin-top:16px; padding:9px 12px; background:var(--surface-2); border:1px solid var(--line);
+        border-radius:8px; font-size:11.5px; color:var(--muted)}
+</style>
+</head>
+<body>
+<header class="masthead">
+  <div class="wrap">
+    <p class="eyebrow">__COMPANY__ · Server health</p>
+    <h1 class="title" id="hostTitle">Server health</h1>
+    <p class="subtitle" id="hostMeta">last __WINDOW_DAYS__ days · snapshot __SNAPSHOT_DATE__</p>
+    <a class="back" id="inventoryLink" href="__INVENTORY_HREF__">← back to the fleet inventory report</a>
+    <!-- Per-server, so it has to be rewritten by select() rather than baked in once. Hidden until
+         a server is chosen: a link to a page that has not been published yet is a 404, and a 404
+         is worse than no link because it looks like it should work. -->
+    <a class="back" id="indexUsageLink" href="#" style="display:none">index usage report →</a>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="picker" id="picker"></div>
+  <div id="body"><div class="empty">Loading…</div></div>
+</div>
+
+<script>
+const SERVERS = __SERVERS__;   /* [{slug, name, ip, platform, status, score, file}] — index only */
+const VERSION = "__STAMP__";   /* cache-buster: a rebuilt page must not serve yesterday's series */
+const WINDOW_DAYS = "__WINDOW_DAYS__";
+
+/* ?date= is answered by the web host, which swaps in that day's archived copy of whatever file
+   was asked for. This page is only an index, so the date has to travel with it: the series it
+   fetches must be the SAME day's, or a page dated last week would draw this morning's charts.
+   It is carried on every outgoing link too, so clicking through a dated view stays dated. */
+const DATE_PARAM = new URLSearchParams(location.search).get("date") || "";
+const withDate = (url) => !DATE_PARAM ? url
+  : url + (url.includes("?") ? "&" : "?") + "date=" + encodeURIComponent(DATE_PARAM);
+
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const CLS = {CRITICAL:"crit", WARNING:"warn", OK:"ok", HEALTHY:"ok", UNKNOWN:"unk"};
+/* The DATABASE_STATUS values that mean "usable", one per engine's wording. Kept in step with
+   db_ops.lib.inventory_render.ONLINE_DATABASE_STATES, which the fleet page counts with. */
+const ONLINE_STATES = ["ONLINE", "READ WRITE", "READ ONLY", "READ ONLY WITH APPLY"];
+const COLOR = {crit:"#dc2626", warn:"#c2700a", ok:"#15803d", unk:"#94a3b8"};
+const cls = s => CLS[String(s||"").toUpperCase()] || "unk";
+const fmt = v => v == null ? "—" : (Math.abs(v) >= 1000 ? v.toFixed(0) : Math.abs(v) >= 10 ? v.toFixed(1) : v.toFixed(2));
+const isPercentUnit = u => {
+  const raw = String(u||"").trim().toLowerCase();
+  const compact = raw.replace(/[^a-z0-9%]+/g,"_").replace(/^_+|_+$/g,"");
+  return raw.includes("%") || compact.includes("percent") || compact === "pct"
+      || compact.startsWith("pct_") || compact.endsWith("_pct");
+};
+const unitText = u => isPercentUnit(u) ? "%" : String(u||"");
+const day = t => new Date(t*1000).toLocaleDateString(undefined,{month:"numeric",day:"numeric"});
+/* `when` is declared once, further down, as a function — a second `const when` here made the
+   whole script a SyntaxError ("Identifier 'when' has already been declared") and the page
+   rendered nothing but "Loading…". Timestamp formatting lives in that one place. */
+const ago = s => {
+  if (s == null) return "never";
+  if (s < 90) return "just now";
+  if (s < 5400) return Math.round(s/60) + " min ago";
+  if (s < 172800) return Math.round(s/3600) + " h ago";
+  return Math.round(s/86400) + " days ago";
+};
+
+/* ---------------- charts (hand-drawn SVG; no library is reachable offline) --------------- */
+const W = 320, H = 92, PAD_L = 34, PAD_R = 6, PAD_T = 8, PAD_B = 16;
+function hash(s){ let h=0; for(const c of String(s)) h=(h*31+c.charCodeAt(0))|0; return h; }
+
+function lineChart(s){
+  const pts = s.points.filter(p => p[1] != null);
+  if (!pts.length) return '<div class="empty">no numeric data in window</div>';
+  const xs = pts.map(p=>p[0]), ys = pts.map(p=>p[1]);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs);
+  let y0 = s.min == null ? Math.min(0, Math.min(...ys)) : s.min;
+  let y1 = s.max == null ? Math.max(...ys) : s.max;
+  if (y1 === y0) y1 = y0 + 1;
+  const sx = t => PAD_L + ((t-x0)/Math.max(x1-x0,1))*(W-PAD_L-PAD_R);
+  const sy = v => PAD_T + (1-(v-y0)/(y1-y0))*(H-PAD_T-PAD_B);
+  const color = COLOR[cls(s.severity)] || COLOR.ok;
+  const line = pts.map((p,i)=>`${i?"L":"M"}${sx(p[0]).toFixed(1)},${sy(p[1]).toFixed(1)}`).join("");
+  const area = `${line}L${sx(pts[pts.length-1][0]).toFixed(1)},${sy(y0).toFixed(1)}L${sx(pts[0][0]).toFixed(1)},${sy(y0).toFixed(1)}Z`;
+  const gid = "g"+Math.abs(hash(s.code+s.item));
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+    <defs><linearGradient id="${gid}" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0%" stop-color="${color}" stop-opacity=".18"/><stop offset="100%" stop-color="${color}" stop-opacity="0"/>
+    </linearGradient></defs>
+    <line x1="${PAD_L}" x2="${W-PAD_R}" y1="${sy(y1)}" y2="${sy(y1)}" stroke="#e5e9ef"/>
+    <line x1="${PAD_L}" x2="${W-PAD_R}" y1="${sy(y0)}" y2="${sy(y0)}" stroke="#e5e9ef"/>
+    <text class="axis" x="0" y="${sy(y1)+3}">${fmt(y1)}</text>
+    <text class="axis" x="0" y="${sy(y0)+3}">${fmt(y0)}</text>
+    <text class="axis" x="${PAD_L}" y="${H-3}">${day(x0)}</text>
+    <text class="axis" x="${W-PAD_R}" y="${H-3}" text-anchor="end">${day(x1)}</text>
+    <path d="${area}" fill="url(#${gid})"/>
+    <path d="${line}" fill="none" stroke="${color}" stroke-width="1.6" stroke-linejoin="round"/>
+    <circle cx="${sx(pts[pts.length-1][0])}" cy="${sy(pts[pts.length-1][1])}" r="2.6" fill="${color}"/>
+  </svg>`;
+}
+
+/* A word that CHANGED over the window (Running -> Stopped) is worth a picture: one block per
+   sample, coloured by status. A word that never changed is a card, not a chart. */
+function statusStrip(s){
+  const pts = s.points;
+  if (!pts.length) return '<div class="empty">no data in window</div>';
+  const w = (W-PAD_L-PAD_R)/pts.length;
+  const blocks = pts.map((p,i)=>
+    `<rect x="${(PAD_L+i*w).toFixed(2)}" y="${PAD_T+18}" width="${Math.max(w,0.6).toFixed(2)}" height="34" fill="${COLOR[cls(sev(p[2]))]}" opacity=".85"/>`).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${blocks}
+    <text class="axis" x="${PAD_L}" y="${H-3}">${day(pts[0][0])}</text>
+    <text class="axis" x="${W-PAD_R}" y="${H-3}" text-anchor="end">${day(pts[pts.length-1][0])}</text>
+  </svg>`;
+}
+const sev = s => {
+  const u = String(s||"").toUpperCase();
+  if (u==="CRITICAL"||u==="ERROR") return "CRITICAL";
+  if (u==="WARNING"||u==="WARN"||u==="UNKNOWN"||u==="NO_DATA") return "WARNING";
+  return "OK";
+};
+
+function chartCard(s){
+  const c = cls(s.severity);
+  const unit = unitText(s.unit);
+  const suffix = unit ? ` ${esc(unit)}` : "";
+  const head = s.numeric
+    ? `<span class="last ${c}">${fmt(s.last)}${suffix}</span>`
+    : `<span class="last ${c}">${esc(s.lastText||"")}</span>`;
+  const scaleLabel = s.scaleKind === "capacity" ? "capacity" : s.scaleKind === "fixed" ? "range" : "auto scale";
+  const stats = s.numeric
+    ? `${scaleLabel} ${fmt(s.min)}–${fmt(s.max)}${suffix} · ${WINDOW_DAYS}d observed min ${fmt(s.observedMin)} · avg ${fmt(s.avg)} · max ${fmt(s.observedMax)}`
+    : `${s.points.length} samples`;
+  return `<div class="card ${c==="ok"||c==="unk"?"":c}">
+    ${head}<h3>${esc(s.label)} — ${esc(s.item)}</h3>
+    <div class="meta">${stats} <span class="code">${esc(s.code)}</span></div>
+    ${s.numeric ? lineChart(s) : statusStrip(s)}
+  </div>`;
+}
+
+function chartGrid(list){
+  return list.length ? `<div class="grid">${list.map(chartCard).join("")}</div>`
+                     : '<div class="empty">nothing in this group</div>';
+}
+
+/* ---------------- sections ---------------- */
+function verdict(h, server){
+  const c = cls(h.status);
+  const bar = h.score >= 80 ? COLOR.ok : h.score >= 50 ? COLOR.warn : COLOR.crit;
+  const staleTxt = h.stale
+    ? `<span class="stale">stale — nothing collected for ${Math.round((h.staleAfterSeconds||10800)/3600)} h+</span>`
+    : "fresh";
+  return `<div class="verdict">
+    <div class="vcard ${c}">
+      <div class="vstatus ${c}">${esc(h.status)}</div>
+      <div class="vsub">${esc([server.name, server.role && server.role !== server.name ? server.role : "",
+                               server.platform||""].filter(Boolean).join(" · "))}</div>
+      <div class="score">
+        <div class="bar"><i style="width:${h.score}%;background:${bar}"></i></div>
+        <div class="num">health score ${h.score}/100</div>
+      </div>
+    </div>
+    <div class="vcard">
+      <div class="facts">
+        <div class="fact"><div class="k">Critical</div><div class="v ${h.critical?"crit":""}">${h.critical}</div></div>
+        <div class="fact"><div class="k">Warning</div><div class="v ${h.warning?"warn":""}">${h.warning}</div></div>
+        <div class="fact"><div class="k">Last collected</div><div class="v" style="font-size:13px">${h.lastCollected?esc(when(h.lastCollected)):"never"}</div></div>
+        <div class="fact"><div class="k">Data freshness</div><div class="v ${h.stale?"stale":""}" style="font-size:13px">${esc(ago(h.ageSeconds))}</div></div>
+        <div class="fact"><div class="k">Series</div><div class="v">${h.seriesCount}</div></div>
+      </div>
+      <div class="vsub" style="margin-top:10px">${h.stale
+        ? "The newest sample is older than the collection interval: this page describes the past, not the present. Fix collection before trusting anything below."
+        : "Collection is current, so the values below are what the server looks like now."}</div>
+    </div>
+  </div>`;
+}
+
+/* Store timestamps are UTC (docs/14). Saying so on every stamp is the difference between a
+   reader trusting the number and a reader guessing whose clock it is. */
+function when(value){
+  if (value == null || value === "") return "";
+  if (typeof value === "number") return new Date(value*1000).toISOString().slice(0,16).replace("T"," ")+" UTC";
+  return esc(String(value).replace("T"," ").replace("Z",""))+" UTC";
+}
+
+/* The tile names the row it is reading. Without it a CPU tile could show a memory percentage
+   and nothing on the page would say so — which is exactly what happened, for a whole run. */
+function areaGrid(areas){
+  return `<div class="areas">${areas.map(a=>{
+    const c = cls(a.status);
+    const src = a.sourceCode ? `${a.sourceCode}${a.sourceItem?" / "+a.sourceItem:""}` : "";
+    /* The value graded itself worse than the tile shows, and config lowered it. Marked rather
+       than repainted: repainting would undo the decision, and staying silent is what made a
+       90.67% reading sit green under a tile that printed "CRITICAL >= 90%". */
+    const down = a.downgradedFrom || "";
+    const dc = down ? cls(down) : "";
+    return `<div class="area ${c}${down?` sil sil-${dc}`:""}">
+      <div class="top"><span class="name">${esc(a.label)}${
+        down?`<span class="sil-tag ${dc}">silenced</span>`:""}</span><span class="val ${c}">${esc(a.value)}</span></div>
+      <div class="thr">${esc(a.threshold)}</div>
+      <div class="why">${esc(a.note)}</div>
+      ${down?`<div class="sil-why ${dc}">This reading grades <b>${esc(down)}</b> against the rule above.
+        It is not alerting because a severity_map for this server lowers it in
+        <span class="mono">data/db_instances.json</span> — the value is real, the silence is a decision.</div>`:""}
+      ${a.detail?`<div class="src">${esc(a.detail)}</div>`:""}
+      ${src?`<div class="src">source: ${esc(src)}${a.collectedAt?" · "+when(a.collectedAt):""}</div>`:""}
+      ${a.stale?`<div class="src" style="color:var(--warn)">its metric is late or failing — not a current reading</div>`:""}
+      ${a.reportJudged?`<div class="src">status judged by this report — the collector logs this metric without alerting</div>`:""}
+    </div>`;
+  }).join("")}</div>`;
+}
+
+/* Monitoring's own health. A verdict is only worth as much as the collection behind it, and the
+   page-wide "data age" is the newest metric on the server — which hid a metric 48 hours stale
+   behind one three minutes old, and said nothing at all about two that never ran. */
+function coverage(f){
+  if (!f || !f.metrics || !f.metrics.length) return "";
+  const bad = f.metrics.filter(m=>m.state!=="OK");
+  const missing = f.notCollected || [];
+  const summary = `${f.seen}/${f.expected} metric(s) reporting`
+    + (bad.length?` · ${bad.length} failing or late`:"")
+    + (missing.length?` · ${missing.length} with no evidence`:"");
+  const rows = bad.map(m=>`<tr class="${m.state==="FAILED"?"crit":"warn"}">
+      <td class="metric">${esc(m.label)}<span class="code">${esc(m.code)}</span></td>
+      <td class="nowrap mono">${m.state}</td>
+      <td class="nowrap mono">${m.lastSuccess?when(m.lastSuccess):"never in window"}</td>
+      <td class="nowrap mono">${m.cadenceSeconds?Math.round(m.cadenceSeconds/60)+" min":"—"}</td>
+      <td class="detail">${esc(m.error||m.status||"")}</td>
+    </tr>`).join("")
+   + missing.map(m=>`<tr class="warn">
+      <td class="metric">${esc(m.label)}<span class="code">${esc(m.code)}</span></td>
+      <td class="nowrap mono">NO EVIDENCE</td><td class="nowrap mono">—</td><td class="nowrap mono">—</td>
+      <td class="detail">Active in the catalog for this engine, no rows in the window. Either never
+        collected here, or switched off for this target.</td>
+    </tr>`).join("");
+  if (!rows) return `<details class="fold"><summary>Metric coverage — ${esc(summary)}</summary>
+    <div class="in"><p class="sec-note">Every expected metric reported inside its cadence.</p></div></details>`;
+  return `<h2 class="sec">Metric coverage<span class="sec-tools">${esc(summary)}</span></h2>
+    <p class="sec-note">A metric that is failing or late is not a healthy metric. Whatever the page
+      shows for it is the last value from before it stopped.</p>
+    <div class="tbl-wrap"><table class="rpt">
+      <thead><tr><th>Metric</th><th>State</th><th>Last success</th><th>Cadence</th><th>Now says</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+}
+
+/* Per-database backup compliance. Server-level "newest backup" let one healthy database answer
+   for a whole instance; this is one row per database and one column per required type. */
+function backupBlock(b){
+  const rows = (b && b.databases) || [];
+  if (!rows.length) return "";
+  const s = b.summary || {};
+  const cell = t => t.required
+    ? `${t.age_hours==null?"never":(t.age_hours<48?Math.round(t.age_hours)+"h":Math.round(t.age_hours/24)+"d")}`
+    : `<span class="muted">n/r</span>`;
+  return `<details class="fold"${s.status==="CRITICAL"?" open":""}><summary>Backup policy — ${
+      s.compliant}/${s.eligible} database(s) within policy${s.reason?" · "+esc(s.reason):""}</summary>
+    <div class="in"><p class="sec-note">Required types come from <code>data/backup_policy.json</code>.
+      "n/r" means the policy does not require that type for this database. A stale LOG backup is an
+      RPO violation; whether the log chain is intact needs backup LSN evidence, which is not collected.</p>
+    <div class="tbl-wrap"><table class="rpt">
+      <thead><tr><th>Database</th><th>Recovery</th><th>FULL</th><th>DIFF</th><th>LOG</th><th>Verdict</th></tr></thead>
+      <tbody>${rows.map(d=>`<tr class="${d.status==="CRITICAL"?"crit":d.status==="WARNING"?"warn":""}">
+        <td class="metric">${esc(d.database)}</td>
+        <td class="mono">${esc(d.recovery_model||"—")}</td>
+        <td class="mono nowrap">${cell(d.types.FULL)}</td>
+        <td class="mono nowrap">${cell(d.types.DIFF)}</td>
+        <td class="mono nowrap">${cell(d.types.LOG)}</td>
+        <td class="detail">${esc(d.reason||"within policy")}</td>
+      </tr>`).join("")}</tbody></table></div></div></details>`;
+}
+
+/* Linked servers, as a decision table. Reachability alone is a status chip; reachability NEXT
+   TO the reference count is a decision — which is why this is a table and not a chip strip.
+   The verdict column is the whole point: an unreachable server nothing calls is cleanup, the
+   same server with a procedure behind it is the next outage. */
+const VERDICT_CLS = {FIX:"crit", DROP:"warn", REVIEW:"warn", KEEP:"ok"};
+/* Query Store, per database. Its own section because the question is per database and the
+   answer has settings attached: "can I still investigate what happened on this database
+   yesterday" is not answerable from a status chip.
+
+   The state shown is the ACTUAL state. A Query Store that reaches its max_storage_size flips
+   itself to READ_ONLY and stops capturing while sys.databases.is_query_store_on still reads 1 —
+   so a page built on the configured flag calls that database covered when it has recorded
+   nothing since the day it filled up. That is the row this section exists to surface. */
+function queryStoreBlock(q){
+  if (!q || !q.databases || !q.databases.length) return "";
+  const s = q.summary;
+  const num = v => v==null ? "—" : String(v);
+  const mb = v => v==null ? "—" : (v>=1024 ? (v/1024).toFixed(1)+" GB" : v+" MB");
+  const stateChip = r => {
+    if (r.state === "READ_WRITE") return `<span class="sev ok">CAPTURING</span>`;
+    if (r.state === "AG_SECONDARY") return `<span class="sev">SECONDARY</span>`;
+    if (r.state === "OFF") return `<span class="sev warn">OFF</span>`;
+    /* ERROR / READ_ONLY / NOT_ONLINE: switched on at some point and not recording now. */
+    return `<span class="sev crit">${esc(r.state || "UNKNOWN")}</span>`;
+  };
+  const storage = r => {
+    if (r.storagePct == null) return "—";
+    const cls = r.storagePct >= 90 ? "crit" : r.storagePct >= 75 ? "warn" : "";
+    return `<span class="${cls}">${r.storagePct}%</span> <span class="code">${esc(mb(r.storageMB))} / ${esc(mb(r.maxStorageMB))}</span>`;
+  };
+  const rows = q.databases.map(r=>{
+    /* "off" on its own cannot be acted on. Somebody switching Query Store off is a decision;
+       Query Store switching itself off after an error is a fault, usually with captured data
+       still sitting in the database — AXDB on 192.168.70.115 reads desired OFF / actual ERROR
+       with 2128 MB still there, and both cases used to render as the same flat "off". */
+    const why = [r.offReasonDesc, r.readonlyReasonDesc,
+                 (r.desiredState && r.actualState && r.desiredState !== r.actualState)
+                   ? `configured ${r.desiredState}, actually ${r.actualState}` : ""]
+      .filter(Boolean).filter((v,i,a)=>a.indexOf(v)===i).join(" · ");
+    const note = why ? `<div class="detail">${esc(why)}</div>` : "";
+    return `<tr class="${r.capturing ? "" : "warn"}">
+      <td>${stateChip(r)}</td>
+      <td class="metric">${esc(r.name)}${note}</td>
+      <td class="nowrap mono">${esc(r.actualState || r.state || "—")}</td>
+      <td class="nowrap">${storage(r)}</td>
+      <td class="nowrap mono">${esc(r.captureMode || "—")}</td>
+      <td class="nowrap mono">${esc(r.cleanupMode || "—")}</td>
+      <td class="nowrap mono">${esc(r.waitStatsCapture || "—")}</td>
+      <td class="nowrap mono">${esc(num(r.staleQueryThresholdDays))}d / ${esc(num(r.intervalLengthMinutes))}m</td>
+      <td class="nowrap mono">${esc(num(r.maxPlansPerQuery))}</td>
+    </tr>`;
+  }).join("");
+  const head = `${s.capturing}/${s.databases} capturing`
+    + (s.off ? ` · ${s.off} off` : "")
+    + (s.onButNotCapturing ? ` · ${s.onButNotCapturing} on but not capturing` : "")
+    + (s.stoppedOnItsOwn ? ` · ${s.stoppedOnItsOwn} stopped on its own` : "");
+  return `<details class="fold"${(s.onButNotCapturing || s.off) ? " open" : ""}>
+    <summary>Query Store — ${esc(head)}</summary>
+    <div class="in">
+    <p class="sec-note">Whether each database is recording query history, and how it is
+      configured. <b>CAPTURING</b> is the actual state (READ_WRITE), not the configured one:
+      Query Store that reaches its storage limit switches itself to READ_ONLY and stops
+      recording, while the database still reports Query Store as on — so the state here is the
+      one that says whether a slowdown can still be diagnosed afterwards. Each row that is not
+      capturing says <b>why</b>: <i>switched off</i> is somebody's decision, while <i>stopped
+      after an error</i> or <i>storage size limit reached</i> is Query Store having stopped by
+      itself, usually with captured data still in the database (turning it back on cleanly then
+      needs <span class="mono">ALTER DATABASE … SET QUERY_STORE CLEAR</span>). Storage shows how
+      close each one is to that limit. <b>Retention</b> is the stale-query threshold and the
+      aggregation interval. This is an inventory collected once a day; the alerting on a
+      misbehaving query belongs to QUERY_STORE_QUERY_ISSUES.</p>
+    <div class="tbl-wrap"><table class="rpt">
+      <thead><tr><th></th><th>Database</th><th>State</th><th>Storage used</th><th>Capture</th>
+        <th>Cleanup</th><th>Wait stats</th><th>Retention</th><th>Max plans</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+    </div></details>`;
+}
+
+/* Oracle storage — one row per tablespace, its datafiles folded underneath.
+
+   Every number here was already in the store and none of it was readable: TABLESPACE_FREE_SPACE
+   rendered as ten sparklines all labelled "Tablespace free space" with the name only in a
+   tooltip, and the datafiles as fifteen more cards saying "15000 MB" with nothing saying which
+   tablespace they extend.
+
+   The headline is EFFECTIVE free, not free-right-now: free space plus autoextend headroom is what
+   the tablespace can still absorb before ORA-01653. RBS on 192.168.1.236 holds 2.3 GB free inside
+   65 GB of headroom — read as "free now" it is nearly full, and the datafile somebody adds on that
+   reading was never needed. The largest free extent is carried beside it because an allocation has
+   to fit in one piece: 4 GB of free space in small fragments still raises ORA-01653. */
+function tablespaceBlock(t){
+  if (!t || !t.tablespaces || !t.tablespaces.length) return "";
+  const s = t.summary;
+  const mb = v => v == null ? "—"
+    : v >= 1024 ? (v/1024).toFixed(v >= 10240 ? 0 : 1) + " GB" : Math.round(v) + " MB";
+  const pctCell = r => {
+    if (r.usedPct == null) return `<span class="muted">—</span>`;
+    const cls = r.usedPct >= 95 ? "crit" : r.usedPct >= 85 ? "warn" : "";
+    return `<span class="${cls}">${r.usedPct.toFixed(1)}%</span>`;
+  };
+  /* Headroom counted from files that cannot grow is a promise the database will not keep, so the
+     count of autoextending files is stated next to it rather than left to the total. */
+  const headroomCell = r => {
+    if (r.autoextendHeadroomMB == null) return `<span class="muted">—</span>`;
+    const none = r.autoextendFiles === 0;
+    return `<span class="${none ? "warn" : ""}">${esc(mb(r.autoextendHeadroomMB))}</span>`
+      + (r.autoextendFiles == null ? ""
+         : `<div class="detail">${none ? "no file autoextends"
+              : r.autoextendFiles + " of " + r.declaredFiles + " autoextend"}</div>`);
+  };
+  /* A fragmented tablespace fails an allocation it has the space for. Only worth flagging when
+     the gap is real: plenty of free space whose largest piece is small. */
+  const extentCell = r => {
+    if (r.largestFreeExtentMB == null) return `<span class="muted">—</span>`;
+    const fragmented = r.freeNowMB != null && r.freeNowMB > 1024
+      && r.largestFreeExtentMB < r.freeNowMB / 10;
+    return `<span class="${fragmented ? "warn" : ""}">${esc(mb(r.largestFreeExtentMB))}</span>`
+      + (fragmented ? `<div class="detail">fragmented</div>` : "");
+  };
+  const tempCell = r => {
+    if (!r.temp) return `<span class="muted">—</span>`;
+    return `<span class="mono">${esc(mb(r.tempMaxUsedMB))}</span>`
+      + `<div class="detail">peak sort use of ${esc(mb(r.tempTotalMB))}</div>`;
+  };
+  /* Datafile paths under the tablespace name rather than in a table of their own: the path is
+     only ever read to answer "where does this tablespace live", so it belongs next to it. */
+  const fileRows = r => {
+    if (!r.files || !r.files.length) return "";
+    return r.files.map(f=>`<div class="detail mono">${esc(f.file)} — ${esc(mb(f.sizeMB))}</div>`)
+      .join("");
+  };
+  const chip = st => `<span class="sev ${cls(sev(st))}">${esc(sev(st))}</span>`;
+  const rows = t.tablespaces.map(r=>`<tr class="${cls(sev(r.status))}">
+      <td>${chip(r.status)}</td>
+      <td class="metric">${esc(r.name)}${r.temp ? ` <span class="code">TEMP</span>` : ""}${fileRows(r)}</td>
+      <td class="nowrap">${pctCell(r)}</td>
+      <td class="nowrap mono">${esc(mb(r.effectiveFreeMB))}</td>
+      <td class="nowrap mono">${esc(mb(r.freeNowMB))}</td>
+      <td class="nowrap">${headroomCell(r)}</td>
+      <td class="nowrap mono">${esc(mb(r.allocatedMB))} / ${esc(mb(r.maxMB))}</td>
+      <td class="nowrap">${extentCell(r)}</td>
+      <td class="nowrap">${tempCell(r)}</td>
+    </tr>`).join("");
+  const orphans = (t.orphanFiles || []).length
+    ? `<p class="sec-note">${t.orphanFiles.length} datafile(s) belong to a tablespace that
+        reported no free-space row this run: ${
+        t.orphanFiles.map(f=>`<span class="mono">${esc(f.tablespace)}</span>`)
+          .filter((v,i,a)=>a.indexOf(v)===i).join(", ")}.</p>`
+    : "";
+  const head = `${s.tablespaces} tablespace(s) · ${s.datafiles} datafile(s)`
+    + (s.critical ? ` · ${s.critical} critical` : "")
+    + (s.warning ? ` · ${s.warning} warning` : "")
+    + (s.noAutoextend ? ` · ${s.noAutoextend} cannot autoextend` : "");
+  return `<details class="fold"${(s.critical || s.warning) ? " open" : ""}>
+    <summary>Tablespaces &amp; datafiles — ${esc(head)}</summary>
+    <div class="in">
+    <p class="sec-note"><b>Free</b> is the effective figure: space free inside the current files
+      <i>plus</i> what autoextend can still add, which is what a growing segment actually has
+      available before ORA-01653. <b>Free now</b> is only the first half — a tablespace with
+      little of it and plenty of headroom is fine, one with no autoextending file is not, and
+      the headroom column says which. <b>Largest extent</b> is what a single allocation has to
+      fit inside: a tablespace can hold gigabytes in fragments too small to satisfy one extent.
+      <b>Used %</b> is measured against the maximum the tablespace can reach, not against what is
+      allocated today. Datafile paths are listed under each tablespace name.</p>
+    ${orphans}
+    <div class="tbl-wrap"><table class="rpt">
+      <thead><tr><th></th><th>Tablespace / datafiles</th><th>Used</th><th>Free</th>
+        <th>Free now</th><th>Autoextend headroom</th><th>Allocated / max</th>
+        <th>Largest extent</th><th>Temp peak</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+    </div></details>`;
+}
+
+/* ---- The four Oracle sections. Each renders "" when its metrics produced no rows, which is how
+   a SQL Server or PostgreSQL page is unchanged without anything here knowing the engine. ---- */
+
+const oraMB = v => v == null ? "—"
+  : v >= 1024 ? (v/1024).toFixed(v >= 10240 ? 0 : 1) + " GB" : (v >= 10 ? Math.round(v) : v.toFixed(2)) + " MB";
+/* Counts in the hundreds of millions are unreadable as digits, and these are all counters. */
+const oraCount = v => {
+  if (v == null) return "—";
+  if (v >= 1e9) return (v/1e9).toFixed(1) + "B";
+  if (v >= 1e6) return (v/1e6).toFixed(1) + "M";
+  if (v >= 1e4) return (v/1e3).toFixed(0) + "k";
+  return String(Math.round(v * 100) / 100);
+};
+
+/* Oracle instance health: the SGA pools, the caches, and how close the instance is to its
+   process/session ceilings. SHARED_POOL_FREE on 192.168.1.236 has been CRITICAL at 9 MB free —
+   the instance's only critical finding — while rendering as one nameless sparkline among thirty. */
+function oracleInstanceBlock(o){
+  if (!o || (!o.pools.length && !o.limits.length && !o.bufferCache)) return "";
+  const chip = st => `<span class="sev ${cls(sev(st))}">${esc(sev(st))}</span>`;
+  const poolRows = o.pools.map(p=>`<tr class="${cls(sev(p.status))}">
+      <td>${chip(p.status)}</td>
+      <td class="metric">${esc(p.pool)}<div class="detail">${esc(p.name)}</div></td>
+      <td class="nowrap mono">${esc(oraMB(p.freeMB))}</td></tr>`).join("");
+  /* Percent of limit, not the raw count: 215 sessions means nothing without the 610 beside it,
+     and ORA-00020 is what the column is read to avoid. The peak is carried because the ceiling
+     is hit at the peak, never at the moment the collector happened to look. */
+  const limitRows = o.limits.map(l=>{
+    const c = l.usedPct == null ? "" : l.usedPct >= 90 ? "crit" : l.usedPct >= 75 ? "warn" : "";
+    return `<tr>
+      <td class="metric">${esc(l.resource)}</td>
+      <td class="nowrap mono">${l.current == null ? "—" : l.current}</td>
+      <td class="nowrap mono">${l.peak == null ? "—" : l.peak}${
+        l.peakPct == null ? "" : `<div class="detail">${l.peakPct}% of limit</div>`}</td>
+      <td class="nowrap mono">${l.limit == null ? "—" : l.limit}</td>
+      <td class="nowrap"><span class="${c}">${l.usedPct == null ? "—" : l.usedPct + "%"}</span></td>
+    </tr>`;
+  }).join("");
+  /* A namespace nothing asked for has no hit ratio and shows "—": reading that as 0% would rank
+     the untouched namespaces as the worst on the instance. Reloads are the number that matters —
+     a reload is a statement that had to be parsed again because it was aged out of the pool. */
+  const cacheRows = o.libraryCache.map(c=>{
+    const hit = c.hitPct == null ? "" : c.hitPct < 90 ? "crit" : c.hitPct < 95 ? "warn" : "";
+    return `<tr>
+      <td class="metric">${esc(c.namespace)}</td>
+      <td class="nowrap mono">${esc(oraCount(c.gets))}</td>
+      <td class="nowrap"><span class="${hit}">${c.hitPct == null ? "—" : c.hitPct + "%"}</span></td>
+      <td class="nowrap mono">${esc(oraCount(c.reloads))}</td>
+      <td class="nowrap mono">${esc(oraCount(c.invalidations))}</td>
+    </tr>`;
+  }).join("");
+  const bc = o.bufferCache;
+  const bcBlock = !bc ? "" : `<h3 class="sub">Buffer cache</h3>
+    <p class="sec-note">Hit ratio since instance start —
+      <b class="${bc.hitPct == null ? "" : bc.hitPct < 90 ? "crit" : bc.hitPct < 95 ? "warn" : ""}">${
+        bc.hitPct == null ? "—" : bc.hitPct + "%"}</b>
+      from ${esc(oraCount(bc.consistentGets))} consistent gets and
+      ${esc(oraCount(bc.dbBlockGets))} block gets against
+      ${esc(oraCount(bc.physicalReads))} physical reads. Cumulative, so it describes this
+      instance's history rather than its state right now.</p>`;
+  const head = `${o.summary.pools} pool(s)`
+    + (o.summary.criticalPools ? ` · ${o.summary.criticalPools} critical` : "")
+    + (o.summary.reloads ? ` · ${esc(oraCount(o.summary.reloads))} library cache reloads` : "");
+  return `<details class="fold"${o.summary.worstStatus !== "OK" ? " open" : ""}>
+    <summary>Oracle instance health — ${head}</summary>
+    <div class="in">
+    <h3 class="sub">SGA pools</h3>
+    <p class="sec-note">Free memory per pool. A shared pool down to single-digit megabytes is
+      about to raise ORA-04031, and it shows first as statements being aged out and re-parsed —
+      which is the reload count in the table below.</p>
+    <div class="tbl-wrap"><table class="rpt">
+      <thead><tr><th></th><th>Pool</th><th>Free</th></tr></thead>
+      <tbody>${poolRows}</tbody></table></div>
+    ${o.libraryCache.length ? `<h3 class="sub">Library cache</h3>
+    <p class="sec-note"><b>Reloads</b> are statements that had to be parsed again because they
+      were aged out of the shared pool — the symptom that connects a shrinking pool to slower
+      queries. <b>Invalidations</b> are objects whose cached plans were thrown away by a DDL or a
+      statistics change.</p>
+    <div class="tbl-wrap"><table class="rpt">
+      <thead><tr><th>Namespace</th><th>Gets</th><th>Hit ratio</th><th>Reloads</th>
+        <th>Invalidations</th></tr></thead>
+      <tbody>${cacheRows}</tbody></table></div>` : ""}
+    ${bcBlock}
+    ${o.limits.length ? `<h3 class="sub">Process and session limits</h3>
+    <p class="sec-note">How close the instance is to refusing new connections with ORA-00020. The
+      <b>peak</b> is what decides that, not the current count — the ceiling is reached at the busy
+      moment, never at the one the collector happened to sample.</p>
+    <div class="tbl-wrap"><table class="rpt">
+      <thead><tr><th>Resource</th><th>Current</th><th>Peak</th><th>Limit</th><th>Used</th></tr></thead>
+      <tbody>${limitRows}</tbody></table></div>` : ""}
+    </div></details>`;
+}
+
+/* Segments and objects: what is broken, what is about to break, and what used the space.
+   Four failures live here and none of them is visible in the tablespace numbers above. */
+function oracleObjectsBlock(o){
+  if (!o) return "";
+  const s = o.summary;
+  if (!s.invalidObjects && !s.unusableIndexes && !s.extentLimits && !s.topSegments
+      && !s.rollbackSegments) return "";
+  /* INVALID code raises ORA-04068 at CALL time, not when it broke. This is a list of things that
+     will fail on next use, which is why it leads the section rather than sitting under the sizes. */
+  const invalidBlock = !o.invalidObjects.length ? "" : `<h3 class="sub">Invalid objects</h3>
+    <p class="sec-note">INVALID code raises <span class="mono">ORA-04068</span> when it is
+      <i>called</i>, not when it broke — so this is a list of things that will fail on next use.
+      Recompile with <span class="mono">ALTER … COMPILE</span>, or run
+      <span class="mono">utlrp.sql</span>; anything that will not compile has a real dependency
+      that is gone.</p>
+    <div class="tbl-wrap"><table class="rpt">
+      <thead><tr><th></th><th>Owner</th><th>Type</th><th>Invalid</th><th>Examples</th></tr></thead>
+      <tbody>${o.invalidObjects.map(i=>`<tr class="warn">
+        <td><span class="sev ${cls(sev(i.status))}">${esc(sev(i.status))}</span></td>
+        <td class="metric">${esc(i.owner)}</td>
+        <td class="nowrap mono">${esc(i.objectType)}</td>
+        <td class="nowrap mono">${i.count == null ? "—" : i.count}</td>
+        <td class="mono">${esc(i.examples.join(", ")) || "—"}</td></tr>`).join("")}
+      </tbody></table></div>`;
+  /* An UNUSABLE index is not a slow index, it is an absent one: queries silently full-scan and
+     any DML touching it fails outright. */
+  const unusableBlock = !o.unusableIndexes.length ? "" : `<h3 class="sub">Unusable indexes</h3>
+    <p class="sec-note">Not slow indexes — <b>absent</b> ones. Queries fall back to full scans
+      without saying so, and any INSERT or UPDATE touching one fails with
+      <span class="mono">ORA-01502</span>. Rebuild with
+      <span class="mono">ALTER INDEX … REBUILD</span>.</p>
+    <div class="tbl-wrap"><table class="rpt">
+      <thead><tr><th>Index</th><th>Scope</th></tr></thead>
+      <tbody>${o.unusableIndexes.map(i=>`<tr class="crit">
+        <td class="metric mono">${esc(i.index)}</td>
+        <td class="nowrap">${i.partition ? `one partition` : `whole index`}</td></tr>`).join("")}
+      </tbody></table></div>`;
+  /* The one 8i failure a capacity percentage cannot predict: the segment fails while the
+     tablespace still shows gigabytes free. */
+  const extentBlock = !o.extentLimits.length ? "" : `<h3 class="sub">Segments near MAX_EXTENTS</h3>
+    <p class="sec-note">These fail with <span class="mono">ORA-01631</span> on their next extent
+      <b>while the tablespace still has free space</b>, so nothing in the storage table above
+      predicts it. A dictionary-managed 8i tablespace gives every segment a hard ceiling; the fix
+      is <span class="mono">ALTER … STORAGE (MAXEXTENTS UNLIMITED)</span> or a rebuild with
+      larger extents.</p>
+    <div class="tbl-wrap"><table class="rpt">
+      <thead><tr><th></th><th>Segment</th><th>Type</th><th>Tablespace</th><th>Extents</th>
+        <th>Used</th></tr></thead>
+      <tbody>${o.extentLimits.map(e=>`<tr class="${cls(sev(e.status))}">
+        <td><span class="sev ${cls(sev(e.status))}">${esc(sev(e.status))}</span></td>
+        <td class="metric mono">${esc(e.segment)}</td>
+        <td class="nowrap mono">${esc(e.type)}</td>
+        <td class="nowrap mono">${esc(e.tablespace)}</td>
+        <td class="nowrap mono">${e.extents == null ? "—" : e.extents} / ${
+          e.maxExtents == null ? "—" : e.maxExtents}</td>
+        <td class="nowrap"><span class="crit">${e.usedPct == null ? "—" : e.usedPct + "%"}</span></td>
+        </tr>`).join("")}
+      </tbody></table></div>`;
+  const segmentBlock = !o.topSegments.length ? "" : `<h3 class="sub">Largest segments (${
+      o.topSegments.length})</h3>
+    <p class="sec-note">The tablespace table answers "is there room left"; this answers <b>what
+      used the room</b>. Allocated size, not row counts — allocation is what consumes the
+      tablespace and it is true whether or not statistics are current. A high extent count on a
+      large segment is a candidate for a rebuild with a bigger extent size.</p>
+    <div class="tbl-wrap"><table class="rpt">
+      <thead><tr><th>Segment</th><th>Type</th><th>Tablespace</th><th>Size</th>
+        <th>Extents</th></tr></thead>
+      <tbody>${o.topSegments.map(g=>`<tr>
+        <td class="metric mono">${esc(g.segment)}</td>
+        <td class="nowrap mono">${esc(g.type)}</td>
+        <td class="nowrap mono">${esc(g.tablespace)}</td>
+        <td class="nowrap mono">${esc(oraMB(g.sizeMB))}</td>
+        <td class="nowrap mono">${g.extents == null ? "—" : g.extents}</td></tr>`).join("")}
+      </tbody></table></div>`;
+  /* On 8i this is the throughput ceiling and no other metric sees it. Shrinks and extends matter
+     as much as the wait ratio: a segment that had to grow back did the work, it just did not
+     have to queue for a slot to do it. */
+  const rollbackBlock = !o.rollbackSegments.length ? "" : `<h3 class="sub">Rollback segments (${
+      o.rollbackSegments.length})</h3>
+    <p class="sec-note"><b>Wait ratio</b> is transactions queueing for a rollback slot — on 8i
+      this is the write-throughput ceiling, and nothing else on this page measures it. <b>Shrinks
+      and extends</b> matter even at a zero wait ratio: a segment that keeps growing back after
+      being shrunk is doing that work on every long transaction. ${s.rollbackResizes
+        ? `${s.rollbackResizes} resize(s) across the set.` : ""}</p>
+    <div class="tbl-wrap"><table class="rpt">
+      <thead><tr><th>Segment</th><th>Waits</th><th>Gets</th><th>Wait ratio</th><th>Active tx</th>
+        <th>Extents</th><th>Shrinks / extends</th><th>Size</th></tr></thead>
+      <tbody>${o.rollbackSegments.map(r=>{
+        const c = r.waitPct == null ? "" : r.waitPct >= 2 ? "crit" : r.waitPct >= 1 ? "warn" : "";
+        return `<tr>
+        <td class="metric mono">${esc(r.name)}</td>
+        <td class="nowrap mono">${esc(oraCount(r.waits))}</td>
+        <td class="nowrap mono">${esc(oraCount(r.gets))}</td>
+        <td class="nowrap"><span class="${c}">${r.waitPct == null ? "—" : r.waitPct + "%"}</span></td>
+        <td class="nowrap mono">${r.activeTransactions == null ? "—" : r.activeTransactions}</td>
+        <td class="nowrap mono">${r.extents == null ? "—" : r.extents}</td>
+        <td class="nowrap mono">${r.shrinks == null ? "—" : r.shrinks} / ${
+          r.extends == null ? "—" : r.extends}</td>
+        <td class="nowrap mono">${esc(oraMB(r.sizeMB))}</td></tr>`;}).join("")}
+      </tbody></table></div>`;
+  const head = [
+    s.invalidObjects ? `${s.invalidObjects} invalid object(s)` : "",
+    s.unusableIndexes ? `${s.unusableIndexes} unusable index(es)` : "",
+    s.extentLimits ? `${s.extentLimits} near MAX_EXTENTS` : "",
+    s.topSegments ? `${s.topSegments} segment(s)` : "",
+    s.rollbackSegments ? `${s.rollbackSegments} rollback segment(s)` : "",
+  ].filter(Boolean).join(" · ");
+  const bad = s.invalidObjects || s.unusableIndexes || s.extentLimits;
+  return `<details class="fold"${bad ? " open" : ""}>
+    <summary>Segments &amp; objects — ${esc(head)}</summary>
+    <div class="in">${unusableBlock}${extentBlock}${invalidBlock}${segmentBlock}${rollbackBlock}</div>
+    </details>`;
+}
+
+/* Redo and archiving — whether this instance can be recovered to a point in time at all.
+   NOARCHIVELOG is the single most consequential fact about 192.168.1.236 and no page stated it:
+   the value sat inside a card titled "Log file space", a name that on every other server means
+   per-database log usage. */
+function oracleRedoBlock(o){
+  if (!o || !o.logMode) return "";
+  const s = o.summary;
+  const verdict = o.archiving
+    ? `<span class="sev ok">ARCHIVELOG</span> point-in-time recovery is possible`
+    : `<span class="sev crit">NOARCHIVELOG</span> <b>no point-in-time recovery</b> — the only
+       restore possible is to the moment of the last full backup`;
+  const destRows = o.destinations.map(d=>`<tr class="${cls(sev(d.status))}">
+      <td><span class="sev ${cls(sev(d.status))}">${esc(d.state || "?")}</span></td>
+      <td class="metric mono">${esc(d.destination || "—")}</td>
+      <td class="nowrap mono">${esc(d.binding || "—")}</td>
+      <td class="mono">${esc(d.error && d.error !== "none" ? d.error : "—")}</td></tr>`).join("");
+  /* The same number means opposite things in each mode, so it is never shown without the mode:
+     a backlog under ARCHIVELOG is archiving falling behind and heading for a frozen instance,
+     while under NOARCHIVELOG no group is ever archived and the count is normal. */
+  const backlog = o.unarchivedLogs == null ? "" : (o.archiving
+    ? `<p class="sec-note"><b class="${o.unarchivedLogs > 0 ? "warn" : ""}">${o.unarchivedLogs}</b>
+        redo group(s) filled and not yet archived. Under ARCHIVELOG this is archiving falling
+        behind — when it reaches the number of groups the instance stops until ARCH catches up.</p>`
+    : `<p class="sec-note">${o.unarchivedLogs} redo group(s) filled and not archived — expected,
+        and not a backlog: in NOARCHIVELOG no group is ever archived.</p>`);
+  const fra = o.recoveryArea;
+  const fraBlock = !fra ? "" : `<h3 class="sub">Fast Recovery Area</h3>
+    <p class="sec-note"><b>Unreclaimable</b> is the number that stops the instance, not used:
+      space held by files the FRA is still required to keep cannot be freed under pressure.</p>
+    <div class="tbl-wrap"><table class="rpt">
+      <thead><tr><th>Area</th><th>Used</th><th>Reclaimable</th><th>Unreclaimable</th>
+        <th>Size</th><th>Files</th></tr></thead>
+      <tbody><tr class="${cls(sev(fra.status))}">
+        <td class="metric mono">${esc(fra.name)}</td>
+        <td class="nowrap mono">${fra.usedPct == null ? "—" : fra.usedPct + "%"}</td>
+        <td class="nowrap mono">${fra.reclaimablePct == null ? "—" : fra.reclaimablePct + "%"}</td>
+        <td class="nowrap"><span class="${fra.unreclaimablePct >= 85 ? "crit" : ""}">${
+          fra.unreclaimablePct == null ? "—" : fra.unreclaimablePct + "%"}</span></td>
+        <td class="nowrap mono">${esc(oraMB(fra.spaceUsedMB))} / ${esc(oraMB(fra.spaceLimitMB))}</td>
+        <td class="nowrap mono">${fra.files == null ? "—" : fra.files}</td>
+      </tr></tbody></table></div>`;
+  const head = esc(o.logMode)
+    + (s.failedDestinations ? ` · ${s.failedDestinations} destination(s) failing` : "")
+    + (o.redoTotalMB != null ? ` · ${esc(oraMB(o.redoTotalMB))} redo` : "");
+  /* Opens by itself when there is no point-in-time recovery: that is not a detail to go looking
+     for, it is the recovery position of the whole instance. */
+  return `<details class="fold"${(!o.archiving || s.failedDestinations) ? " open" : ""}>
+    <summary>Redo &amp; archiving — ${head}</summary>
+    <div class="in">
+    <p class="sec-note">${verdict}.</p>
+    ${backlog}
+    ${o.destinations.length ? `<h3 class="sub">Archive destinations</h3>
+    <p class="sec-note">A MANDATORY destination that stops accepting redo freezes the instance
+      once every online group is filled; an OPTIONAL one silently loses the archive.</p>
+    <div class="tbl-wrap"><table class="rpt">
+      <thead><tr><th>State</th><th>Destination</th><th>Binding</th><th>Error</th></tr></thead>
+      <tbody>${destRows}</tbody></table></div>` : ""}
+    ${fraBlock}
+    </div></details>`;
+}
+
+/* The heaviest statements, by disk reads and by buffer gets. Two lists because a statement can
+   top one and be absent from the other: on 192.168.1.236 the worst buffer-gets statement runs
+   91 million times at 3 gets each and does no disk I/O at all.
+
+   Uncapped, from the raw rows: the chart pipeline's MAX_ITEMS_PER_METRIC dropped 18 of the 28
+   statements collected, and a top-SQL list missing two thirds of its entries is worse than none —
+   the reader believes they have seen the worst. */
+function oracleTopSqlBlock(o){
+  if (!o || (!o.byDiskReads.length && !o.byBufferGets.length)) return "";
+  const table = (rows, valueLabel, perLabel, extra) => `
+    <div class="tbl-wrap"><table class="rpt">
+      <thead><tr><th>${valueLabel}</th><th>Executions</th><th>${perLabel}</th>
+        ${extra ? `<th>${extra}</th>` : ""}<th>Statement</th></tr></thead>
+      <tbody>${rows.map(r=>`<tr>
+        <td class="nowrap mono">${esc(oraCount(r.value))}</td>
+        <td class="nowrap mono">${esc(oraCount(r.executions))}</td>
+        <td class="nowrap mono">${esc(oraCount(r.perExecution))}</td>
+        ${extra ? `<td class="nowrap mono">${esc(oraCount(
+            extra === "Disk reads" ? r.diskReads : r.rowsProcessed))}</td>` : ""}
+        <td class="mono sqltext">${esc(r.sql || "—")}
+          <div class="detail">sql_id ${esc(r.sqlId)}</div></td></tr>`).join("")}
+      </tbody></table></div>`;
+  const head = `${o.byDiskReads.length} by disk reads · ${o.byBufferGets.length} by buffer gets`;
+  return `<details class="fold">
+    <summary>Top SQL — ${esc(head)}</summary>
+    <div class="in">
+    <p class="sec-note">Two lists, because they name different problems. <b>Disk reads</b> is the
+      statement making storage the bottleneck; <b>buffer gets</b> is the one burning CPU on
+      logical I/O, which can be the heaviest statement on the instance while doing no disk I/O at
+      all. Ranked by total — that is what the instance actually pays — but <b>per execution</b> is
+      what says whether the fix is a plan or a caller: 378k reads over 3 executions is one bad
+      plan, the same total over 4 million executions is a statement doing its job.</p>
+    ${o.byDiskReads.length ? `<h3 class="sub">By disk reads</h3>${
+      table(o.byDiskReads, "Disk reads", "Per execution", "")}` : ""}
+    ${o.byBufferGets.length ? `<h3 class="sub">By buffer gets</h3>${
+      table(o.byBufferGets, "Buffer gets", "Per execution", "Disk reads")}` : ""}
+    </div></details>`;
+}
+
+/* What is actually on this server, one row per database.
+
+   The page carried every one of these facts already — size, log usage, recovery model, CHECKDB
+   age, backup ages, Query Store — spread across six sections, so "what is on this server and how
+   is each one doing" meant reading all six and joining them by eye.
+
+   System databases are listed. They are why this section exists: master, model and msdb each
+   carried a CHECKDB warning that no row on any page could be attached to, because the database
+   list was built from DATABASE_STATUS, whose SQL Server variant selects `database_id > 4`. A
+   metric's own scope must not decide what the page is allowed to show.
+
+   Same rows as the fleet page's Server Detail, from the same builder
+   (inventory_health.build_database_rows), so the two cannot disagree about one database. */
+function databasesBlock(d){
+  if (!d || !d.databases || !d.databases.length) return "";
+  const s = d.summary;
+  const gb = v => v == null ? "—" : (v >= 100 ? Math.round(v) : v.toFixed(2)) + " GB";
+  const SYSTEM = ["master","model","msdb","tempdb"];
+  /* Allocated size next to how much of it is in use. The pair is the point: a log at 99% used
+     with an unchanged data file is a broken log-backup chain, and either number alone hides it. */
+  const logCell = r => {
+    if (r.logGB == null && r.logUsedPct == null) return "—";
+    const pct = r.logUsedPct;
+    const cls = pct == null ? "" : pct >= 90 ? "crit" : pct >= 75 ? "warn" : "";
+    return `${gb(r.logGB)}${pct == null ? "" :
+      ` <span class="${cls}">${pct.toFixed(1)}%</span>`}`
+      + (r.logReuseWait && r.logReuseWait !== "NOTHING"
+         ? `<span class="code" title="why the log cannot truncate">${esc(r.logReuseWait)}</span>` : "");
+  };
+  /* "never" is not a date and must not read as one. It means no successful CHECKDB has ever been
+     recorded for this database, so corruption would first be found by a query or a restore. */
+  const checkdbCell = r => {
+    if (!r.checkdb || r.checkdb === "never")
+      return `<span class="sev crit">never</span>`;
+    return `<span class="mono">${esc(String(r.checkdb).replace("T", " "))}</span>`;
+  };
+  const ageCell = (hours, warnAt, critAt) => {
+    if (hours == null) return `<span class="muted">—</span>`;
+    const cls = hours >= critAt ? "crit" : hours >= warnAt ? "warn" : "";
+    const text = hours < 48 ? Math.round(hours) + "h" : Math.round(hours / 24) + "d";
+    return `<span class="${cls}">${text}</span>`;
+  };
+  const qsCell = r => {
+    if (!r.queryStore) return `<span class="muted">—</span>`;
+    return r.queryStoreCapturing
+      ? `<span class="sev ok">ON</span>`
+      : `<span class="sev warn">${esc(r.queryStore)}</span>`;
+  };
+  const rows = d.databases.map(r => {
+    const system = SYSTEM.indexOf(r.name) >= 0;
+    /* Every engine words "usable" differently — SQL Server and PostgreSQL say ONLINE, Oracle
+       reports v$database.open_mode ("READ WRITE"). Comparing against the literal painted every
+       Oracle database on the page red while it was open and serving. Mirrors
+       db_ops.lib.inventory_render.ONLINE_DATABASE_STATES. */
+    const down = r.state && ONLINE_STATES.indexOf(r.state.toUpperCase()) < 0;
+    const bad = (!r.checkdb || r.checkdb === "never") || down
+             || (r.logUsedPct != null && r.logUsedPct >= 90);
+    return `<tr class="${down ? "crit" : bad ? "warn" : ""}">
+      <td class="metric">${esc(r.name)}${system ? `<span class="code">system</span>` : ""}</td>
+      <td>${!r.state ? `<span class="sev crit">?</span>`
+            : down ? `<span class="sev crit">${esc(r.state)}</span>`
+                   : `<span class="sev ok">${esc(r.state.toUpperCase())}</span>`}</td>
+      <td class="nowrap mono">${esc(r.recovery || "—")}</td>
+      <td class="nowrap mono">${gb(r.dataGB)}${r.staticSize ? `<span class="code">static</span>` : ""}</td>
+      <td class="nowrap mono">${logCell(r)}</td>
+      <td class="nowrap mono">${r.compat == null ? "—" : esc(String(r.compat))}</td>
+      <td class="nowrap mono">${esc(r.pageVerify || "—")}</td>
+      <td class="nowrap">${checkdbCell(r)}</td>
+      <td class="nowrap mono">${r.users == null ? "—" : r.users}</td>
+      <td class="nowrap">${qsCell(r)}</td>
+      <td class="nowrap">${ageCell(r.fullAgeHours, 26, 48)}</td>
+      <td class="nowrap">${ageCell(r.diffAgeHours, 26, 48)}</td>
+      <td class="nowrap">${ageCell(r.logAgeHours, 4, 24)}</td>
+    </tr>`;
+  }).join("");
+  const head = `${s.count} database${s.count === 1 ? "" : "s"} · ${s.online} online`
+    + (s.neverCheckdb ? ` · ${s.neverCheckdb} never CHECKDB'd` : "")
+    + (s.backupGraded ? ` · ${s.backupOk}/${s.backupGraded} within backup policy` : "");
+  /* Open when something on it needs doing — the same rule the sections around it use. */
+  return `<details class="fold"${(s.neverCheckdb || s.online < s.count) ? " open" : ""}>
+    <summary>Databases — ${esc(head)}</summary>
+    <div class="in">
+    <p class="sec-note">Every database on this instance, including the <b>system</b> ones
+      (master, model, msdb, tempdb) — they are listed because findings are raised against them:
+      a CHECKDB warning on <span class="mono">master</span> had nowhere to appear before this
+      table existed. <b>Last CHECKDB</b> reads <i>never</i> when no successful integrity check has
+      ever been recorded, which means corruption on that database would first be found by a query
+      or by a restore. <b>Log</b> shows the allocated size next to how much of it is in use, with
+      the reason it cannot truncate beside it when there is one — 99% used against an unchanged
+      data file is a broken log-backup chain, not a big database. <b>FULL / DIFF / LOG</b> are the
+      ages of the newest backup of each type; the per-type verdict against
+      <code>data/backup_policy.json</code> is in the Backup policy section above.</p>
+    <div class="tbl-wrap"><table class="rpt">
+      <thead><tr><th>Database</th><th>State</th><th>Recovery</th><th>Data</th><th>Log (used)</th>
+        <th>Compat</th><th>Page verify</th><th>Last CHECKDB</th><th>Users</th><th>Query Store</th>
+        <th>FULL</th><th>DIFF</th><th>LOG</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+    </div></details>`;
+}
+
+/* What this instance runs on a schedule. One table for SQL Server Agent and for Oracle's
+   DBMS_JOB / DBMS_SCHEDULER, because the question is the same on both and an operator asking
+   "what runs on this box at 02:00" should not have to know which engine answers it.
+
+   Only enabled jobs are rows; the disabled ones are a count in the header. A job that is switched
+   off is not a schedule, and listing it beside the live ones is how a table stops being the
+   answer to "what runs here".
+
+   The run counters carry their own window (7d on SQL Server from sysjobhistory, total on
+   Oracle's scheduler, which only keeps lifetime counters). Showing both as one number would
+   invent a comparison the data does not support. */
+function jobsBlock(j){
+  if (!j || !j.jobs || !j.jobs.length) return "";
+  const s = j.summary;
+  const outcome = r => {
+    if (r.lastOutcome === "SUCCEEDED" || r.lastOutcome === "SCHEDULED") return `<span class="sev ok">${esc(r.lastOutcome)}</span>`;
+    if (r.lastOutcome === "FAILED" || r.lastOutcome === "BROKEN") return `<span class="sev crit">${esc(r.lastOutcome)}</span>`;
+    if (!r.lastOutcome || r.lastOutcome === "NONE") return `<span class="sev">never run</span>`;
+    return `<span class="sev warn">${esc(r.lastOutcome)}</span>`;
+  };
+  const history = r => {
+    if (r.runs == null && r.failed == null) return "—";
+    const failed = r.failed || 0, runs = r.runs || 0;
+    const cls = failed > 0 ? (failed >= runs && runs > 0 ? "crit" : "warn") : "";
+    const win = r.window === "total" ? "lifetime" : "7d";
+    return `<span class="${cls}">${(r.succeeded == null ? runs - failed : r.succeeded)} ok / ${failed} failed</span>`
+         + ` <span class="code">of ${runs} run(s), ${win}</span>`;
+  };
+  const secs = n => n < 60 ? n + "s"
+                 : n < 3600 ? Math.round(n / 60) + "m"
+                 : (n / 3600).toFixed(1) + "h";
+  /* Each engine says something different about how long a run takes, and the three are not
+     interchangeable, so the cell names the one it got. Oracle 10g+ hands over an INTERVAL that
+     TO_CHAR renders as "+000000000 00:05:12.000000"; the HH:MM:SS in the middle is the whole
+     readable content of it. */
+  const duration = r => {
+    if (r.maxDurationSeconds != null)
+      return `${secs(r.maxDurationSeconds)}<span class="code">longest, 7d</span>`;
+    if (r.lastDuration) {
+      const clock = /(\d+:\d\d:\d\d)/.exec(r.lastDuration);
+      return `${esc(clock ? clock[1] : r.lastDuration)}<span class="code">last run</span>`;
+    }
+    if (r.totalRuntimeSeconds != null)
+      return `${secs(r.totalRuntimeSeconds)}<span class="code">total, lifetime</span>`;
+    return "—";
+  };
+  const rows = j.jobs.map(r=>{
+    const failing = (r.failed || 0) > 0 || r.lastOutcome === "FAILED";
+    /* Oracle stops running a job after 16 consecutive failures. The count is the only warning
+       before a schedule silently stops existing, and SQL Server has nothing like it. */
+    const streak = (r.consecutiveFailures || 0) > 0
+      ? `<div class="detail">${r.consecutiveFailures} consecutive failure(s) — Oracle breaks a job at 16</div>` : "";
+    /* schema_user, and only when it disagrees with the submitter: a job whose PL/SQL resolves
+       against a different schema than the one that owns it is how "it worked yesterday" starts. */
+    const schema = r.schema && r.schema !== r.owner
+      ? `<div class="detail">runs as schema ${esc(r.schema)}</div>` : "";
+    const restart = r.restartable ? `<div class="detail">restartable — retried after a failure</div>` : "";
+    /* Only the first step's command is collected. Saying so beside it is what stops the column
+       being read as the whole job when it is one step of five. */
+    const steps = r.steps && r.steps > 1
+      ? `<span class="code">step 1 of ${r.steps}</span>` : "";
+    return `<tr class="${failing ? "warn" : ""}">
+      <td>${outcome(r)}</td>
+      <td class="metric">${esc(r.name)}${
+        r.category ? `<span class="code">${esc(r.category)}</span>` : ""}${streak}${schema}${restart}</td>
+      <td class="cmdcell">${r.command ? esc(r.command) : "—"}${steps}</td>
+      <td class="wrapcell mono">${esc(r.schedule || "—")}</td>
+      <td class="nowrap mono">${esc(r.nextRun || "—")}</td>
+      <td class="nowrap mono">${esc(r.lastRun || "never")}</td>
+      <td class="nowrap mono">${duration(r)}</td>
+      <td class="nowrap">${history(r)}</td>
+      <td class="nowrap mono">${esc(r.owner || "—")}</td>
+    </tr>`;
+  }).join("");
+  const head = `${s.enabled} enabled`
+    + (s.disabled ? ` · ${s.disabled} disabled (not listed)` : "")
+    + (s.failing ? ` · ${s.failing} failing` : "")
+    + (s.neverRun ? ` · ${s.neverRun} never run` : "");
+  /* Open when a job is failing, folded when the schedule is simply running — the same rule the
+     linked-server, backup and Query Store sections above it use. */
+  return `<details class="fold"${s.failing ? " open" : ""}>
+    <summary>Scheduled jobs — ${esc(head)}</summary>
+    <div class="in">
+    <p class="sec-note">What this instance runs on a schedule, what it executes, and how it has
+      actually been going. SQL Server Agent jobs and Oracle DBMS_JOB / DBMS_SCHEDULER jobs share
+      this table. <b>Command</b> is the first step only, truncated — enough to recognise the job,
+      not to review its code. The engines disagree about what their counters mean and this table
+      does not paper over it: <b>History</b> and <b>Duration</b> each state the window they cover,
+      7 days on SQL Server against the lifetime of the job on Oracle's scheduler. Disabled jobs are
+      counted in the header but not listed; a job that is switched off is not a schedule.</p>
+    <div class="tbl-wrap"><table class="rpt">
+      <thead><tr><th>Last outcome</th><th>Job</th><th>Command</th><th>Schedule</th><th>Next run</th>
+        <th>Last run</th><th>Duration</th><th>History</th><th>Owner</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+    </div></details>`;
+}
+
+/* Who can reach this instance, and what they hold once inside. Two tables rather than one:
+   a login is server-scope, a user is database-scope, and the mapping between them is the thing
+   that breaks. After the 2026-08-10 migration onto 172.17.100.115 all 55 database users pointed
+   at logins that did not exist on the target, and no view on this page could say so. */
+function accessBlock(a){
+  if (!a || (!a.logins.length && !a.databaseUsers.length)) return "";
+  const s = a.summary;
+  const chip = (t, cls) => `<span class="sev ${cls}">${esc(t)}</span>`;
+  const loginRows = a.logins.map(r=>{
+    const cls = r.high ? "warn" : "ok";
+    const perms = r.permissions.length ? `<div class="detail">${esc(r.permissions.join(", "))}</div>` : "";
+    const age = r.passwordAgeDays === null ? "—" : `${r.passwordAgeDays}d`;
+    /* Status is its own column, not a word buried in a flags list. A disabled login is still
+       listed — it is an account somebody can re-enable — but whether it can be used right now is
+       the first thing an access review asks of each row, and it was only inferable from a
+       lower-case "disabled" in the last column. */
+    const status = r.disabled
+      ? `<span class="sev warn">DISABLED</span>`
+      : `<span class="sev ok">ENABLED</span>`;
+    const flags = [r.checkPolicy === "off" ? "policy off" : ""].filter(Boolean).join(" · ");
+    return `<tr class="${r.high ? "warn" : ""}">
+      <td>${chip(r.high ? "HIGH" : "—", cls)}</td>
+      <td class="metric">${esc(r.name)}<span class="code">${esc(r.type)}</span></td>
+      <td class="nowrap">${status}</td>
+      <td class="rolecell mono">${esc(r.roles.join(", ") || "—")}${perms}</td>
+      <td class="wrapcell mono">${esc(r.defaultDatabase || "—")}</td>
+      <td class="nowrap mono">${esc(age)}</td>
+      <td class="nowrap">${esc(flags || "—")}</td>
+    </tr>`;
+  }).join("");
+  const userRows = a.databaseUsers.map(r=>{
+    const cls = r.orphaned ? "crit" : (r.high ? "warn" : "ok");
+    const note = r.note ? `<div class="detail">${esc(r.note)}</div>` : "";
+    return `<tr class="${cls === "ok" ? "" : cls}">
+      <td>${chip(r.orphaned ? "ORPHANED" : (r.high ? "HIGH" : "—"), cls)}</td>
+      <td class="nowrap mono">${esc(r.database)}</td>
+      <td class="metric">${esc(r.name)}<span class="code">${esc(r.type)}</span></td>
+      <td class="wrapcell mono">${esc(r.login || "— none —")}</td>
+      <td class="rolecell">${esc(r.roles.join(", ") || "—")}${note}</td>
+    </tr>`;
+  }).join("");
+  /* The login count is EVERY login on the instance, disabled ones included — they are listed
+     with a "disabled" flag rather than hidden, because a disabled sysadmin is still an account
+     someone can re-enable, and a reader auditing access has to see it. Saying how many are
+     disabled in the header is what stops "31 logins" being read as 31 usable ones. */
+  const head = `${s.logins} login${s.logins===1?"":"s"} · ${s.highPrivilegeLogins} privileged`
+    + (s.disabledLogins ? ` · ${s.disabledLogins} disabled` : "")
+    + ` · ${s.databaseUsers} database user${s.databaseUsers===1?"":"s"} in ${s.databases} db`
+    + (s.orphanedUsers ? ` · ${s.orphanedUsers} orphaned` : "");
+  return `<details class="fold"${s.orphanedUsers ? " open" : ""}>
+    <summary>Access — ${esc(head)}</summary>
+    <div class="in">
+    <p class="sec-note">Every principal that can reach this instance, and every database user
+      inside it. An <b>orphaned</b> user has no login behind it: it survives a restore because it
+      lives in the database, but its SID belongs to the instance the backup came from, so nobody
+      can connect as it until a login is created with that same SID. <b>HIGH</b> marks a role or
+      permission that can change who else gets in — sysadmin, securityadmin, serveradmin,
+      setupadmin, CONTROL SERVER at server scope; db_owner, db_securityadmin, db_accessadmin,
+      db_ddladmin at database scope. This is an inventory: nothing here raises an alert on its
+      own, because the alerting on the same principals belongs to the login-health and
+      failed-login metrics.</p>
+    <h3 class="sub">Instance logins</h3>
+    <div class="tbl-wrap"><table class="rpt">
+      <thead><tr><th></th><th>Login</th><th>Status</th><th>Server roles / permissions</th>
+        <th>Default db</th><th>Password age</th><th>Flags</th></tr></thead>
+      <tbody>${loginRows}</tbody></table></div>
+    <h3 class="sub">Database users</h3>
+    <div class="tbl-wrap"><table class="rpt">
+      <thead><tr><th></th><th>Database</th><th>User</th><th>Login</th><th>Database roles</th></tr></thead>
+      <tbody>${userRows}</tbody></table></div>
+    </div></details>`;
+}
+
+function linkedServerBlock(rows){
+  if (!rows || !rows.length) return "";
+  const n = v => rows.filter(r=>r.verdict===v).length;
+  const summary = [["FIX",n("FIX")],["DROP",n("DROP")],["REVIEW",n("REVIEW")],["KEEP",n("KEEP")]]
+    .filter(([,c])=>c).map(([v,c])=>`${c} ${v.toLowerCase()}`).join(" · ");
+  const body = rows.map(r=>{
+    const c = VERDICT_CLS[r.verdict] || "unk";
+    const refs = `${r.procedures} proc · ${r.objects} obj · ${r.databases} db`;
+    const detail = [r.sample ? `references: ${r.sample}` : "", r.error ? `error: ${r.error}` : ""]
+      .filter(Boolean).map(x=>`<div class="detail">${esc(x)}</div>`).join("");
+    return `<tr class="${c === "ok" ? "" : c}">
+      <td><span class="sev ${c}">${esc(r.verdict)}</span></td>
+      <td class="metric">${esc(r.name)}<span class="code">${esc(r.dataSource)}</span></td>
+      <td class="nowrap mono">${esc(r.state)}</td>
+      <td class="nowrap mono">${esc(refs)}</td>
+      <td>${esc(r.why)}${detail}</td>
+    </tr>`;
+  }).join("");
+  /* Open when something needs doing, folded when every linked server is simply fine. */
+  const needsAttention = rows.some(r=>r.verdict !== "KEEP");
+  return `<details class="fold"${needsAttention ? " open" : ""}>
+    <summary>Linked servers — ${rows.length} configured · ${esc(summary)}</summary>
+    <div class="in">
+    <p class="sec-note">Whether each linked server still answers, and whether any code still calls
+      it. Both facts on one row, because neither decides anything alone: a dead linked server
+      nothing references is cleanup, the same one with a procedure behind it fails the next time
+      that procedure runs. "obj" counts every referencing object (a view over a four-part name
+      breaks just as loudly as a procedure).</p>
+    <div class="tbl-wrap"><table class="rpt">
+      <thead><tr><th>Verdict</th><th>Linked server</th><th>State</th><th>Referenced by</th>
+        <th>Why / what to do</th></tr></thead>
+      <tbody>${body}</tbody></table></div></div></details>`;
+}
+
+/* ---------- Volumes ----------
+   How large each volume is and how full. The Disk space tile reduces the whole host to one
+   percentage, which on a machine with a 2 TB data volume at 28% and a 200 GB system volume at
+   14% is a green "28%" and no way to see either size — so "how much room is left on D:" was a
+   question the page held every number for and answered none of.
+
+   Both platforms are read the same way: the Windows and Linux collectors already carry
+   total_gb / used_gb / free_gb in their message, and the engine's own view of the same volumes
+   fills in the hosts where the OS metric cannot run (cmd disabled, or no credential). */
+function volumesBlock(v){
+  if (!v || !v.volumes || !v.volumes.length) return "";
+  const s = v.summary;
+  const gb = n => n == null ? "—"
+    : n >= 1024 ? (n/1024).toFixed(n >= 10240 ? 0 : 2) + " TB" : n.toFixed(n >= 100 ? 0 : 1) + " GB";
+  const body = v.volumes.map(r=>{
+    const c = cls(sev(r.status));
+    const pct = r.usedPct == null ? null : Math.max(0, Math.min(100, r.usedPct));
+    /* The bar is the column that makes the table scannable: 14% of 200 GB and 28% of 2 TB are
+       the same word "low" and very different amounts of room, and the eye reads the pair
+       faster than it reads two numbers. */
+    const bar = pct == null ? "" :
+      `<span class="vbar"><i style="width:${pct.toFixed(1)}%;background:${COLOR[c] || COLOR.unk}"></i></span>`;
+    const where = [r.filesystem, r.device].filter(Boolean).join(" · ");
+    return `<tr class="${c === "ok" || c === "unk" ? "" : c}">
+      <td class="metric">${esc(r.name)}${where?`<span class="code">${esc(where)}</span>`:""}</td>
+      <td class="mono nowrap">${esc(gb(r.totalGB))}</td>
+      <td class="mono nowrap">${esc(gb(r.usedGB))}</td>
+      <td class="mono nowrap"><b>${esc(gb(r.freeGB))}</b></td>
+      <td class="nowrap">${bar}<span class="mono ${c === "ok" || c === "unk" ? "" : c}">${
+        r.usedPct == null ? "—" : r.usedPct.toFixed(1) + "%"}</span></td>
+      <td class="mono nowrap muted">${r.source === "os" ? "OS" : "engine"}</td>
+    </tr>`;
+  }).join("");
+  /* "free of total" only when every volume reported a size — see build_volumes. An old SQL
+     Server falls back to xp_fixeddrives, which knows free space and nothing else. */
+  const head = `${s.count} volume(s) · ${gb(s.freeGB)} free`
+    + (s.totalGB == null ? "" : ` of ${gb(s.totalGB)}`)
+    + (s.unsized ? ` · ${s.unsized} with no size reported` : "")
+    + (s.fullestPct == null ? "" : ` · fullest ${s.fullest} at ${s.fullestPct.toFixed(1)}%`)
+    + (s.critical ? ` · ${s.critical} critical` : "")
+    + (s.warning ? ` · ${s.warning} warning` : "");
+  return `<details class="fold"${(s.critical || s.warning) ? " open" : ""}>
+    <summary>Volumes — ${esc(head)}</summary>
+    <div class="in">
+    <p class="sec-note">Every fixed volume on the host, fullest first: how large it is, how much
+      is used, and how much room is left. <b>Free</b> is the column that decides anything — a
+      volume at 90% has 20 GB left if it is 200 GB and 200 GB left if it is 2 TB, and only one of
+      those is a problem tonight. The OS collector grades these at <span class="mono">WARN ≥ 85% ·
+      CRITICAL ≥ 95%</span>. <b>Source</b> says who was asked: <i>OS</i> is the host itself
+      (Windows <span class="mono">DriveInfo</span> / Linux <span class="mono">df</span>, which is
+      also where the file system and device come from), <i>engine</i> is the database's own view
+      of the same volume, used where the OS metric cannot run. How fast each one is draining is
+      the Capacity forecast below.</p>
+    <div class="tbl-wrap"><table class="rpt">
+      <thead><tr><th>Volume</th><th>Size</th><th>Used</th><th>Free</th><th>Used %</th>
+        <th>Source</th></tr></thead>
+      <tbody>${body}</tbody></table></div></div></details>`;
+}
+
+/* ---------- Capacity forecast ----------
+   The current free-space number is on the page already; what was missing is its direction. A
+   volume two days from full and one flat for a month rendered identically. "insufficient history"
+   is shown as itself, never as "no growth" — a confident zero from two samples is the worst thing
+   this table could say. */
+function capacityBlock(rows){
+  if (!rows || !rows.length) return "";
+  const soon = rows.filter(r=>r.daysToFull != null && r.status !== "ok" && r.status !== "OK");
+  const summary = soon.length
+    ? `${soon.length} volume(s) projected to fill — soonest ${soon[0].item} in ${soon[0].daysToFull} day(s)`
+    : `${rows.length} volume(s), none projected to fill`;
+  const body = rows.map(r=>{
+    const c = cls(r.status);
+    const when = r.daysToFull == null
+      ? (r.enough ? '<span class="muted">not filling</span>' : '<span class="muted">unknown</span>')
+      : `<b>${r.daysToFull}</b> d`;
+    const rate = r.enough
+      ? `${r.perDay > 0 ? "+" : ""}${r.perDay} GB/day`
+      : '<span class="muted">—</span>';
+    return `<tr class="${c === "ok" || c === "unk" ? "" : c}">
+      <td class="metric">${esc(r.item)}</td>
+      <td class="mono nowrap">${r.freeGb == null ? "—" : r.freeGb + " GB"}</td>
+      <td class="mono nowrap">${rate}</td>
+      <td class="mono nowrap">${when}</td>
+      <td class="mono nowrap muted">${r.enough ? r.points + " pts / " + r.spanHours + "h" : "—"}</td>
+      <td>${esc(r.text)}</td>
+    </tr>`;
+  }).join("");
+  const needsAttention = soon.length > 0;
+  return `<details class="fold"${needsAttention ? " open" : ""}>
+    <summary>Capacity forecast — ${esc(summary)}</summary>
+    <div class="in">
+    <p class="sec-note">Projected from stored free-space history using the median of pairwise
+      slopes, so a shrink/regrow spike cannot reverse the trend. A resize or shrink restarts the
+      measurement — the row says when that happened. Thresholds and any reserve come from
+      <code>data/capacity_policy.json</code>.</p>
+    <div class="tbl-wrap"><table class="rpt">
+      <thead><tr><th>Volume</th><th>Free now</th><th>Rate</th><th>Full in</th><th>History</th>
+        <th>Reading</th></tr></thead>
+      <tbody>${body}</tbody></table></div></div></details>`;
+}
+
+/* One row per metric, not per failing item: 24 stale statistics objects are one finding with
+   a count, and the objects themselves live behind the expander. */
+function problemList(problems){
+  if (!problems.length) return '<div class="all-ok">Nothing is failing right now — every collected metric is OK.</div>';
+  const itemLine = it => `${esc(it.item)} · <span class="mono">${esc(it.value)}</span>`
+    + (it.age?` <span class="muted">(${esc(it.age)})</span>`:"")
+    + (it.detail?`<br><span class="detail">${esc(it.detail)}</span>`:"");
+  return `<div class="tbl-wrap"><table class="rpt">
+    <thead><tr><th>Sev</th><th>Metric</th><th>Finding</th><th>What to do</th></tr></thead>
+    <tbody>${problems.map(p=>{
+      const c = cls(p.severity);
+      const worst = (p.items||[])[0]||{};
+      const more = p.count>1
+        ? `<details><summary>${p.count} items — show all</summary><ul>${
+             p.items.map(it=>`<li>${itemLine(it)}</li>`).join("")}</ul></details>`
+        : (worst.detail?`<div class="detail">${esc(worst.detail)}</div>`:"");
+      /* When the sample was taken, on the row itself. A 48-hour-old error-log finding sat in
+         this table looking exactly like one from the last five minutes. */
+      const stamp = p.collectedAt ? `<span class="code">sampled ${when(p.collectedAt)}</span>` : "";
+      return `<tr class="${c}">
+        <td><span class="sev ${c}">${esc(p.severity)}</span></td>
+        <td class="metric">${esc(p.label)}<span class="code">${esc(p.code)}</span></td>
+        <td>${esc(p.headline)}${stamp}${more}</td>
+        <td class="muted">${esc(p.action)}</td>
+      </tr>`;
+    }).join("")}</tbody></table></div>`;
+}
+
+/* Folded by default. Two sections that answer "since when" and "what are the words right now"
+   do not need to sit open above the charts: the page opens on the verdict, the areas and the
+   things that need doing, and these two are one summary line each until asked for. */
+function timeline(events){
+  if (!events.length) return "";
+  const ongoing = events.filter(e=>e.end==null).length;
+  return `<details class="fold"><summary>Recent incidents — ${ongoing} ongoing · ${events.length-ongoing} cleared</summary>
+    <div class="in">
+    <p class="sec-note">When each problem started and whether it cleared — this is where
+      "better or worse" is visible.</p>
+    ${timelineTable(events)}</div></details>`;
+}
+
+function timelineTable(events){
+  const ongoing = events.filter(e=>e.end==null).length;
+  return `<div class="tbl-wrap"><table class="rpt">
+    <thead><tr><th>State</th><th>Metric</th><th>Item</th><th>Started</th><th>Cleared</th><th class="nowrap">Samples</th></tr></thead>
+    <tbody>${events.map(e=>{
+      const c = cls(e.severity);
+      return `<tr class="${c}">
+        <td class="nowrap">${e.end==null?'<span class="sev '+c+'">ongoing</span>':'<span class="cleared">cleared</span>'}</td>
+        <td class="metric">${esc(e.label)}</td>
+        <td>${esc(e.item)}</td>
+        <td class="mono nowrap">${esc(when(e.start))}</td>
+        <td class="mono nowrap muted">${e.end==null?"—":esc(when(e.end))}</td>
+        <td class="mono nowrap">${e.samples}</td>
+      </tr>`;
+    }).join("")}</tbody></table></div>
+    <div class="foot">${ongoing} ongoing · ${events.length-ongoing} cleared in the window.
+      Ongoing and cleared each keep their own share of this list, so a problem that came and went
+      is not pushed out by one that is simply still there.</div>`;
+}
+
+/* 127 chips of "word values that never changed" is a wall. Grouped by metric, one row each,
+   with the ones that are actually not OK pulled out on top and the rest folded away. */
+function cardStrip(cards){
+  if (!cards.length) return "";
+  /* Anything not OK is already a row in Problems, with its action. Repeating it here made the
+     same 27 stale-statistics objects appear twice on one page. This section is the reference
+     list: what the words currently are. */
+  const byMetric = list => {
+    const groups = new Map();
+    list.forEach(s=>{ if(!groups.has(s.label)) groups.set(s.label,[]); groups.get(s.label).push(s); });
+    return [...groups.entries()].map(([label, items])=>`<tr>
+      <td class="metric">${esc(label)}<span class="code">${esc(items[0].code)}</span></td>
+      <td>${items.map(s=>`<span class="nowrap">${esc(s.item)}: <b class="mono">${esc(s.lastText||"—")}</b></span>`).join(" · ")}</td>
+    </tr>`).join("");
+  };
+  const table = rows => `<div class="tbl-wrap"><table class="rpt">
+      <thead><tr><th>Metric</th><th>Values</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  const metrics = new Set(cards.map(s=>s.label)).size;
+  return `<details class="fold"><summary>Status checks — ${cards.length} value(s) across ${metrics} metric(s)</summary>
+    <div class="in">
+    <p class="sec-note">Values that are words, not numbers, and did not change in the window — a chart of them
+      would be a flat line. Anything not OK is listed above, in Problems, with what to do about it.</p>
+    ${table(byMetric(cards))}</div></details>`;
+}
+
+function omittedFoot(omitted){
+  if (!omitted.length) return "";
+  const total = omitted.reduce((a,o)=>a+o.dropped,0);
+  const detail = omitted.map(o=>`${esc(o.label)} (${o.dropped})`).join(", ");
+  return `<div class="foot"><b>${total} item(s) not charted.</b> They are absent from the latest
+    collection or have fewer than 3 samples — a session id or a query hash is an event, not a
+    series. By metric: ${detail}.</div>`;
+}
+
+/* ---------------- page ---------------- */
+function renderPicker(active){
+  /* Buttons carry the server_id because it is unique; the role name (which is not — an FCI
+     pair shares one) rides along in the tooltip for anyone who knows the box by that name. */
+  document.getElementById("picker").innerHTML = SERVERS.map(s=>
+    `<button data-slug="${esc(s.slug)}" class="${s.slug===active?"on":""}"
+             title="${esc([s.role, s.ip, s.platform].filter(Boolean).join(" · "))}">
+       <span class="dot" style="background:${COLOR[cls(s.status)]}"></span>${esc(s.name)}
+     </button>`).join("");
+  document.querySelectorAll("#picker button").forEach(b=>b.addEventListener("click",()=>select(b.dataset.slug)));
+}
+
+async function select(slug){
+  const server = SERVERS.find(s=>s.slug===slug) || SERVERS[0];
+  if (!server) return;
+  history.replaceState(null,"",withDate("?server="+encodeURIComponent(server.slug)));
+  renderPicker(server.slug);
+  document.getElementById("hostTitle").textContent = server.name;
+  // Published by the same workflow as this page, under a name derived from the same slug.
+  const ix = document.getElementById("indexUsageLink");
+  if (server.index_usage_file){
+    ix.href = withDate(server.index_usage_file);
+    ix.style.display = "";
+  } else {
+    ix.style.display = "none";
+  }
+  document.getElementById("hostMeta").textContent =
+    [server.role && server.role !== server.name ? server.role : "",
+     server.ip, server.platform, `last ${WINDOW_DAYS} days`].filter(Boolean).join(" · ");
+  document.getElementById("body").innerHTML = '<div class="empty">Loading…</div>';
+
+  let d;
+  try {
+    const r = await fetch(withDate(server.file + "?v=" + VERSION));
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    d = await r.json();
+  } catch (err) {
+    document.getElementById("body").innerHTML =
+      `<div class="empty">Could not load ${esc(server.file)} (${esc(err.message)}). This page loads each
+       server's data on demand, so it must be opened over the report web host, not from a copied file.</div>`;
+    return;
+  }
+
+  /* The severity a chart is coloured by is the one the analysis decided (which is the
+     collector's, except for the two metrics the collector logs without judging). */
+  for (const s of d.series) s.severity = seriesSeverity(s, d);
+  for (const s of d.cards) s.severity = seriesSeverity(s, d);
+
+  const tier = t => d.series.filter(s=>s.tier===t);
+  const primary = tier("primary"), dbSize = tier("database_size"),
+        diag = tier("diagnostics"), detail = tier("detail");
+
+  document.getElementById("body").innerHTML =
+      verdict(d.health, server)
+    + `<h2 class="sec">Current status</h2>
+       <p class="sec-note">Each health area shows the worst thing in it, the rule that decided the status, and what it means.</p>`
+    + areaGrid(d.areas)
+    + `<h2 class="sec">Problems — what needs doing<span class="sec-tools">${
+         d.problems.length} finding(s) · ${d.problems.reduce((a,p)=>a+p.count,0)} item(s), worst first</span></h2>`
+    + problemList(d.problems)
+    + coverage(d.freshness)
+    /* First of the inventory sections: it is the "what is on this server" overview that every
+       section below details one aspect of. */
+    + databasesBlock(d.databases)
+    /* Directly under the database list: on Oracle the tablespace is the storage unit the
+       database list has no column for, and the first thing looked up after "what is here". */
+    + tablespaceBlock(d.tablespaces)
+    /* Redo before backup: "can this be restored to a point in time" is the question the backup
+       verdict below is read against, and on a NOARCHIVELOG instance the answer is no whatever
+       the backup ages say. */
+    + oracleRedoBlock(d.oracleRedo)
+    + backupBlock(d.backup)
+    /* What the storage is, then when it runs out: the forecast's "12 days" is unreadable
+       without the size and free space it was projected from. */
+    + volumesBlock(d.volumes)
+    + capacityBlock(d.capacity)
+    + linkedServerBlock(d.linkedServers)
+    + queryStoreBlock(d.queryStore)
+    + jobsBlock(d.jobs)
+    /* Instance health, then what is broken inside it, then the statements doing the damage —
+       the order an Oracle problem is actually worked through. */
+    + oracleInstanceBlock(d.oracleInstance)
+    + oracleObjectsBlock(d.oracleObjects)
+    + oracleTopSqlBlock(d.oracleTopSql)
+    + accessBlock(d.access)
+    + timeline(d.timeline)
+    + cardStrip(d.cards)
+    + `<h2 class="sec">Primary health indicators</h2>
+       <p class="sec-note">The metrics that decide whether the server is healthy.</p>`
+    + chartGrid(primary)
+    + `<details class="fold"><summary>Database size history (${dbSize.length})</summary><div class="in">
+         <p class="sec-note">Allocated file size per database: MDF/NDF data and LDF log are shown separately in GB.</p>
+         ${chartGrid(dbSize)}</div></details>`
+    + `<details class="fold"><summary>Performance diagnostics (${diag.length})</summary><div class="in">${chartGrid(diag)}</div></details>`
+    + `<details class="fold"><summary>Detailed / raw metrics (${detail.length})</summary><div class="in">${chartGrid(detail)}</div></details>`
+    + omittedFoot(d.omitted);
+}
+
+/* Mirrors the Python: the collector's status, except for the two metrics whose SQL returns OK
+   on every branch (they are logging-only) — those are judged on their value. */
+function seriesSeverity(s){
+  if (s.code === "PERFORMANCE_IO_LATENCY")
+    return s.last == null ? "OK" : s.last >= 50 ? "CRITICAL" : s.last >= 20 ? "WARNING" : "OK";
+  if (s.code === "PAGE_LIFE_EXPECTANCY")
+    return s.last == null ? "OK" : (s.last > 0 && s.last < 300) ? "CRITICAL"
+         : (s.last > 0 && s.last < 2000) ? "WARNING" : "OK";
+  return sev(s.status);
+}
+
+/* Every link off this page keeps the date, including the one back to the fleet. */
+const inventoryLink = document.getElementById("inventoryLink");
+if (DATE_PARAM) inventoryLink.href = withDate(inventoryLink.getAttribute("href"));
+
+const wanted = new URLSearchParams(location.search).get("server");
+select(wanted && SERVERS.some(s=>s.slug===wanted) ? wanted : (SERVERS[0]||{}).slug);
+</script>
+</body>
+</html>

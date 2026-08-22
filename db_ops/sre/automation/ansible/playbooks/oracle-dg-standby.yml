@@ -1,0 +1,241 @@
+---
+# Phase 2 — Oracle DataGuard Standby Creation and Broker Configuration
+# Creates physical standby via RMAN DUPLICATE FROM ACTIVE DATABASE
+# Configures DataGuard broker via DGMGRL with MaxAvailability protection mode
+# Run after oracle-dg-primary.yml
+
+- name: Create DataGuard standby database and configure broker
+  hosts: oracle_dg
+  become: true
+  gather_facts: false
+  vars_files:
+    - ../group_vars/oracle_dg.yml
+  vars:
+    dg_primary_host: >-
+      {{ groups['oracle_dg'] | map('extract', hostvars) |
+         selectattr('oracle_dg_role', 'equalto', 'primary') |
+         map(attribute='inventory_hostname') | first }}
+    dg_standby_host: >-
+      {{ groups['oracle_dg'] | map('extract', hostvars) |
+         selectattr('oracle_dg_role', 'equalto', 'standby') |
+         map(attribute='inventory_hostname') | first }}
+
+  tasks:
+    - name: Check DG broker configuration marker on primary
+      ansible.builtin.stat:
+        path: "{{ oracle_base }}/.db-sre-dg-ready"
+      register: dg_marker
+      delegate_to: "{{ dg_primary_host }}"
+      run_once: true
+
+    - name: Create standby data directory
+      ansible.builtin.file:
+        path: "{{ oracle_redo_log_dir }}/{{ oracle_standby_db_unique_name }}"
+        state: directory
+        owner: oracle
+        group: oinstall
+        mode: "0775"
+      delegate_to: "{{ dg_standby_host }}"
+      run_once: true
+      when: not dg_marker.stat.exists or oracle_standby_force_reseed
+
+    - name: Create standby FRA directory
+      ansible.builtin.file:
+        path: "{{ oracle_fra_dir }}/{{ oracle_standby_db_unique_name }}"
+        state: directory
+        owner: oracle
+        group: oinstall
+        mode: "0775"
+      delegate_to: "{{ dg_standby_host }}"
+      run_once: true
+      when: not dg_marker.stat.exists or oracle_standby_force_reseed
+
+    - name: Create Oracle password file on standby
+      ansible.builtin.shell: |
+        {{ oracle_db_home }}/bin/orapwd \
+          file={{ oracle_db_home }}/dbs/orapw{{ hostvars[dg_standby_host].oracle_db_sid }} \
+          password={{ oracle_sys_password | quote }} \
+          force=yes
+      args:
+        executable: /bin/bash
+      become_user: oracle
+      environment:
+        ORACLE_HOME: "{{ oracle_db_home }}"
+        PATH: "{{ oracle_db_home }}/bin:{{ ansible_env.PATH }}"
+      delegate_to: "{{ dg_standby_host }}"
+      run_once: true
+      when: not dg_marker.stat.exists or oracle_standby_force_reseed
+      no_log: true
+      changed_when: true
+
+    - name: Create minimal pfile for standby NOMOUNT startup
+      ansible.builtin.copy:
+        dest: "{{ oracle_db_home }}/dbs/init{{ hostvars[dg_standby_host].oracle_db_sid }}.ora"
+        content: "db_name='{{ oracle_primary_db_name }}'\n"
+        owner: oracle
+        group: oinstall
+        mode: "0640"
+      delegate_to: "{{ dg_standby_host }}"
+      run_once: true
+      when: not dg_marker.stat.exists or oracle_standby_force_reseed
+
+    - name: Start standby in NOMOUNT mode for RMAN duplicate
+      ansible.builtin.shell: |
+        {{ oracle_db_home }}/bin/sqlplus -S / as sysdba <<'SQLEOF'
+        WHENEVER SQLERROR EXIT FAILURE;
+        STARTUP NOMOUNT;
+        EXIT;
+        SQLEOF
+      args:
+        executable: /bin/bash
+      become_user: oracle
+      environment:
+        ORACLE_HOME: "{{ oracle_db_home }}"
+        ORACLE_SID: "{{ hostvars[dg_standby_host].oracle_db_sid }}"
+        PATH: "{{ oracle_db_home }}/bin:{{ ansible_env.PATH }}"
+      delegate_to: "{{ dg_standby_host }}"
+      run_once: true
+      when: not dg_marker.stat.exists or oracle_standby_force_reseed
+      changed_when: true
+
+    - name: Duplicate primary to standby with RMAN
+      ansible.builtin.shell: |
+        {{ oracle_db_home }}/bin/rman <<RMANEOF
+        CONNECT TARGET sys/{{ oracle_sys_password | quote }}@{{ oracle_primary_db_unique_name }};
+        CONNECT AUXILIARY sys/{{ oracle_sys_password | quote }}@{{ oracle_standby_db_unique_name }};
+        RUN {
+          ALLOCATE CHANNEL prm1 TYPE DISK;
+          ALLOCATE AUXILIARY CHANNEL stby1 TYPE DISK;
+          DUPLICATE TARGET DATABASE FOR STANDBY FROM ACTIVE DATABASE
+            SPFILE
+              PARAMETER_VALUE_CONVERT
+                '{{ oracle_primary_db_unique_name }}', '{{ oracle_standby_db_unique_name }}',
+                '{{ hostvars[dg_primary_host].oracle_db_sid }}', '{{ hostvars[dg_standby_host].oracle_db_sid }}'
+              SET db_unique_name='{{ oracle_standby_db_unique_name }}'
+              SET db_file_name_convert
+                '{{ oracle_redo_log_dir }}/{{ oracle_primary_db_unique_name }}',
+                '{{ oracle_redo_log_dir }}/{{ oracle_standby_db_unique_name }}'
+              SET log_file_name_convert
+                '{{ oracle_redo_log_dir }}/{{ oracle_primary_db_unique_name }}',
+                '{{ oracle_redo_log_dir }}/{{ oracle_standby_db_unique_name }}'
+              SET fal_server='{{ oracle_primary_db_unique_name }}'
+              SET fal_client='{{ oracle_standby_db_unique_name }}'
+              SET standby_file_management='AUTO'
+            NOFILENAMECHECK;
+        }
+        EXIT;
+        RMANEOF
+      args:
+        executable: /bin/bash
+      become_user: oracle
+      environment:
+        ORACLE_HOME: "{{ oracle_db_home }}"
+        ORACLE_SID: "{{ hostvars[dg_standby_host].oracle_db_sid }}"
+        NLS_LANG: AMERICAN_AMERICA.AL32UTF8
+        PATH: "{{ oracle_db_home }}/bin:{{ ansible_env.PATH }}"
+      delegate_to: "{{ dg_standby_host }}"
+      run_once: true
+      when: not dg_marker.stat.exists or oracle_standby_force_reseed
+      no_log: true
+      register: rman_duplicate
+      failed_when: rman_duplicate.rc != 0
+      changed_when: true
+
+    - name: Start managed recovery on standby
+      ansible.builtin.shell: |
+        {{ oracle_db_home }}/bin/sqlplus -S / as sysdba <<'SQLEOF'
+        WHENEVER SQLERROR EXIT FAILURE;
+        ALTER DATABASE RECOVER MANAGED STANDBY DATABASE DISCONNECT FROM SESSION;
+        EXIT;
+        SQLEOF
+      args:
+        executable: /bin/bash
+      become_user: oracle
+      environment:
+        ORACLE_HOME: "{{ oracle_db_home }}"
+        ORACLE_SID: "{{ hostvars[dg_standby_host].oracle_db_sid }}"
+        PATH: "{{ oracle_db_home }}/bin:{{ ansible_env.PATH }}"
+      delegate_to: "{{ dg_standby_host }}"
+      run_once: true
+      when: not dg_marker.stat.exists or oracle_standby_force_reseed
+      changed_when: true
+
+    - name: Enable DataGuard broker on standby
+      ansible.builtin.shell: |
+        {{ oracle_db_home }}/bin/sqlplus -S / as sysdba <<'SQLEOF'
+        WHENEVER SQLERROR EXIT FAILURE;
+        ALTER SYSTEM SET dg_broker_start=TRUE SCOPE=BOTH;
+        EXIT;
+        SQLEOF
+      args:
+        executable: /bin/bash
+      become_user: oracle
+      environment:
+        ORACLE_HOME: "{{ oracle_db_home }}"
+        ORACLE_SID: "{{ hostvars[dg_standby_host].oracle_db_sid }}"
+        PATH: "{{ oracle_db_home }}/bin:{{ ansible_env.PATH }}"
+      delegate_to: "{{ dg_standby_host }}"
+      run_once: true
+      when: not dg_marker.stat.exists or oracle_standby_force_reseed
+      changed_when: true
+
+    - name: Configure DataGuard broker with DGMGRL
+      ansible.builtin.shell: |
+        {{ oracle_db_home }}/bin/dgmgrl sys/{{ oracle_sys_password | quote }}@{{ oracle_primary_db_unique_name }} <<'DGEOF'
+        CREATE CONFIGURATION '{{ oracle_dg_config_name }}'
+          AS PRIMARY DATABASE IS '{{ oracle_primary_db_unique_name }}'
+          CONNECT IDENTIFIER IS '{{ oracle_primary_db_unique_name }}';
+        ADD DATABASE '{{ oracle_standby_db_unique_name }}'
+          AS CONNECT IDENTIFIER IS '{{ oracle_standby_db_unique_name }}'
+          MAINTAINED AS PHYSICAL;
+        ENABLE CONFIGURATION;
+        EXIT;
+        DGEOF
+      args:
+        executable: /bin/bash
+      become_user: oracle
+      environment:
+        ORACLE_HOME: "{{ oracle_db_home }}"
+        NLS_LANG: AMERICAN_AMERICA.AL32UTF8
+        PATH: "{{ oracle_db_home }}/bin:{{ ansible_env.PATH }}"
+      delegate_to: "{{ dg_primary_host }}"
+      run_once: true
+      when: not dg_marker.stat.exists or oracle_dg_force_reconfigure
+      no_log: true
+      register: dgmgrl_config
+      failed_when: >
+        dgmgrl_config.rc != 0 and
+        'ORA-16532' not in (dgmgrl_config.stdout | default(''))
+      changed_when: true
+
+    - name: Set protection mode and log transport on primary
+      ansible.builtin.shell: |
+        {{ oracle_db_home }}/bin/dgmgrl sys/{{ oracle_sys_password | quote }}@{{ oracle_primary_db_unique_name }} <<'DGEOF'
+        EDIT CONFIGURATION SET PROTECTION MODE AS MAX{{ oracle_dg_protection_mode | upper | replace('MAXAVAILABILITY', 'AVAILABILITY') | replace('MAXPERFORMANCE', 'PERFORMANCE') | replace('MAXPROTECTION', 'PROTECTION') }};
+        EDIT DATABASE '{{ oracle_primary_db_unique_name }}' SET PROPERTY LogXptMode='{{ oracle_dg_log_shipping }}';
+        EDIT DATABASE '{{ oracle_standby_db_unique_name }}' SET PROPERTY LogXptMode='{{ oracle_dg_log_shipping }}';
+        EXIT;
+        DGEOF
+      args:
+        executable: /bin/bash
+      become_user: oracle
+      environment:
+        ORACLE_HOME: "{{ oracle_db_home }}"
+        NLS_LANG: AMERICAN_AMERICA.AL32UTF8
+        PATH: "{{ oracle_db_home }}/bin:{{ ansible_env.PATH }}"
+      delegate_to: "{{ dg_primary_host }}"
+      run_once: true
+      when: not dg_marker.stat.exists or oracle_dg_force_reconfigure
+      no_log: true
+      changed_when: true
+
+    - name: Write DG broker ready marker on primary
+      ansible.builtin.copy:
+        dest: "{{ oracle_base }}/.db-sre-dg-ready"
+        content: "dg configured\n"
+        owner: oracle
+        group: oinstall
+        mode: "0640"
+      delegate_to: "{{ dg_primary_host }}"
+      run_once: true
+      when: not dg_marker.stat.exists or oracle_dg_force_reconfigure

@@ -17,6 +17,46 @@ do about it. Not the internal refactor that made it possible.
 
 Nothing yet.
 
+## [0.2.0] - 2026-08-23
+
+**The whole toolkit ships.** `v0.1.0` claimed one path — one SQL Server, metrics, a Telegram alert
+— and carried the seven packages that path needed. This release carries twelve more capabilities
+that were already written and already tested, and were held back only because a first release is
+easier to stand behind when it claims less.
+
+### Added
+
+- **Scheduled reporting** (`db-ops reports`) — turns collected metrics into periodic reports and
+  queues them for delivery, deduplicating and splitting messages over Telegram's length limit.
+- **Backup and restore validation** (`db-ops backup-restore`) — runs backups from a declared
+  policy and *proves* them by restoring, including point-in-time where the engine supports it.
+- **SLA/SLO evaluation** (`db-ops sla`) — checks objectives against real measurement history rather
+  than against a promise.
+- **Scheduled SQL tasks** (`db-ops sql-tasks`) — your own SQL, per target, on a window.
+- **The SRE toolkit** (`db-ops sre`) — host provisioning, Ansible and VMware automation, and
+  database-in-Docker for building the lab you test restores against.
+- **The web console and report host** (`db-ops webhost`) — serves the generated reports over HTTP
+  and a console that edits configuration and runs an app on demand.
+- Documentation for all of it: the seven per-component pages that were held back ship with their
+  components.
+
+### Changed
+
+- The distribution is no longer thin. One package is still withheld and will stay withheld:
+  `control`, which builds and deploys the master/worker pair and contains the export that produces
+  this repository. The thing that makes the public tree does not belong in it.
+
+### Fixed
+
+- The report and automation templates now travel with the wheel. Twenty-seven `.j2` and `.html`
+  files were being refused as unrecognised binaries, and without them `reports` renders a blank
+  page and the Docker/Ansible automation writes empty files.
+- The shipped example configuration no longer contradicts itself: the backup and SQL-task examples
+  route to Telegram levels the example `telegram_config.json` did not define, so the example set
+  could not be loaded as a set.
+- The shipped metric catalogue describes the collectors the package actually carries — ninety
+  metrics, not ten.
+
 ## [0.1.1] - 2026-08-22
 
 Three defects in the **first two commands anybody runs**, all found by installing `0.1.0` from PyPI

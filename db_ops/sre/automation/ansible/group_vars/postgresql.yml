@@ -1,0 +1,20 @@
+postgresql_cluster_name: postgresql-lab
+postgresql_major_version: 16
+postgresql_port: 5432
+postgresql_data_dir: "/var/lib/postgresql/{{ postgresql_major_version }}/main"
+postgresql_config_dir: "/etc/postgresql/{{ postgresql_major_version }}/main"
+postgresql_bin_dir: "/usr/lib/postgresql/{{ postgresql_major_version }}/bin"
+postgresql_listen_addresses: "*"
+postgresql_admin_user: postgres
+postgresql_admin_password: ChangeMe_PostgresAdmin_123!
+postgresql_replication_user: replicator
+postgresql_replication_password: ChangeMe_Replicator_123!
+postgresql_replication_network: 192.168.18.0/24
+postgresql_client_network: 192.168.18.0/24
+postgresql_wal_level: replica
+postgresql_max_wal_senders: 10
+postgresql_max_replication_slots: 10
+postgresql_hot_standby: true
+postgresql_password_encryption: scram-sha-256
+postgresql_force_reseed: false
+postgresql_synchronous_replication: false

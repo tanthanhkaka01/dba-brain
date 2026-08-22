@@ -1,0 +1,30 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - 127.0.0.1:{{ monitoring_alertmanager_listen_port }}
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets:
+          - 127.0.0.1:{{ monitoring_prometheus_listen_port }}
+
+  - job_name: mon-node
+    static_configs:
+      - targets:
+          - 127.0.0.1:9100
+
+  - job_name: db-node-exporters
+    static_configs:
+      - targets:
+{% for target in monitoring_node_targets %}
+          - {{ target }}
+{% endfor %}

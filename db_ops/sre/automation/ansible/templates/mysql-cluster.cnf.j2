@@ -1,0 +1,23 @@
+[mysqld]
+bind-address = 0.0.0.0
+mysqlx-bind-address = 0.0.0.0
+report_host = {{ ansible_host }}
+server_id = {{ mysql_server_id }}
+
+log_bin = mysql-bin
+binlog_format = ROW
+gtid_mode = ON
+enforce_gtid_consistency = ON
+log_replica_updates = ON
+relay_log_recovery = ON
+
+skip_name_resolve = ON
+disabled_storage_engines = MyISAM,BLACKHOLE,FEDERATED,ARCHIVE
+
+loose-group_replication_start_on_boot = OFF
+loose-group_replication_bootstrap_group = OFF
+loose-group_replication_single_primary_mode = ON
+loose-group_replication_enforce_update_everywhere_checks = OFF
+loose-group_replication_ip_allowlist = {{ mysql_replication_allowed_host }}
+loose-group_replication_local_address = {{ mysql_local_address }}
+loose-group_replication_group_seeds = {{ mysql_group_seeds }}

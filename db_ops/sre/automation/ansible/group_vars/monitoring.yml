@@ -1,0 +1,15 @@
+---
+monitoring_prometheus_listen_port: 9090
+monitoring_alertmanager_listen_port: 9093
+monitoring_grafana_listen_port: 3000
+
+monitoring_grafana_admin_user: admin
+monitoring_grafana_admin_password: ChangeMe_GrafanaAdmin_123!
+
+monitoring_node_targets:
+  - 192.168.18.11:9100
+  - 192.168.18.12:9100
+  - 192.168.18.13:9100
+  - 192.168.18.21:9100
+  - 192.168.18.22:9100
+  - 192.168.18.23:9100

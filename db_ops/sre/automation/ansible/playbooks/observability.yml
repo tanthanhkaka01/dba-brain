@@ -1,0 +1,191 @@
+---
+- name: Install and configure observability stack on monitoring node
+  hosts: monitoring
+  become: true
+  vars_files:
+    - ../group_vars/monitoring.yml
+  handlers:
+    - name: Restart prometheus
+      ansible.builtin.service:
+        name: prometheus
+        state: restarted
+
+    - name: Restart alertmanager
+      ansible.builtin.service:
+        name: prometheus-alertmanager
+        state: restarted
+
+    - name: Restart grafana-server
+      ansible.builtin.service:
+        name: grafana-server
+        state: restarted
+
+  tasks:
+    - name: Update apt metadata
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Install prerequisite packages
+      ansible.builtin.apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gpg
+          - jq
+          - software-properties-common
+        state: present
+
+    - name: Ensure apt keyrings directory exists
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Download Grafana GPG key
+      ansible.builtin.get_url:
+        url: https://apt.grafana.com/gpg.key
+        dest: /tmp/grafana-gpg.key
+        mode: "0644"
+
+    - name: Install Grafana keyring
+      ansible.builtin.command:
+        cmd: >-
+          gpg --dearmor
+          --yes
+          --output /etc/apt/keyrings/grafana.gpg
+          /tmp/grafana-gpg.key
+      changed_when: true
+
+    - name: Configure Grafana apt repository
+      ansible.builtin.apt_repository:
+        repo: "deb [signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main"
+        filename: grafana
+        state: present
+
+    - name: Install Prometheus, Alertmanager, Grafana, and node exporter
+      ansible.builtin.apt:
+        name:
+          - prometheus
+          - prometheus-alertmanager
+          - prometheus-node-exporter
+          - grafana
+        state: present
+        update_cache: true
+
+    - name: Ensure Prometheus rule directory exists
+      ansible.builtin.file:
+        path: /etc/prometheus/rules
+        state: directory
+        owner: prometheus
+        group: prometheus
+        mode: "0755"
+
+    - name: Deploy Prometheus config
+      ansible.builtin.template:
+        src: ../templates/prometheus.yml.j2
+        dest: /etc/prometheus/prometheus.yml
+        owner: prometheus
+        group: prometheus
+        mode: "0644"
+      notify: Restart prometheus
+
+    - name: Deploy Prometheus alert rules
+      ansible.builtin.template:
+        src: ../templates/observability-alerts.yml.j2
+        dest: /etc/prometheus/rules/observability-alerts.yml
+        owner: prometheus
+        group: prometheus
+        mode: "0644"
+      notify: Restart prometheus
+
+    - name: Ensure Alertmanager config directory exists
+      ansible.builtin.file:
+        path: /etc/alertmanager
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Deploy Alertmanager config
+      ansible.builtin.copy:
+        dest: /etc/alertmanager/alertmanager.yml
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          route:
+            receiver: local-file
+            group_wait: 10s
+            group_interval: 30s
+            repeat_interval: 4h
+          receivers:
+            - name: local-file
+      notify: Restart alertmanager
+
+    - name: Configure Grafana admin user
+      ansible.builtin.lineinfile:
+        path: /etc/grafana/grafana.ini
+        regexp: "^;?admin_user ="
+        line: "admin_user = {{ monitoring_grafana_admin_user }}"
+      notify: Restart grafana-server
+
+    - name: Configure Grafana admin password
+      ansible.builtin.lineinfile:
+        path: /etc/grafana/grafana.ini
+        regexp: "^;?admin_password ="
+        line: "admin_password = {{ monitoring_grafana_admin_password }}"
+      notify: Restart grafana-server
+      no_log: true
+
+    - name: Ensure Grafana datasource provisioning directory exists
+      ansible.builtin.file:
+        path: /etc/grafana/provisioning/datasources
+        state: directory
+        owner: root
+        group: grafana
+        mode: "0750"
+
+    - name: Deploy Grafana Prometheus datasource
+      ansible.builtin.template:
+        src: ../templates/grafana-datasource-prometheus.yml.j2
+        dest: /etc/grafana/provisioning/datasources/prometheus.yml
+        owner: root
+        group: grafana
+        mode: "0640"
+      notify: Restart grafana-server
+
+    - name: Ensure observability services are enabled and running
+      ansible.builtin.service:
+        name: "{{ item }}"
+        enabled: true
+        state: started
+      loop:
+        - prometheus
+        - prometheus-alertmanager
+        - prometheus-node-exporter
+        - grafana-server
+
+    - name: Flush handlers
+      ansible.builtin.meta: flush_handlers
+
+    - name: Wait for Prometheus
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: "{{ monitoring_prometheus_listen_port }}"
+        timeout: 120
+
+    - name: Wait for Alertmanager
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: "{{ monitoring_alertmanager_listen_port }}"
+        timeout: 120
+
+    - name: Wait for Grafana
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: "{{ monitoring_grafana_listen_port }}"
+        timeout: 120

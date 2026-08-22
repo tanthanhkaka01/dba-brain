@@ -1,0 +1,14 @@
+mysql_ubuntu_codename: noble
+mysql_apt_key_url: https://repo.mysql.com/RPM-GPG-KEY-mysql-2025
+mysql_apt_keyring_path: /usr/share/keyrings/mysql-archive-keyring.gpg
+mysql_apt_repo_components:
+  - mysql-8.4-lts
+  - mysql-tools
+mysql_root_password: ""
+mysql_cluster_name: mysql-lab
+mysql_cluster_admin_user: clusteradmin
+mysql_cluster_admin_password: ChangeMe_ClusterAdmin_123!
+mysql_cluster_expel_timeout: 30
+mysql_cluster_auto_rejoin_tries: 10
+mysql_replication_allowed_host: 192.168.18.0/24
+mysql_cluster_force_rebootstrap: false

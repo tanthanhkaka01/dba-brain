@@ -65,6 +65,7 @@ USAGE = (
     "  rotate-password  Change database login passwords on the server AND in the store (see --help)\n"
     "  check-secret     Try to authenticate with each secret and say why any cannot be (see --help)\n"
     "  check-identifiers  Which of this estate's real names appear in files that ship (see --help)\n"
+    "  lift-example     Refresh a data/*.example.json from your own file, refusing identifiers\n"
     "  probe-host       What a host listens on, and what db_ops can do with it (see --help)\n"
     "  metric-severity  Remap one metric's statuses for one server_id, e.g. WARNING -> LOGGING (see --help)\n"
     "  trace-session    Who is holding an open transaction — the app user behind a SPID (see --help)\n"
@@ -269,6 +270,69 @@ INVENTORY_SUMMARY_USAGE = (
     "\n"
     "Prints JSON: {ok, inventory, file}. Exit 0 on success, 1 on failure.\n"
 )
+
+LIFT_EXAMPLE_USAGE = (
+    "usage: python -m db_ops.common.cli lift-example <json>|@<file>|-\n"
+    "\n"
+    "Copies one of your configuration files over the *.example.json beside it. The examples ship:\n"
+    "they are what a stranger copies to get a working tool root, so they drift in one direction -\n"
+    "your file gains records as the estate grows and the example does not, until the shipped\n"
+    "catalogue describes a tenth of the collectors the package carries.\n"
+    "\n"
+    "It does NOT scrub. It copies, then runs check-identifiers over the result, and if anything\n"
+    "real would be carried across it writes nothing and names the terms. A tool that rewrote what\n"
+    "it found would be a second scrubber with its own opinions.\n"
+    "\n"
+    "It also refuses a source naming an asset file that does not exist - a lifted catalogue that\n"
+    "names a missing variant refuses to load, and it fails on somebody else's machine.\n"
+    "\n"
+    "  source   the file to lift from, e.g. data/metric_definitions.json\n"
+    "  dest     where to write it (default: the *.example.json beside the source)\n"
+    "  write    false to report what would happen and write nothing\n"
+    "\n"
+    '  {"source": "data/metric_definitions.json"}\n'
+    '  {"source": "data/sla_policies.json", "write": false}\n'
+)
+
+def _lift_example_command(argv: list[str]) -> int:
+    """Refresh one `data/*.example.json` from the operator's own file."""
+    from db_ops.common.example_lift import LiftError, lift_example
+    from db_ops.lib import response
+
+    if not argv:
+        print(LIFT_EXAMPLE_USAGE, file=sys.stderr)
+        return response.emit(response.fail("lift-example", "no request given; see --help"))
+    request, code = _read_json_request(argv[0], LIFT_EXAMPLE_USAGE)
+    if request is None:
+        return code
+
+    source = str(request.get("source") or "").strip()
+    if not source:
+        # The envelope, not a usage dump: a caller must not have to parse prose off stderr to
+        # learn that its request was wrong. Usage still goes to stderr for the person.
+        print(LIFT_EXAMPLE_USAGE, file=sys.stderr)
+        return response.emit(response.fail(
+            "lift-example", "'source' is required: the file to lift from."))
+    default_dest = Path(source).with_suffix("").with_suffix(".example.json")
+    dest = str(request.get("dest") or default_dest)
+
+    try:
+        summary = lift_example(
+            source=source,
+            dest=dest,
+            blank_keys=tuple(request.get("blank_keys") or ()),
+            write=bool(request.get("write", True)),
+        )
+    except LiftError as exc:
+        return response.emit(response.fail("lift-example", str(exc)))
+
+    # A finding is a fact about the source, not a failure of the command - the same distinction
+    # `check-identifiers` makes. Callers gate on `data.identifier_hits`.
+    return response.emit(response.ok(
+        "lift-example", message=summary["message"], data=summary,
+        metrics={"records": summary["records"], "identifier_hits": summary["identifier_hits"]},
+    ))
+
 
 CHECK_IDENTIFIERS_USAGE = (
     "usage: python -m db_ops.common.cli check-identifiers <json>|@<file>|- [--config ...]\n"
@@ -1611,6 +1675,8 @@ def main(argv: list[str] | None = None) -> int:
         return _check_secret_command(argv[1:])
     if argv[0] == "check-identifiers":
         return _check_identifiers_command(argv[1:])
+    if argv[0] == "lift-example":
+        return _lift_example_command(argv[1:])
     if argv[0] == "probe-host":
         return _probe_host_command(argv[1:])
     if argv[0] == "restore-database":

@@ -1,0 +1,27 @@
+################################################################################
+## Oracle TNS Names — DataGuard
+## Managed by Ansible — db-sre lab
+################################################################################
+
+{% for h in groups['oracle_dg'] | map('extract', hostvars) | selectattr('oracle_dg_role', 'equalto', 'primary') %}
+{{ oracle_primary_db_unique_name }} =
+  (DESCRIPTION =
+    (ADDRESS = (PROTOCOL = TCP)(HOST = {{ h.ansible_host }})(PORT = {{ oracle_listener_port }}))
+    (CONNECT_DATA =
+      (SERVER = DEDICATED)
+      (SID = {{ h.oracle_db_sid }})
+    )
+  )
+
+{% endfor %}
+{% for h in groups['oracle_dg'] | map('extract', hostvars) | selectattr('oracle_dg_role', 'equalto', 'standby') %}
+{{ oracle_standby_db_unique_name }} =
+  (DESCRIPTION =
+    (ADDRESS = (PROTOCOL = TCP)(HOST = {{ h.ansible_host }})(PORT = {{ oracle_listener_port }}))
+    (CONNECT_DATA =
+      (SERVER = DEDICATED)
+      (SID = {{ h.oracle_db_sid }})
+    )
+  )
+
+{% endfor %}

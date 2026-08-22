@@ -1,0 +1,9 @@
+# PostgreSQL Client Authentication Configuration File
+# Managed by Ansible for the db-sre lab.
+
+local   all             postgres                                peer
+local   all             all                                     peer
+host    all             all             127.0.0.1/32            scram-sha-256
+host    all             all             ::1/128                 scram-sha-256
+host    all             all             {{ postgresql_client_network }}        scram-sha-256
+host    replication     {{ postgresql_replication_user }}      {{ postgresql_replication_network }}        scram-sha-256

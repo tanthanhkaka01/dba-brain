@@ -1,77 +1,88 @@
 {
+  "report_base_url": "",
   "notes": [
-    "Sample reports_config.json - which reports are built, how often, and how stale a measurement may be before it stops counting. Copy to reports_config.json and edit.",
-    "Two levels of scheduling, on purpose. data/app_commands.json decides how often the reports APP wakes up; this file decides which report is due when it does. Adding a report therefore never means touching the scheduler.",
-    "'metric_max_age_seconds' is the freshness gate: a metric older than this is not reported at all. Without it a report quietly restates yesterday's numbers as though they were current, which is worse than reporting nothing - so an hourly report keeps a short window and a daily summary a long one.",
-    "'time_window' is the same shared scheduling object the daemon and the SQL tasks use. from_hour/to_hour confine a report to office hours; 'repeat_interval' is seconds and is counted from the previous run's start.",
-    "'report_base_url' is the public address the rendered pages are served at - it appears in delivered messages as the link back to the full report. Leave it empty when nothing serves the pages; the reports are still written to runtime/reports.",
-    "'inventory_exclude_ip_prefixes' hides address ranges from the inventory pages. It was a constant inside the rendering library until it became clear that the library was deciding which of an estate's machines nobody gets to see. Empty means show everything."
+    "'inventory_exclude_ip_prefixes' lists server ip prefixes the inventory pages leave out. It was a constant in db_ops/lib/inventory_render.py until 2026-08-21, which meant the rendering library itself decided which of this estate's machines nobody gets to see. Empty means show everything."
   ],
-
-  "report_base_url": "http://db01.example.com:8080/report_dba/",
-
-  "inventory_exclude_ip_prefixes": [],
-
+  "inventory_exclude_ip_prefixes": [
+    "192.168.18."
+  ],
   "reports": [
     {
       "report_code": "rp_metric_daily_logging",
-      "display_name": "Daily metrics summary",
+      "display_name": "Daily Metrics Logging Summary",
       "metric_max_age_seconds": 86400,
       "active": true,
-      "_note": "The morning digest: everything measured in the last day, whatever its severity. A day of tolerance is right here because the report IS the daily picture.",
       "time_window": {
-        "from_year": null, "to_year": null,
-        "from_month": null, "to_month": null,
-        "from_day": 1, "to_day": 31,
-        "from_hour": 8, "to_hour": 9,
-        "from_minute": null, "to_minute": null,
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": 1,
+        "to_day": 31,
+        "from_hour": 10,
+        "to_hour": 11,
+        "from_minute": null,
+        "to_minute": null,
         "repeat_interval": 72000,
         "timeout": 1800
       }
     },
     {
       "report_code": "rp_metric_hourly_warning",
-      "display_name": "Warnings",
+      "display_name": "Metrics Warning Report",
       "metric_max_age_seconds": 900,
       "active": true,
-      "_note": "Fifteen minutes of tolerance, because a warning about a measurement taken an hour ago is a statement about the past. The short window is what makes this report actionable.",
       "time_window": {
-        "from_year": null, "to_year": null,
-        "from_month": null, "to_month": null,
-        "from_day": 1, "to_day": 31,
-        "from_hour": 0, "to_hour": 23,
-        "from_minute": null, "to_minute": null,
-        "repeat_interval": 900,
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": 1,
+        "to_day": 31,
+        "from_hour": 0,
+        "to_hour": 23,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 180,
         "timeout": 1800
       }
     },
     {
       "report_code": "rp_metric_hourly_critical",
-      "display_name": "Critical findings",
+      "display_name": "Metrics Critical Report",
       "metric_max_age_seconds": 900,
       "active": true,
       "time_window": {
-        "from_year": null, "to_year": null,
-        "from_month": null, "to_month": null,
-        "from_day": 1, "to_day": 31,
-        "from_hour": 0, "to_hour": 23,
-        "from_minute": null, "to_minute": null,
-        "repeat_interval": 300,
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": 1,
+        "to_day": 31,
+        "from_hour": 0,
+        "to_hour": 23,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 180,
         "timeout": 1800
       }
     },
     {
       "report_code": "rp_backup_health_daily",
-      "display_name": "Backup health",
+      "display_name": "Backup Health Daily Report",
       "metric_max_age_seconds": 604800,
       "active": true,
-      "_note": "A week of tolerance, deliberately. A database backed up weekly still has a valid, week-old measurement, and a freshness gate of one day would report it as unmonitored rather than as backed up.",
       "time_window": {
-        "from_year": null, "to_year": null,
-        "from_month": null, "to_month": null,
-        "from_day": 1, "to_day": 31,
-        "from_hour": 9, "to_hour": 10,
-        "from_minute": null, "to_minute": null,
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": 1,
+        "to_day": 31,
+        "from_hour": 9,
+        "to_hour": 10,
+        "from_minute": null,
+        "to_minute": null,
         "repeat_interval": 72000,
         "timeout": 1800
       }
