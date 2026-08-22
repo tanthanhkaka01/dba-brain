@@ -114,7 +114,12 @@ def move_map(cursor, backup_path: str, *, data_dir: str, log_dir: str = "") -> d
         physical = str(row.get("PhysicalName") or "")
         suffix = physical.rsplit("\\", 1)[-1].rsplit("/", 1)[-1] or logical
         root = (log_dir or data_dir) if str(row.get("Type") or "").upper() == "L" else data_dir
-        moves[logical] = f"{str(root).rstrip('/\\')}{separator}{suffix}"
+        # Hoisted out of the f-string: a backslash inside an f-string expression is Python 3.12+
+        # syntax, and this package declares `requires-python = ">=3.11"`. It parsed here because
+        # development runs on a newer interpreter, so the tree did not run at all on the floor it
+        # promised — found by the first lint pass, which is exactly what `G-08` is for.
+        base = str(root).rstrip("/\\")
+        moves[logical] = f"{base}{separator}{suffix}"
     return moves
 
 

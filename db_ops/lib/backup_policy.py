@@ -63,7 +63,7 @@ def _type_rule(policy: dict, *, server_id: str, database: str, backup_type: str)
             continue
         if wanted_db and wanted_db != str(database or "").strip().lower():
             continue
-        rule.update(((override.get("types") or {}).get(backup_type) or {}))
+        rule.update((override.get("types") or {}).get(backup_type) or {})
         break
     return rule
 

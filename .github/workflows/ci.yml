@@ -1,0 +1,81 @@
+# Tests, lint and a secret scan on every push and pull request. Go-live gate item `G-08`.
+#
+# **The test job is red today, on purpose, and that is documented rather than hidden.** This tree
+# is a preview: 38 tests read configuration files the distribution does not ship, a coupling being
+# removed rather than a broken product, and `CHANGELOG.md` says so. Two things were deliberately
+# not done to make the badge green — deselecting the failures, or marking them xfail — because a
+# green badge over 38 known failures is worse than a red one. It stops meaning anything, and the
+# first real regression arrives looking exactly like the noise.
+#
+# The secret scan is the job that must never be red. It guards the one mistake that cannot be
+# undone.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        # `requires-python` is >=3.11. The floor is a policy choice — no dependency and no language
+        # feature in the tree needs more than 3.9 — so the matrix is what proves the claim rather
+        # than the metadata.
+        python: ["3.11", "3.12", "3.13"]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . pytest
+
+      # No database, no network, no credentials: the suite is offline by design. A test that needs
+      # any of those has escaped, and CI is where that gets noticed.
+      - name: Tests
+        run: python -m pytest tests -q
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff
+        run: python -m pip install --upgrade pip ruff
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Format check
+        run: ruff format --check .
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The whole history, not just the tip: a secret removed in a later commit is still in the
+          # repository, and this repository was created from a filtered copy precisely so that its
+          # history is short enough for this to be cheap.
+          fetch-depth: 0
+
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

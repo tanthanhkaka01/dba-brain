@@ -167,7 +167,7 @@ def shrink_log(
     try:
         with _closing(connection):
             cursor = connection.cursor()
-            files = _rows(cursor, f"""
+            files = _rows(cursor, """
                 SELECT f.name, f.size / 128.0,
                        FILEPROPERTY(f.name, 'SpaceUsed') / 128.0, f.physical_name,
                        d.log_reuse_wait_desc, d.recovery_model_desc

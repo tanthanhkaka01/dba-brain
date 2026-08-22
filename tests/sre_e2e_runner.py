@@ -134,11 +134,11 @@ def _check(cmd: str, timeout: int = 120) -> Step:
 
 
 def _stop(group: str) -> Step:
-    return _ps("stop-vms", f"-Group", group, name=f"stop:{group}", timeout=T_SHORT, critical=False)
+    return _ps("stop-vms", "-Group", group, name=f"stop:{group}", timeout=T_SHORT, critical=False)
 
 
 def _delete(group: str) -> Step:
-    return _ps("delete-vms", f"-Group", group, name=f"delete:{group}", timeout=T_SHORT, critical=False)
+    return _ps("delete-vms", "-Group", group, name=f"delete:{group}", timeout=T_SHORT, critical=False)
 
 
 # ── Step sequences per group ───────────────────────────────────────────────────
@@ -616,7 +616,7 @@ def main(argv: list[str] | None = None) -> int:
         dry_run=args.dry_run,
     )
 
-    print(_c(f"\nSRE E2E Runner", _BOLD, _CYAN))
+    print(_c("\nSRE E2E Runner", _BOLD, _CYAN))
     print(f"  Config  : {args.config}")
     print(f"  Groups  : {', '.join(requested)}")
     print(f"  Cleanup : {'disabled' if args.no_cleanup else 'enabled'}")

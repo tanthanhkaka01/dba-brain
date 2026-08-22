@@ -23,7 +23,7 @@ PACKAGE = Path(__file__).resolve().parents[1] / "db_ops" / "common" / "restore"
 #: Modules whose whole purpose is to reach data or config. Importing any of them from the restore
 #: API means the API can no longer answer from its input alone.
 DATA_REACHING = frozenset({
-    "db_ops.config", "db_ops.common.data_sources", "db_ops.common.data_sources",
+    "db_ops.config", "db_ops.common.data_sources",
     "db_ops.lib.secret_text", "db_ops.db",
 })
 
