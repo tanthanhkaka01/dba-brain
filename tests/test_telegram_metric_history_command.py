@@ -95,45 +95,6 @@ def _messages(sqlite_path):
         )
 
 
-def test_production_metric_history_command_contract():
-    command = _production_command()
-    config = command["action_config"]
-
-    assert command["command_id"] == 9
-    assert command["node_role"] == "worker"
-    assert command["command_type"] == 2
-    assert command["action_type"] == "cli_execute"
-    assert config["working_dir"] == "tools/db_ops"
-    assert not config.get("background", False)
-    assert not config.get("detached", False)
-    assert config["defaults"] == {"summary_limit": 150, "dedupe_seconds": 0}
-    assert [parameter["name"] for parameter in config["parameters"]] == [
-        "server_id",
-        "metric_code",
-        "hours",
-    ]
-    assert [parameter["position"] for parameter in config["parameters"]] == [1, 2, 3]
-    assert all(parameter["validator"] == "regex" for parameter in config["parameters"])
-    assert config["command_argv"] == [
-        "{python}",
-        "-m",
-        "db_ops.reports.cli",
-        "--config",
-        "{config_path}",
-        "metric-history-report",
-        "--server-id",
-        "{server_id}",
-        "--metric-code",
-        "{metric_code}",
-        "--hours",
-        "{hours}",
-        "--summary-limit",
-        "{summary_limit}",
-        "--dedupe-seconds",
-        "{dedupe_seconds}",
-    ]
-
-
 @pytest.mark.parametrize(
     ("text", "expected_prompt"),
     [

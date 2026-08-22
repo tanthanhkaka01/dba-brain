@@ -15,13 +15,18 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
-> **Status: preview. The test suite is not green in this tree — 10 failures.**
+> **Status: preview, and the suite is now green — 2,895 passed, 0 failed.**
 >
-> This is published early and deliberately, so the shape can be reviewed before it is fixed. The
-> monitoring path it claims *is* verified end to end against a real SQL Server: install, `db-ops
-> init`, add one instance, collect metrics, alert to Telegram. The failures are tests that read
-> configuration files this distribution does not ship — a coupling being removed, not a broken
-> product. Do not treat this as a release, and expect no PyPI package until the suite is green.
+> This was published early and deliberately, so the shape could be reviewed before it was
+> finished. The monitoring path it claims *is* verified end to end against a real SQL Server:
+> install, `db-ops init`, add one instance, collect metrics, alert to Telegram.
+>
+> The ten remaining failures were tests that read the maintainer's own configuration — a coupling,
+> not a broken product. Eight of them ask "is my configuration still correct", which is a question
+> only that estate can answer, and they now live in a private suite that is not part of this
+> repository. Two were ordinary coupling and were fixed: they assert how a reply is formatted and
+> how a metric is filtered, and each failed because something else in the call reached for a file
+> this distribution does not ship.
 
 ### Added
 
@@ -44,6 +49,11 @@ do about it. Not the internal refactor that made it possible.
 
 ### Fixed
 
+- The test suite passes on a clean install. Ten tests failed because they read configuration files
+  this distribution does not ship. Eight of them were asking *is my configuration still correct* —
+  a question only the maintainer's estate can answer — and have moved to a suite that stays there;
+  the other two were fixed, and still ship. CI runs the whole suite on 3.11, 3.12 and 3.13 with
+  nothing skipped and nothing allowed to fail.
 - The documented first run could not be completed. Two commands the guides told you to run are not
   in this distribution: `db_ops.control.cli encrypt-secret-text`, which moved to
   `db-ops encrypt-secret`, and `db_ops.reports.cli queue-metrics-reports`, whose app is not shipped

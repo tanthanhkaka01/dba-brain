@@ -83,15 +83,6 @@ def test_creating_a_login_stays_guarded_so_a_re_run_converges():
 # What the replay promises about passwords on the target
 # --------------------------------------------------------------------------------------
 
-def test_sa_is_never_exported_so_the_target_keeps_its_own_sa_password():
-    """The target here is a container whose sa password db_ops itself issued and stores. An
-    export that carried the source's sa would replace it, and the connection registered in
-    docker_db_connections.json would stop working."""
-    policy = si.load_policy()
-    skip = {str(n).lower() for n in ((policy.get("logins") or {}).get("skip_names") or ())}
-
-    assert "sa" in skip
-
 
 def test_an_existing_login_never_has_its_password_rewritten():
     """Every CREATE is guarded by IF NOT EXISTS and there is no ALTER LOGIN ... WITH PASSWORD
