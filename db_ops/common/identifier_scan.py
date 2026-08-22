@@ -472,7 +472,7 @@ def scan(request: dict[str, Any] | None = None, *, data_dir: str | Path | None =
         item["terms"] = sorted(term for term, level in item["terms"].items() if level != REVIEW)
 
     review_only = sorted(
-        (item["file"] for item in findings.values() if not (item["certain"] or item["likely"]))
+        item["file"] for item in findings.values() if not (item["certain"] or item["likely"])
     )
     certain = sum(item["certain"] for item in findings.values())
     likely = sum(item["likely"] for item in findings.values())

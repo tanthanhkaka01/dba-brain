@@ -38,7 +38,13 @@ def load_metric_importance_overrides(
             raise RuntimeError("instance_overrides[].importance must be an object keyed by metric_code.")
         for metric_code, value in importance.items():
             if known_metric_codes is not None and str(metric_code) not in known_metric_codes:
-                warnings.warn(f"metric_importance_overrides references unknown metric_code: {metric_code}", RuntimeWarning)
+                warnings.warn(
+                    f"metric_importance_overrides references unknown metric_code: {metric_code}",
+                    RuntimeWarning,
+                    # Without this the warning names this module, and the reader has to work
+                    # out that the fault is in their config file rather than in the loader.
+                    stacklevel=2,
+                )
             int_value = int(value)
             if not 0 <= int_value <= 5:
                 raise RuntimeError(f"Override importance for {metric_code} must be from 0 to 5.")

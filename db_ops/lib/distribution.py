@@ -88,6 +88,11 @@ def is_public(module: str) -> bool:
 #: deny list" is that a file added tomorrow ships by default. A file nobody decided about is
 #: exactly the file that leaks, so the export copies what is *named* and nothing else.
 PUBLIC_PATHS: tuple[str, ...] = (
+    # CI and the release workflow. They must travel with the export rather than be written into
+    # the public repository by hand: `--force` empties everything except `.git`, so anything
+    # created only over there disappears on the next export. And trusted publishing checks the
+    # *workflow file name*, which makes it part of the product's identity rather than local setup.
+    ".github",
     "README.md",
     "LICENSE",
     "NOTICE",

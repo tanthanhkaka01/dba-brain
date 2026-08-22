@@ -575,10 +575,10 @@ def command_permission(*, row: Any, command: SupportCommand, data_dir: Path) -> 
     # raising a permission that was never the blocker.
     if chat_type == "private" and command.is_private != 1:
         return {"allowed": False,
-                "reason": f"This command is not available in a private chat (is_private=0); run it in a group."}
+                "reason": "This command is not available in a private chat (is_private=0); run it in a group."}
     if chat_type != "private" and command.is_group != 1:
         return {"allowed": False,
-                "reason": f"This command is not available in a group (is_group=0); message the bot in a private chat."}
+                "reason": "This command is not available in a group (is_group=0); message the bot in a private chat."}
 
     user_type = telegram_user_type(data_dir / "telegram_users.json", user_id=user_id)
     allow_command = user_type if chat_type == "private" else telegram_group_allow_command(data_dir / "telegram_groups.json", chat_id=chat_id)
