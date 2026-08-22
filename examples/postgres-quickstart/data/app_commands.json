@@ -1,0 +1,49 @@
+{
+  "notes": [
+    "The scheduler's list, present but switched off. Run the commands by hand first - a scheduler that starts a command you have never seen succeed only makes the failure harder to find.",
+    "Set 'active': true on both entries and start the daemon (step 6 of the README) once the manual runs are clean.",
+    "'working_dir' is the literal string 'tools/db_ops' and is not a folder on your disk. It is a logical alias for the tool root, resolved at run time to wherever the project actually lives, so the same file works in a checkout and in the container.",
+    "Metrics repeats every 5 minutes and is allowed 20; reports repeat every 5 minutes and are allowed 10. The timeout is always the budget for the WHOLE pass, so it stays above the slowest single thing in it - a pass killed at its timeout loses every metric in it, not just the slow one."
+  ],
+
+  "app_commands": [
+    {
+      "node_role": "master",
+      "app_ord": 1,
+      "app_command_id": "APP-METRICS",
+      "app_code": "APP-METRICS",
+      "app_name": "db_ops_metrics",
+      "display_name": "Collect database metrics",
+      "log_scope": "metrics",
+      "working_dir": "tools/db_ops",
+      "command_text": "python -m db_ops.metrics.cli --config config.json collect",
+      "active": false,
+      "time_window": {
+        "from_day": 1, "to_day": 31,
+        "from_hour": 0, "to_hour": 23,
+        "repeat_interval": 300,
+        "retry_interval": 60,
+        "timeout": 1200
+      }
+    },
+    {
+      "node_role": "master",
+      "app_ord": 2,
+      "app_command_id": "APP-REPORTS-CREATE",
+      "app_code": "APP-REPORTS-CREATE",
+      "app_name": "db_ops_reports_create",
+      "display_name": "Run scheduled reports",
+      "log_scope": "reports_create",
+      "working_dir": "tools/db_ops",
+      "command_text": "python -m db_ops.reports.cli --config config.json run-scheduled --summary-limit 50",
+      "active": false,
+      "time_window": {
+        "from_day": 1, "to_day": 31,
+        "from_hour": 0, "to_hour": 23,
+        "repeat_interval": 300,
+        "retry_interval": 60,
+        "timeout": 600
+      }
+    }
+  ]
+}

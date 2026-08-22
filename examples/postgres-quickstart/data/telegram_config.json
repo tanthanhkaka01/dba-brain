@@ -1,0 +1,23 @@
+{
+  "notes": [
+    "Off. The toolkit sends nothing anywhere by itself, and this file is where that stops being a claim and becomes a setting you can read.",
+    "'enabled': false means no outbound connection is attempted at all - findings are written to the store and to logs/ and stay there. Everything in this quickstart works with delivery off.",
+    "To turn it on later you need three things: a bot token in the encrypted secret store, its reference in data/bot_telegram.json, and at least one chat in data/telegram_groups.json. See docs/07_telegram_app.md."
+  ],
+
+  "enabled": false,
+
+  "bot_token_env": "TELEGRAM_BOT_TOKEN",
+  "bot_config_file": "data/bot_telegram.json",
+  "secret_text_file": "data/encrypted_secret_text.json",
+  "bot_token_secret_file": "",
+  "bot_token": "",
+
+  "api_url": "https://api.telegram.org",
+  "timeout_seconds": 20,
+  "update_offset": null,
+
+  "groups_file": "data/telegram_groups.json",
+
+  "level_chat_map": {}
+}

@@ -1,0 +1,136 @@
+{
+  "schema_version": 2,
+  "notes": [
+    "Seven metrics, all PostgreSQL, all plain SQL. The shipped catalogue carries around ninety across four engines; this is a readable subset, and every entry below is copied unchanged from it, so what you learn here is what the full file means.",
+    "The 'file' in each variant is resolved against the assets tree: your own assets/ directory first, then the SQL that ships inside the package. That is what lets you override one query for your environment without forking the project - and it is why this example works with no assets/ directory of its own.",
+    "Look at the range of 'repeat_interval': availability every 60 seconds, capacity every 5 minutes, vacuum health every 30. A catalogue where everything runs at the same rate is either wasting the estate's time or measuring the urgent things too slowly.",
+    "'connection_error_severity' is the interesting field. For INSTANCE_STATUS, failing to connect IS the finding, so it is CRITICAL. For the rest it is a WARNING, because the instance being down is already being reported once and does not need reporting seven times."
+  ],
+
+  "collection": {
+    "max_parallel_servers": 4,
+    "note": "Metrics of one server always run one at a time, in catalogue order; only different servers overlap. With a single target this number changes nothing."
+  },
+
+  "metrics": [
+    {
+      "metric_id": 1,
+      "metric_code": "INSTANCE_STATUS",
+      "db_type": "postgresql",
+      "category": "availability",
+      "default_importance": 5,
+      "active": true,
+      "connection_error_severity": "CRITICAL",
+      "execution_error_severity": "CRITICAL",
+      "collector_type": "sql",
+      "time_window": {"repeat_interval": 60, "timeout": 60},
+      "variants": [
+        {"db_type": "postgresql", "min_major_version": 10, "name": "postgresql_10_plus", "file": "postgresql/001_postgresql_instance_status.sql"}
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 2,
+      "metric_code": "DATABASE_STATUS",
+      "db_type": "postgresql",
+      "category": "availability",
+      "default_importance": 5,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "collector_type": "sql",
+      "time_window": {"repeat_interval": 300, "timeout": 60},
+      "variants": [
+        {"db_type": "postgresql", "min_major_version": 10, "name": "postgresql_10_plus", "file": "postgresql/002_postgresql_database_status.sql"}
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 3,
+      "metric_code": "INSTANCE_CONNECTIONS",
+      "db_type": "postgresql",
+      "category": "capacity",
+      "default_importance": 4,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "collector_type": "sql",
+      "time_window": {"repeat_interval": 300, "timeout": 60},
+      "variants": [
+        {"db_type": "postgresql", "min_major_version": 10, "name": "postgresql_10_plus", "file": "postgresql/003_postgresql_connections.sql"}
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 4,
+      "metric_code": "QUERY_LONG_RUNNING",
+      "db_type": "postgresql",
+      "category": "performance",
+      "default_importance": 3,
+      "empty_result_is_ok": true,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "collector_type": "sql",
+      "time_window": {"repeat_interval": 150, "timeout": 60},
+      "variants": [
+        {"db_type": "postgresql", "min_major_version": 10, "name": "postgresql_10_plus", "file": "postgresql/004_postgresql_long_running_queries.sql"}
+      ],
+      "max_rows": 500,
+      "_note": "'empty_result_is_ok' is why an idle instance reports OK rather than a failure. For a metric that lists problems, finding none is the good answer - and saying so in the catalogue is what stops a quiet database looking broken."
+    },
+    {
+      "metric_id": 5,
+      "metric_code": "POSTGRES_XID_WRAPAROUND",
+      "db_type": "postgresql",
+      "category": "integrity",
+      "default_importance": 5,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "collector_type": "sql",
+      "time_window": {"repeat_interval": 300, "retry_interval": 60, "timeout": 15},
+      "report_policy": {"cost": "LIGHT", "minimum_version": 10, "role": "both"},
+      "variants": [
+        {"db_type": "postgresql", "min_major_version": 10, "name": "postgresql_10_plus", "file": "postgresql/056_postgresql_xid_wraparound.sql"}
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 6,
+      "metric_code": "POSTGRES_VACUUM_HEALTH",
+      "db_type": "postgresql",
+      "category": "operational_health",
+      "default_importance": 4,
+      "empty_result_is_ok": true,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "collector_type": "sql",
+      "time_window": {"repeat_interval": 1800, "retry_interval": 300, "timeout": 30},
+      "report_policy": {"cost": "NORMAL", "minimum_version": 10, "role": "both", "top_n": 20},
+      "variants": [
+        {"db_type": "postgresql", "min_major_version": 10, "name": "postgresql_10_plus", "file": "postgresql/055_postgresql_vacuum_health.sql", "per_database": true}
+      ],
+      "max_rows": 500,
+      "_note": "'per_database': true runs the query once per database in database_names instead of once per instance, because the answer differs per database."
+    },
+    {
+      "metric_id": 7,
+      "metric_code": "POSTGRES_DATABASE_HEALTH",
+      "db_type": "postgresql",
+      "category": "capacity",
+      "default_importance": 3,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "collector_type": "sql",
+      "time_window": {"repeat_interval": 900, "retry_interval": 120, "timeout": 20},
+      "report_policy": {"cost": "LIGHT", "minimum_version": 10, "role": "both"},
+      "variants": [
+        {"db_type": "postgresql", "min_major_version": 10, "name": "postgresql_10_plus", "file": "postgresql/057_postgresql_database_health.sql"}
+      ],
+      "max_rows": 500
+    }
+  ]
+}

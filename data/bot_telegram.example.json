@@ -1,0 +1,10 @@
+{
+  "notes": [
+    "Sample bot_telegram.json - the bot's identity. Copy to bot_telegram.json and edit. Kept apart from telegram_config.json because this is WHO the bot is, while that file is HOW the transport behaves; swapping bots is then one file, not a merge.",
+    "'telegram_bot_token_ref' names a key in data/encrypted_secret_text.json. The token itself never appears in any file under data/ - a bot token is a bearer credential, so anyone holding it can read every chat the bot is in and post as it.",
+    "'telegram_bot_id' and 'telegram_bot_username' are what BotFather gives you. They are used to recognise the bot's own messages and to address it in a group."
+  ],
+  "telegram_bot_token_ref": "TOKEN_TELEGRAM_ACME_DBA_BOT",
+  "telegram_bot_id": "1000000001",
+  "telegram_bot_username": "acme_dba_bot"
+}

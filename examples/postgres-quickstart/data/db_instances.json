@@ -1,0 +1,40 @@
+{
+  "notes": [
+    "One target: the container from docker-compose.yml. 127.0.0.1 is the honest value here - the container publishes on loopback, so this is not a placeholder standing in for a machine somewhere.",
+    "'server_id' is the identity every other file joins on. Even with one target it is worth reading as a decision: one machine, one id, never reused.",
+    "'cmd_access' is absent, so no OS metric is attempted. Reaching into the container to measure the laptop's CPU and reporting it under this instance's name would be a lie, and the toolkit refuses that shape (method 'local' with a remote host) rather than doing it quietly. Everything collected here comes from SQL."
+  ],
+
+  "db_instances": [
+    {
+      "ord": 1,
+      "db_instance_name": "quickstart_postgres",
+      "server_id": "QUICKSTART-PG-5432",
+      "site": "LOCAL",
+      "env": "lab",
+      "ip": "127.0.0.1",
+      "port": 5432,
+      "db_type": "postgresql",
+      "instance_name": "quickstart",
+      "major_version": 16,
+      "database": "postgres",
+      "service_name": "QUICKSTART",
+      "database_names": ["postgres", "appdb"],
+      "default_credential_name": "postgresql_quickstart_monitor_user",
+      "os": "Linux (Docker)",
+      "owner": "DBA",
+      "enabled": true,
+      "status_os": "unknown",
+      "status_db": "unknown",
+      "status_connect": "unknown",
+      "metrics": {
+        "enabled": true,
+        "disabled_collector_types": ["cmd", "docker"],
+        "metric_overrides": {}
+      },
+      "reports": {"enabled": true},
+      "alerts": {"enabled": false},
+      "note": "Throwaway container. 'database' is a real database name here - PostgreSQL connects to one, unlike SQL Server, where the connection database is always master and the metric SQL selects its own."
+    }
+  ]
+}

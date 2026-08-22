@@ -1,0 +1,40 @@
+# DB Ops runtime dependencies
+
+# SQL Server via ODBC. Requires a system ODBC SQL Server driver installed.
+pyodbc>=5.3.0
+
+# SQL Server fallback for servers that connect in Navicat but fail local ODBC TLS/SChannel.
+pymssql>=2.3.13
+
+# Oracle metrics/sql_tasks driver. Uses thin mode by default; old Oracle versions may still need
+# an Oracle Instant Client setup depending on server compatibility.
+oracledb>=3.1.0
+
+# PostgreSQL metrics driver. Pure-Python (no build/system deps), keeps the image
+# self-contained; used by db_ops.metrics for db_type=postgresql targets.
+pg8000>=1.31.0
+
+# MySQL/MariaDB driver. db_ops.common.db_connect has imported it since the metrics app was
+# written, but it was never declared here — a db_type=mysql target would have failed at connect
+# with "pymysql is required". Nobody hit it because the inventory has no MySQL targets yet;
+# declaring it means the first one added just works. Pure-Python, like pg8000.
+PyMySQL>=1.1.0
+
+# Legacy YAML parser for non-architecture inventory files passed explicitly.
+# Architecture inventory files are JSON.
+PyYAML>=6.0.2
+
+# Test runner for DB Ops unit/regression tests.
+pytest>=8.0.0
+
+# SSH transport for OS metrics collection (Windows via OpenSSH + PowerShell, Linux via bash).
+# Handles both password and key-based authentication.
+paramiko>=3.0.0
+
+# WinRM transport (legacy fallback for Windows targets that do not yet have OpenSSH Server).
+# Prefer method="ssh" for new targets. Keep this entry so existing WinRM targets keep working.
+pypsrp
+
+# Encryption for data/encrypted_secret_text.json (PBKDF2-HMAC-SHA256 + Fernet).
+# The runtime passphrase is supplied via the daemon --key flag / DB_OPS_SECRET_KEY env var.
+cryptography>=42.0.0

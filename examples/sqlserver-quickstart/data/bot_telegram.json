@@ -1,0 +1,11 @@
+{
+  "notes": [
+    "Who the bot is. Kept apart from telegram_config.json because that file is HOW the transport behaves and this one is WHO posts - swapping bots is then one file rather than a merge.",
+    "'telegram_bot_token_ref' names a key in data/encrypted_secret_text.json. The token itself appears in no file under data/: a bot token is a bearer credential, so whoever holds it can read every chat the bot is in and post as it. In this quickstart you put the token in secrets/secret_text.json under this same name and encrypt it, exactly the way the database password was handled in step 3.",
+    "'telegram_bot_id' and 'telegram_bot_username' are what BotFather gives you. They are how the bot recognises its own messages and how it is addressed in a group; delivery works without them, so they are left blank here until you have a bot."
+  ],
+
+  "telegram_bot_token_ref": "QUICKSTART_TELEGRAM_BOT_TOKEN",
+  "telegram_bot_id": "",
+  "telegram_bot_username": ""
+}

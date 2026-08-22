@@ -1,0 +1,193 @@
+{
+  "_comment": "Rows exactly as the Linux cmd collectors return them for an OS-only Ubuntu host. One entry per metric_code; each is the parsed JSON array the .sh prints to stdout.",
+  "OS_INFO": [
+    {
+      "metric_item": "os_name",
+      "metric_value": "Ubuntu 22.04.4 LTS",
+      "metric_unit": "text",
+      "status": "OK",
+      "message": "os_family=Linux, edition=Ubuntu 22.04.4 LTS, version=22.04, build=5.15.0-107-generic, architecture=x86_64"
+    },
+    {
+      "metric_item": "hostname",
+      "metric_value": "app-ubuntu-01",
+      "metric_unit": "text",
+      "status": "OK",
+      "message": "hostname=app-ubuntu-01"
+    },
+    {
+      "metric_item": "timezone",
+      "metric_value": "Asia/Ho_Chi_Minh",
+      "metric_unit": "text",
+      "status": "OK",
+      "message": "timezone=Asia/Ho_Chi_Minh"
+    },
+    {
+      "metric_item": "last_boot_time",
+      "metric_value": "2026-07-01T09:30:00Z",
+      "metric_unit": "timestamp",
+      "status": "OK",
+      "message": "uptime_seconds=1052000"
+    }
+  ],
+  "OS_CPU_USAGE": [
+    {
+      "metric_item": "cpu_usage",
+      "metric_value": "7.25",
+      "metric_unit": "percent",
+      "status": "OK",
+      "message": "Average CPU usage is 7.25 percent. model=Intel(R) Xeon(R) Silver 4210R CPU @ 2.40GHz, sockets=1, cores=4, logical_cpus=8"
+    },
+    {
+      "metric_item": "load_average",
+      "metric_value": "0.42",
+      "metric_unit": "processes",
+      "status": "OK",
+      "message": "load_1m=0.42, load_5m=0.51, load_15m=0.48, logical_cpus=8"
+    }
+  ],
+  "OS_MEMORY_USAGE": [
+    {
+      "metric_item": "memory_usage",
+      "metric_value": "31.40",
+      "metric_unit": "percent",
+      "status": "OK",
+      "message": "Memory usage is 31.40 percent. total_gb=15.62, used_gb=4.90, available_gb=10.72"
+    },
+    {
+      "metric_item": "memory_used_mb",
+      "metric_value": "5017",
+      "metric_unit": "MB",
+      "status": "OK",
+      "message": "Memory used is 5017 MB of 15990 MB."
+    },
+    {
+      "metric_item": "swap_usage",
+      "metric_value": "0.00",
+      "metric_unit": "percent",
+      "status": "OK",
+      "message": "Swap usage is 0.00 percent. swap_total_gb=4.00, swap_used_gb=0.00"
+    }
+  ],
+  "OS_DISK_USAGE": [
+    {
+      "metric_item": "/",
+      "metric_value": "46",
+      "metric_unit": "percent",
+      "status": "OK",
+      "message": "/ usage is 46 percent. total_gb=97.87, used_gb=43.95, free_gb=48.92, free_percent=54.00, filesystem=ext4, device=/dev/sda2"
+    },
+    {
+      "metric_item": "/var",
+      "metric_value": "88",
+      "metric_unit": "percent",
+      "status": "WARN",
+      "message": "/var usage is 88 percent. total_gb=50.00, used_gb=44.00, free_gb=6.00, free_percent=12.00, filesystem=ext4, device=/dev/sdb1"
+    },
+    {
+      "metric_item": "disk_iops",
+      "metric_value": "37",
+      "metric_unit": "iops",
+      "status": "OK",
+      "message": "read_iops=12, write_iops=25"
+    },
+    {
+      "metric_item": "disk_read_kbps",
+      "metric_value": "36.00",
+      "metric_unit": "KB/s",
+      "status": "OK",
+      "message": "Disk read throughput is 36.00 KB/s (all physical disks)."
+    },
+    {
+      "metric_item": "disk_write_kbps",
+      "metric_value": "0.00",
+      "metric_unit": "KB/s",
+      "status": "OK",
+      "message": "Disk write throughput is 0.00 KB/s (all physical disks)."
+    }
+  ],
+  "OS_NETWORK": [
+    {
+      "metric_item": "ens160",
+      "metric_value": "192.0.2.249",
+      "metric_unit": "text",
+      "status": "OK",
+      "message": "link=up, speed_mbps=10000, bytes_sent=51221993, bytes_received=88231145, errors=0, dropped=0"
+    },
+    {
+      "metric_item": "ens160 send",
+      "metric_value": "0.00",
+      "metric_unit": "Mbps",
+      "status": "OK",
+      "message": "ens160 is sending 0.00 Mbps (link speed 10000 Mbps)."
+    },
+    {
+      "metric_item": "ens160 receive",
+      "metric_value": "0.01",
+      "metric_unit": "Mbps",
+      "status": "OK",
+      "message": "ens160 is receiving 0.01 Mbps (link speed 10000 Mbps)."
+    }
+  ],
+  "OS_SERVICE_STATUS": [
+    {
+      "metric_item": "docker",
+      "metric_value": "active",
+      "metric_unit": "status",
+      "status": "OK",
+      "message": "Service docker status is active."
+    },
+    {
+      "metric_item": "chronyd",
+      "metric_value": "inactive",
+      "metric_unit": "status",
+      "status": "CRITICAL",
+      "message": "Service chronyd status is inactive."
+    }
+  ],
+  "OS_PROCESS_TOP_CPU": [
+    {
+      "metric_item": "dockerd",
+      "metric_value": "12.3",
+      "metric_unit": "percent",
+      "status": "OK",
+      "message": "process=dockerd, pid=1284, cpu_percent=12.3, memory_mb=512.00, memory_percent=3.2, logical_cpus=8"
+    }
+  ],
+  "OS_PROCESS_TOP_MEMORY": [
+    {
+      "metric_item": "python3",
+      "metric_value": "1843.20",
+      "metric_unit": "MB",
+      "status": "OK",
+      "message": "process=python3, memory_mb=1843.20, memory_percent=11.50, process_count=4"
+    }
+  ],
+  "OS_EVENTLOG_CRITICAL": [
+    {
+      "metric_item": "journal",
+      "metric_value": "5",
+      "metric_unit": "events",
+      "status": "LOGGING",
+      "message": "window_hours=24, latest=2026-07-13T06:11:02+0700, top=unit=kernel count=3; unit=systemd count=2; "
+    }
+  ],
+  "OS_REBOOT_PENDING": [
+    {
+      "metric_item": "reboot_pending",
+      "metric_value": "YES",
+      "metric_unit": "status",
+      "status": "WARN",
+      "message": "/var/run/reboot-required exists."
+    }
+  ],
+  "OS_UPTIME": [
+    {
+      "metric_item": "uptime",
+      "metric_value": "1052000",
+      "metric_unit": "seconds",
+      "status": "OK",
+      "message": "System uptime is 1052000 seconds."
+    }
+  ]
+}

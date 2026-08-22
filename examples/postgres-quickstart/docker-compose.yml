@@ -1,0 +1,29 @@
+# A throwaway PostgreSQL to point the toolkit at.
+#
+# Nothing here is production-shaped and it is not meant to be: the point is to have a real engine
+# answering real queries within a minute, so the first metric you collect is a measurement rather
+# than a mock. `docker compose down -v` removes it and its data completely.
+#
+# The password is in the file on purpose. It belongs to a container that listens on loopback only
+# and is deleted at the end of the quickstart. Every OTHER password in this toolkit lives in the
+# encrypted secret store — including this one, once you finish step 3 of the README, which is the
+# part worth practising.
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: dbops_quickstart_pg
+    environment:
+      POSTGRES_PASSWORD: quickstart_only_not_a_real_password
+      POSTGRES_DB: appdb
+    ports:
+      # Loopback only. Binding 0.0.0.0 would put a superuser with a published password on
+      # whatever network this machine is attached to.
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10

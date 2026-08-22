@@ -1,0 +1,62 @@
+{
+  "notes": [
+    "Sample telegram_groups.json - the chats the bot delivers into. Copy to telegram_groups.json and edit.",
+    "'notify_level' is the routing key, and it is what builds the level -> chat map the whole toolkit sends through. Four of the names are severities (logging, warning, error, critical); the rest are streams an operator chose to separate (sql, backup, restore, sla, control). A producer asks for a level by name and the message goes wherever that name points - which is why muting a stream is done by clearing this field, not by editing code.",
+    "Two groups may not carry the same notify_level: the map has one chat per level, and the second entry would silently win.",
+    "'allow_command' is the highest command clearance this chat may exercise, checked together with the person's own user_type in telegram_users.json. Both have to allow it. A noisy logging group is usually 0 or 100 for read-only listings; a chat where somebody can restart a machine should be private, not a group.",
+    "'group_id' is negative for a group and positive for a direct message. A DM therefore cannot be declared here - put it in 'level_chat_map' in telegram_config.json instead.",
+    "'status' other than 'active' takes the chat out of routing without deleting the record of it."
+  ],
+  "telegram_groups": [
+    {
+      "group_id": "-1000000000001",
+      "title": "ACME DBA - Log",
+      "group_type": "group",
+      "notify_level": "logging",
+      "source_notify_level": "logging",
+      "allow_command": 10,
+      "status": "active",
+      "note": "Everything that ran and worked. High volume by design - it is the record, not the alarm."
+    },
+    {
+      "group_id": "-1000000000002",
+      "title": "ACME DBA - Warning",
+      "group_type": "group",
+      "notify_level": "warning",
+      "source_notify_level": "warning",
+      "allow_command": 10,
+      "status": "active",
+      "note": "Findings that need follow-up but not tonight."
+    },
+    {
+      "group_id": "-1000000000003",
+      "title": "ACME DBA - Critical",
+      "group_type": "group",
+      "notify_level": "critical",
+      "source_notify_level": "critical",
+      "allow_command": 10,
+      "status": "active",
+      "note": "Wakes somebody up. Keep the membership small and the threshold high, or it stops working."
+    },
+    {
+      "group_id": "-1000000000004",
+      "title": "ACME DBA - Backup",
+      "group_type": "group",
+      "notify_level": "backup",
+      "source_notify_level": "",
+      "allow_command": 10,
+      "status": "active",
+      "note": "Backup and restore-drill traffic, split off so a nightly success stream does not bury a warning in the main channel."
+    },
+    {
+      "group_id": "-1000000000005",
+      "title": "ACME DBA - SQL tasks",
+      "group_type": "group",
+      "notify_level": "sql",
+      "source_notify_level": "",
+      "allow_command": 10,
+      "status": "active",
+      "note": "Scheduled SQL task output and failures."
+    }
+  ]
+}

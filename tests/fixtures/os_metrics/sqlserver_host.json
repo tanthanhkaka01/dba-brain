@@ -1,0 +1,28 @@
+{
+  "_comment": "A database host: the SQL collectors it has always had, plus the OS collectors that run on it too (cmd_access is configured). Used to prove the OS work does not change how a database host is modelled.",
+  "DATABASE_STATUS": [
+    {"metric_item": "SALESDB", "metric_value": "ONLINE", "metric_unit": "state", "status": "OK", "message": "state=ONLINE, read_only=0"},
+    {"metric_item": "SALESDW", "metric_value": "ONLINE", "metric_unit": "state", "status": "OK", "message": "state=ONLINE, read_only=0"}
+  ],
+  "STORAGE_DISK_FREE_SPACE": [
+    {"metric_item": "C:\\", "metric_value": "42.5", "metric_unit": "GB", "status": "OK", "message": "total_gb=100.0"},
+    {"metric_item": "E:\\", "metric_value": "8.2", "metric_unit": "GB", "status": "CRITICAL", "message": "total_gb=500.0"}
+  ],
+  "PAGE_LIFE_EXPECTANCY": [
+    {"metric_item": "page_life_expectancy", "metric_value": "8421", "metric_unit": "seconds", "status": "OK", "message": "page_life_expectancy=8421"}
+  ],
+  "OS_INFO": [
+    {"metric_item": "os_name", "metric_value": "Microsoft Windows Server 2019 Datacenter", "metric_unit": "text", "status": "OK", "message": "os_family=Windows, edition=Microsoft Windows Server 2019 Datacenter, version=10.0.17763, build=17763, architecture=64-bit"},
+    {"metric_item": "hostname", "metric_value": "ACMESQL01", "metric_unit": "text", "status": "OK", "message": "domain=allianceone.local, manufacturer=VMware, Inc., model=VMware Virtual Platform"},
+    {"metric_item": "last_boot_time", "metric_value": "2026-06-14T12:15:22Z", "metric_unit": "timestamp", "status": "OK", "message": "uptime_seconds=2500000"}
+  ],
+  "OS_CPU_USAGE": [
+    {"metric_item": "cpu_usage", "metric_value": "22.10", "metric_unit": "percent", "status": "OK", "message": "Average CPU usage is 22.10 percent. model=Intel(R) Xeon(R) Gold 6248R CPU @ 3.00GHz, sockets=2, cores=30, logical_cpus=60"}
+  ],
+  "OS_MEMORY_USAGE": [
+    {"metric_item": "memory_usage", "metric_value": "72.30", "metric_unit": "percent", "status": "OK", "message": "Memory usage is 72.30 percent. total_gb=300, used_gb=216.9, available_gb=83.1"}
+  ],
+  "OS_SERVICE_STATUS": [
+    {"metric_item": "SQL Server (SALESCLUSTER)", "metric_value": "Running", "metric_unit": "status", "status": "OK", "message": "Service SQL Server (SALESCLUSTER) status is Running. service_name=MSSQL$SALESCLUSTER, configured_as=MSSQL$SALESCLUSTER"}
+  ]
+}

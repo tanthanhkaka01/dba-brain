@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "notes": [
+    "Sample emergency_operations.json - how hard each dangerous operation is to authorise. Copy to emergency_operations.json and edit.",
+    "This is deliberately NOT the chat clearance file. telegram_support_commands.json says WHO may ask for an operation; this says HOW HARD it is to confirm once asked. The two carry the same number for the same operation and a test pins that they agree, but they answer different questions - and the shared operations layer reads no chat settings at all, which is what lets the same confirmation apply to a shell caller, a scheduled run and a chat message.",
+    "'confirmations' is how many separate answers the caller must give. 'challenge': 'target_id' makes the second answer the target's own identifier, typed out. That cannot be given from muscle memory - it has to be read off the prompt - and a payload written for one host is then rejected by another.",
+    "'effects' is written for the person at the prompt at 3am. It is the sentence they read before typing yes, so it says what actually happens, not what the command is called.",
+    "An operation not listed here has no entry and therefore no confirmation. Add the entry in the same change that adds the operation."
+  ],
+
+  "levels": {
+    "100": {
+      "confirmations": 2,
+      "challenge": "target_id",
+      "note": "Takes a machine or a service down. Two answers: 'yes', then the target's own id typed out."
+    },
+    "50": {
+      "confirmations": 1,
+      "note": "No downtime, but a large blast radius: rolls back a transaction, moves a file, starts work on a production instance. One typed 'yes'."
+    },
+    "0": {
+      "confirmations": 0,
+      "note": "Read-only or self-contained. No confirmation."
+    }
+  },
+
+  "operations": {
+    "host-restart": {
+      "level": 100,
+      "effects": [
+        "every service on the host stops",
+        "sessions are lost",
+        "a clustered instance may fail over"
+      ]
+    },
+    "host-service (stop)": {
+      "level": 100,
+      "effects": [
+        "the service stops; if it is the database engine, the instance is down"
+      ]
+    },
+    "host-service (restart)": {
+      "level": 100,
+      "effects": [
+        "the service stops and starts; sessions are lost",
+        "a clustered instance may fail over"
+      ]
+    },
+    "host-service (start)": {
+      "level": 50,
+      "effects": [
+        "the service starts and begins accepting work"
+      ]
+    },
+    "sqlserver-apply-cu": {
+      "level": 100,
+      "effects": [
+        "the instance is stopped and patched",
+        "a cumulative update cannot be uninstalled"
+      ]
+    },
+    "shrink-log": {
+      "level": 50,
+      "effects": [
+        "the transaction log file is rewritten",
+        "log allocation structures are re-created",
+        "concurrent writers may stall while it runs"
+      ]
+    },
+    "kill-spid": {
+      "level": 50,
+      "effects": [
+        "the session's open transaction is rolled back",
+        "rollback can take longer than the work it undoes",
+        "the application sees a lost connection"
+      ]
+    },
+    "start-job": {
+      "level": 50,
+      "effects": [
+        "the job runs now, on top of whatever load is already there",
+        "a maintenance job can generate hours of transaction log"
+      ]
+    },
+    "disable-job": {
+      "level": 50,
+      "effects": [
+        "the job stops running on its schedule until someone re-enables it",
+        "a disabled backup or log-backup job silently stops protecting the database",
+        "a run already in progress is NOT stopped"
+      ]
+    }
+  }
+}

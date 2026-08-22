@@ -1,0 +1,38 @@
+{
+  "notes": [
+    "Two reports, both narrow, so the fourth step of the README produces something you can read rather than a wall of output.",
+    "'metric_max_age_seconds' is the freshness gate: a measurement older than this is not reported. It matters more than it looks - without it a report restates yesterday's numbers as though they were current, which is worse than reporting nothing.",
+    "'report_base_url' is empty because nothing is serving the rendered pages here. The reports are still written under runtime/reports; the URL only decides what link a delivered message carries."
+  ],
+
+  "report_base_url": "",
+
+  "inventory_exclude_ip_prefixes": [],
+
+  "reports": [
+    {
+      "report_code": "rp_metric_daily_logging",
+      "display_name": "Daily metrics summary",
+      "metric_max_age_seconds": 86400,
+      "active": true,
+      "time_window": {
+        "from_day": 1, "to_day": 31,
+        "from_hour": 0, "to_hour": 23,
+        "repeat_interval": 3600,
+        "timeout": 600
+      }
+    },
+    {
+      "report_code": "rp_metric_hourly_warning",
+      "display_name": "Warnings",
+      "metric_max_age_seconds": 900,
+      "active": true,
+      "time_window": {
+        "from_day": 1, "to_day": 31,
+        "from_hour": 0, "to_hour": 23,
+        "repeat_interval": 900,
+        "timeout": 600
+      }
+    }
+  ]
+}

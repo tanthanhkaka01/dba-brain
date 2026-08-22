@@ -1,0 +1,45 @@
+{
+  "notes": [
+    "Sample maintenance_policy.json - the timing budgets and safety gates for host maintenance: restart-and-wait, service control, and the SQL Server cumulative-update path. Copy to maintenance_policy.json and edit.",
+    "These are policy, not code. A host with slow storage needs a longer services budget, and that is an operator decision to record here rather than a constant to edit in Python.",
+    "Resolution order is built-in defaults, then 'defaults' below, then 'servers.<server_id>', then the individual request's own wait block. The most specific statement wins, so a single awkward machine never forces the whole estate onto its numbers.",
+    "'field_notes' is documentation that travels with the file. It is read by people, not by code, and it is here because a bare number like 'services_timeout_seconds: 600' explains nothing about the failure it was raised for.",
+    "The gates ('min_free_gb_*', 'max_backup_age_hours', 'max_uptime_days_warn') are refusals, not warnings: a patch that starts without enough disk or without a recent backup is the situation this file exists to prevent."
+  ],
+
+  "maintenance_policy": {
+    "defaults": {
+      "down_timeout_seconds": 600,
+      "up_timeout_seconds": 1800,
+      "services_timeout_seconds": 600,
+      "poll_seconds": 15,
+      "connect_timeout_seconds": 30,
+      "facts_timeout_seconds": 300,
+      "max_uptime_days_warn": 90,
+      "min_free_gb_system": 15.0,
+      "min_free_gb_installer": 5.0,
+      "max_backup_age_hours": 30.0,
+      "patch_timeout_seconds": 5400,
+      "sql_reconnect_timeout_seconds": 900
+    },
+
+    "field_notes": {
+      "down_timeout_seconds": "How long to wait for the host to STOP answering after a restart is issued. Without this wait, a machine that has not begun shutting down yet looks exactly like one that already came back.",
+      "up_timeout_seconds": "How long to wait for the host to answer again. Thirty minutes covers a Windows host applying updates during the restart.",
+      "services_timeout_seconds": "How long to wait for every named service to report up AFTER the transport answers. The remote shell returns long before a database engine does; a single sample taken when the port opens reports healthy services as down.",
+      "poll_seconds": "How often to re-check while waiting. Short enough to feel responsive, long enough not to hammer a machine that is booting.",
+      "max_uptime_days_warn": "Uptime above this is reported as a warning: long-running Windows hosts accumulate pending file-rename operations, which make database setup refuse to patch.",
+      "min_free_gb_system": "Free space required on the system drive before a cumulative update. Setup extracts and stages there, not next to the installer, which is why this is a separate number from min_free_gb_installer.",
+      "max_backup_age_hours": "A database whose newest full backup is older than this blocks a patch. Overridable per run, deliberately awkwardly.",
+      "patch_timeout_seconds": "Upper bound on the unattended setup run. A cumulative update on a small instance takes minutes; ninety minutes leaves room for a large estate without hanging forever."
+    },
+
+    "servers": {
+      "ACME-192-0-2-10": {
+        "_note": "Shared storage, and services that take several minutes to come up after the transport answers. Everything else follows the defaults.",
+        "services_timeout_seconds": 1200,
+        "up_timeout_seconds": 2400
+      }
+    }
+  }
+}

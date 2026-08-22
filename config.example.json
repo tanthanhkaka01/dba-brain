@@ -1,0 +1,40 @@
+{
+  "notes": [
+    "Sample config.json. Copy to config.json in the tool root and edit.",
+    "This file answers 'where does the tool put its own runtime state, and which declaration files does it read'. It deliberately holds no thresholds, targets or schedules - those are data/*.json, one file per decision.",
+    "Relative paths resolve against the directory holding this file, so a copied tool root stays self-consistent.",
+    "The tool root is found by a stated order and NOT by where the package sits on disk: DB_OPS_HOME, then the working directory when it holds data/ or config.json, then the package location. DB_OPS_DATA_DIR moves the data folder on its own. See docs/configuration.md.",
+    "'console_level' and 'file_level' are the two logging thresholds: DEBUG, INFO, WARNING, ERROR.",
+    "'master' and 'worker' are only read by the control app (docs/11_control_app.md), which builds an image on one machine and deploys it to another. A single-machine install can delete both lists.",
+    "A worker node's 'password_ref' names a key in data/encrypted_secret_text.json - never a password itself."
+  ],
+
+  "app_name": "db_ops",
+
+  "log_dir": "logs",
+  "runtime_dir": "runtime",
+
+  "console_level": "INFO",
+  "file_level": "INFO",
+
+  "store_config_file": "data/store_config.json",
+  "telegram_config_file": "data/telegram_config.json",
+
+  "master": [
+    {
+      "node_id": "workstation",
+      "host": "localhost",
+      "description": "Where the image is built and configuration is edited. The role of THIS process is declared at run time by DB_OPS_NODE_ROLE, so a config file copied between machines can never mislabel one."
+    }
+  ],
+
+  "worker": [
+    {
+      "node_id": "worker-192-0-2-249",
+      "host": "192.0.2.249",
+      "user": "dba_user",
+      "password_ref": "REMOTE_192_0_2_249_DBA_USER",
+      "description": "Linux host running the scheduled apps near the databases. 'user' and 'password_ref' let the control app authenticate with only the secret passphrase on the command line."
+    }
+  ]
+}

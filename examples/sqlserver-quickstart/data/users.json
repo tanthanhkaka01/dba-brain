@@ -1,0 +1,28 @@
+{
+  "notes": [
+    "One credential, and it holds no password. 'password_ref' names a key in data/encrypted_secret_text.json, which you create in step 3 of the README by encrypting secrets/secret_text.json.",
+    "The account is monitor_user, created by setup/01_monitor_login.sql with exactly two server-level permissions — VIEW SERVER STATE and VIEW ANY DEFINITION — and membership of db_datareader in msdb so BACKUP_AGE can read backupset. No server role, and nothing that can change the instance.",
+    "'credential_name' is the handle db_instances.json points at. Keep it stable — renaming it silently breaks every file that names it."
+  ],
+
+  "database_credentials": [
+    {
+      "server_id": "QUICKSTART-MSSQL-1433",
+      "db_type": "sqlserver",
+      "service_name": "QUICKSTART",
+      "instance_name": "MSSQLSERVER",
+      "credentials": [
+        {
+          "credential_name": "sqlserver_quickstart_monitor_user",
+          "username": "monitor_user",
+          "password_ref": "MSSQL_QUICKSTART_MONITOR_USER",
+          "role": "MONITOR"
+        }
+      ]
+    }
+  ],
+
+  "remote_credentials": [],
+
+  "monitor_users": []
+}

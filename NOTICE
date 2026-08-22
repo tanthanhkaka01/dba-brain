@@ -1,0 +1,57 @@
+DBA Brain
+Copyright 2026 Trieu Tan Thanh
+
+This product includes software developed by Trieu Tan Thanh.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+--------------------------------------------------------------------------------
+Third-party dependencies
+--------------------------------------------------------------------------------
+
+DBA Brain does not bundle or modify its dependencies; they are installed from
+PyPI by pip. Distributed container images, however, do contain them, so their
+licenses are listed here.
+
+Permissively licensed (Apache-2.0, BSD, MIT or equivalent):
+
+    cryptography            Apache-2.0 OR BSD-3-Clause
+    oracledb                UPL-1.0 OR Apache-2.0
+    pyodbc                  MIT
+    pg8000                  BSD-3-Clause
+    PyMySQL                 MIT
+    PyYAML                  MIT
+    pypsrp                  MIT
+    psutil                  BSD-3-Clause
+    pytest                  MIT
+    bcrypt                  Apache-2.0
+    PyNaCl                  Apache-2.0
+    requests                Apache-2.0
+
+Weak copyleft — used as unmodified libraries, never linked statically and never
+modified. Their own license terms continue to apply to them:
+
+    paramiko                LGPL-2.1
+    pymssql                 LGPL-2.1
+    certifi                 MPL-2.0
+
+Both LGPL components are optional in the sense that they serve specific
+transports: paramiko provides SSH, and pymssql is the fallback SQL Server driver
+for hosts where ODBC/TLS negotiation fails. Anyone redistributing a container
+image that contains them inherits the LGPL obligation to make the corresponding
+source of those libraries available and to allow them to be replaced with a
+modified version; both are satisfied by shipping them unmodified from PyPI and
+by this notice.
+
+The full license text of every dependency is available in its distribution on
+PyPI and in the site-packages directory of any installation.

@@ -1,0 +1,32 @@
+{
+  "notes": [
+    "The chats the bot delivers into, one per notify level. A producer asks for a level by name - 'warning', 'logging' - and the message goes wherever that name points here, which is why muting a stream means clearing this file rather than editing code.",
+    "One chat covers both levels in this quickstart, because the point is to see a message arrive rather than to design a routing scheme. In a real estate they are separate chats: 'logging' is the record and is high-volume by design, 'warning' is the one somebody reads.",
+    "'group_id' is negative for a group and positive for a direct message. REPLACE the placeholder with your own - the id below belongs to nobody and delivery will fail with 'chat not found', which is the correct failure for a chat that does not exist.",
+    "The fastest way to learn your own id: message your bot, then run 'python -m db_ops.telegram.cli --config config.json get-updates' and read chat.id out of the reply.",
+    "'allow_command' is the highest command clearance this chat may exercise. 0 means the bot delivers here and accepts no commands from here, which is what a quickstart wants - this file can otherwise let a stranger's chat drive the toolkit."
+  ],
+
+  "telegram_groups": [
+    {
+      "group_id": "-1000000000001",
+      "title": "Quickstart - warnings",
+      "group_type": "group",
+      "notify_level": "warning",
+      "source_notify_level": "warning",
+      "allow_command": 0,
+      "status": "active",
+      "note": "Where BACKUP_AGE's WARNING lands. Replace group_id with your own chat."
+    },
+    {
+      "group_id": "-1000000000002",
+      "title": "Quickstart - log",
+      "group_type": "group",
+      "notify_level": "logging",
+      "source_notify_level": "logging",
+      "allow_command": 0,
+      "status": "active",
+      "note": "Everything that ran, including the runs that found nothing."
+    }
+  ]
+}

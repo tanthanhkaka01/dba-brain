@@ -1,0 +1,41 @@
+{
+  "notes": [
+    "One target: the container from docker-compose.yml. 127.0.0.1 is the honest value here — the container publishes on loopback, so this is not a placeholder standing in for a machine somewhere.",
+    "'service_name' is a SERVICE LABEL, not a database. This is the single most important thing to get right on SQL Server: collection always connects to master and the metric SQL issues its own USE. Putting a database name here — or letting the label be used as one — fails every SQL Server target at once with 'Cannot open database ... requested by the login'. The rule is enforced in db_ops/metrics/executor.py, not left to configuration.",
+    "'database_names' is what the per-database metrics iterate over. It is a list of real databases, unlike 'service_name'.",
+    "'major_version' picks the metric variant. 16 is SQL Server 2022; anything 11 or above gets the modern query, and older instances get the legacy_2008r2 variant instead of failing to parse.",
+    "'cmd_access' is absent, so no OS metric is attempted. Reaching into the container to measure the laptop's CPU and reporting it under this instance's name would be a lie, and the toolkit refuses that shape rather than doing it quietly."
+  ],
+
+  "db_instances": [
+    {
+      "ord": 1,
+      "db_instance_name": "quickstart_sqlserver",
+      "server_id": "QUICKSTART-MSSQL-1433",
+      "site": "LOCAL",
+      "env": "lab",
+      "ip": "127.0.0.1",
+      "port": 1433,
+      "db_type": "sqlserver",
+      "instance_name": "MSSQLSERVER",
+      "major_version": 16,
+      "service_name": "QUICKSTART",
+      "database_names": ["master", "msdb", "APPDB"],
+      "default_credential_name": "sqlserver_quickstart_monitor_user",
+      "os": "Linux (Docker)",
+      "owner": "DBA",
+      "enabled": true,
+      "status_os": "unknown",
+      "status_db": "unknown",
+      "status_connect": "unknown",
+      "metrics": {
+        "enabled": true,
+        "disabled_collector_types": ["cmd", "docker"],
+        "metric_overrides": {}
+      },
+      "reports": {"enabled": true},
+      "alerts": {"enabled": false},
+      "note": "Throwaway container. env is 'lab', which is what lets LOCK_BLOCKING_SESSIONS downgrade its severity — see the report_policy on that metric in metric_definitions.json."
+    }
+  ]
+}

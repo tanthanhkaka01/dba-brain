@@ -1,0 +1,135 @@
+# Packaging metadata.
+#
+# Added 2026-08-21 as the first structural step toward a publishable toolkit. Until now the
+# repository was only ever *run from a checkout* — there was no way to install it, so nothing
+# forced the question of what belongs to the package and what belongs to the operator.
+#
+# Deliberately still named `db_ops`, with the package still at the repository root rather than
+# under `src/`. Both of those change to `dbabrain` and `src/` at the moment the code moves to the
+# public repository, not before: the module path is stored as text in `data/app_commands.json`
+# for every scheduled app and named in the Dockerfile and `docker/entrypoint.sh`, so renaming or
+# relocating it in place breaks the running worker until it is redeployed in lockstep. See
+# `audits/go-live/PUBLIC_RELEASE_ROADMAP.md` (D-03).
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "db_ops"
+description = "Database operations toolkit: metrics, reports, scheduled SQL, backup/restore validation, SLA checks."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Trieu Tan Thanh" }]
+keywords = ["dba", "database", "sqlserver", "oracle", "postgresql", "mysql", "monitoring", "operations"]
+dynamic = ["version"]
+
+# Measured 2026-08-21, not guessed (D-05):
+#
+#   * No dependency requires more than 3.10. `pypsrp` (the WinRM extra) is the strictest at
+#     >=3.10; every driver — pyodbc, pymssql, oracledb, pg8000, PyMySQL, paramiko — says >=3.9,
+#     and the two core dependencies say >=3.9 and >=3.8.
+#   * No language feature in the tree requires more than 3.9: no `match` statements, no
+#     `ExceptionGroup`, no PEP 695 syntax. `from __future__ import annotations` is used
+#     throughout, so the `X | Y` annotations are not a floor either.
+#
+# So 3.11 is a *policy* floor rather than a technical one, chosen for two reasons: 3.10 reaches
+# end of life during this project's first year and a new public project should not ship support
+# it must drop immediately, and the test suite reads this file with `tomllib`, which is 3.11+.
+# The CI matrix is what will prove the tree actually runs on it (S1-27).
+requires-python = ">=3.11"
+
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: System Administrators",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Database",
+    "Topic :: System :: Monitoring",
+    "Topic :: System :: Systems Administration",
+]
+
+# Core: what every install needs regardless of which engine the operator runs.
+#   cryptography — the encrypted secret store (PBKDF2-HMAC-SHA256 + Fernet). Nothing that
+#                  connects anywhere works without it.
+#   PyYAML       — legacy inventory files passed explicitly. Small, and dropping it would break
+#                  existing operators for no gain.
+# Every database driver is an extra: a DBA who runs only PostgreSQL must not be made to install
+# an ODBC driver and an Oracle client to start.
+dependencies = [
+    "cryptography>=42.0.0",
+    "PyYAML>=6.0.2",
+]
+
+[project.optional-dependencies]
+mssql = ["pyodbc>=5.3.0", "pymssql>=2.3.13"]
+oracle = ["oracledb>=3.1.0"]
+postgres = ["pg8000>=1.31.0"]
+mysql = ["PyMySQL>=1.1.0"]
+ssh = ["paramiko>=3.0.0"]
+winrm = ["pypsrp"]
+all = [
+    "pyodbc>=5.3.0",
+    "pymssql>=2.3.13",
+    "oracledb>=3.1.0",
+    "pg8000>=1.31.0",
+    "PyMySQL>=1.1.0",
+    "paramiko>=3.0.0",
+    "pypsrp",
+]
+dev = ["pytest>=8.0.0"]
+
+# One command, apps as subcommands. `db-ops metrics --help` rather than twelve entry points a
+# reader has to discover — and it becomes `dbabrain` with the package rename, which is the whole
+# reason the dispatcher is a lookup table and not twelve script declarations.
+[project.scripts]
+db-ops = "db_ops.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/tanthanhkaka01/dba-brain"
+Repository = "https://github.com/tanthanhkaka01/dba-brain"
+Changelog = "https://github.com/tanthanhkaka01/dba-brain/blob/main/CHANGELOG.md"
+
+[tool.setuptools.dynamic]
+version = { attr = "db_ops.__version__" }
+
+# The package is at the repository root today, so `find` is scoped rather than left to guess:
+# `data`, `assets`, `docs`, `tests`, `scripts` and `tools` are all top-level directories that are
+# emphatically not part of the distribution.
+#
+# The list is narrower than `db_ops*` from 2026-08-22, and the reason is the release rather than
+# the packaging: `v0.1.0` is one sentence — point it at one SQL Server, collect metrics, add a
+# Telegram token, get an alert — so seven of the fourteen apps do not ship until `v0.2.0`. The
+# authority is `db_ops/lib/distribution.py`, which states which and why; this list is generated
+# from it and `tests/test_distribution_closure.py` fails if the two drift apart. A second copy of
+# that decision is how a wheel and a repository start shipping different software.
+#
+# Nothing is deleted from this repository to achieve it. The worker runs the full toolkit, and the
+# image copies `db_ops/` wholesale rather than installing the wheel, so what is distributed and
+# what is deployed are independent by construction.
+[tool.setuptools.packages.find]
+include = ["db_ops", "db_ops.lib*", "db_ops.common*", "db_ops.db*", "db_ops.logging_ops*", "db_ops.metrics*", "db_ops.telegram*", "db_ops.jobs*"]
+namespaces = false
+
+# The built-in assets are not Python, and setuptools ships no non-Python file unless told. They
+# are the SQL and scripts that *implement* the shipped metrics, backups, restores and host checks
+# — an install without them is an install that cannot collect a metric. The operator's own
+# `assets/tasks` and `assets/sql_telegram_commands` stay at the repository root and are
+# deliberately not here: they are per-estate data, and they never ship.
+# The shipped SQL and scripts are not Python, and setuptools ships no non-Python file unless
+# told. They *implement* the shipped metrics, backups, restores and host checks — an install
+# without them cannot collect a metric. Each lives with the component that owns it; the
+# operator's own `assets/` stays at the repository root and deliberately never ships.
+[tool.setuptools.package-data]
+"db_ops.metrics" = ["collectors/**/*.sql", "collectors/**/*.sh", "collectors/**/*.ps1"]
+"db_ops.common" = ["backup_scripts/**/*.sh", "backup_scripts/**/*.ps1",
+                   "restore_scripts/**/*.sh", "restore_scripts/**/*.ps1"]
+# `db_ops.sre` had an entry here for `host_config/`. It was removed on 2026-08-22 with the package:
+# package-data for a package that is not in `packages.find` is silently ignored, so leaving it
+# would have read as "the host configuration ships" while nothing shipped. It comes back with the
+# package in `v0.2.0`.
