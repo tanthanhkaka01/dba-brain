@@ -217,7 +217,7 @@ class BackupRestoreConfig:
         # local separator it becomes `\\VM_IP\E$\LOGS/copy_sqlbk.log` on the Ubuntu worker that
         # actually runs this — and it is then passed to `robocopy /LOG:`, which is stricter about
         # its arguments than the filesystem API is about its paths.
-        return Path(PureWindowsPath(self.vm_log_unc) / "copy_sqlbk.log")
+        return Path(str(PureWindowsPath(self.vm_log_unc) / "copy_sqlbk.log"))
 
     @property
     def full_backup_dir(self) -> Path:
