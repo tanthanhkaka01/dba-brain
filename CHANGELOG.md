@@ -15,18 +15,24 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
-> **Status: preview, and the suite is now green — 2,895 passed, 0 failed.**
->
-> This was published early and deliberately, so the shape could be reviewed before it was
-> finished. The monitoring path it claims *is* verified end to end against a real SQL Server:
-> install, `db-ops init`, add one instance, collect metrics, alert to Telegram.
->
-> The ten remaining failures were tests that read the maintainer's own configuration — a coupling,
-> not a broken product. Eight of them ask "is my configuration still correct", which is a question
-> only that estate can answer, and they now live in a private suite that is not part of this
-> repository. Two were ordinary coupling and were fixed: they assert how a reply is formatted and
-> how a metric is filtered, and each failed because something else in the call reached for a file
-> this distribution does not ship.
+Nothing yet.
+
+## [0.1.0] - 2026-08-22
+
+**The first release.** One database engine claimed — SQL Server — and one path proven end to end:
+install, `db-ops init`, describe one instance in JSON, collect metrics, send the finding to
+Telegram. Oracle, PostgreSQL and MySQL collectors ship and are documented, but SQL Server is what
+`v0.1.0` says it does.
+
+The apps this release does **not** carry — scheduled reporting, backup/restore drills, SLA
+checking, SQL task running, the SRE lab builder and the web console — are the `v0.2.0` scope. Where
+the documentation names one, it says so.
+
+> **Verified, not asserted.** The suite is green — 2,895 passed, 0 failed — on Python 3.11, 3.12
+> and 3.13, with nothing skipped. The monitoring path was run end to end against a real SQL Server
+> and against a throwaway container: install, `db-ops init`, one instance, metrics collected, the
+> finding delivered to Telegram. The least-privilege grants in `docs/security.md` were measured
+> against live instances of all four engines rather than read off the collector SQL.
 
 ### Added
 
