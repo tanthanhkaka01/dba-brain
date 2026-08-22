@@ -634,7 +634,7 @@ def test_negative_command_type_is_disabled(tmp_path):
     assert fetch_send_messages(sqlite_path) == []
 
 
-def test_list_server_id_command_replies_with_targets(tmp_path):
+def test_list_server_id_command_replies_with_targets(tmp_path, monkeypatch):
     sqlite_path = tmp_path / "runtime.sqlite"
     commands_path = tmp_path / "telegram_support_commands.json"
     write_json(
@@ -658,6 +658,12 @@ def test_list_server_id_command_replies_with_targets(tmp_path):
     write_json(tmp_path / "telegram_users.json", "telegram_users",
                [{"user_id": "100", "user_type": 2, "status": "active"}])
     write_json(tmp_path / "telegram_groups.json", "telegram_groups", [])
+    write_json(tmp_path / "db_instances.json", "db_instances", [
+        {"server_id": "ACME-192-0-2-10", "db_instance_name": "sqlserver_192.0.2.10",
+         "ip": "192.0.2.10", "port": 1433, "db_type": "sqlserver",
+         "instance_name": "MSSQLSERVER", "service_name": "SALESDB", "enabled": True},
+    ])
+    monkeypatch.setattr("db_ops.common.data_sources.DEFAULT_DATA_DIR", tmp_path)
 
     command_message_id = insert_command_message(sqlite_path, "/spbot_list_server_id")
     result = process_one_command_message(
@@ -667,9 +673,12 @@ def test_list_server_id_command_replies_with_targets(tmp_path):
     )
     assert result["status"] == "processed"
     messages = fetch_send_messages(sqlite_path)
-    # Reads the real db_instances.json; the listing header + a known target must be present.
+    # What this asserts is the *shape of the reply*, not which servers this estate has — so the
+    # inventory is written above rather than read from the repository. It used to read the real
+    # `db_instances.json`, which made a test about formatting fail on any checkout without one.
     assert any("Server targets" in m["message_text"] for m in messages)
     assert any("<db_type> <ip> [port]" in m["message_text"] for m in messages)
+    assert any("ACME-192-0-2-10" in m["message_text"] for m in messages)
 
 
 def test_sql_to_xlsx_denied_for_underprivileged_user(tmp_path):

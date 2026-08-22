@@ -563,59 +563,6 @@ def _create_db_docker_config():
     return cmd["action_config"]
 
 
-def test_spbot_create_db_docker_worker_vs_remote_argv():
-    """The unified parameter set drives both deploy paths from one command: deploy_target=worker
-    stays in-container (no --remote-host); an IP adds SSH args; the SSH password takes a ref OR
-    an env-fed text value, mirroring the DB password. Same set for every engine."""
-    config = _create_db_docker_config()
-    base = {
-        "python": "python", "config_path": "config.json",
-        "name": "ora_lab", "engine": "oracle", "version": "23.26.2", "mode": "single",
-        "host_port": "-", "password_env": "-", "password_text": "Secret#12345",
-        "recreate": "no", "install_docker": "no", "remote_key_name": "-",
-    }
-
-    worker = build_cli_argv(config, base | {
-        "deploy_target": "worker", "remote_user": "-",
-        "remote_password_ref": "-", "remote_password_text": "-",
-    })
-    assert "--remote-host" not in worker
-    assert "--worker-host" in worker  # in-container path keeps the worker host
-    assert "--install-docker" not in worker
-
-    with_install = build_cli_argv(config, base | {
-        "deploy_target": "198.51.100.146", "remote_user": "dba_user",
-        "remote_password_ref": "-", "remote_password_text": "p", "install_docker": "yes",
-    })
-    assert "--install-docker" in with_install
-
-    remote_ref = build_cli_argv(config, base | {
-        "deploy_target": "198.51.100.146", "remote_user": "dba_user",
-        "remote_password_ref": "REMOTE_198_51_100_146_TANTHANH", "remote_password_text": "-",
-    })
-    assert remote_ref[remote_ref.index("--remote-host") + 1] == "198.51.100.146"
-    assert remote_ref[remote_ref.index("--remote-user") + 1] == "dba_user"
-    assert "--remote-password-ref" in remote_ref
-    assert "--remote-password-env" not in remote_ref
-
-    remote_text = build_cli_argv(config, base | {
-        "deploy_target": "198.51.100.146", "remote_user": "dba_user",
-        "remote_password_ref": "-", "remote_password_text": "mypass", "remote_key_name": "-",
-    })
-    # SSH password given as text goes through an env var, never onto argv
-    assert remote_text[remote_text.index("--remote-password-env") + 1] == "DB_OPS_REMOTE_SSH_PASSWORD"
-    assert "mypass" not in remote_text
-    assert "--remote-password-ref" not in remote_text
-
-    # key-auth VM (Oracle Cloud): remote_key_name -> --remote-key (resolved to data/ssh_keys/ on the worker)
-    remote_key = build_cli_argv(config, base | {
-        "deploy_target": "203.0.113.188", "remote_user": "ubuntu",
-        "remote_password_ref": "-", "remote_password_text": "-", "remote_key_name": "oracle-cloud.key",
-    })
-    assert remote_key[remote_key.index("--remote-key") + 1] == "oracle-cloud.key"
-    assert "--remote-password-ref" not in remote_key and "--remote-password-env" not in remote_key
-
-
 def test_spbot_restore_uses_generic_background_cli_checker(tmp_path, monkeypatch):
     sqlite_path = tmp_path / "runtime.sqlite"
     commands_path = tmp_path / "telegram_support_commands.json"

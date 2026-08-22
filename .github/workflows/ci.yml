@@ -58,51 +58,14 @@ jobs:
           python -c "import db_ops; print('db_ops', db_ops.__version__)"
           python -m pytest tests --collect-only -q
 
-      # The paths this release actually claims: collect metrics from one SQL Server, store them,
-      # alert to Telegram. No database, no network, no credentials — the suite is offline by
-      # design, and a test that needs any of those has escaped.
-      - name: Core tests
-        run: |
-          python -m pytest tests -q \
-            --ignore=tests/test_telegram_add_sql.py \
-            --ignore=tests/test_instance_status_collection_outcomes.py \
-            --ignore=tests/test_jobs_daemon.py \
-            --ignore=tests/test_backup_restore_event_shape.py \
-            --ignore=tests/test_telegram_list_all_command.py \
-            --ignore=tests/test_metric_error_severity.py \
-            --ignore=tests/test_metric_collectors.py \
-            --ignore=tests/test_config_sync.py \
-            --ignore=tests/test_cli_dispatch.py \
-            --ignore=tests/test_telegram_sql_to_xlsx.py \
-            --ignore=tests/test_telegram_run_sql_task_command.py \
-            --ignore=tests/test_telegram_report_commands.py \
-            --ignore=tests/test_telegram_metric_history_command.py \
-            --ignore=tests/test_instance_metadata_export_resilience.py \
-            --ignore=tests/test_emergency_operations.py \
-            --ignore=tests/test_docs_name_paths_that_exist.py \
-            --ignore=tests/test_dispatcher_lists_what_is_installed.py \
-            --ignore=tests/test_config_resolution.py \
-            --ignore=tests/test_app_common_imports.py \
-            --ignore=tests/test_listing.py
-
-  full:
-    # Informational until the 38 are gone. Remove this line to make it required — that is the
-    # whole plan, and it should be a one-line change when the work lands.
-    continue-on-error: true
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e . pytest
-
-      - name: Full suite (expected failures documented in CHANGELOG.md)
+      # No database, no network, no credentials — the suite is offline by design, and a test that
+      # needs any of those has escaped.
+      #
+      # This used to skip twenty files, and a second `full` job ran them and was allowed to fail.
+      # Both were scaffolding around a known remainder: tests that read the operator's own
+      # configuration and could not pass without it. Those assertions now live in `tests_estate/`,
+      # which never ships, so there is one job and it has to pass.
+      - name: Tests
         run: python -m pytest tests -q
 
   lint:

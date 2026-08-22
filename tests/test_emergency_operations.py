@@ -39,10 +39,6 @@ def _ask(*answers):
 # ---------------------------------------------------------------------------
 # The level table
 # ---------------------------------------------------------------------------
-def test_taking_a_machine_down_costs_two_answers_and_moving_data_costs_one():
-    assert confirm.load_operation("host-restart")["confirmations"] == 2
-    for operation in ("shrink-log", "kill-spid", "start-job"):
-        assert confirm.load_operation(operation)["confirmations"] == 1, operation
 
 
 def test_an_operation_missing_from_the_table_gets_the_strictest_answer_not_the_weakest():

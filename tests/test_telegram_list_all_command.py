@@ -180,12 +180,3 @@ def test_the_parameter_summary_survives_a_malformed_parameters_block():
     assert _command_parameter_summary({"parameters": [{"position": 1, "required": True}]}) == "<arg>"
 
 
-@pytest.mark.parametrize("chat_type", ["private", "group"])
-def test_the_real_config_lists_itself_without_raising(chat_type):
-    """Against the shipped config, not a fixture: the command has to survive whatever is actually
-    in telegram_support_commands.json."""
-    row = _Row(chat_id="100000001", message_id=1, chat_type=chat_type, user_id="100000001")
-    out = execute_list_all_command_command(
-        store=_Store(), row=row, command=_command(), source_id="1")
-    assert out["command_count"] >= 1
-    assert "/spbot_list_all_command" in out["listing"]

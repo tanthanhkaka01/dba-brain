@@ -136,6 +136,11 @@ def test_collect_metrics_skips_report_policy_disabled_metric_codes(tmp_path, mon
     monkeypatch.setattr("db_ops.metrics.collector.load_metric_targets", lambda **_: [target])
     monkeypatch.setattr("db_ops.metrics.collector.data_sources.load_secret_text", lambda *_, **__: {})
     monkeypatch.setattr("db_ops.metrics.collector._collect_one_metric", fake_collect_one_metric)
+    # The catalogue is read twice on this path: once for the definitions, which this test supplies,
+    # and once by `load_max_parallel_servers`, which takes its own default path. Redirecting only
+    # the first left the second reading the repository's real `data/` — so on a checkout without
+    # it the test failed on a missing file rather than on the thing it is about.
+    monkeypatch.setattr("db_ops.metrics.collector.load_max_parallel_servers", lambda *_, **__: 1)
 
     summary = collect_metrics(
         config=DbOpsConfig(log_dir=tmp_path / "logs", runtime_dir=tmp_path / "runtime", sqlite_path=tmp_path / "runtime.sqlite"),
@@ -198,27 +203,6 @@ def test_load_metric_definitions_reads_new_variants(tmp_path):
 
     assert definitions[0].collector_type == "sql"
     assert definitions[0].variants[0].file == "metric.sql"
-
-
-def test_long_waiting_or_rollback_metric_resolves_sqlserver_version_variants():
-    definitions = load_metric_definitions(shipped_config("metric_definitions.json"), sql_dir=DEFAULT_SQL_DIR)
-    metric = next(
-        item for item in definitions if item.metric_code == "QUERY_LONG_WAITING_OR_ROLLBACK_REQUESTS"
-    )
-    legacy_target = _target()
-    legacy_target.connection_info["sqlserver_major_version"] = 10
-    modern_target = _target()
-    modern_target.connection_info["sqlserver_major_version"] = 11
-
-    legacy_path = _resolve_metric_file_path(metric, legacy_target)
-    modern_path = _resolve_metric_file_path(metric, modern_target)
-
-    # 150s since 2026-08-07: this metric answers 'is anything stuck right now', and a
-    # 5-minute cadence is why the 09:16 incident on 192.0.2.115 was seen once.
-    assert metric.interval_seconds == 150
-    assert metric.empty_result_is_ok is True
-    assert legacy_path == DEFAULT_SQL_DIR / "sqlserver/legacy_2008r2/026_long_waiting_or_rollback_requests.sql"
-    assert modern_path == DEFAULT_SQL_DIR / "sqlserver/026_long_waiting_or_rollback_requests.sql"
 
 
 def test_load_metric_definitions_converts_sql_variants_with_warning(tmp_path):

@@ -91,16 +91,6 @@ def test_the_operator_is_told_a_forced_run_ignores_the_active_flag(command):
     assert "forced" in start_text or "ignores" in start_text
 
 
-def test_it_is_registered_once_with_a_free_command_id():
-    raw = json.loads(COMMANDS_PATH.read_text(encoding="utf-8"))
-    commands = raw["support_commands" if "support_commands" in raw else list(raw)[0]]
-
-    ids = [c["command_id"] for c in commands]
-    texts = [c["command_text"] for c in commands]
-    assert len(ids) == len(set(ids)), "duplicate command_id"
-    assert texts.count("spbot_run_sql_task") == 1
-
-
 def test_it_is_offered_in_the_botfather_menu():
     """The bot executes from the JSON, but an operator finds commands in the menu file."""
     menu = Path("data/telegram_support_commands.md").read_text(encoding="utf-8")
