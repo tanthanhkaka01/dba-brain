@@ -114,6 +114,10 @@ PUBLIC_PATHS: tuple[str, ...] = (
     "pytest.ini",
     ".gitignore",
     ".dockerignore",
+    # The secret scan's configuration travels with the workflow that runs it. Left behind, the
+    # public repository's scan would use the defaults and go red on the same false positive this
+    # file exists to answer — and nobody reading that repository would know why.
+    ".gitleaks.toml",
     ".env.example",
     "config.example.json",
     "docs",
@@ -264,4 +268,4 @@ PRIVATE_TESTS: dict[str, str] = {
 #: version is immutable** — it cannot be re-uploaded after deletion, so the mistake is permanent.
 #: The public tree starts where a first release starts.
 PUBLIC_DISTRIBUTION_NAME = "dbabrain"
-PUBLIC_VERSION = "0.2.0"
+PUBLIC_VERSION = "0.2.1"

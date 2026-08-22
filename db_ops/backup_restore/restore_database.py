@@ -8,7 +8,7 @@ import threading
 import time
 import re
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from db_ops.backup_restore.config import (
     BackupRestoreConfig,
@@ -126,9 +126,17 @@ def _target_path_str(path: Path, config: BackupRestoreConfig) -> str:
 
 
 def vm_unc_to_local_path(path: str | Path, config: BackupRestoreConfig) -> Path:
+    """Where a file copied to the VM's import share is, *as the VM sees it*.
+
+    The join is a `PureWindowsPath` on purpose. `vm_import_local` is a Windows location — `E:\\
+    SQLBK_IMPORT` — and joining it with `pathlib.Path` takes the separator of whichever machine is
+    running this, which for this project is an Ubuntu worker. The result was
+    `E:\\SQLBK_IMPORT/APPDB/FULL/latest.bak`, mixed separators that Windows tolerates and nobody
+    chose.
+    """
     backup_path = Path(path)
     relative_path = backup_path.relative_to(config.vm_import_unc)
-    return config.vm_import_local / relative_path
+    return Path(PureWindowsPath(config.vm_import_local) / PureWindowsPath(relative_path))
 
 
 
@@ -265,7 +273,9 @@ def build_restore_candidate(
     backup_unc = Path(backup_file_unc)
     backup_on_vm = vm_unc_to_local_path(backup_unc, config)
     source_root = backup_unc.parent.parent
-    source_key = str(source_root.relative_to(config.vm_import_unc))
+    # Names a folder on the VM, so it is written the way the VM writes it, whatever this machine
+    # would have used as a separator.
+    source_key = str(PureWindowsPath(source_root.relative_to(config.vm_import_unc)))
     source_database = source_root.name
     mapping = database or _find_database_mapping(config, source_database)
     restore_database = mapping.target_database if mapping and mapping.target_database else config.restore_database_name or source_database
@@ -276,8 +286,10 @@ def build_restore_candidate(
         restore_database_name=restore_database,
         backup_file_unc=backup_unc,
         backup_file_on_vm=backup_on_vm,
-        restore_data_file_on_vm=config.restore_data_dir_on_vm / f"{safe_restore_name}.mdf",
-        restore_log_file_on_vm=config.restore_data_dir_on_vm / f"{safe_restore_name}_log.ldf",
+        restore_data_file_on_vm=Path(
+            PureWindowsPath(config.restore_data_dir_on_vm) / f"{safe_restore_name}.mdf"),
+        restore_log_file_on_vm=Path(
+            PureWindowsPath(config.restore_data_dir_on_vm) / f"{safe_restore_name}_log.ldf"),
     )
 
 
@@ -2267,5 +2279,6 @@ def _candidate_from_backup_argument(backup_file: str | Path, config: BackupResto
             backup_file_unc=backup_path,
             backup_file_on_vm=backup_path,
             restore_data_file_on_vm=config.restore_data_file_on_vm or config.restore_data_dir_on_vm / f"{safe_restore_name}.mdf",
-            restore_log_file_on_vm=config.restore_log_file_on_vm or config.restore_data_dir_on_vm / f"{safe_restore_name}_log.ldf",
+            restore_log_file_on_vm=config.restore_log_file_on_vm or Path(
+                PureWindowsPath(config.restore_data_dir_on_vm) / f"{safe_restore_name}_log.ldf"),
         )

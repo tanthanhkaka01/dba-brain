@@ -17,6 +17,25 @@ do about it. Not the internal refactor that made it possible.
 
 Nothing yet.
 
+## [0.2.1] - 2026-08-23
+
+Three things that only appeared once `v0.2.0`'s packages were built and tested on Linux, which is
+where this toolkit actually runs.
+
+### Fixed
+
+- **Restore paths on a Linux orchestrator were built with the wrong separator.** A path naming a
+  location on a Windows VM — the import share, the data file to restore to, the `robocopy /LOG:`
+  target — was joined with the *local* separator, so on a Linux worker it came out as
+  `E:\SQLBK_IMPORT/APPDB/FULL/latest.bak`. Windows tolerates that; a tool given it as an argument
+  need not. Those joins are now `PureWindowsPath`, which is the type that means "a Windows path,
+  wherever this is running".
+- The web console listed every app the configuration described, whether or not it was installed —
+  so a distribution carrying a subset offered pages that could not open.
+- The secret scan reported a key-derivation cost parameter as a leaked key. `.gitleaks.toml` now
+  carries that allowance, scoped to the constant's own name and with its reason written out, so a
+  real secret in the same file is still found.
+
 ## [0.2.0] - 2026-08-23
 
 **The whole toolkit ships.** `v0.1.0` claimed one path — one SQL Server, metrics, a Telegram alert

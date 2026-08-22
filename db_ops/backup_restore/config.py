@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 import datetime as dt
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from db_ops.lib.paths import DEFAULT_DATA_DIR
 from typing import Any
 
@@ -213,7 +213,11 @@ class BackupRestoreConfig:
 
     @property
     def vm_copy_log_unc(self) -> Path:
-        return self.vm_log_unc / "copy_sqlbk.log"
+        # A UNC path names a Windows share, so it is joined the way Windows joins. Built with the
+        # local separator it becomes `\\VM_IP\E$\LOGS/copy_sqlbk.log` on the Ubuntu worker that
+        # actually runs this — and it is then passed to `robocopy /LOG:`, which is stricter about
+        # its arguments than the filesystem API is about its paths.
+        return Path(PureWindowsPath(self.vm_log_unc) / "copy_sqlbk.log")
 
     @property
     def full_backup_dir(self) -> Path:

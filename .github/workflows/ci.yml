@@ -106,3 +106,8 @@ jobs:
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Named rather than left to discovery. The action reads `.gitleaks.toml` from the
+          # checkout root anyway, but a config that is picked up implicitly is one nobody notices
+          # has stopped being picked up — and this file is what keeps the scan's allowances
+          # visible and argued for.
+          GITLEAKS_CONFIG: ${{ github.workspace }}/.gitleaks.toml
