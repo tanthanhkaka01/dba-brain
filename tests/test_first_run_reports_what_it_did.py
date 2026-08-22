@@ -52,8 +52,17 @@ def test_a_flat_secret_file_still_encrypts(tmp_path: Path) -> None:
 
 
 def test_check_credentials_refuses_a_flag_where_a_folder_belongs(capsys) -> None:
-    """`--key-base64` is accepted by every other command, so it will be passed to this one."""
-    code = _check_credentials_command(["--key-base64", "cXVpY2tzdGFydA=="])
+    """`--key-base64` is accepted by every other command, so it will be passed to this one.
+
+    The value is deliberately **not** base64, and that is the whole of it. What is asserted is that
+    the *flag* is refused where a folder belongs, so the value is irrelevant — while a
+    realistic-looking one costs something: the first version passed a base64 placeholder copied out
+    of the quickstart (it decodes to an ordinary English word), and `gitleaks` reported the file as
+    a leaked `generic-api-key`. A secret scanner that cries wolf is one people learn to switch off,
+    so the literal goes rather than the rule — and it is not quoted here either, for the same
+    reason.
+    """
+    code = _check_credentials_command(["--key-base64", "not-a-key"])
 
     assert code == 2, "a flag in the folder position is a usage error, not a folder"
     assert "not a flag" in capsys.readouterr().err
