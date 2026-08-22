@@ -18,7 +18,8 @@ tests/test_metric_error_severity.py for the per-phase grading rules themselves.
 import pytest
 
 from db_ops.metrics.collector import _collect_one_metric
-from db_ops.metrics.definitions import DEFAULT_DEFINITIONS_PATH, load_metric_definitions
+from conftest import shipped_config
+from db_ops.metrics.definitions import load_metric_definitions
 from db_ops.metrics.models import MetricTarget
 
 
@@ -64,7 +65,7 @@ class _FakeConnection:
 
 
 def _instance_status_definition():
-    definitions = {item.metric_code: item for item in load_metric_definitions(DEFAULT_DEFINITIONS_PATH)}
+    definitions = {item.metric_code: item for item in load_metric_definitions(shipped_config("metric_definitions.json"))}
     return definitions["INSTANCE_STATUS"]
 
 
@@ -166,7 +167,7 @@ def test_instance_status_that_cannot_connect_at_all_is_critical(monkeypatch):
 def test_the_same_two_failures_on_a_non_availability_metric_stay_warnings(monkeypatch, failure):
     """Proof the severity is the metric's own and not a new global rule: BACKUP_AGE breaking the
     same two ways is a warning, because a backup check that cannot run is not an outage."""
-    definitions = {item.metric_code: item for item in load_metric_definitions(DEFAULT_DEFINITIONS_PATH)}
+    definitions = {item.metric_code: item for item in load_metric_definitions(shipped_config("metric_definitions.json"))}
     backup_age = definitions["BACKUP_AGE"]
 
     cursor = _FakeCursor(rows=[], columns=[], execute_error=failure.get("execute_error"))

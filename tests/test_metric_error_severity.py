@@ -25,7 +25,8 @@ from db_ops.metrics.collector import (
     _collect_one_metric,
     _remote_failure_phase,
 )
-from db_ops.metrics.definitions import DEFAULT_DEFINITIONS_PATH, load_metric_definitions
+from conftest import shipped_config
+from db_ops.metrics.definitions import load_metric_definitions
 from db_ops.metrics.executor import MetricConnectionError, MetricExecutionError
 from db_ops.metrics.models import MetricDefinition, MetricTarget
 
@@ -176,7 +177,7 @@ def test_a_command_metric_that_exited_non_zero_is_graded_as_an_execution_failure
 def test_every_metric_in_the_catalog_declares_both_failure_severities():
     """The fields are optional to the loader on purpose — a catalog that will not parse stops the
     whole estate's monitoring — so the "every metric declares them" rule is enforced here."""
-    catalog = json.loads(DEFAULT_DEFINITIONS_PATH.read_text(encoding="utf-8"))
+    catalog = json.loads(shipped_config("metric_definitions.json").read_text(encoding="utf-8"))
 
     missing = [
         item.get("metric_code")
@@ -189,7 +190,7 @@ def test_every_metric_in_the_catalog_declares_both_failure_severities():
 
 def test_the_instance_status_metric_treats_both_kinds_of_failure_as_critical():
     """An instance that cannot be reached or cannot answer is an outage, not a warning."""
-    definitions = {item.metric_code: item for item in load_metric_definitions(DEFAULT_DEFINITIONS_PATH)}
+    definitions = {item.metric_code: item for item in load_metric_definitions(shipped_config("metric_definitions.json"))}
 
     instance_status = definitions["INSTANCE_STATUS"]
     assert (instance_status.connection_error_severity, instance_status.execution_error_severity) == (

@@ -4,6 +4,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from db_ops.lib.time_window import TimeWindow
+import pytest
+
 from conftest import shipped_config
 from db_ops.jobs import daemon
 
@@ -188,7 +190,7 @@ def test_daemon_sets_secret_key_env_for_spawned_restore_command(tmp_path, monkey
         [
             app_command(
                 "APP-RESTORE-WORKFLOW",
-                command_text="python -m db_ops.backup_restore.cli restore-workflow --config config.json --restore-id R1",
+                command_text="python -m db_ops.metrics.cli collect --config config.json",
             )
         ],
     )
@@ -209,7 +211,7 @@ def test_daemon_sets_secret_key_env_for_spawned_restore_command(tmp_path, monkey
         forwarded_key_args=daemon.ForwardedKeyArgs("--key-base64", "c2VjcmV0LXBocmFzZQ=="),
     )
 
-    assert started[0][0].startswith("python -m db_ops.backup_restore.cli --key-base64")
+    assert started[0][0].startswith("python -m db_ops.metrics.cli --key-base64")
     assert started[0][1] == "secret-phrase"
 
 
@@ -495,7 +497,12 @@ def _make_app_command(app_command_id="APP-RESTORE-WORKFLOW", *, timeout=7200, re
         display_name="Restore Workflow",
         log_scope="restore_workflow",
         working_dir=".",
-        command_text="python -m db_ops.backup_restore.cli restore-workflow",
+        # A module this distribution ships. The behaviour under test - the daemon injecting
+        # --key-base64 for a CLI that declares it, and raising exactly one alert for a stale
+        # run - is not specific to backup_restore, and naming it made the test unable to run
+        # wherever that component is not installed: the daemon cannot introspect a module
+        # that is not there, so it correctly does something else and the test reads as a bug.
+        command_text="python -m db_ops.metrics.cli collect",
         time_window=TimeWindow(
             from_day=1, to_day=31, from_hour=0, to_hour=23,
             repeat_interval=repeat_interval, retry_interval=retry_interval, timeout=timeout,
@@ -738,7 +745,25 @@ def test_a_two_week_old_stale_row_is_reconciled_without_an_alert():
     assert store.telegram_sent == []        # but it is not an incident
 
 
-def test_a_workflow_that_died_today_still_raises_one_alert():
+@pytest.fixture
+def routed_alerts(monkeypatch):
+    """Give the daemon a Telegram route instead of letting it read one.
+
+    `recover_stale_running_jobs` asks `telegram_route(level)` where an alert should go, and that
+    reads the operator's `telegram_config.json`. A tree without one resolves to no chat, the daemon
+    returns before queueing, and a test about *how many* alerts a startup raises fails saying zero
+    - which reads as the alert being broken rather than as the routing being absent.
+
+    Routing is not what these tests are about. Supplying it makes them measure the thing they name:
+    one alert for a whole startup, not one per stale row.
+    """
+    from db_ops.lib import notify_route
+
+    monkeypatch.setattr(notify_route, "chat_from_route", lambda route: "chat-under-test")
+    yield
+
+
+def test_a_workflow_that_died_today_still_raises_one_alert(routed_alerts):
     """The guard above must not silence the case the alert exists for."""
     cmd = _make_app_command(timeout=300)
     recent = _make_row("running", started_seconds_ago=2 * 3600, log_id=2)
@@ -756,7 +781,7 @@ def test_a_workflow_that_died_today_still_raises_one_alert():
     assert len(store.telegram_sent) == 1
 
 
-def test_one_alert_carries_the_whole_startup_not_one_message_per_row():
+def test_one_alert_carries_the_whole_startup_not_one_message_per_row(routed_alerts):
     """171 rows became 171 Telegram messages. An operator's phone is not a log file."""
     cmd = _make_app_command(timeout=300)
     rows = [dict(_make_row("running", started_seconds_ago=3600 + i, log_id=i),
