@@ -55,6 +55,9 @@ the documentation names one, it says so.
 
 ### Fixed
 
+- **The package now requires Python 3.12, and 3.11 is no longer claimed.** It never worked: the CSV
+  writer uses `csv.QUOTE_STRINGS`, which arrived in 3.12, so every CSV export raised
+  `AttributeError` on 3.11. The floor was a policy choice; the test matrix ran on it and disagreed.
 - The test suite passes on a clean install. Ten tests failed because they read configuration files
   this distribution does not ship. Eight of them were asking *is my configuration still correct* —
   a question only the maintainer's estate can answer — and have moved to a suite that stays there;

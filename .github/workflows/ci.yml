@@ -29,11 +29,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # `requires-python` is >=3.11. The floor is a policy choice — no dependency and no language
-        # feature needs more than 3.9 — so the matrix is what proves the claim, not the metadata.
-        # It has already earned its place: the first lint run found a backslash inside an f-string,
-        # which is 3.12+ syntax, in a package declaring 3.11.
-        python: ["3.11", "3.12", "3.13"]
+        # `requires-python` is >=3.12, and this matrix is why it is not >=3.11. The floor was a
+        # policy choice until the matrix ran unrestricted for the first time and found
+        # `csv.QUOTE_STRINGS` — a 3.12 stdlib API — in the CSV writer, breaking every CSV path on
+        # the version the package promised. That is the second such defect; the first, a backslash
+        # inside an f-string, is recorded in pyproject.toml. **The matrix is what proves the claim,
+        # not the metadata**, and it has now earned its place twice.
+        python: ["3.12", "3.13"]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -18,7 +18,7 @@ step that changes that, and it is the only one that talks to anything off this m
 ## Before you start
 
 - **Docker**, with roughly 2 GB free for the container.
-- **Python 3.11+**, with the toolkit installed and the SQL Server driver:
+- **Python 3.12+**, with the toolkit installed and the SQL Server driver:
 
   ```bash
   pip install -e '.[mssql]'          # from the repository root

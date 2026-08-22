@@ -78,7 +78,7 @@ each — and 13/14 are the two shared layers they all sit on.
 
 ## Install
 
-Python **3.11+**. Every database driver is an extra, so a DBA who runs only PostgreSQL is not made
+Python **3.12+**. Every database driver is an extra, so a DBA who runs only PostgreSQL is not made
 to install an ODBC driver and an Oracle client to start.
 
 ```bash

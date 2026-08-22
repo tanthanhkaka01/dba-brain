@@ -10,7 +10,7 @@
 
 | | |
 | --- | --- |
-| Python | **3.11 or newer.** Nothing in the tree needs a 3.11-only feature, but 3.10 leaves support during this project's first year and shipping support for a version that has to be dropped immediately helps nobody. |
+| Python | **3.12 or newer.** Measured, not chosen: the CSV writer uses `csv.QUOTE_STRINGS`, which arrived in 3.12 and is what keeps a NULL and an empty string apart in an export. The floor was 3.11 until the test matrix ran on it and disagreed. |
 | A database to point it at | Any supported engine you can reach and log in to. Nothing else has to be installed on the monitored machine — there is no agent. |
 | A database driver | One extra per engine you monitor. See [Engine extras](#engine-extras). |
 | Disk | Small. The toolkit's own store is a SQLite file until you move it to PostgreSQL. |

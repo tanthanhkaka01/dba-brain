@@ -34,11 +34,17 @@ version = "0.1.0"
 #     `ExceptionGroup`, no PEP 695 syntax. `from __future__ import annotations` is used
 #     throughout, so the `X | Y` annotations are not a floor either.
 #
-# So 3.11 is a *policy* floor rather than a technical one, chosen for two reasons: 3.10 reaches
-# end of life during this project's first year and a new public project should not ship support
-# it must drop immediately, and the test suite reads this file with `tomllib`, which is 3.11+.
-# The CI matrix is what will prove the tree actually runs on it (S1-27).
-requires-python = ">=3.11"
+# That reasoning produced a *policy* floor of 3.11, and the CI matrix — added to prove the claim
+# rather than trust it — disproved it on its first unrestricted run. **The floor is 3.12, and it is
+# measured**: `db_ops/lib/result_format.py` writes CSV with `csv.QUOTE_STRINGS`, which arrived in
+# 3.12, so every CSV path raises `AttributeError` on 3.11. The property it is there for — NULL and
+# the empty string staying distinct while numbers stay unquoted — cannot be had from the 3.11
+# stdlib writer, and hand-rolled quoting is the one thing that module refuses to do.
+#
+# Note what the survey above missed: it looked for *syntax* and dependency metadata, and this is a
+# **stdlib API**. It is the second defect of this shape — the first, a backslash inside an
+# f-string, is recorded under [tool.ruff.lint] below — and neither was findable by reading.
+requires-python = ">=3.12"
 
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -46,7 +52,6 @@ classifiers = [
     "Intended Audience :: System Administrators",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Database",

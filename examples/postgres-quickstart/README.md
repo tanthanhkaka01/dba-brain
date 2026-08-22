@@ -19,7 +19,7 @@ turning delivery on actually takes.
 ## Before you start
 
 - Docker, for the throwaway PostgreSQL.
-- Python 3.11 or newer, with the toolkit installed and the PostgreSQL driver:
+- Python 3.12 or newer, with the toolkit installed and the PostgreSQL driver:
 
   ```bash
   pip install -e '.[postgres]'        # from the repository root

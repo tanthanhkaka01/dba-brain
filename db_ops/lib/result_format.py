@@ -210,6 +210,11 @@ def _render_csv(columns: list[str], rows: list[list[Any]]) -> str:
     ``None`` as a bare empty field, which is exactly PostgreSQL's ``COPY ... WITH CSV`` output and
     what a spreadsheet reads back correctly. It also leaves numbers unquoted, so Excel treats them
     as numbers instead of text — ``QUOTE_ALL`` would have been unambiguous and unusable.
+
+    **It is also why this package requires Python 3.12.** ``QUOTE_STRINGS`` arrived in 3.12, and
+    the 3.11 stdlib cannot express the same thing: ``QUOTE_NONNUMERIC`` quotes ``None`` into the
+    same ``""`` it writes for an empty string, collapsing the distinction this function exists to
+    preserve. Hand-rolling the quoting to get it back is the one thing the line above refuses.
     """
     import csv
     import io
