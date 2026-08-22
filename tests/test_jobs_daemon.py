@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from db_ops.lib.time_window import TimeWindow
+from conftest import shipped_config
 from db_ops.jobs import daemon
 
 
@@ -150,7 +151,7 @@ def test_daemon_default_scan_delay_is_two_seconds():
 
 
 def test_repository_telegram_repeat_interval_is_one_second():
-    commands = daemon.load_app_commands(daemon.DEFAULT_DATA_DIR / "app_commands.json")
+    commands = daemon.load_app_commands(shipped_config("app_commands.json"))
     assert commands["APP-TELEGRAM"].repeat_interval_seconds == 1
 
 

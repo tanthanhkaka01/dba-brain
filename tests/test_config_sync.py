@@ -94,10 +94,18 @@ def test_every_config_file_is_either_catalogued_or_deliberately_excluded() -> No
 
 
 def test_every_catalogued_app_code_is_a_real_package() -> None:
-    """``app_code`` is what the web UI groups by, so a typo would create a fourteenth app."""
+    """``app_code`` is what the web UI groups by, so a typo would create a fourteenth app.
+
+    A code naming a component the *distribution* leaves out is not a typo — the catalogue
+    describes the whole toolkit, and seven of its fourteen apps do not ship in the public tree.
+    Only names that belong to no component at all are wrong, which is the mistake this catches.
+    """
+    from db_ops.lib.distribution import PRIVATE_PACKAGES
+
     packages = {p.name for p in (REPO_ROOT / "db_ops").iterdir()
                 if p.is_dir() and not p.name.startswith("__")}
-    unknown = sorted({spec.app_code for spec in config_sync.load_catalog(DATA_DIR)} - packages)
+    catalogued = {spec.app_code for spec in config_sync.load_catalog(DATA_DIR)}
+    unknown = sorted(catalogued - packages - set(PRIVATE_PACKAGES))
     assert not unknown, f"config_catalog.json names app_code(s) with no db_ops/ package: {unknown}"
 
 

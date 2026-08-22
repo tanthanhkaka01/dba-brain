@@ -29,9 +29,21 @@ import pytest
 from db_ops import cli
 
 
-def test_this_checkout_has_every_app(capsys) -> None:
-    """The full tree is the control case: nothing is filtered out here."""
-    assert cli.installed_apps() == cli.APPS
+def test_every_app_whose_package_exists_is_reachable() -> None:
+    """The detection must find everything present, and nothing that is not.
+
+    It asserted `installed_apps() == APPS`, which is true only where all fourteen components are —
+    so the test that proves the filtering works could not itself run in the tree the filtering
+    exists for. Stated against what is on disk, it holds in both.
+    """
+    from db_ops.lib.paths import PACKAGE_DIR
+
+    expected = {
+        name: module for name, module in cli.APPS.items()
+        if (PACKAGE_DIR / module.split(".")[1]).is_dir()
+    }
+
+    assert cli.installed_apps() == expected
 
 
 def test_a_missing_app_is_not_listed(monkeypatch) -> None:
