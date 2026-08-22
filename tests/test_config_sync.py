@@ -347,9 +347,17 @@ def test_every_catalogued_file_is_read_by_something() -> None:
     this without being dead, which is what ``READ_INDIRECTLY`` is for — but adding to it should mean
     "I checked and it is read", never "make the test stop".
     """
+    from db_ops.lib.distribution import PRIVATE_PACKAGES
+
     unread = []
     for spec in config_sync.load_catalog(DATA_DIR):
         if spec.file in READ_INDIRECTLY:
+            continue
+        # A file whose owning component is not in this distribution has no reader here by
+        # construction — `webhost_config.json` is read by `db_ops/webhost/`, which the public tree
+        # withholds. That is a missing component, not an orphaned config file, and the two need
+        # different answers.
+        if spec.app_code in PRIVATE_PACKAGES and not (REPO_ROOT / "db_ops" / spec.app_code).is_dir():
             continue
         stem = spec.file.replace(".json", "")
         readers = [path for path in (REPO_ROOT / "db_ops").rglob("*.py")

@@ -14,7 +14,8 @@ from db_ops.metrics.collector import (
     _resolve_metric_file_path,
     collect_metrics,
 )
-from db_ops.metrics.definitions import DEFAULT_DEFINITIONS_PATH, DEFAULT_SQL_DIR, load_metric_definitions
+from conftest import shipped_config
+from db_ops.metrics.definitions import DEFAULT_SQL_DIR, load_metric_definitions
 from db_ops.metrics.models import MetricDefinition, MetricTarget, MetricVariant
 
 
@@ -200,7 +201,7 @@ def test_load_metric_definitions_reads_new_variants(tmp_path):
 
 
 def test_long_waiting_or_rollback_metric_resolves_sqlserver_version_variants():
-    definitions = load_metric_definitions(DEFAULT_DEFINITIONS_PATH, sql_dir=DEFAULT_SQL_DIR)
+    definitions = load_metric_definitions(shipped_config("metric_definitions.json"), sql_dir=DEFAULT_SQL_DIR)
     metric = next(
         item for item in definitions if item.metric_code == "QUERY_LONG_WAITING_OR_ROLLBACK_REQUESTS"
     )

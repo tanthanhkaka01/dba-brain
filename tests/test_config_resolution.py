@@ -148,6 +148,8 @@ def test_resolve_shared_fallback_for_unknown_app(monkeypatch, capsys):
 # ---------------------------------------------------------------------------
 
 def test_all_apps_have_config_name_and_env_var():
+    # The full set: `APP_CONFIG_NAMES` is the product's map and stays complete in every build,
+    # the same way `cli.APPS` does. What must agree is the two tables with each other.
     expected_apps = {
         "backup_restore",
         "jobs",
@@ -209,12 +211,21 @@ def test_no_direct_import_of_reports_from_telegram():
 
 
 def test_no_direct_import_of_telegram_from_sql_tasks():
-    """sql_tasks.runner must not import telegram modules directly."""
+    """sql_tasks.runner must not import telegram modules directly.
+
+    Skipped where `sql_tasks` is not in the distribution. The rule it enforces is about the source
+    repository, and a boundary cannot be crossed by software that is not there — but the check must
+    not *fail* in that tree, because a red test for an absent component says nothing true.
+    """
     import ast
     import importlib.util
 
-    spec = importlib.util.find_spec("db_ops.sql_tasks.runner")
-    assert spec is not None
+    try:
+        spec = importlib.util.find_spec("db_ops.sql_tasks.runner")
+    except ModuleNotFoundError:
+        spec = None
+    if spec is None:
+        pytest.skip("sql_tasks is not in this distribution")
     source = Path(spec.origin).read_text(encoding="utf-8")
     tree = ast.parse(source)
     for node in ast.walk(tree):

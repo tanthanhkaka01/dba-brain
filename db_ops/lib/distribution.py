@@ -191,6 +191,13 @@ PRIVATE_TESTS: dict[str, str] = {
                                     "definition. The closure it guards is a property of the source",
     "test_legacy_oracle_tool_is_python2_safe.py": "checks tools/python32_legacy, a Win32 Python 2.7 "
                                                   "payload that never ships",
+    "test_backup_restore_event_shape.py": "walks db_ops/backup_restore/*.py to check every event "
+                                          "call site shares one shape. The package is withheld, so "
+                                          "in the export it walks an empty path and reports that "
+                                          "no file announces a run - a true statement about "
+                                          "nothing. Listed here rather than caught by the import "
+                                          "filter because it *reads* the package instead of "
+                                          "importing it, which no static import walk can see",
 }
 
 
