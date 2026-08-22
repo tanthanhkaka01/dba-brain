@@ -311,7 +311,7 @@ Three fields are easy to get wrong, and each fails in a way that does not name i
 ### 2. The password - `secrets/secret_text.json`, then encrypt
 
 ```json
-{ "secrets": { "MSSQL_MYLAB_MONITOR": "the-password" } }
+{ "MSSQL_MYLAB_MONITOR": "the-password" }
 ```
 
 Then:

@@ -17,6 +17,26 @@ do about it. Not the internal refactor that made it possible.
 
 Nothing yet.
 
+## [0.1.1] - 2026-08-22
+
+Three defects in the **first two commands anybody runs**, all found by installing `0.1.0` from PyPI
+into an empty directory and following the `AGENTS.md` that `db-ops init` writes there.
+
+### Fixed
+
+- **`AGENTS.md` documented the wrong shape for `secrets/secret_text.json`.** It showed
+  `{"secrets": {"REF": "..."}}`; the file is flat — `{"REF": "the secret"}` — which is what the
+  scaffolded file itself says. Following the guide produced a store with nothing usable in it.
+- **`encrypt-secret` accepted that wrong shape and reported success.** It stringified the nested
+  object into a single secret named `secrets` and printed `Encrypted 1 secret(s)`; the failure then
+  surfaced two commands later as `Password ref not found`, naming a reference the plaintext file
+  appears to define. It now refuses the file and shows the shape it needs.
+- **`check-credentials` reported a pass for having checked nothing.** Given `--key-base64` — which
+  every other command accepts — it read the flag as a folder name, walked a directory that does not
+  exist, and printed `checked 0 target(s); 0 without a resolvable credential`. It now refuses a flag
+  where a folder belongs, and refuses a folder that is not there. It needs no passphrase: it reads
+  the store through the same resolution as everything else.
+
 ## [0.1.0] - 2026-08-22
 
 **The first release.** One database engine claimed — SQL Server — and one path proven end to end:

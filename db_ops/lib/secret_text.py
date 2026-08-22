@@ -295,10 +295,23 @@ def encrypt_secret_text_file(source: str | Path, dest: str | Path, key: str) -> 
     # to fix and worth fixing: a file an operator has to hand-edit needs somewhere to put a
     # sentence, and that place should not become data.
     secrets = {
-        str(name): str(value)
+        str(name): value
         for name, value in secrets.items()
         if not str(name).startswith("_")
     }
+    # A *secret* that is not a scalar means the file has the wrapped shape — `{"secrets": {...}}`
+    # rather than a flat `{ref: secret}`. `str(value)` turned that into one secret named `secrets`
+    # holding the repr of a dict, and reported "Encrypted 1 secret(s)": the first run then failed
+    # two commands later at `Password ref not found`, naming a ref this file appears to define.
+    # Checked after the `_` keys are dropped, because commentary is legitimately a list.
+    for name, value in secrets.items():
+        if isinstance(value, (dict, list)):
+            raise RuntimeError(
+                f"{source}: '{name}' holds an object, so this file is nested. It must be flat — "
+                f'{{"REF_NAME": "the secret"}} — with one entry per reference that '
+                f"users.json points at with password_ref."
+            )
+    secrets = {name: str(value) for name, value in secrets.items()}
 
     blob = encrypt_secret_text(secrets, key)
     if decrypt_secret_text(blob, key) != secrets:
