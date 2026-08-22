@@ -125,18 +125,31 @@ def _target_path_str(path: Path, config: BackupRestoreConfig) -> str:
     return s.replace("\\", "/") if config.is_linux else s
 
 
-def vm_unc_to_local_path(path: str | Path, config: BackupRestoreConfig) -> Path:
-    """Where a file copied to the VM's import share is, *as the VM sees it*.
+def target_path(*parts, config: BackupRestoreConfig) -> Path:
+    """Join *parts* the way the **target host** writes a path, not the way this machine does.
 
-    The join is a `PureWindowsPath` on purpose. `vm_import_local` is a Windows location — `E:\\
-    SQLBK_IMPORT` — and joining it with `pathlib.Path` takes the separator of whichever machine is
-    running this, which for this project is an Ubuntu worker. The result was
-    `E:\\SQLBK_IMPORT/APPDB/FULL/latest.bak`, mixed separators that Windows tolerates and nobody
-    chose.
+    Three separators are in play and only one is right: the orchestrator's (an Ubuntu worker), the
+    target's, and whichever one `pathlib.Path` picks from the platform it was imported on. Joining
+    with `Path` silently chose the third, so a restore path for a Windows SQL Server came off the
+    Linux worker with a forward slash in the middle of it.
+
+    Forcing Windows is not the fix either — SQL Server runs on Linux, and `config.is_linux` is what
+    says which this target is. The result is converted through `str` because
+    `Path(PureWindowsPath(...))` copies the *parts* and re-joins them locally, which is the same
+    bug wearing a different hat.
     """
+    flavour = PurePosixPath if config.is_linux else PureWindowsPath
+    joined = flavour(parts[0])
+    for part in parts[1:]:
+        joined = joined / flavour(part)
+    return Path(str(joined))
+
+
+def vm_unc_to_local_path(path: str | Path, config: BackupRestoreConfig) -> Path:
+    """Where a file copied to the target's import share is, as the *target* sees it."""
     backup_path = Path(path)
     relative_path = backup_path.relative_to(config.vm_import_unc)
-    return Path(str(PureWindowsPath(config.vm_import_local) / PureWindowsPath(relative_path)))
+    return target_path(config.vm_import_local, relative_path, config=config)
 
 
 
@@ -275,7 +288,7 @@ def build_restore_candidate(
     source_root = backup_unc.parent.parent
     # Names a folder on the VM, so it is written the way the VM writes it, whatever this machine
     # would have used as a separator.
-    source_key = str(PureWindowsPath(source_root.relative_to(config.vm_import_unc)))
+    source_key = str(target_path(source_root.relative_to(config.vm_import_unc), config=config))
     source_database = source_root.name
     mapping = database or _find_database_mapping(config, source_database)
     restore_database = mapping.target_database if mapping and mapping.target_database else config.restore_database_name or source_database
@@ -286,10 +299,10 @@ def build_restore_candidate(
         restore_database_name=restore_database,
         backup_file_unc=backup_unc,
         backup_file_on_vm=backup_on_vm,
-        restore_data_file_on_vm=Path(
-            str(PureWindowsPath(config.restore_data_dir_on_vm) / f"{safe_restore_name}.mdf")),
-        restore_log_file_on_vm=Path(
-            str(PureWindowsPath(config.restore_data_dir_on_vm) / f"{safe_restore_name}_log.ldf")),
+        restore_data_file_on_vm=target_path(
+            config.restore_data_dir_on_vm, f"{safe_restore_name}.mdf", config=config),
+        restore_log_file_on_vm=target_path(
+            config.restore_data_dir_on_vm, f"{safe_restore_name}_log.ldf", config=config),
     )
 
 
@@ -2279,6 +2292,6 @@ def _candidate_from_backup_argument(backup_file: str | Path, config: BackupResto
             backup_file_unc=backup_path,
             backup_file_on_vm=backup_path,
             restore_data_file_on_vm=config.restore_data_file_on_vm or config.restore_data_dir_on_vm / f"{safe_restore_name}.mdf",
-            restore_log_file_on_vm=config.restore_log_file_on_vm or Path(
-                str(PureWindowsPath(config.restore_data_dir_on_vm) / f"{safe_restore_name}_log.ldf")),
+            restore_log_file_on_vm=config.restore_log_file_on_vm or target_path(
+                config.restore_data_dir_on_vm, f"{safe_restore_name}_log.ldf", config=config),
         )
