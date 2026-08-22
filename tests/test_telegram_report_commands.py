@@ -11,6 +11,17 @@ _REAL_RUN = subprocess.run
 #: Same reason: subprocess.run builds a Popen, so a Popen stub catches the reply queue
 #: too. The stubs below hand those calls back to the real one.
 _REAL_POPEN = subprocess.Popen
+
+
+def _mentions(argv, token: str) -> bool:
+    """Is *token* anywhere in this launch, whichever shape the platform used?
+
+    A detached launch is `[python, -m, module, subcommand, ...]` on Windows and
+    `["/bin/sh", "-c", "<the whole command line>"]` on POSIX, because a POSIX detached process has
+    to write its own exit code out — see `command_processor`. So `token in argv`, which tests whole
+    elements, is true on one platform and false on the other.
+    """
+    return any(token in part for part in argv)
 from pathlib import Path
 
 import pytest
@@ -151,7 +162,7 @@ def test_report_force_hourly_cli_command_is_built_from_config_defaults(tmp_path,
     calls = []
 
     def fake_run(argv, **kwargs):
-        if "queue-telegram-message" in argv:
+        if _mentions(argv, "queue-telegram-message"):
             # Not the call under test: queueing the reply goes through the common CLI now, and
             # it shares this module-level subprocess.run. Let it succeed so the argv this test
             # actually asserts on is the action's, not the notification's - and the row still
@@ -233,7 +244,7 @@ def test_report_force_hourly_failure_returns_safe_failure_message(tmp_path, monk
     sqlite_path, commands_path, command_message_id = prepare(tmp_path)
 
     def fake_run(argv, **kwargs):
-        if "queue-telegram-message" in argv:
+        if _mentions(argv, "queue-telegram-message"):
             # Not the call under test: queueing the reply goes through the common CLI now, and
             # it shares this module-level subprocess.run. Let it succeed so the argv this test
             # actually asserts on is the action's, not the notification's - and the row still
@@ -263,7 +274,7 @@ def test_cli_execute_masks_sensitive_values_in_metadata(tmp_path, monkeypatch):
     sqlite_path, commands_path, command_message_id = prepare(tmp_path)
 
     def fake_run(argv, **kwargs):
-        if "queue-telegram-message" in argv:
+        if _mentions(argv, "queue-telegram-message"):
             # Not the call under test: queueing the reply goes through the common CLI now, and
             # it shares this module-level subprocess.run. Let it succeed so the argv this test
             # actually asserts on is the action's, not the notification's - and the row still
@@ -583,7 +594,7 @@ def test_spbot_restore_uses_generic_background_cli_checker(tmp_path, monkeypatch
             # subprocess.run needs a full Popen (context manager, communicate, poll), so the
             # reply queue gets the real class rather than a partial stand-in. Returning a
             # non-instance also skips __init__, which is what keeps the fake's bookkeeping clean.
-            if "queue-telegram-message" in argv:
+            if _mentions(argv, "queue-telegram-message"):
                 return _REAL_POPEN(argv, **kwargs)
             return super().__new__(cls)
 
@@ -609,8 +620,8 @@ def test_spbot_restore_uses_generic_background_cli_checker(tmp_path, monkeypatch
             "SELECT * FROM telegram_background_tasks ORDER BY task_id DESC LIMIT 1"
         ).fetchone()
     assert result["status"] == "processed"
-    assert launches[0][0][3] == "restore-workflow"
-    assert "--point-in-time" not in launches[0][0]
+    assert _mentions(launches[0][0], "restore-workflow")
+    assert not _mentions(launches[0][0], "--point-in-time")
     assert task is not None
 
     Path(task["stdout_path"]).write_text(
@@ -682,7 +693,7 @@ def test_spbot_restore_reports_immediate_crash(tmp_path, monkeypatch):
             # subprocess.run needs a full Popen (context manager, communicate, poll), so the
             # reply queue gets the real class rather than a partial stand-in. Returning a
             # non-instance also skips __init__, which is what keeps the fake's bookkeeping clean.
-            if "queue-telegram-message" in argv:
+            if _mentions(argv, "queue-telegram-message"):
                 return _REAL_POPEN(argv, **kwargs)
             return super().__new__(cls)
 
