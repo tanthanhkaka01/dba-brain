@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "notes": [
+    "SQLite, because a quickstart that begins by installing a database server for the tool itself is not a quickstart. The file appears at runtime/db_ops.sqlite the first time anything writes.",
+    "The postgresql section below is filled in and inert: switching a real installation to it is a one-word edit of 'backend', not a rediscovery of host, port and credentials. That is why the unused section stays in the file instead of being deleted."
+  ],
+
+  "backend": "sqlite",
+
+  "sqlite": {
+    "path": "runtime/db_ops.sqlite",
+    "connection_string": "sqlite:///runtime/db_ops.sqlite"
+  },
+
+  "postgresql": {
+    "host": "127.0.0.1",
+    "port": 5432,
+    "database": "db_ops",
+    "schema": "db_ops",
+    "username": "db_ops",
+    "password_ref": "DB_OPS_STORE_PASSWORD",
+    "credential_name": "",
+    "sslmode": "prefer",
+    "connect_timeout_seconds": 10,
+    "application_name": "db_ops",
+    "connection_string": ""
+  }
+}

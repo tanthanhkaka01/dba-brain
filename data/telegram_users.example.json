@@ -1,0 +1,43 @@
+{
+  "notes": [
+    "Sample telegram_users.json - who may talk to the bot. Copy to telegram_users.json and edit. The bot registers a person here the first time it sees them, with user_type 0; raising that number is the deliberate act that grants them anything.",
+    "'user_type' is a clearance level on the same 0-100 ladder the web console uses. A command in telegram_support_commands.json carries a 'command_type', and a person may run it only when their user_type is at least that number. 0 is 'known but may do nothing but read'; 100 is 'may take a machine down'.",
+    "'status' other than 'active' stops the person being served at all, which is how someone is switched off without losing the record that they existed.",
+    "The chat ids and names below are placeholders. A real user_id is a number Telegram assigns; you get it by having the person message the bot once and reading it back with the bot's own listing command."
+  ],
+  "telegram_users": [
+    {
+      "user_id": "1000000001",
+      "is_bot": false,
+      "user_type": 100,
+      "first_name": "Ada",
+      "last_name": "Byron",
+      "username": "acme_dba_lead",
+      "language_code": "en",
+      "status": "active",
+      "note": "Lead DBA. user_type 100 is the only level that may restart a host or patch an instance."
+    },
+    {
+      "user_id": "1000000002",
+      "is_bot": false,
+      "user_type": 50,
+      "first_name": "Grace",
+      "last_name": "Hopper",
+      "username": "acme_dba_oncall",
+      "language_code": "en",
+      "status": "active",
+      "note": "On-call DBA. May run the read-only reports and the level-50 operations (kill a session, start a job), not the level-100 ones."
+    },
+    {
+      "user_id": "1000000003",
+      "is_bot": false,
+      "user_type": 0,
+      "first_name": "Alan",
+      "last_name": "Turing",
+      "username": "",
+      "language_code": "en",
+      "status": "active",
+      "note": "Registered automatically the first time they messaged the bot. Level 0 until somebody decides otherwise - that default is the whole point."
+    }
+  ]
+}

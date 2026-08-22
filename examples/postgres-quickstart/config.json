@@ -1,0 +1,17 @@
+{
+  "notes": [
+    "Quickstart tool root. Stand in this directory and the toolkit finds it: the working directory holds data/ and config.json, which is the second entry in the resolution order, so no environment variable is needed.",
+    "Everything is relative to this file, so logs/ and runtime/ appear here and nowhere else. Delete the whole directory and nothing is left behind."
+  ],
+
+  "app_name": "db_ops_quickstart",
+
+  "log_dir": "logs",
+  "runtime_dir": "runtime",
+
+  "console_level": "INFO",
+  "file_level": "INFO",
+
+  "store_config_file": "data/store_config.json",
+  "telegram_config_file": "data/telegram_config.json"
+}

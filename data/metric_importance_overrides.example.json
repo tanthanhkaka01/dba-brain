@@ -1,0 +1,59 @@
+{
+  "notes": [
+    "Sample metric_importance_overrides.json - how much a given metric matters on a given instance. Copy to metric_importance_overrides.json and edit.",
+    "Kept apart from metric_definitions.json on purpose: that file describes what a metric IS and is the same for everybody, this one describes YOUR estate. A metric worth waking someone for on a production instance is noise on a developer sandbox, and that difference belongs in your data, not in the catalogue.",
+    "'scale' declares the ladder once so the numbers mean the same thing everywhere. 0 disables the metric on the matched instances entirely.",
+    "'instance_overrides' are matched on the fields in 'match'. Every field given must agree, so a match on db_type alone is broad and a match on ip plus service_name is one instance. First match wins - put the specific entries above the broad ones.",
+    "'reason' is required by convention, not by the parser. An override with no reason is indistinguishable from a mistake six months later, and this is exactly the file people forget."
+  ],
+
+  "scale": {
+    "min": 0,
+    "max": 5,
+    "labels": {
+      "0": "disabled",
+      "1": "informational",
+      "2": "low",
+      "3": "medium",
+      "4": "high",
+      "5": "critical"
+    }
+  },
+
+  "instance_overrides": [
+    {
+      "match": {
+        "ip": "192.0.2.10",
+        "service_name": "APPDB-PROD"
+      },
+      "reason": "The application everything else depends on. Availability and recoverability are graded at the top of the scale here even though the defaults are lower.",
+      "importance": {
+        "INSTANCE_STATUS": 5,
+        "BACKUP_AGE": 5,
+        "INSTANCE_CONNECTIONS": 5
+      }
+    },
+    {
+      "match": {
+        "env": "dev"
+      },
+      "reason": "Developer instances. They are monitored so an outage is visible, but nothing here is worth a page - the data is reproducible and nobody is on call for it.",
+      "importance": {
+        "INSTANCE_STATUS": 3,
+        "BACKUP_AGE": 1,
+        "INSTANCE_CONNECTIONS": 2
+      }
+    },
+    {
+      "match": {
+        "db_type": "oracle",
+        "service_name": "FINDB"
+      },
+      "reason": "Finance reporting database. Storage is the failure mode that has actually bitten here, so it is graded above the default while the rest stays as shipped.",
+      "importance": {
+        "STORAGE_DATA_FILE_SPACE": 5,
+        "TABLESPACE_FREE_SPACE": 5
+      }
+    }
+  ]
+}

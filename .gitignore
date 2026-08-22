@@ -1,0 +1,82 @@
+# Local secrets and machine-specific runtime config
+# Plaintext secret source used to regenerate the encrypted store — never commit.
+# The pattern is ** rather than a plain path: `secrets/*.json` contains a slash and is therefore
+# anchored to this directory, so it did not cover examples/*/secrets/ — and running a quickstart
+# leaves a plaintext secret file there. With a real bot token in it, one `git add -A` publishes it.
+**/secrets/*.json
+!**/secrets/*.example.json
+data/secret_text.json
+
+# What a quickstart run leaves behind. The repository-root data/encrypted_secret_text.json is
+# tracked on purpose (it is ciphertext, and the estate needs it); an example's copy is scratch.
+examples/*/data/encrypted_secret_text.json
+examples/*/logs/
+examples/*/runtime/
+
+# Python local cache
+__pycache__/
+*.py[cod]
+
+# Python generated files
+.venv/
+venv/
+env/
+ENV/
+.pytest_cache/
+.pytest_tmp/
+tmp_pytest_local/
+pytest-cache-files-*/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Local environment and runtime secrets
+.env
+.env.*
+!.env.example
+*.session
+*.pem
+*.key
+*.ppk
+*.pfx
+*.p12
+
+# Claude Code working notes. CLAUDE.md carries the secret-text passphrase, and the encrypted
+# secret file IS committed — so publishing the passphrase would expose every secret in it.
+# Keep it local; .claude/settings.json (shared) stays committable.
+CLAUDE.md
+CLAUDE.local.md
+.claude/settings.local.json
+
+# SSH private keys used by sre create-db-docker (bind-mounted onto the worker).
+# Keep the folder in git (via .gitkeep) but never any key material inside it.
+data/ssh_keys/*
+!data/ssh_keys/.gitkeep
+
+# Tool runtime outputs
+runtime/
+logs/
+
+# Docker build/deploy artifacts (image tar, packaged secrets) — never commit
+deploy/
+*.tar
+db_ops_image.tar
+
+# Backup/restore scratch dirs that land at the repo root when a pg_basebackup-shaped command
+# is run from here instead of a temp dir (tests/test_backup_transfer_stream.py builds exactly
+# this layout). Anchored to the root so a real base/ or wal/ inside the tree is unaffected.
+/base/
+/wal/
+/empty_top/
+
+# Editor and OS noise (Windows master, Ubuntu worker)
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini

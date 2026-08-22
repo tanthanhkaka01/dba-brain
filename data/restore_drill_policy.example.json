@@ -1,0 +1,27 @@
+{
+  "notes": [
+    "Sample restore_drill_policy.json - how old a successful restore drill may be before it stops counting as evidence. Copy to restore_drill_policy.json and edit.",
+    "A drill proves the whole recovery path still works: the backup format, the credentials, the destination, the free space and the script itself. Only an actual restore proves it, which is why the age of the last successful one is a monitored fact rather than a note in a runbook.",
+    "The default of one week is short enough that a break is found before a month-end close depends on it, and long enough not to thrash a large database nightly.",
+    "Past twice 'max_age_hours' the verdict escalates from a warning to critical, because evidence that stale is no evidence.",
+    "'overrides' name a database exactly as the restore history records it. A large production database is often drilled on a longer cycle because a full restore is expensive; a small critical one can be drilled daily."
+  ],
+
+  "restore_drill_policy": {
+    "defaults": {
+      "max_age_hours": 168
+    },
+    "overrides": [
+      {
+        "_note": "A multi-terabyte database. Restoring it takes most of a night, so it is drilled fortnightly and the policy says so instead of reporting a violation every week.",
+        "database": "SALESDB",
+        "max_age_hours": 336
+      },
+      {
+        "_note": "Small, and the one nobody can work without. Drilled daily.",
+        "database": "FINDB",
+        "max_age_hours": 24
+      }
+    ]
+  }
+}

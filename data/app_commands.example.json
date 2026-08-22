@@ -1,0 +1,152 @@
+{
+  "notes": [
+    "Sample app_commands.json - what the scheduler runs. Copy to app_commands.json and edit. The daemon reads this file and starts each active entry as its own process on its own interval; nothing here is compiled in, so an app is added, retimed or switched off by editing data.",
+    "'working_dir' is the literal string 'tools/db_ops' on every entry and is NOT a folder on your disk. It is a logical alias for the tool root, resolved at run time to wherever the project actually lives - a flat checkout on a workstation, or /app/tools/db_ops inside the container - so the same file works on both.",
+    "'time_window' is the shared scheduling object used across the whole toolkit. Null bounds mean no restriction; from_hour/to_hour confine a command to a window; 'repeat_interval' is seconds between runs, counted from the PREVIOUS run's start, so a command taking 9s with an interval of 10 becomes due 1s after it exits.",
+    "'repeat_interval': 0 means run once and leave it running - that is how a server that stays up (the web host) is expressed. 'repeat_interval': -1 means manual only: never scheduled, run on request.",
+    "'timeout' must stay ABOVE the slowest thing the command does, not merely above the average. A collection pass killed at its timeout loses every metric in it, not just the slow one - worse than the slow metric failing alone. A command still running when its interval comes round is skipped, not started twice.",
+    "'log_scope' names the log files the run writes: logs/<log_scope>.log and logs/<log_scope>_runtime.log.",
+    "'node_role' limits an entry to a node started with that role (DB_OPS_NODE_ROLE). One config file can then be shipped everywhere without a machine running the apps it has no access for.",
+    "Start small. A first install usually runs only APP-METRICS until the targets and credentials are proven, then adds reports and delivery."
+  ],
+  "app_commands": [
+    {
+      "node_role": "worker",
+      "app_ord": 1,
+      "app_command_id": "APP-METRICS",
+      "app_code": "APP-METRICS",
+      "app_name": "db_ops_metrics",
+      "display_name": "Collect database metrics",
+      "log_scope": "metrics",
+      "working_dir": "tools/db_ops",
+      "command_text": "python -m db_ops.metrics.cli --config config.json collect",
+      "active": true,
+      "note": "The timeout is the budget for a whole pass, so it stays above the largest single metric timeout in metric_definitions.json plus the rest of the pass. Equal is not enough - the slow metric would still be running when the daemon reached its own limit.",
+      "time_window": {
+        "from_year": null, "to_year": null,
+        "from_month": null, "to_month": null,
+        "from_day": 1, "to_day": 31,
+        "from_hour": 0, "to_hour": 23,
+        "from_minute": null, "to_minute": null,
+        "repeat_interval": 300,
+        "retry_interval": 60,
+        "timeout": 2400
+      }
+    },
+    {
+      "node_role": "worker",
+      "app_ord": 2,
+      "app_command_id": "APP-REPORTS-CREATE",
+      "app_code": "APP-REPORTS-CREATE",
+      "app_name": "db_ops_reports_create",
+      "display_name": "Run scheduled reports",
+      "log_scope": "reports_create",
+      "working_dir": "tools/db_ops",
+      "command_text": "python -m db_ops.reports.cli --config config.json run-scheduled --summary-limit 150 --backup-days 7",
+      "active": true,
+      "_note": "This entry only decides how often the reports app WAKES UP. Which reports are due is decided in data/reports_config.json - two levels on purpose, so adding a report does not mean touching the scheduler.",
+      "time_window": {
+        "from_year": null, "to_year": null,
+        "from_month": null, "to_month": null,
+        "from_day": 1, "to_day": 31,
+        "from_hour": 0, "to_hour": 23,
+        "from_minute": null, "to_minute": null,
+        "repeat_interval": 300,
+        "retry_interval": 60,
+        "timeout": 600
+      }
+    },
+    {
+      "node_role": "worker",
+      "app_ord": 3,
+      "app_command_id": "APP-SQL_TASKS",
+      "app_code": "APP-SQL_TASKS",
+      "app_name": "db_ops_sql_tasks",
+      "display_name": "Run due SQL tasks",
+      "log_scope": "sql_tasks",
+      "working_dir": "tools/db_ops",
+      "command_text": "python -m db_ops.sql_tasks.runner --config config.json",
+      "active": false,
+      "_note": "Inactive in this example because a fresh install has no SQL tasks defined yet. Turning it on with an empty sql_commands.json is harmless - it simply finds nothing due.",
+      "time_window": {
+        "from_year": null, "to_year": null,
+        "from_month": null, "to_month": null,
+        "from_day": 1, "to_day": 31,
+        "from_hour": 0, "to_hour": 23,
+        "from_minute": null, "to_minute": null,
+        "repeat_interval": 60,
+        "retry_interval": 60,
+        "timeout": 1800
+      }
+    },
+    {
+      "node_role": "worker",
+      "app_ord": 4,
+      "app_command_id": "APP-SLA-VALIDATE",
+      "app_code": "APP-SLA-VALIDATE",
+      "app_name": "db_ops_sla_validate",
+      "display_name": "Validate SLA/SLO compliance",
+      "log_scope": "sla_validate",
+      "working_dir": "tools/db_ops",
+      "command_text": "python -m db_ops.sla.cli --config config.json validate --format text --allow-fail",
+      "active": false,
+      "_note": "--allow-fail means a failing objective is reported, not treated as a broken command. Without it every SLO breach would also read as a scheduler failure, and those are different facts.",
+      "time_window": {
+        "from_year": null, "to_year": null,
+        "from_month": null, "to_month": null,
+        "from_day": 1, "to_day": 31,
+        "from_hour": 0, "to_hour": 23,
+        "from_minute": null, "to_minute": null,
+        "repeat_interval": 3600,
+        "retry_interval": 60,
+        "timeout": 600
+      }
+    },
+    {
+      "node_role": "worker",
+      "app_ord": 5,
+      "app_command_id": "APP-TELEGRAM",
+      "app_code": "APP-TELEGRAM",
+      "app_name": "db_ops_telegram",
+      "display_name": "Deliver the queue and answer commands",
+      "log_scope": "telegram",
+      "working_dir": "tools/db_ops",
+      "command_text": "python -m db_ops.telegram.cli --config config.json run-workflow",
+      "active": false,
+      "_note": "One second, because this is the interactive path: it delivers one queued message and processes one incoming command per pass. Leave it inactive until telegram_config.json is enabled and the groups are confirmed.",
+      "time_window": {
+        "from_year": null, "to_year": null,
+        "from_month": null, "to_month": null,
+        "from_day": 1, "to_day": 31,
+        "from_hour": 0, "to_hour": 23,
+        "from_minute": null, "to_minute": null,
+        "repeat_interval": 1,
+        "retry_interval": 60,
+        "timeout": 300
+      }
+    },
+    {
+      "node_role": "worker",
+      "app_ord": 6,
+      "app_command_id": "APP-WEBHOST",
+      "app_code": "APP-WEBHOST",
+      "app_name": "db_ops_webhost",
+      "display_name": "Serve the rendered reports over HTTP",
+      "log_scope": "webhost",
+      "working_dir": "tools/db_ops",
+      "command_text": "python -m db_ops.webhost.cli --config config.json serve --root runtime/reports --mount report_dba --port 8080",
+      "active": false,
+      "_note": "repeat_interval 0 = run once and keep running. The daemon starts it, sees it is still alive on every later pass, and does not start a second one.",
+      "time_window": {
+        "from_year": null, "to_year": null,
+        "from_month": null, "to_month": null,
+        "from_day": null, "to_day": null,
+        "from_hour": null, "to_hour": null,
+        "from_minute": null, "to_minute": null,
+        "repeat_interval": 0,
+        "retry_interval": 0,
+        "timeout": 0
+      }
+    }
+  ]
+}

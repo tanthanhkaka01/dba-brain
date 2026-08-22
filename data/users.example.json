@@ -1,0 +1,124 @@
+{
+  "notes": [
+    "Sample users.json - the credential registry. Copy to users.json and edit. It holds WHO the tool logs in as, never WITH WHAT: every password is a 'password_ref' naming a key in data/encrypted_secret_text.json, resolved at run time.",
+    "Three sections, because three different things are logged into: 'database_credentials' (a database engine), 'remote_credentials' (a machine, over SSH or WinRM), and 'monitor_users' (an account on a neighbouring tool the DBA also owns, recorded so it is not lost - nothing connects with these).",
+    "'credential_name' is how every other file refers to one credential. db_instances.json points at it by 'default_credential_name', sql_targets.json by 'credential_name', cmd_access blocks by 'credential_name'. Keep it unique and keep it stable - renaming one silently breaks every file that names it.",
+    "'server_id' ties a credential block to an entry in db_instances.json. One machine may carry several credentials with different roles; the instance's 'default_credential_name' picks which one is used when a caller does not say.",
+    "An SSH key credential leaves 'password_ref' empty and is resolved through the key file instead - keep key files out of the repository (data/ssh_keys/ is ignored).",
+    "The tool needs far less than an administrator on a monitored instance. The least-privilege grants per engine are in docs/security.md; the short form is a read-only login plus the server-level view permissions the metric SQL reads."
+  ],
+
+  "database_credentials": [
+    {
+      "server_id": "ACME-192-0-2-10",
+      "db_type": "sqlserver",
+      "service_name": "APPDB-PROD",
+      "instance_name": "MSSQLSERVER",
+      "credentials": [
+        {
+          "credential_name": "sqlserver_192.0.2.10_MSSQLSERVER_dba_user",
+          "username": "dba_user",
+          "password_ref": "MSSQL_192_0_2_10_DBA_USER",
+          "role": "DBA"
+        },
+        {
+          "credential_name": "sqlserver_192.0.2.10_MSSQLSERVER_monitor_user",
+          "username": "monitor_user",
+          "password_ref": "MSSQL_192_0_2_10_MONITOR_USER",
+          "role": "MONITOR",
+          "notes": "Read-only login used by metric collection. Preferred over the DBA login for anything scheduled: a monitoring pass should not be able to change the instance it is measuring."
+        }
+      ]
+    },
+    {
+      "server_id": "ACME-192-0-2-20-PG-5432",
+      "db_type": "postgresql",
+      "service_name": "SALESDB-PROD",
+      "instance_name": "salesdb_primary",
+      "credentials": [
+        {
+          "credential_name": "postgresql_192.0.2.20_monitor_user",
+          "username": "monitor_user",
+          "password_ref": "POSTGRES_192_0_2_20_MONITOR_USER",
+          "role": "MONITOR",
+          "notes": "GRANT pg_monitor is enough for every PostgreSQL metric in the catalog."
+        }
+      ]
+    },
+    {
+      "server_id": "ACME-192-0-2-30-ORA-1521",
+      "db_type": "oracle",
+      "service_name": "FINDB",
+      "instance_name": "FINDB",
+      "credentials": [
+        {
+          "credential_name": "oracle_192.0.2.30_FINDB_monitor_user",
+          "username": "monitor_user",
+          "password_ref": "ORACLE_192_0_2_30_1521_MONITOR_USER",
+          "role": "MONITOR"
+        }
+      ]
+    }
+  ],
+
+  "remote_credentials": [
+    {
+      "server_id": "ACME-192-0-2-10",
+      "host": "192.0.2.10",
+      "server_description": "Windows host - OS metrics and maintenance over WinRM",
+      "credentials": [
+        {
+          "credential_name": "remote_192.0.2.10_administrator",
+          "username": "ACME\\svc_dbops",
+          "password_ref": "REMOTE_192_0_2_10_SVC_DBOPS",
+          "role": "REMOTE",
+          "account_owner": "IT Infrastructure",
+          "notes": "A domain service account, not a personal one: a scheduled job authenticating as a person breaks the day that person leaves."
+        }
+      ]
+    },
+    {
+      "server_id": "ACME-192-0-2-20-PG-5432",
+      "host": "192.0.2.20",
+      "server_description": "Linux host - OS metrics and backup scripts over SSH",
+      "credentials": [
+        {
+          "credential_name": "remote_192.0.2.20_dba_user",
+          "username": "dba_user",
+          "password_ref": "REMOTE_192_0_2_20_DBA_USER",
+          "role": "REMOTE",
+          "account_owner": "DBA",
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "server_id": "ACME-192-0-2-30-ORA-1521",
+      "host": "192.0.2.30",
+      "server_description": "Linux host - SSH key authentication, no password",
+      "credentials": [
+        {
+          "credential_name": "remote_192.0.2.30_oracle",
+          "username": "oracle",
+          "password_ref": "",
+          "role": "REMOTE",
+          "account_owner": "DBA",
+          "notes": "Key authentication via data/ssh_keys/oracle-lab.key. An empty password_ref is what says 'use the key', so do not fill it in with a placeholder."
+        }
+      ]
+    }
+  ],
+
+  "monitor_users": [
+    {
+      "type": "Monitor-ACME",
+      "company_code": "ACME",
+      "description": "Metrics dashboard admin",
+      "link": "http://db01.example.com:3000/",
+      "login_name": "admin",
+      "authentication_info_ref": "GRAFANA_DB01_ADMIN",
+      "note": "Recorded so the account is not lost with the person who created it. Nothing in the toolkit logs in here.",
+      "name": "monitor-acme_grafana_admin"
+    }
+  ]
+}

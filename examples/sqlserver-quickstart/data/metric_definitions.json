@@ -1,0 +1,151 @@
+{
+  "schema_version": 2,
+  "notes": [
+    "Seven metrics, all SQL Server, all plain SQL. The shipped catalogue carries around ninety across four engines; this is a readable subset, and every entry below is copied unchanged from it, so what you learn here is what the full file means.",
+    "The 'file' in each variant resolves against the assets tree: your own assets/ directory first, then the SQL that ships inside the package. That is what lets you override one query for your environment without forking the project — and it is why this example works with no assets/ directory of its own.",
+    "'min_major_version': 11 is SQL Server 2012. The shipped catalogue pairs most of these with a legacy_2008r2 variant for older engines; an instance too old to parse the modern query gets a query it can, rather than failing every cycle.",
+    "LOCK_BLOCKING_SESSIONS keeps its 'report_policy' because it is the clearest example of a rule that is data rather than code: the same finding is graded differently by environment, and short waits are suppressed entirely. This target is env 'lab', so blocking here is logged and not alerted."
+  ],
+
+  "collection": {
+    "max_parallel_servers": 4,
+    "note": "Metrics of one server always run one at a time, in catalogue order; only different servers overlap. With a single target this number changes nothing."
+  },
+
+  "metrics": [
+    {
+      "metric_id": 1,
+      "metric_code": "INSTANCE_STATUS",
+      "db_type": "sqlserver",
+      "category": "availability",
+      "default_importance": 5,
+      "active": true,
+      "connection_error_severity": "CRITICAL",
+      "execution_error_severity": "CRITICAL",
+      "collector_type": "sql",
+      "time_window": {"repeat_interval": 60, "timeout": 60},
+      "variants": [
+        {"db_type": "sqlserver", "min_major_version": 11, "name": "sqlserver_modern_2012_plus", "file": "sqlserver/001_sqlserver_instance_status.sql"}
+      ],
+      "max_rows": 500,
+      "_note": "The one metric worth keeping at importance 5 on every instance: a connection failure here IS the outage, which is why both error severities are CRITICAL. On every other metric they are WARNING, because the instance being down is already reported once and does not need reporting seven times."
+    },
+    {
+      "metric_id": 2,
+      "metric_code": "DATABASE_STATUS",
+      "db_type": "sqlserver",
+      "category": "availability",
+      "default_importance": 5,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "collector_type": "sql",
+      "time_window": {"repeat_interval": 300, "timeout": 60},
+      "variants": [
+        {"db_type": "sqlserver", "min_major_version": 11, "name": "sqlserver_modern_2012_plus", "file": "sqlserver/002_sqlserver_database_status.sql"}
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 3,
+      "metric_code": "INSTANCE_CONNECTIONS",
+      "db_type": "sqlserver",
+      "category": "capacity",
+      "default_importance": 4,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "collector_type": "sql",
+      "time_window": {"repeat_interval": 300, "timeout": 60},
+      "variants": [
+        {"db_type": "sqlserver", "min_major_version": 11, "name": "sqlserver_modern_2012_plus", "file": "sqlserver/003_sqlserver_connections.sql"}
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 4,
+      "metric_code": "QUERY_LONG_RUNNING",
+      "db_type": "sqlserver",
+      "category": "performance",
+      "default_importance": 3,
+      "empty_result_is_ok": true,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "collector_type": "sql",
+      "time_window": {"repeat_interval": 150, "timeout": 60},
+      "variants": [
+        {"db_type": "sqlserver", "min_major_version": 11, "name": "sqlserver_modern_2012_plus", "file": "sqlserver/004_sqlserver_long_running_queries.sql"}
+      ],
+      "max_rows": 500,
+      "_note": "'empty_result_is_ok' is why an idle instance reports OK rather than a failure. For a metric that lists problems, finding none is the good answer — and saying so in the catalogue is what stops a quiet database looking broken."
+    },
+    {
+      "metric_id": 5,
+      "metric_code": "BACKUP_AGE",
+      "db_type": "sqlserver",
+      "category": "backup",
+      "default_importance": 5,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "collector_type": "sql",
+      "time_window": {"repeat_interval": 3600, "timeout": 60},
+      "report_policy": {"backup_health": {"role": "age"}},
+      "variants": [
+        {"db_type": "sqlserver", "min_major_version": 11, "name": "sqlserver_modern_2012_plus", "file": "sqlserver/005_sqlserver_backup_age.sql"}
+      ],
+      "max_rows": 500,
+      "_note": "Reads msdb.dbo.backupset, which is why the monitoring login needs db_datareader in msdb. The thresholds are NOT here: how old a backup may be is a per-database decision and lives in backup_policy.json, so this metric reports the age and the policy grades it. On a fresh container nothing has been backed up, and that is exactly what it will tell you."
+    },
+    {
+      "metric_id": 6,
+      "metric_code": "STORAGE_DATA_FILE_SPACE",
+      "db_type": "sqlserver",
+      "category": "capacity",
+      "default_importance": 5,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "collector_type": "sql",
+      "time_window": {"repeat_interval": 3600, "timeout": 60},
+      "variants": [
+        {"db_type": "sqlserver", "min_major_version": 11, "name": "sqlserver_modern_2012_plus", "file": "sqlserver/006_sqlserver_data_file_space.sql"}
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 9,
+      "metric_code": "LOCK_BLOCKING_SESSIONS",
+      "db_type": "sqlserver",
+      "category": "performance",
+      "default_importance": 4,
+      "empty_result_is_ok": true,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "collector_type": "sql",
+      "time_window": {"repeat_interval": 150, "timeout": 60},
+      "report_policy": {
+        "severity_policy": {
+          "default": "KEEP",
+          "by_env": {
+            "prod": "KEEP",
+            "dev": "DOWNGRADE_TO_WARNING",
+            "lab": "DOWNGRADE_TO_LOGGING",
+            "sandbox": "DOWNGRADE_TO_LOGGING"
+          },
+          "thresholds": [
+            {"field": "max_wait_seconds", "op": "<", "value": 5, "severity": "SUPPRESS"},
+            {"field": "max_wait_seconds", "op": "<", "value": 30, "severity": "WARNING"}
+          ]
+        }
+      },
+      "variants": [
+        {"db_type": "sqlserver", "min_major_version": 11, "name": "sqlserver_modern_2012_plus", "file": "sqlserver/009_sqlserver_blocking_sessions.sql"}
+      ],
+      "max_rows": 500,
+      "_note": "The clearest example of a rule that is data rather than code. Blocking of under five seconds is normal on a busy instance and is suppressed; the same finding is graded by the target's 'env', so it pages in production and is only logged in a lab. Change any of it by editing this block — no code knows these numbers."
+    }
+  ]
+}

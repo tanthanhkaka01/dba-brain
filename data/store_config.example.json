@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "notes": [
+    "Sample store_config.json - where the toolkit keeps its OWN data. Copy to store_config.json and edit. This is the toolkit's bookkeeping (job runs, metric results, reports, the delivery queue, restore history), not one of the databases you monitor.",
+    "'backend' picks which section below is live: 'sqlite' or 'postgresql'. The other section stays in the file as a fully specified, prepared target, so switching is a one-word edit rather than a rediscovery of host, port and credentials.",
+    "Start on SQLite. It needs nothing installed and is the right answer for a single machine trying the toolkit out. Move to PostgreSQL when more than one node writes to the store, or when you want the history to outlive the machine.",
+    "'connection_string' wins when it is non-empty; the fields beside it build one when it is blank. The built form is the password-free string that is safe to log - the password is substituted only at the moment of connecting.",
+    "Never put a password here. 'password_ref' names a key in data/encrypted_secret_text.json and fills the {password} placeholder at run time. A ref that is configured but missing from the store raises rather than connecting as nobody.",
+    "Relative paths resolve against the tool root - the folder holding config.json.",
+    "This is the one database every layer may reach directly, because the toolkit owns it and its connection is declared here rather than resolved from an inventory. Every OTHER database is reached only through the shared operations layer."
+  ],
+
+  "backend": "sqlite",
+
+  "sqlite": {
+    "path": "runtime/db_ops.sqlite",
+    "connection_string": "sqlite:///runtime/db_ops.sqlite"
+  },
+
+  "postgresql": {
+    "host": "127.0.0.1",
+    "port": 5432,
+    "database": "db_ops",
+    "schema": "db_ops",
+    "username": "db_ops",
+    "password_ref": "DB_OPS_STORE_PASSWORD",
+    "credential_name": "",
+    "sslmode": "prefer",
+    "connect_timeout_seconds": 10,
+    "application_name": "db_ops",
+    "connection_string": ""
+  }
+}

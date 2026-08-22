@@ -1,0 +1,138 @@
+{
+  "notes": [
+    "Sample sql_targets.json - where and when each SQL task runs. Copy to sql_targets.json and edit. One row is one script against one instance on one schedule; the same 'sql_id' may appear many times with different targets.",
+    "'sql_id' + 'target_no' together identify a row. 'server_id' points at db_instances.json and 'credential_name' at users.json - a target names accounts, never passwords.",
+    "'database_name' null means the script decides for itself (its own USE or ALTER SESSION). Set it only when the SQL must run inside a named database and does not say so itself. On SQL Server this is a real database name, unlike the 'service_name' on the instance, which is a label.",
+    "'time_window' is the shared scheduling object. 'repeat_interval' -1 means MANUAL ONLY: the task is never scheduled and runs when somebody asks for it. That is the right setting for anything that writes.",
+    "'output' decides how the result comes back - 'plain' text or 'xlsx' - and which chat receives it. It is a property of the target rather than of the script, because the same query is a spreadsheet for one audience and a text answer for another.",
+    "'notify' is the shared notification object: 'logging_on_run' announces that it ran, 'alert_on_error' announces that it failed, and each names a chat by its routing level. Setting 'chat_id' directly overrides the level lookup and is for the rare case that needs one specific chat.",
+    "Confine a heavy task with from_hour/to_hour. A report that scans a large table at 09:00 competes with the people the database exists for."
+  ],
+  "sql_targets": [
+    {
+      "sql_id": 1,
+      "target_no": 1,
+      "server_id": "ACME-192-0-2-10",
+      "db_type": "sqlserver",
+      "service_name": "APPDB-PROD",
+      "instance_name": "MSSQLSERVER",
+      "database_name": null,
+      "credential_name": "sqlserver_192.0.2.10_MSSQLSERVER_dba_user",
+      "active": true,
+      "time_window": {
+        "from_year": null, "to_year": null,
+        "from_month": null, "to_month": null,
+        "from_day": 1, "to_day": 31,
+        "from_hour": 20, "to_hour": 23,
+        "from_minute": null, "to_minute": null,
+        "repeat_interval": 72000,
+        "timeout": 1800
+      },
+      "notify": {
+        "logging_on_run": {"enabled": true, "telegram_chat": "sql", "chat_id": ""},
+        "alert_on_error": {"enabled": true, "telegram_chat": "sql", "chat_id": ""}
+      }
+    },
+    {
+      "sql_id": 2,
+      "target_no": 1,
+      "server_id": "ACME-192-0-2-10",
+      "db_type": "sqlserver",
+      "service_name": "APPDB-PROD",
+      "instance_name": "MSSQLSERVER",
+      "database_name": "FINDB",
+      "credential_name": "sqlserver_192.0.2.10_MSSQLSERVER_monitor_user",
+      "active": true,
+      "_note": "Read-only, so it runs as the monitoring login rather than the DBA one. A scheduled export has no business holding rights it does not use.",
+      "time_window": {
+        "from_year": null, "to_year": null,
+        "from_month": null, "to_month": null,
+        "from_day": 1, "to_day": 31,
+        "from_hour": 6, "to_hour": 7,
+        "from_minute": null, "to_minute": null,
+        "repeat_interval": 86400,
+        "timeout": 1800
+      },
+      "output": {"format": "xlsx", "telegram_chat": "sql", "chat_id": ""},
+      "notify": {
+        "logging_on_run": {"enabled": true, "telegram_chat": "sql", "chat_id": ""},
+        "alert_on_error": {"enabled": true, "telegram_chat": "sql", "chat_id": ""}
+      }
+    },
+    {
+      "sql_id": 3,
+      "target_no": 1,
+      "server_id": "ACME-192-0-2-10",
+      "db_type": "sqlserver",
+      "service_name": "APPDB-PROD",
+      "instance_name": "MSSQLSERVER",
+      "database_name": null,
+      "credential_name": "sqlserver_192.0.2.10_MSSQLSERVER_dba_user",
+      "active": true,
+      "note": "Manual only. repeat_interval -1 is what keeps a backfill that writes to production from ever starting on its own; a timeout of 12 hours is what keeps it from being killed halfway through when somebody does start it.",
+      "time_window": {
+        "from_year": null, "to_year": null,
+        "from_month": null, "to_month": null,
+        "from_day": 1, "to_day": 31,
+        "from_hour": 0, "to_hour": 23,
+        "from_minute": null, "to_minute": null,
+        "repeat_interval": -1,
+        "timeout": 43200
+      },
+      "notify": {
+        "logging_on_run": {"enabled": true, "telegram_chat": "sql", "chat_id": ""},
+        "alert_on_error": {"enabled": true, "telegram_chat": "critical", "chat_id": ""}
+      }
+    },
+    {
+      "sql_id": 4,
+      "target_no": 1,
+      "server_id": "ACME-192-0-2-30-ORA-1521",
+      "db_type": "oracle",
+      "service_name": "FINDB",
+      "instance_name": null,
+      "database_name": "FIN",
+      "credential_name": "oracle_192.0.2.30_FINDB_monitor_user",
+      "active": true,
+      "_note": "On Oracle the login and the schema owning the tables are often different accounts; 'database_name' becomes the session's current schema, which is what makes an unqualified table name resolve.",
+      "time_window": {
+        "from_year": null, "to_year": null,
+        "from_month": null, "to_month": null,
+        "from_day": 1, "to_day": 31,
+        "from_hour": 0, "to_hour": 23,
+        "from_minute": null, "to_minute": null,
+        "repeat_interval": -1,
+        "timeout": 1800
+      },
+      "output": {"format": "xlsx", "telegram_chat": "sql", "chat_id": ""},
+      "notify": {
+        "logging_on_run": {"enabled": true, "telegram_chat": "sql", "chat_id": ""},
+        "alert_on_error": {"enabled": true, "telegram_chat": "sql", "chat_id": ""}
+      }
+    },
+    {
+      "sql_id": 5,
+      "target_no": 1,
+      "server_id": "ACME-192-0-2-20-PG-5432",
+      "db_type": "postgresql",
+      "service_name": "SALESDB-PROD",
+      "instance_name": "salesdb_primary",
+      "database_name": "salesdb",
+      "credential_name": "postgresql_192.0.2.20_monitor_user",
+      "active": true,
+      "time_window": {
+        "from_year": null, "to_year": null,
+        "from_month": null, "to_month": null,
+        "from_day": 1, "to_day": 31,
+        "from_hour": 2, "to_hour": 4,
+        "from_minute": null, "to_minute": null,
+        "repeat_interval": 604800,
+        "timeout": 3600
+      },
+      "notify": {
+        "logging_on_run": {"enabled": true, "telegram_chat": "sql", "chat_id": ""},
+        "alert_on_error": {"enabled": true, "telegram_chat": "sql", "chat_id": ""}
+      }
+    }
+  ]
+}

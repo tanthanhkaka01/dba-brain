@@ -1,0 +1,62 @@
+# Build the DBA Ops Assistant image and define its mounts.
+#
+# Build context is tools/db_ops. Environment-specific inputs (config, data, sql)
+# are bind-mounted so the image stays generic and credential-free. Secrets ride
+# along ENCRYPTED in data/encrypted_secret_text.json.
+#
+# The decryption passphrase is NEVER stored in a file. Start the daemon yourself
+# and pass it on the command line with --key (the entrypoint forwards extra args):
+#
+#   docker compose build
+#   docker compose run -d --name db_ops_daemon db_ops daemon --key "<passphrase>"
+#   docker compose logs -f db_ops_daemon
+#
+# One-off app command (also needs the key, since it reads secrets):
+#   docker compose run --rm db_ops \
+#       python -m db_ops.metrics.cli --config config.json collect --dry-run --key "<passphrase>"
+services:
+  db_ops:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: db_ops:latest
+    container_name: db_ops_daemon
+    restart: unless-stopped
+    environment:
+      DB_OPS_CONFIG: config.json
+      DB_OPS_DAEMON_DELAY: "2"
+      TZ: Asia/Ho_Chi_Minh
+    # Publish the web host port (webhost app_command serves reports on 8080 inside this
+    # container). Use `docker compose run --service-ports` so the mapping is applied.
+    ports:
+      - "8080:8080"
+    volumes:
+      # Environment-specific runtime inputs (kept out of the image). The
+      # encrypted secret file lives in data/, so no separate secrets mount.
+      - ./config.json:/app/tools/db_ops/config.json:ro
+      - ./data:/app/tools/db_ops/data
+      - ./assets:/app/tools/db_ops/assets:ro
+      # Writable runtime state.
+      - ./logs:/app/tools/db_ops/logs
+      - ./runtime:/app/tools/db_ops/runtime
+
+# Pin this stack's network instead of letting Compose take whatever Docker's default pool hands
+# out. It had taken 172.18.0.0/16, and the estate has a real SQL Server whose address sat inside
+# that same /16 — so the worker answered "No route to host" for a machine that was up and
+# reachable from everywhere else: the host matched the address against its own bridge and never
+# sent the packet out. db_ops was blocking db_ops from monitoring it.
+#
+# /24, not /16, on purpose. The bug was a sixteen-bit net swallowing 65,534 real addresses; a /24
+# can only ever swallow 254, and this stack needs three. 172.30.240.0/24 is outside every network
+# seen in this estate (172.17.x, 172.18.99.x, 192.168.{1,18,43,50,54,70}.x) and outside the other
+# lab bridges on the worker (172.19-172.22).
+#
+# Changing this requires the OLD network to be removed first - Docker will not re-subnet an
+# existing one, it will silently keep the old value:
+#   docker rm -f db_ops_daemon && docker network rm db_ops_default
+networks:
+  default:
+    name: db_ops_default
+    ipam:
+      config:
+        - subnet: 172.30.240.0/24

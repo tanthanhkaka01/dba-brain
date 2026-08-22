@@ -1,0 +1,161 @@
+{
+  "notes": [
+    "Sample db_instances.json - the monitored estate. Copy to db_instances.json and edit. This is the file every other app resolves a target against, so it is the first one to get right.",
+    "'server_id' is the identity of one machine+instance and is the ONLY join key. Every other file (users.json, sql_targets.json, restore_config.json, backup_policy.json) points here by server_id, so it must be unique and must never be reused for a different machine. The convention below is SITE-ADDRESS-WITH-DASHES, optionally plus instance and port when one machine hosts several instances; any stable string works as long as it is unique.",
+    "'db_type' is one of sqlserver, oracle, postgresql, mysql, or host. A 'host' entry is a machine with no database on it - it exists so OS metrics are collected once per machine instead of once per instance.",
+    "'service_name' is a SERVICE LABEL (APPDB-PROD), not a database name. On SQL Server the collector always connects to master and the metric SQL issues its own USE, because using the service label as the connection database fails every SQL Server target at once with 'Cannot open database'. PostgreSQL and MySQL take a named database ('database'); Oracle connects by service.",
+    "'default_credential_name' names an entry in users.json. Passwords are never here.",
+    "'cmd_access' is how OS-level metrics reach the machine: ssh or winrm, with a credential_name from users.json remote_credentials. method 'local' means 'run inside this process's own machine' and is refused when 'host' names a remote address - it would silently report the local CPU under a remote machine's name.",
+    "'metrics.enabled' turns collection off for one instance. 'metrics.disabled_collector_types' drops a whole collector (for example 'cmd' on a container that has no shell worth reaching). 'metrics.metric_overrides' re-grades one metric's severity for this instance only, optionally per metric item.",
+    "'report_policy.disabled_metric_codes' keeps a metric out of the reports without stopping its collection - the rows stay in the store, they just do not become findings.",
+    "A broken entry costs one target, not the estate: an unparseable cmd_access is recorded against that target instead of aborting the scan."
+  ],
+
+  "db_instances": [
+    {
+      "ord": 1,
+      "db_instance_name": "sqlserver_appdb_prod",
+      "server_id": "ACME-192-0-2-10",
+      "site": "ACME",
+      "env": "prod",
+      "ip": "192.0.2.10",
+      "port": 1433,
+      "db_type": "sqlserver",
+      "instance_name": "MSSQLSERVER",
+      "major_version": 16,
+      "server_name": "db01.example.com",
+      "service_name": "APPDB-PROD",
+      "database_names": ["APPDB", "APPDB_STG", "FINDB"],
+      "default_credential_name": "sqlserver_192.0.2.10_MSSQLSERVER_dba_user",
+      "os": "Windows Server 2022",
+      "owner": "DBA",
+      "enabled": true,
+      "status_os": "unknown",
+      "status_db": "unknown",
+      "status_connect": "unknown",
+      "cmd_access": {
+        "enabled": true,
+        "method": "winrm",
+        "host": "192.0.2.10",
+        "port": 5985,
+        "ssl": false,
+        "shell": "powershell",
+        "credential_name": "remote_192.0.2.10_administrator"
+      },
+      "metrics": {
+        "enabled": true,
+        "disabled_collector_types": [],
+        "metric_overrides": {
+          "BACKUP_AGE": {
+            "metric_item_overrides": {
+              "APPDB_STG": {
+                "severity_map": {"CRITICAL": "LOGGING", "WARNING": "LOGGING"}
+              }
+            },
+            "_note": "A staging copy is refreshed from production and is not backed up on purpose. Downgrading the severity keeps the measurement and stops the page."
+          }
+        }
+      },
+      "report_policy": {
+        "enabled": true,
+        "severity_overrides": {},
+        "disabled_metric_codes": [],
+        "disabled_event_codes": [],
+        "disabled_report_events": []
+      },
+      "note": "Primary application instance. Replace every value with your own."
+    },
+    {
+      "ord": 2,
+      "db_instance_name": "postgres_salesdb",
+      "server_id": "ACME-192-0-2-20-PG-5432",
+      "site": "ACME",
+      "env": "prod",
+      "ip": "192.0.2.20",
+      "port": 5432,
+      "db_type": "postgresql",
+      "instance_name": "salesdb_primary",
+      "major_version": 16,
+      "database": "postgres",
+      "service_name": "SALESDB-PROD",
+      "default_credential_name": "postgresql_192.0.2.20_monitor_user",
+      "os": "Ubuntu 24.04",
+      "owner": "DBA",
+      "enabled": true,
+      "status_os": "unknown",
+      "status_db": "unknown",
+      "status_connect": "unknown",
+      "cmd_access": {
+        "enabled": true,
+        "method": "ssh",
+        "host": "192.0.2.20",
+        "port": 22,
+        "shell": "bash",
+        "auth_type": "password",
+        "credential_name": "remote_192.0.2.20_dba_user"
+      },
+      "metrics": {"enabled": true, "disabled_collector_types": [], "metric_overrides": {}},
+      "reports": {"enabled": true},
+      "alerts": {"enabled": true},
+      "note": "PostgreSQL takes a real database name in 'database' - unlike SQL Server, whose connection database is always master."
+    },
+    {
+      "ord": 3,
+      "db_instance_name": "oracle_findb",
+      "server_id": "ACME-192-0-2-30-ORA-1521",
+      "site": "ACME",
+      "env": "prod",
+      "ip": "192.0.2.30",
+      "port": 1521,
+      "db_type": "oracle",
+      "instance_name": "FINDB",
+      "major_version": 19,
+      "service_name": "FINDB",
+      "default_credential_name": "oracle_192.0.2.30_FINDB_monitor_user",
+      "os": "Oracle Linux 9",
+      "owner": "DBA",
+      "enabled": true,
+      "status_os": "unknown",
+      "status_db": "unknown",
+      "status_connect": "unknown",
+      "cmd_access": {
+        "enabled": false,
+        "method": "ssh",
+        "host": "192.0.2.30",
+        "port": 22,
+        "shell": "bash",
+        "auth_type": "key",
+        "credential_name": "remote_192.0.2.30_oracle"
+      },
+      "metrics": {"enabled": true, "disabled_collector_types": ["cmd"], "metric_overrides": {}},
+      "reports": {"enabled": true},
+      "alerts": {"enabled": false},
+      "note": "Alerts are off while this instance is onboarded: findings reach the reports for a few days first, so nobody is paged by what turns out to be this instance's normal shape. Oracle connects by service, so there is no 'database' key here."
+    },
+    {
+      "ord": 4,
+      "server_id": "ACME-192-0-2-40-HOST",
+      "target_id": "ACME-192-0-2-40-HOST/DOCKER-HOST",
+      "site": "ACME",
+      "env": "lab",
+      "ip": "192.0.2.40",
+      "port": null,
+      "db_type": "host",
+      "instance_name": "",
+      "server_name": "db01.example.com",
+      "platform": "linux",
+      "enabled": true,
+      "cmd_access": {
+        "enabled": true,
+        "method": "ssh",
+        "host": "192.0.2.40",
+        "port": 22,
+        "shell": "bash",
+        "auth_type": "password",
+        "credential_name": "remote_192.0.2.40_dba_user"
+      },
+      "metrics": {"enabled": true, "disabled_collector_types": [], "metric_overrides": {}},
+      "note": "A machine, not a database. OS metrics (CPU, memory, disk, uptime, listening ports) are collected once here; the database containers on it collect only their SQL metrics, which is what keeps one machine from being measured four times."
+    }
+  ]
+}

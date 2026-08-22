@@ -1,0 +1,28 @@
+# Keep the build context small and free of host/runtime artifacts.
+# Only requirements.txt, db_ops/, and docker/entrypoint.sh are COPYed by the Dockerfile.
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.pytest_tmp/
+tmp_pytest_local/
+tests/
+docs/
+logs/
+runtime/
+*.log
+.venv/
+node_modules/
+*.sqlite
+# Runtime inputs are bind-mounted, not baked in.
+config.json
+config.*.json
+data/
+# The OPERATOR's assets only — task SQL and bot commands, bind-mounted at runtime rather than
+# baked in. The shipped half lives with the component that owns it (db_ops/metrics/collectors,
+# db_ops/common/{backup,restore}_scripts, db_ops/sre/host_config) and ships
+# inside the image with the package, so the leading slash matters: it anchors this to the root.
+/assets/
+# The legacy Oracle 8i tool: a Win32 Python 2.7 runtime and ~200MB of Oracle 10.2 client DLLs
+# that cannot execute on Linux anyway. The Dockerfile never COPYs it, but the build context is
+# the whole repo, so without this every `build-image` ships ~370MB to the daemon for nothing.
+tools/

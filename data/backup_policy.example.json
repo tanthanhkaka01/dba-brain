@@ -1,0 +1,67 @@
+{
+  "notes": [
+    "Sample backup_policy.json - how old each kind of backup may be before it is a finding. Copy to backup_policy.json and edit.",
+    "Evaluated per database and per backup type, not per server. Taking the newest backup on an instance as the instance's answer hides the one database that stopped being backed up three weeks ago, which is the failure this file exists to catch.",
+    "A database not named in 'overrides' follows 'defaults'. Overrides match on server_id and/or database name, case-insensitively, first match wins.",
+    "'required' false is what makes a missing backup type read as 'not required' instead of 'missing'. Under a daily-full-plus-frequent-log plan a differential is genuinely optional; under an incremental plan it is the only thing standing between the weekly baseline and now, and leaving it not-required would let a silently failing incremental go unreported.",
+    "'required_for_recovery_models' limits the log-backup rule to the databases where a log backup is meaningful. On a simple-recovery database there is nothing to back up and nothing to report.",
+    "The thresholds follow the schedule that actually runs. Defaults assume a daily full; an estate backing up weekly with daily incrementals needs its own numbers, or six days out of seven are scored as violations.",
+    "A wide log-backup window is sometimes correct rather than lax: an engine that archives only the log it produces archives nothing while idle, so the age of its last log backup grows while the archiver is perfectly healthy. Tell the two apart by the failure count in the metric, not by the age alone."
+  ],
+
+  "backup_policy": {
+    "description": "Per-database backup requirements, evaluated one type at a time.",
+    "defaults": {
+      "types": {
+        "FULL": {
+          "required": true,
+          "warn_hours": 24,
+          "critical_hours": 48,
+          "note": "Worst-case data loss when no differential or log backup exists."
+        },
+        "DIFF": {
+          "required": false,
+          "warn_hours": 48,
+          "critical_hours": 96,
+          "note": "Optional under a daily-full plan. Absent is not a finding unless a policy says it is required."
+        },
+        "LOG": {
+          "required_for_recovery_models": ["FULL", "BULK_LOGGED"],
+          "warn_hours": 2,
+          "critical_hours": 6,
+          "note": "The recovery point objective of a full-recovery database. A stale log backup proves an RPO gap; it does not by itself prove the chain is broken."
+        }
+      }
+    },
+    "overrides": [
+      {
+        "server_id": "ACME-192-0-2-30-ORA-1521",
+        "note": "Weekly level 0 on Sunday, level 1 every other day, archive log every twenty minutes. The defaults assume a daily full and would score a 33-hour-old level 0 as a violation on six days out of seven, so the thresholds follow the real schedule. The incremental is REQUIRED here precisely because it is what stands between the weekly baseline and now.",
+        "types": {
+          "FULL": {"required": true, "warn_hours": 192, "critical_hours": 240},
+          "DIFF": {"required": true, "warn_hours": 30, "critical_hours": 50},
+          "LOG": {"required_for_recovery_models": ["FULL", "BULK_LOGGED"], "warn_hours": 3, "critical_hours": 8}
+        }
+      },
+      {
+        "server_id": "ACME-192-0-2-20-PG-5432",
+        "note": "Same weekly-baseline shape, but a much wider log window: this engine archives only the write-ahead log it actually produces, so a quiet cluster archives nothing and its last log backup ages while the archiver is healthy. 24h/72h still catches a genuinely broken archiver within a day without alerting on an idle one.",
+        "types": {
+          "FULL": {"required": true, "warn_hours": 192, "critical_hours": 240},
+          "DIFF": {"required": true, "warn_hours": 30, "critical_hours": 50},
+          "LOG": {"required_for_recovery_models": ["FULL", "BULK_LOGGED"], "warn_hours": 24, "critical_hours": 72}
+        }
+      },
+      {
+        "server_id": "ACME-192-0-2-10",
+        "database": "APPDB_STG",
+        "note": "A staging copy, refreshed from production on demand and deliberately not backed up. Stating that here is the difference between a decision and an oversight.",
+        "types": {
+          "FULL": {"required": false, "warn_hours": 0, "critical_hours": 0},
+          "DIFF": {"required": false, "warn_hours": 0, "critical_hours": 0},
+          "LOG": {"required_for_recovery_models": [], "warn_hours": 0, "critical_hours": 0}
+        }
+      }
+    ]
+  }
+}

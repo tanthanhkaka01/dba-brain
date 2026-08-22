@@ -1,0 +1,85 @@
+{
+  "notes": [
+    "Sample sql_commands.json - the SQL scripts the task runner knows about. Copy to sql_commands.json and edit. This file says WHAT may run; sql_targets.json says WHERE and WHEN. They are split because one script is often run against several instances on different schedules.",
+    "'sql_id' is the join key to sql_targets.json and must be unique and stable. The SQL itself is never stored here - it lives under assets/tasks/ as a file you can review, diff and put through code review like any other change.",
+    "'script_type' is 'single' (one file in 'script_path'), 'array' (an ordered list in 'script_paths'), or 'folder' ('script_path' is a directory, and its files run in name order). A folder run reports progress per file and names the file it stopped at.",
+    "'version_from'/'version_to' keep a script off an engine version that cannot parse it. Null means no bound.",
+    "'autocommit' false (the default) wraps a whole file in one transaction. Set it true for a long backfill: the default would hold every statement open for hours and grow the transaction log without bound. The trade is that a mid-file failure leaves earlier statements committed, so only use it where re-running the same work is idempotent.",
+    "'parameters' declare what a caller may supply. Values are substituted as bound parameters where the driver allows it; where a legacy tool takes no bind variables the value is substituted textually and is refused if it carries a quote, a comment marker or a semicolon.",
+    "'active' false keeps a task defined but unrunnable. Prefer it to deleting an entry: a deleted task takes its history and its explanation with it."
+  ],
+  "sql_commands": [
+    {
+      "sql_id": 1,
+      "sql_code": "SQLSERVER-001-INDEX-USAGE-REPORT",
+      "sql_name": "Index usage report",
+      "db_type": "sqlserver",
+      "script_type": "single",
+      "script_path": "assets/tasks/sqlserver/001_index_usage_report.sql",
+      "version_from": "2016",
+      "version_to": null,
+      "active": true,
+      "_note": "Read-only. A good first task: it proves the credential, the connection and the delivery path without writing anything."
+    },
+    {
+      "sql_id": 2,
+      "sql_code": "SQLSERVER-002-STOCK-EXPORT",
+      "sql_name": "Current stock export",
+      "db_type": "sqlserver",
+      "script_type": "single",
+      "script_path": "assets/tasks/sqlserver/002_current_stock_export.sql",
+      "version_from": "2016",
+      "version_to": null,
+      "active": true,
+      "_note": "Delivered as a spreadsheet - the output format is a property of the TARGET, not of the script, so it is set in sql_targets.json."
+    },
+    {
+      "sql_id": 3,
+      "sql_code": "SQLSERVER-003-MONTH-END-BACKFILL",
+      "sql_name": "Month-end recalculation backfill",
+      "db_type": "sqlserver",
+      "script_type": "folder",
+      "script_path": "assets/tasks/sqlserver/003_month_end_backfill",
+      "version_from": "2016",
+      "version_to": null,
+      "active": true,
+      "autocommit": true,
+      "note": "WRITES TO PRODUCTION. One file per month, each running a recalculation procedure day by day. Manual only in sql_targets.json (repeat_interval -1): a backfill is an event, not a schedule. autocommit is true so each batch commits on its own - the default would hold dozens of procedure calls in one transaction for hours."
+    },
+    {
+      "sql_id": 4,
+      "sql_code": "ORACLE-004-JOB-DETAIL",
+      "sql_name": "Job detail by number",
+      "db_type": "oracle",
+      "script_type": "single",
+      "script_path": "assets/tasks/oracle/004_job_detail.sql",
+      "version_from": null,
+      "version_to": null,
+      "active": true,
+      "_note": "Answers a question about one record, on request. Parameterised rather than edited each time, so the script under review is the script that runs.",
+      "parameters": [
+        {
+          "name": "job_no",
+          "type": "varchar(50)",
+          "required": true,
+          "_note": "Named to match the marker the script substitutes. A value carrying a quote, a comment marker or a semicolon is refused rather than escaped."
+        }
+      ]
+    },
+    {
+      "sql_id": 5,
+      "sql_code": "POSTGRES-005-BLOAT-CHECK",
+      "sql_name": "Table bloat check",
+      "db_type": "postgresql",
+      "script_type": "array",
+      "script_paths": [
+        "assets/tasks/postgresql/005_01_bloat_estimate.sql",
+        "assets/tasks/postgresql/005_02_bloat_summary.sql"
+      ],
+      "version_from": "12",
+      "version_to": null,
+      "active": true,
+      "_note": "Two files in a fixed order: the estimate populates what the summary reads. 'array' rather than 'folder' because the order matters and is stated here rather than implied by filenames."
+    }
+  ]
+}

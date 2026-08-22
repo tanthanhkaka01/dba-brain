@@ -1,0 +1,184 @@
+{
+  "schema_version": 1,
+  "notes": [
+    "Sample sqlserver_instance_policy.json - what is portable between two SQL Server instances when one is rebuilt from the other. Copy to sqlserver_instance_policy.json and edit.",
+    "It governs exporting one instance's SERVER-level metadata (logins, roles, permissions, Agent objects, linked servers) as reviewable SQL and replaying it onto a freshly installed instance. It does not back up or restore the system databases.",
+    "Everything here is a decision about what is portable, which is exactly why it is configuration and not a literal in Python: the answer changes per estate and per engine version.",
+    "'artifacts' is the replay order and the phase each item belongs to. 'pre-database' must run BEFORE the user databases are restored, or every restored database's users are orphaned; 'post-database' must run after, because Agent jobs name databases that have to exist first. 'min_major_version' gates replay onto an older target.",
+    "'sp_configure.portable' is replayed as-is. 'host_specific' describes the MACHINE rather than the workload, so it is exported COMMENTED OUT with the source value visible and reported as skipped - replaying a large source's memory ceiling onto a small target is worse than not replaying it. Anything unlisted is also exported commented out, because an unclassified option is an option nobody has decided about.",
+    "'logins' replays SQL logins with their identifier and password hash, which is what stops restored databases having orphaned users and lets applications keep their connection strings. Windows logins carry neither, so they are created without them.",
+    "'secrets' cannot be exported at all - the engine encrypts them with its own service key and offers no read path. Each is emitted as a placeholder naming a key in data/encrypted_secret_text.json, and replay fails closed, listing every unresolved reference BEFORE executing anything, rather than creating a credential with a placeholder string that fails at first use."
+  ],
+  "artifacts": {
+    "note": "Each artifact is one file under server/ in the bundle, applied in this order. 'phase' says whether it must run BEFORE the user databases are restored or AFTER: logins must exist before, or every restored database's users are orphaned; Agent jobs must come after, because their steps name databases that have to exist. 'min_major_version' gates replay onto an older target.",
+    "sp_configure": {
+      "order": 1,
+      "phase": "pre-database",
+      "min_major_version": 10
+    },
+    "credentials": {
+      "order": 2,
+      "phase": "pre-database",
+      "min_major_version": 10
+    },
+    "logins": {
+      "order": 3,
+      "phase": "pre-database",
+      "min_major_version": 10
+    },
+    "server_roles": {
+      "order": 4,
+      "phase": "pre-database",
+      "min_major_version": 10,
+      "user_defined_min_major_version": 11
+    },
+    "permissions": {
+      "order": 5,
+      "phase": "pre-database",
+      "min_major_version": 10
+    },
+    "endpoints": {
+      "order": 6,
+      "phase": "pre-database",
+      "min_major_version": 10
+    },
+    "linked_servers": {
+      "order": 7,
+      "phase": "pre-database",
+      "min_major_version": 10
+    },
+    "db_mail": {
+      "order": 8,
+      "phase": "post-database",
+      "min_major_version": 10,
+      "requires_agent": true
+    },
+    "operators": {
+      "order": 9,
+      "phase": "post-database",
+      "min_major_version": 10,
+      "requires_agent": true
+    },
+    "proxies": {
+      "order": 10,
+      "phase": "post-database",
+      "min_major_version": 10,
+      "requires_agent": true
+    },
+    "agent_schedules": {
+      "order": 11,
+      "phase": "post-database",
+      "min_major_version": 10,
+      "requires_agent": true
+    },
+    "agent_jobs": {
+      "order": 12,
+      "phase": "post-database",
+      "min_major_version": 10,
+      "requires_agent": true
+    },
+    "alerts": {
+      "order": 13,
+      "phase": "post-database",
+      "min_major_version": 10,
+      "requires_agent": true
+    },
+    "model_options": {
+      "order": 14,
+      "phase": "post-database",
+      "min_major_version": 10
+    }
+  },
+  "sp_configure": {
+    "note": "'portable' is replayed as-is. 'host_specific' describes the MACHINE, not the workload, so it is exported COMMENTED OUT with the source value visible and reported as skipped - replaying a 256 GB source's memory ceiling onto a 32 GB target is worse than not replaying it. Anything not listed here is exported commented out too, because an unclassified option is an option nobody has decided about.",
+    "portable": [
+      "backup compression default",
+      "blocked process threshold (s)",
+      "clr enabled",
+      "contained database authentication",
+      "cost threshold for parallelism",
+      "database mail XPs",
+      "default trace enabled",
+      "optimize for ad hoc workloads",
+      "remote admin connections",
+      "remote login timeout (s)",
+      "remote query timeout (s)",
+      "xp_cmdshell",
+      "Agent XPs",
+      "Ole Automation Procedures",
+      "backup checksum default",
+      "default full-text language",
+      "default language",
+      "nested triggers",
+      "two digit year cutoff"
+    ],
+    "host_specific": [
+      "max server memory (MB)",
+      "min server memory (MB)",
+      "max degree of parallelism",
+      "affinity mask",
+      "affinity I/O mask",
+      "affinity64 mask",
+      "affinity64 I/O mask",
+      "max worker threads",
+      "index create memory (KB)",
+      "min memory per query (KB)",
+      "fill factor (%)",
+      "recovery interval (min)",
+      "lightweight pooling",
+      "priority boost"
+    ]
+  },
+  "model_options": {
+    "note": "The portable subset of ALTER DATABASE model SET. Sizing (file size/growth) and anything naming a path is deliberately absent: a new instance's disks are its own. is_trustworthy_on is excluded: SQL Server exposes the column but refuses ALTER DATABASE model SET TRUSTWORTHY (error 15309).",
+    "portable": [
+      "recovery_model_desc",
+      "page_verify_option_desc",
+      "is_auto_create_stats_on",
+      "is_auto_update_stats_on",
+      "is_auto_update_stats_async_on",
+      "is_auto_shrink_on",
+      "is_auto_close_on",
+      "is_parameterization_forced",
+      "is_date_correlation_on",
+      "is_read_committed_snapshot_on",
+      "snapshot_isolation_state_desc"
+    ]
+  },
+  "logins": {
+    "note": "SQL logins are replayed WITH their SID and password hash, which is what stops restored user databases having orphaned users and lets applications keep their connection strings. Windows logins carry no hash and their SID comes from the domain, so they are created FROM WINDOWS with no SID clause. 'skip_name_prefixes' are the built-ins every instance already has.",
+    "preserve_sid": true,
+    "preserve_password_hash": true,
+    "skip_name_prefixes": [
+      "##",
+      "NT AUTHORITY\\",
+      "NT SERVICE\\",
+      "BUILTIN\\"
+    ],
+    "skip_names": [
+      "sa",
+      "distributor_admin"
+    ],
+    "on_unmapped_windows_login": "skip"
+  },
+  "agent_jobs": {
+    "note": "preserve_job_id keeps job history correlatable across a rebuild and makes replay idempotent; a collision with a job of the same id but a different name is gated rather than overwritten. default_owner is used when the source owner is a login that was skipped (a domain account that does not exist on the target).",
+    "preserve_job_id": true,
+    "default_owner": "sa",
+    "skip_categories": [
+      "REPL-*",
+      "Database Maintenance Plan"
+    ]
+  },
+  "secrets": {
+    "note": "SQL Server encrypts these with the service master key and offers no read path, so an export CANNOT contain them. Each is emitted as a placeholder naming a key in data/encrypted_secret_text.json, resolved only at replay. Replay fails closed and lists every unresolved reference BEFORE executing anything, rather than creating a credential with a placeholder string that fails at first use.",
+    "placeholder_format": "{{secret:%s}}",
+    "kinds": [
+      "credential",
+      "linked_server_login",
+      "proxy",
+      "db_mail_account",
+      "endpoint_certificate"
+    ]
+  }
+}

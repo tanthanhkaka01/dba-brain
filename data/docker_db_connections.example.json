@@ -1,0 +1,64 @@
+{
+  "notes": [
+    "Sample docker_db_connections.json - the throwaway database containers the SRE app provisions and the drills run against. Copy to docker_db_connections.json and edit.",
+    "This file is written BY the tool as much as read by it: 'create-db-docker' registers what it built here, so a lab instance can be found again by anything that needs one. Editing it by hand is fine; expect the tool to add entries.",
+    "'id' is the handle every command uses to name one lab instance. 'password_env' names a key in data/encrypted_secret_text.json, never a password.",
+    "An empty 'host' means the container runs on the same machine as the process reading this file. 'worker_host' names the machine when it does not - that is how one control node manages labs on several hosts.",
+    "'docker.mode' is 'single' for one container, 'ha-lab' for a small cluster ('replicas' says how many). 'compose_path' is where the generated compose file was written on that host, so the cluster can be brought up, down or thrown away without guessing.",
+    "Nothing here is production. These are the instances a restore drill restores onto and a version upgrade is rehearsed on - disposable on purpose, which is exactly why the credentials are still kept in the secret store rather than left in the clear."
+  ],
+  "docker_db_connections": [
+    {
+      "id": "PG_LAB_01",
+      "engine": "postgres",
+      "host": "",
+      "port": 5433,
+      "database": "postgres",
+      "username": "postgres",
+      "password_env": "POSTGRES_192_0_2_40_LAB",
+      "docker": {
+        "instance_name": "pg_lab_01",
+        "mode": "ha-lab",
+        "version": "16",
+        "compose_path": "/opt/db_ops/containers/pg_lab_01/docker-compose.yml",
+        "replicas": 2
+      },
+      "created_by": "db_ops.sre.create-db-docker"
+    },
+    {
+      "id": "MSSQL_LAB_01",
+      "engine": "mssql",
+      "host": "192.0.2.40",
+      "port": 1433,
+      "database": "master",
+      "username": "sa",
+      "password_env": "MSSQL_192_0_2_40_SA",
+      "docker": {
+        "instance_name": "mssql_lab_01",
+        "mode": "single",
+        "version": "2022-latest",
+        "compose_path": "/opt/db_ops/containers/mssql_lab_01/docker-compose.yml"
+      },
+      "created_by": "db_ops.sre.create-db-docker",
+      "worker_host": "192.0.2.40",
+      "_note": "The restore target for the drill in restore_config.json. 'database': 'master' because that is what the tool connects to; a restore names its own databases."
+    },
+    {
+      "id": "ORA_LAB_01",
+      "engine": "oracle-xe",
+      "host": "192.0.2.40",
+      "port": 1521,
+      "database": "XE",
+      "username": "system",
+      "password_env": "ORACLE_192_0_2_40_LAB",
+      "docker": {
+        "instance_name": "ora_lab_01",
+        "mode": "single",
+        "version": "21",
+        "compose_path": "/opt/db_ops/containers/ora_lab_01/docker-compose.yml"
+      },
+      "created_by": "db_ops.sre.create-db-docker",
+      "worker_host": "192.0.2.40"
+    }
+  ]
+}

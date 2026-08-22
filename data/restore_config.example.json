@@ -1,0 +1,133 @@
+{
+  "notes": [
+    "Sample restore_config.json - the backup jobs the toolkit runs, and the restores that prove them. Copy to restore_config.json and edit.",
+    "Two lists, and the second is the point. 'backups' takes backups; 'restores' restores them somewhere else and checks the result. A backup nobody has restored is a hope, not a recovery plan, which is why they live in one file and are configured together.",
+    "Nothing here names a host or a credential twice: every entry points at db_instances.json by 'server_id' (or by 'id' on a restore's source and target), and the address, container, transport and account are resolved from there. Change a machine in one place.",
+    "'env_secrets' maps an environment variable the backup script needs to a key in data/encrypted_secret_text.json. The value is decrypted into the child process's environment and never written to a file or an argument list - an argument is world-readable in the process table.",
+    "'jobs' is one entry per backup kind, each with its own schedule and retention, so a full and a log backup of the same database are independent. 'time_window' and 'notify' are the same shared objects used everywhere else.",
+    "A restore entry's 'databases' list scopes what is restored. An empty list means 'everything found', which quietly goes on restoring ageing files after a database is removed from the source plan - name them explicitly unless you want that.",
+    "'target_retention_seconds' is how long a restored copy is kept before it is dropped. A drill target is disposable by design; keeping copies indefinitely fills the target instance and turns a proof into an incident.",
+    "A physical restore carries the SOURCE instance's logins and passwords with it. After a drill the target answers to the source's credentials, and the target's own stored credential goes stale - expect that rather than being surprised by it."
+  ],
+
+  "backup_restore": {
+    "copy_file_patterns": ["*.bak", "*.trn"],
+    "copy_recent_hours": 24,
+    "_note": "Which files are worth copying off a backup share, and how far back to look. A wider window means recopying files that are already there; a narrower one means missing a backup taken late.",
+
+    "backups": [
+      {
+        "backup_id": "ACME_APPDB_FULL",
+        "active": true,
+        "db_type": "sqlserver",
+        "server_id": "ACME-192-0-2-10",
+        "backup_dir": "D:\\SQLBK\\dbops",
+        "note": "Full backup of the application instance. The SSH or WinRM transport, the credential and the address all come from db_instances.json via server_id.",
+        "env_secrets": {
+          "BACKUP_ENCRYPTION_PASSWORD": "BACKUP_ENC_ACME_APPDB"
+        },
+        "jobs": [
+          {
+            "job": "database",
+            "active": true,
+            "script": "assets/backup/sqlserver/mssql_backup_database.sh",
+            "retention_days": 14,
+            "time_window": {
+              "from_hour": 1, "to_hour": 5,
+              "repeat_interval": 72000,
+              "retry_interval": 3600,
+              "timeout": 7200
+            },
+            "notify": {
+              "logging_on_run": {"enabled": true, "telegram_chat": "backup", "chat_id": ""},
+              "alert_on_error": {"enabled": true, "telegram_chat": "backup", "chat_id": ""}
+            }
+          },
+          {
+            "job": "log",
+            "active": true,
+            "script": "assets/backup/sqlserver/mssql_backup_log.sh",
+            "retention_days": 7,
+            "_note": "A separate job because the log backup is what sets the recovery point objective. Every fifteen minutes, all day - if this schedule and backup_policy.json disagree, the report is right and one of them is wrong.",
+            "time_window": {
+              "from_hour": 0, "to_hour": 23,
+              "repeat_interval": 900,
+              "retry_interval": 300,
+              "timeout": 900
+            },
+            "notify": {
+              "logging_on_run": {"enabled": false, "telegram_chat": "backup", "chat_id": ""},
+              "alert_on_error": {"enabled": true, "telegram_chat": "backup", "chat_id": ""}
+            }
+          }
+        ]
+      },
+      {
+        "backup_id": "ACME_SALESDB_BASEBACKUP",
+        "active": false,
+        "db_type": "postgresql",
+        "server_id": "ACME-192-0-2-20-PG-5432",
+        "backup_dir": "/opt/pgbackup/dbops",
+        "note": "Weekly baseline plus daily incrementals; the script picks the level from the day of the week. 'backup_dir' must match the directory the archive metric checks, or a cluster that is backed up daily is reported as never backed up.",
+        "env_secrets": {},
+        "jobs": [
+          {
+            "job": "database",
+            "active": false,
+            "script": "assets/backup/postgresql/pg_basebackup_database.sh",
+            "retention_days": 21,
+            "time_window": {
+              "from_hour": 1, "to_hour": 5,
+              "repeat_interval": 72000,
+              "retry_interval": 3600,
+              "timeout": 10800
+            },
+            "notify": {
+              "logging_on_run": {"enabled": true, "telegram_chat": "backup", "chat_id": ""},
+              "alert_on_error": {"enabled": true, "telegram_chat": "backup", "chat_id": ""}
+            }
+          }
+        ]
+      }
+    ],
+
+    "restores": [
+      {
+        "restore_id": "ACME_APPDB_TO_DRILL",
+        "active": true,
+        "target_retention_seconds": 86400,
+        "note": "The drill. It restores yesterday's backup onto a disposable instance, verifies it, and drops the copy a day later. Scoped to the databases that matter - an empty list would go on restoring whatever it found, including files nobody produces any more.",
+        "source": {
+          "id": "ACME-192-0-2-10",
+          "backup_share": "\\\\192.0.2.10\\SQLBK\\APPDB",
+          "credential_target": "192.0.2.10",
+          "username": "192.0.2.10\\svc_backup",
+          "password_env": "REMOTE_192_0_2_10_SVC_BACKUP"
+        },
+        "target": {
+          "id": "ACME-192-0-2-40-HOST",
+          "vm_platform": "linux",
+          "credential_target": "192.0.2.40",
+          "username": "dba_user",
+          "password_env": "REMOTE_192_0_2_40_DBA_USER",
+          "sql_instance": "localhost,1433",
+          "sql_username": "sa",
+          "sql_password_env": "MSSQL_192_0_2_40_SA",
+          "restore_data_dir": "/var/opt/mssql/data",
+          "vm_import_linux_path": "/opt/restore/import/ACME-192-0-2-10",
+          "vm_import_linux_log_path": "/opt/restore/import/ACME-192-0-2-10"
+        },
+        "databases": [
+          {"source_database": "APPDB", "target_database": "APPDB_DRILL"},
+          {"source_database": "FINDB", "target_database": "FINDB_DRILL"}
+        ],
+        "server_metadata": {
+          "enabled": false,
+          "artifacts": [],
+          "phases": ["pre-database", "post-database"],
+          "note": "Replays the source instance's server-level metadata - logins, roles, Agent jobs - around the database restore, so the restored databases have no orphaned users. It reads a bundle written by that instance's own backup entry, so turning it on without one only produces a warning every run."
+        }
+      }
+    ]
+  }
+}

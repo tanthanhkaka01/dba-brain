@@ -1,0 +1,28 @@
+{
+  "notes": [
+    "One credential, and it holds no password. 'password_ref' names a key in data/encrypted_secret_text.json, which you create in step 3 of the README by encrypting secrets/secret_text.json.",
+    "The account is monitor_user, created by initdb/01_monitor_user.sql with the pg_monitor role and nothing else. That is the whole least-privilege story for PostgreSQL: pg_monitor grants the elevated read the metrics need and grants no write anywhere.",
+    "'credential_name' is the handle db_instances.json points at. Keep it stable - renaming it silently breaks every file that names it."
+  ],
+
+  "database_credentials": [
+    {
+      "server_id": "QUICKSTART-PG-5432",
+      "db_type": "postgresql",
+      "service_name": "QUICKSTART",
+      "instance_name": "quickstart",
+      "credentials": [
+        {
+          "credential_name": "postgresql_quickstart_monitor_user",
+          "username": "monitor_user",
+          "password_ref": "POSTGRES_QUICKSTART_MONITOR_USER",
+          "role": "MONITOR"
+        }
+      ]
+    }
+  ],
+
+  "remote_credentials": [],
+
+  "monitor_users": []
+}
