@@ -1,0 +1,29 @@
+# gitleaks configuration.
+#
+# The secret scan is the one CI job that must never be red, and that only works if a red run means
+# something. So every finding gets resolved rather than tolerated — by changing the code where the
+# code is at fault, and by an entry here, with its reason, where the rule is.
+#
+# The bar for an entry: the match must be provably not a credential, and the allowance must be
+# narrow enough that a real secret in the same file would still be caught. A rule switched off
+# wholesale, or a path excluded entirely, is how a scanner becomes decoration.
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+
+  [[rules.allowlists]]
+  description = """
+  `PBKDF2_ITERATIONS` is the name of a key-derivation cost parameter, and the value beside it is an
+  iteration count. `generic-api-key` reads the identifier as the secret because it contains no word
+  that says otherwise, which is the rule doing what it is for on a string that is not one.
+
+  The test that trips it lowers the KDF cost so the console suite does not spend a second per
+  sign-in; the real cost is asserted in `tests/test_web_auth.py`. It began failing when `webhost`
+  joined the distribution in v0.2.0 and its tests were scanned for the first time.
+
+  Scoped to the constant's own name, so a real secret anywhere in the same file is still found.
+  """
+  regexes = ['''PBKDF2_ITERATIONS''']
