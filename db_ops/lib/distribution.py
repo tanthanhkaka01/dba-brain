@@ -187,3 +187,22 @@ PRIVATE_TESTS: dict[str, str] = {
     "test_legacy_oracle_tool_is_python2_safe.py": "checks tools/python32_legacy, a Win32 Python 2.7 "
                                                   "payload that never ships",
 }
+
+
+#: What the public distribution is *called*, and what version it is at.
+#:
+#: Both differ from this repository on purpose, and the export applies them on the way out.
+#:
+#: **The name.** `pyproject.toml` says `db_ops` because that is what this repository builds and
+#: what the worker runs. Uploading that to PyPI would claim `db_ops` and leave `dbabrain` — the
+#: name the roadmap reserves and `G-09` requires — free for somebody else. The *import* package
+#: stays `db_ops` for now: a distribution may be named differently from the module it installs,
+#: and renaming the module is a separate change that D-03 defers because the path is stored as
+#: text in `data/app_commands.json` and in the Dockerfile.
+#:
+#: **The version.** This repository is at 2.85.x, an internal counter with hundreds of increments
+#: behind it. A first public release at 2.85.88 claims a history that never happened, and **a PyPI
+#: version is immutable** — it cannot be re-uploaded after deletion, so the mistake is permanent.
+#: The public tree starts where a first release starts.
+PUBLIC_DISTRIBUTION_NAME = "dbabrain"
+PUBLIC_VERSION = "0.1.0"

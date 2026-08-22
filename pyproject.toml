@@ -16,14 +16,14 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "db_ops"
+name = "dbabrain"
 description = "Database operations toolkit: metrics, reports, scheduled SQL, backup/restore validation, SLA checks."
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Trieu Tan Thanh" }]
 keywords = ["dba", "database", "sqlserver", "oracle", "postgresql", "mysql", "monitoring", "operations"]
-dynamic = ["version"]
+version = "0.1.0"
 
 # Measured 2026-08-21, not guessed (D-05):
 #
@@ -95,8 +95,6 @@ Homepage = "https://github.com/tanthanhkaka01/dba-brain"
 Repository = "https://github.com/tanthanhkaka01/dba-brain"
 Changelog = "https://github.com/tanthanhkaka01/dba-brain/blob/main/CHANGELOG.md"
 
-[tool.setuptools.dynamic]
-version = { attr = "db_ops.__version__" }
 
 # The package is at the repository root today, so `find` is scoped rather than left to guess:
 # `data`, `assets`, `docs`, `tests`, `scripts` and `tools` are all top-level directories that are
