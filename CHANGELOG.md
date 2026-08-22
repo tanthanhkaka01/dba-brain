@@ -15,7 +15,7 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
-> **Status: preview. The test suite is not green in this tree — 38 failures.**
+> **Status: preview. The test suite is not green in this tree — 10 failures.**
 >
 > This is published early and deliberately, so the shape can be reviewed before it is fixed. The
 > monitoring path it claims *is* verified end to end against a real SQL Server: install, `db-ops
@@ -44,6 +44,18 @@ do about it. Not the internal refactor that made it possible.
 
 ### Fixed
 
+- The documented first run could not be completed. Two commands the guides told you to run are not
+  in this distribution: `db_ops.control.cli encrypt-secret-text`, which moved to
+  `db-ops encrypt-secret`, and `db_ops.reports.cli queue-metrics-reports`, whose app is not shipped
+  yet — so the alert step failed whichever spelling you used. The guides now name what exists, and
+  say plainly that the scheduled reporting path arrives in `v0.2.0`.
+- **Alerts have a supported path again**: `db-ops metrics alert-summary` builds the text from the
+  results already collected — it reads the store, not the instance, so it needs no passphrase and
+  costs the monitored server nothing — and `db-ops telegram send-message` sends it.
+- `db-ops init` printed a next step that fails. It suggested
+  `db-ops metrics collect --key-base64 …`, but the key is parsed by the app rather than by its
+  subcommand, so it errored with `unrecognized arguments` — a wrong position reported as a wrong
+  flag. It now prints the form that works.
 - An installed copy could not find its configuration. The tool derived its project root from the
   package's own file path, which is correct only when the package sits beside `data/` — true in a
   checkout and in the container, false for every `pip install`, where it resolved to

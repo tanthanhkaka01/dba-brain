@@ -329,7 +329,7 @@ Keep the passphrase. Nothing else can decrypt the store, and there is no recover
 
 ```bash
 db-ops metrics collect --dry-run                              # resolves targets, connects to nothing
-db-ops metrics collect --key-base64 <passphrase in base64>    # collects
+db-ops metrics --key-base64 <passphrase in base64> collect    # collects
 db-ops metrics summary-latest                                 # reads the result back
 ```
 
@@ -483,7 +483,7 @@ def next_steps(root: Path) -> str:
         "       db-ops metrics collect --dry-run",
         "",
         "  5. Collect:",
-        "       db-ops metrics collect --key-base64 <passphrase in base64>",
+        "       db-ops metrics --key-base64 <passphrase in base64> collect",
         "",
         "  6. Read the result:",
         "       db-ops metrics summary-latest",
