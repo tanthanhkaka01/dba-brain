@@ -19,6 +19,23 @@ set -euo pipefail
 
 CONFIG="${DB_OPS_CONFIG:-config.json}"
 
+# The image runs as a non-root user (uid 10001). `data/`, `logs/` and `runtime/` are bind mounts
+# owned by whoever created them on the host, so an unwritable one is the first thing that goes
+# wrong — and it surfaces as a traceback from whichever component wrote first, which reads as a
+# broken toolkit rather than as a permission. Said once, here, with the fix in it.
+for required in logs runtime; do
+  if [ -d "$required" ] && [ ! -w "$required" ]; then
+    cat >&2 <<UNWRITABLE
+$required/ is not writable by uid $(id -u), which is what this image runs as.
+
+It is a bind mount, so the host owns it. Either:
+  chown -R $(id -u):$(id -g) <host path>      # give this user the directory
+  docker run --user 0:0 ...                   # or run as root, as older images did
+UNWRITABLE
+    exit 1
+  fi
+done
+
 case "${1:-daemon}" in
   daemon)
     shift || true

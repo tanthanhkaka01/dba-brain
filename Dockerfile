@@ -76,8 +76,36 @@ RUN pip install --upgrade pip && pip install -r requirements.txt
 # Application source. config/data/sql/secrets are supplied at runtime via mounts
 # (see docker-compose.yml) and are intentionally NOT baked into the image.
 COPY db_ops ./db_ops
+
+# Install it, rather than relying on the source being in the working directory.
+#
+# Copying alone is enough for the daemon, which runs from this WORKDIR — and it is why the image
+# had no `db-ops` command and `python -m db_ops...` failed from anywhere else. Both are what the
+# documentation tells a reader to type, so an image that cannot do them is an image the docs are
+# wrong about. `--no-deps` because requirements.txt above already resolved them, and installing
+# again would let a transitive pin drift between the two layers.
+COPY pyproject.toml README.md ./
+RUN pip install --no-deps .
+
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# Run as a normal user. The daemon reads databases over the network and writes logs; it needs no
+# privilege in the container, and an image that ships as root gives every operator of it more than
+# they asked for.
+#
+# The uid is **pinned to 10001** rather than left to the distribution's next-free number, because
+# the thing that matters is the number a host has to `chown` its bind mounts to — and that number
+# has to be stable across rebuilds or the instruction in the docs stops being true.
+#
+# `data/`, `logs/` and `runtime/` arrive as mounts owned by the host user. Where they are not
+# writable the entrypoint says so and names the fix; where an operator would rather not chown
+# anything, `--user 0:0` (or `user: "0:0"` in compose) restores the old behaviour in one line.
+ARG APP_UID=10001
+RUN groupadd --gid "${APP_UID}" dbabrain \
+    && useradd --uid "${APP_UID}" --gid "${APP_UID}" --create-home --shell /bin/bash dbabrain \
+    && chown -R dbabrain:dbabrain /app "$VIRTUAL_ENV"
+USER dbabrain
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["daemon"]

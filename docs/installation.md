@@ -123,6 +123,23 @@ docker run -d --name db_ops_daemon \
   db_ops:local daemon
 ```
 
+**It runs as uid 10001, not root.** A monitoring daemon reads databases over the network and
+writes logs; it needs no privilege in the container. The one thing that follows is the mounts: they
+arrive owned by whoever created them on the host, so either give that user the directories or run
+as root —
+
+```bash
+chown -R 10001:10001 data logs runtime     # the directories the container writes to
+docker run --user 0:0 ...                  # or keep the old behaviour, in one flag
+```
+
+An unwritable mount is reported by name before anything starts, rather than surfacing later as a
+traceback from whichever component wrote first.
+
+**`db-ops` is on the PATH inside the image**, and the package is installed rather than only copied,
+so every command in this documentation works from any directory in the container — not only from
+the one the daemon happens to start in.
+
 The image lays the project out under `/app/tools/db_ops`, which is why `working_dir` in
 `data/app_commands.json` is the string `tools/db_ops` — a logical alias for the tool root that
 resolves to the checkout on a workstation and to that path in the container, so one configuration
