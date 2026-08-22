@@ -1,3 +1,4 @@
+import os
 import dataclasses
 import datetime
 import subprocess
@@ -77,6 +78,14 @@ from db_ops.backup_restore.sanitize import sanitize_text, sanitize_value
 from db_ops.config import DbOpsConfig, TelegramConfig
 from db_ops.db import DbOpsStore
 from db_ops.backup_restore.verify_restore import build_checkdb_sql
+
+
+#: The PowerShell copy engine is chosen by `should_use_powershell_unc_copy`, which begins
+#: `os.name == "nt"`: a Windows orchestrator copying between two SMB shares. On Linux the engine is
+#: `smbclient` or `sftp` instead, so these two tests describe a path that does not exist there —
+#: they are platform-specific by subject, not by accident, and skipping is the honest report.
+windows_orchestrator_only = pytest.mark.skipif(
+    os.name != "nt", reason="the PowerShell copy engine only exists on a Windows orchestrator")
 
 
 def make_config(tmp_path: Path) -> BackupRestoreConfig:
@@ -2063,6 +2072,7 @@ def test_copy_backup_file_preserves_relative_folder_and_skips_existing(tmp_path)
     assert skipped.status == "SKIPPED_EXISTS"
 
 
+@windows_orchestrator_only
 def test_run_copy_backup_uses_powershell_for_unc_sources(monkeypatch):
     config = BackupRestoreConfig(
         prod_backup_share=Path(r"\\192.0.2.250\SQLBK"),
@@ -2177,6 +2187,7 @@ def test_copy_backup_file_with_logging_emits_failed(tmp_path, monkeypatch, capsy
     assert "error=copy exploded" in output
 
 
+@windows_orchestrator_only
 def test_run_copy_backup_logs_scan_and_final_summary(monkeypatch, capsys):
     config = BackupRestoreConfig(
         prod_backup_share=Path(r"\\prod\SQLBK"),
