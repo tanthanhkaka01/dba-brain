@@ -1,0 +1,125 @@
+---
+# Phase 1 — Oracle RAC Database Software Install and DBCA
+# Targets: oracle_rac group
+# Run after oracle-rac-grid.yml
+
+- name: Install Oracle Database software on all RAC nodes
+  hosts: oracle_rac
+  become: true
+  gather_facts: false
+  vars_files:
+    - ../group_vars/oracle_rac.yml
+
+  tasks:
+    - name: Check if Oracle DB software is installed
+      ansible.builtin.stat:
+        path: "{{ oracle_db_home }}/rdbms/lib/config.o"
+      register: oracle_binary
+
+    - name: Unzip Oracle Database installer into db home (first node only)
+      ansible.builtin.unarchive:
+        src: "{{ oracle_install_stage }}/{{ oracle_db_installer_zip }}"
+        dest: "{{ oracle_db_home }}"
+        owner: oracle
+        group: oinstall
+        remote_src: true
+        creates: "{{ oracle_db_home }}/runInstaller"
+      when: not oracle_binary.stat.exists
+      run_once: true
+      delegate_to: "{{ groups['oracle_rac'][0] }}"
+
+    - name: Deploy Oracle DB install response file
+      ansible.builtin.template:
+        src: ../templates/oracle-db-install-response.rsp.j2
+        dest: "{{ oracle_install_stage }}/db-install.rsp"
+        owner: oracle
+        group: oinstall
+        mode: "0600"
+      when: not oracle_binary.stat.exists
+
+    - name: Run Oracle DB software-only silent install (first node — blocks until complete)
+      ansible.builtin.shell: |
+        {{ oracle_db_home }}/runInstaller \
+          -silent \
+          -waitforcompletion \
+          -ignorePrereqFailure \
+          -responseFile {{ oracle_install_stage }}/db-install.rsp \
+          ORACLE_HOME={{ oracle_db_home }} \
+          ORACLE_HOME_NAME=OraDB26cHome \
+          2>&1
+      args:
+        executable: /bin/bash
+      become_user: oracle
+      register: db_install_result
+      failed_when: >
+        db_install_result.rc != 0 and
+        'Successfully Setup Software' not in (db_install_result.stdout | default(''))
+      changed_when: true
+      run_once: true
+      delegate_to: "{{ groups['oracle_rac'][0] }}"
+      when: not oracle_binary.stat.exists
+
+    - name: Run root.sh for Oracle DB home on all nodes
+      ansible.builtin.command:
+        cmd: "{{ oracle_db_home }}/root.sh"
+      changed_when: true
+      when: not oracle_binary.stat.exists
+
+- name: Create Oracle RAC database with DBCA
+  hosts: oracle_rac
+  become: true
+  gather_facts: false
+  vars_files:
+    - ../group_vars/oracle_rac.yml
+
+  tasks:
+    - name: Check if RAC database creation marker exists
+      ansible.builtin.stat:
+        path: "{{ oracle_base }}/.db-sre-rac-db-ready"
+      register: rac_db_marker
+      delegate_to: "{{ groups['oracle_rac'][0] }}"
+      run_once: true
+
+    - name: Deploy DBCA RAC response file
+      ansible.builtin.template:
+        src: ../templates/oracle-dbca-rac-response.rsp.j2
+        dest: "{{ oracle_install_stage }}/dbca-rac.rsp"
+        owner: oracle
+        group: oinstall
+        mode: "0600"
+      delegate_to: "{{ groups['oracle_rac'][0] }}"
+      run_once: true
+      when: not rac_db_marker.stat.exists or oracle_db_force_recreate
+
+    - name: Create RAC database with DBCA
+      ansible.builtin.shell: |
+        {{ oracle_db_home }}/bin/dbca \
+          -silent \
+          -createDatabase \
+          -responseFile {{ oracle_install_stage }}/dbca-rac.rsp \
+          -redoLogFileSize 200 \
+          -ignorePreReqs \
+          2>&1
+      args:
+        executable: /bin/bash
+      become_user: oracle
+      environment:
+        ORACLE_HOME: "{{ oracle_db_home }}"
+        PATH: "{{ oracle_db_home }}/bin:{{ ansible_env.PATH }}"
+      register: dbca_result
+      failed_when: dbca_result.rc != 0
+      changed_when: true
+      run_once: true
+      delegate_to: "{{ groups['oracle_rac'][0] }}"
+      when: not rac_db_marker.stat.exists or oracle_db_force_recreate
+
+    - name: Write RAC DB ready marker
+      ansible.builtin.copy:
+        dest: "{{ oracle_base }}/.db-sre-rac-db-ready"
+        content: "rac db created\n"
+        owner: oracle
+        group: oinstall
+        mode: "0640"
+      delegate_to: "{{ groups['oracle_rac'][0] }}"
+      run_once: true
+      when: not rac_db_marker.stat.exists or oracle_db_force_recreate

@@ -1,0 +1,45 @@
+# Oracle 23ai Enterprise DataGuard — Oracle Linux R9U6
+oracle_version: "23ai"
+oracle_edition: EE
+
+# Base paths
+oracle_base: /u01/app/oracle
+oracle_db_home: /u01/app/product/db23c
+oracle_inventory_dir: /u01/app/oraInventory
+oracle_install_stage: /u01/app/stage
+
+# Installer zip name
+oracle_db_installer_zip: LINUX.X64_2326100_db_home.zip
+
+# Database identification
+oracle_dg_config_name: dg-lab
+oracle_primary_db_name: dgpri
+oracle_primary_db_unique_name: dg_primary
+oracle_standby_db_unique_name: dg_standby
+oracle_db_charset: AL32UTF8
+oracle_db_ncharset: AL16UTF16
+
+# DataGuard broker config
+oracle_dg_protection_mode: MaxAvailability
+oracle_dg_log_shipping: SYNC
+oracle_redo_log_dir: /u01/app/oracle/oradata
+oracle_fra_dir: /u01/app/oracle/fast_recovery_area
+oracle_fra_size_mb: 51200
+
+# Listener
+oracle_listener_port: 1521
+oracle_listener_name: LISTENER
+
+# Passwords
+oracle_sys_password: ChangeMe_OracleSYS_123!
+oracle_system_password: ChangeMe_OracleSystem_123!
+oracle_oracle_password: ChangeMe_OracleUser_123!
+
+# Memory (MB)
+oracle_sga_mb: 4096
+oracle_pga_mb: 1024
+oracle_processes: 300
+
+# Rerun flags
+oracle_dg_force_reconfigure: false
+oracle_standby_force_reseed: false

@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Database Inventory Report — __SNAPSHOT_DATE__</title>
+<style>
+  /* ============================================================
+     DATABASE INVENTORY REPORT — TEMPLATE
+     Design goals: scannable, severity-first, print-to-PDF clean.
+     Theme via CSS variables. No external dependencies.
+     ============================================================ */
+  :root{
+    --bg:#f5f6f8; --surface:#ffffff; --surface-2:#fafbfc;
+    --ink:#1b2430; --muted:#64748b; --faint:#94a3b8; --line:#e5e9ef;
+    --brand:#0f2540; --brand-2:#1d3b5e;
+    --crit:#dc2626; --crit-bg:#fef2f2; --crit-line:#fecaca;
+    --warn:#c2700a; --warn-bg:#fff8ed; --warn-line:#fde3bf;
+    --ok:#15803d;   --ok-bg:#f0fdf4;   --ok-line:#bbf7d0;
+    --info:#2563eb; --info-bg:#eff6ff; --info-line:#c7dbfd;
+    --mono:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:var(--sans); font-size:14px; line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1180px; margin:0 auto; padding:0 22px 64px;}
+
+  /* ---------- Header ---------- */
+  header.masthead{
+    background:linear-gradient(135deg,var(--brand),var(--brand-2));
+    color:#fff; padding:30px 0 26px; margin-bottom:26px;
+  }
+  .masthead .wrap{padding-bottom:0}
+  .eyebrow{font-size:11.5px; letter-spacing:.16em; text-transform:uppercase; color:#9db8d6; font-weight:600; margin:0 0 6px}
+  h1.title{font-size:27px; font-weight:700; margin:0 0 4px; letter-spacing:-.01em}
+  .subtitle{color:#c7d6e8; font-size:13px; margin:0}
+  .subtitle code{background:rgba(255,255,255,.12); padding:1px 6px; border-radius:4px; font-family:var(--mono); font-size:12px}
+
+  /* ---------- Scope KPI strip ---------- */
+  .kpi-strip{display:grid; grid-template-columns:repeat(7,1fr); gap:12px; margin-top:22px}
+  .kpi{background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.14); border-radius:10px; padding:12px 14px}
+  .kpi .num{font-size:24px; font-weight:700; line-height:1; letter-spacing:-.02em}
+  .kpi .lbl{font-size:11px; color:#a9c0db; margin-top:5px; letter-spacing:.02em}
+  .kpi.alert .num{color:#ffb4ad}
+  .kpi.warnum .num{color:#ffd79b}
+  .kpi.good .num{color:#9be8b5}
+
+  /* ---------- Section ---------- */
+  section{margin-top:34px}
+  .sec-head{display:flex; align-items:baseline; gap:12px; margin-bottom:14px; padding-bottom:9px; border-bottom:2px solid var(--line)}
+  .sec-head h2{font-size:18px; font-weight:700; margin:0; letter-spacing:-.01em}
+  .sec-head .hint{font-size:12.5px; color:var(--muted)}
+
+  /* ---------- Triage cards ---------- */
+  .triage{display:flex; flex-direction:column; gap:10px}
+  .tcard{
+    display:grid; grid-template-columns:auto 1fr auto; gap:14px; align-items:start;
+    background:var(--surface); border:1px solid var(--line); border-left-width:4px;
+    border-radius:9px; padding:13px 16px;
+  }
+  .tcard.crit{border-left-color:var(--crit); background:var(--crit-bg)}
+  .tcard.warn{border-left-color:var(--warn); background:var(--warn-bg)}
+  .tcard.info{border-left-color:var(--info); background:var(--info-bg)}
+  .tcard .tnum{font-family:var(--mono); font-size:12px; font-weight:700; color:var(--faint); padding-top:2px}
+  .tcard .tbody h3{margin:0 0 3px; font-size:14.5px; font-weight:650}
+  .tcard .tbody p{margin:0; font-size:13px; color:#3a4757}
+  .tcard .tbody .action{margin-top:6px; font-size:12.5px; color:#475569}
+  .tcard .tbody .action b{color:#1b2430; font-weight:650}
+  .tcard .tbody .tags{margin-top:7px; display:flex; flex-wrap:wrap; gap:5px}
+  .pill{display:inline-block; font-family:var(--mono); font-size:11px; padding:2px 7px; border-radius:5px; background:#fff; border:1px solid var(--line); color:#475569}
+  .sev{align-self:start; font-size:10.5px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; padding:3px 9px; border-radius:999px; white-space:nowrap}
+  .sev.crit{background:var(--crit); color:#fff}
+  .sev.warn{background:var(--warn); color:#fff}
+  .sev.info{background:var(--info); color:#fff}
+
+  /* ---------- Tables ---------- */
+  /* A table never widens the page. max-width caps the container at whatever the layout gives it
+     (a grid or flex child defaults to min-width:auto, which is what lets a wide table push its
+     whole container past the viewport), and overflow-x is then the last resort for a table that
+     genuinely cannot fit — 13 columns on a phone — so it scrolls inside its own box instead of
+     dragging the page sideways. */
+  .tbl-scroll{overflow-x:auto; max-width:100%; border:1px solid var(--line); border-radius:10px; background:var(--surface)}
+  table{border-collapse:collapse; width:100%; max-width:100%; font-size:12.5px}
+  thead th{
+    background:var(--surface-2); text-align:left; font-weight:650; color:#475569;
+    padding:9px 12px; border-bottom:1px solid var(--line); white-space:nowrap; font-size:11.5px;
+    letter-spacing:.02em;
+  }
+  tbody td{padding:9px 12px; border-bottom:1px solid var(--line); vertical-align:middle}
+  tbody tr:last-child td{border-bottom:none}
+  tbody tr:hover{background:var(--surface-2)}
+  td.srv{font-family:var(--mono); font-size:11.5px; white-space:nowrap}
+  td.srv .role{display:block; font-family:var(--sans); font-size:12.5px; font-weight:650; color:var(--ink)}
+  td.srv .ip{color:var(--faint); font-size:11px}
+  td.srv a.srv-link{text-decoration:none}
+  td.srv a.srv-link:hover .role{color:var(--info)}
+  td.srv a.srv-link:hover .ip{color:var(--info)}
+  a.charts{color:var(--info); font-size:11.5px; text-decoration:none; border-bottom:1px dotted var(--info-line)}
+  a.charts:hover{border-bottom-style:solid}
+  .num-cell{font-family:var(--mono); text-align:right; white-space:nowrap}
+  /* Prose columns ("What to do", assessments) wrap: one long sentence must not set the width
+     of the whole table. */
+  td.prose{white-space:normal; overflow-wrap:anywhere; min-width:220px}
+  .center{text-align:center}
+
+  /* status dot + badges */
+  .dot{display:inline-block; width:9px; height:9px; border-radius:50%; vertical-align:middle; margin-right:6px}
+  .dot.ok{background:var(--ok)} .dot.warn{background:var(--warn)} .dot.crit{background:var(--crit)} .dot.idle{background:var(--faint)}
+  .badge{display:inline-block; font-size:11px; font-weight:600; padding:2px 8px; border-radius:6px; white-space:nowrap; border:1px solid transparent}
+  .b-ok{background:var(--ok-bg); color:var(--ok); border-color:var(--ok-line)}
+  .b-warn{background:var(--warn-bg); color:var(--warn); border-color:var(--warn-line)}
+  .b-crit{background:var(--crit-bg); color:var(--crit); border-color:var(--crit-line)}
+  .b-idle{background:#f1f5f9; color:var(--muted); border-color:var(--line)}
+  .b-info{background:var(--info-bg); color:var(--info); border-color:var(--info-line)}
+
+  /* mini bar for fill % */
+  .bar{position:relative; width:54px; height:7px; border-radius:4px; background:#eceff3; display:inline-block; vertical-align:middle; margin-right:7px; overflow:hidden}
+  .bar > i{position:absolute; left:0; top:0; bottom:0; border-radius:4px}
+  .fill-cell{white-space:nowrap}
+
+  /* ---------- Server detail (collapsible) ---------- */
+  details.srv-detail{background:var(--surface); border:1px solid var(--line); border-radius:9px; margin-bottom:8px; overflow:hidden}
+  details.srv-detail > summary{
+    list-style:none; cursor:pointer; padding:12px 16px; display:grid;
+    grid-template-columns:auto 1fr auto auto; gap:12px; align-items:center;
+  }
+  details.srv-detail > summary::-webkit-details-marker{display:none}
+  summary .chev{color:var(--faint); font-size:12px; transition:transform .15s}
+  details[open] summary .chev{transform:rotate(90deg)}
+  summary .s-name{font-weight:650}
+  summary .s-name small{display:block; font-family:var(--mono); font-size:11px; color:var(--faint); font-weight:400}
+  .d-body{padding:4px 16px 16px; border-top:1px solid var(--line)}
+  .d-grid{display:grid; grid-template-columns:repeat(4,1fr); gap:10px 18px; margin:14px 0}
+  .d-grid .f{font-size:12.5px}
+  .d-grid .f .k{color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.04em}
+  .d-grid .f .v{font-weight:600; margin-top:1px}
+  .d-grid .f .v.mono{font-family:var(--mono); font-weight:500; font-size:12px}
+  .dblist{display:flex; flex-wrap:wrap; gap:5px; margin-top:4px}
+  .dbchip{font-family:var(--mono); font-size:10.5px; background:var(--surface-2); border:1px solid var(--line); border-radius:5px; padding:2px 7px; color:#475569}
+  /* per-database table + the tag that says where a value came from */
+  table.db-tbl{width:100%; border-collapse:collapse; font-size:11.5px}
+  table.db-tbl th{text-align:left; font-weight:600; color:var(--muted); font-size:10.5px; text-transform:uppercase;
+    letter-spacing:.02em; padding:5px 8px; border-bottom:1px solid var(--line); white-space:nowrap}
+  table.db-tbl td{padding:5px 8px; border-bottom:1px solid var(--line); white-space:nowrap}
+  /* The two columns that carry free text: a database name and a CHECKDB timestamp are what
+     pushed this table past the page once it grew a Query Store column. Numbers, badges and
+     ages stay nowrap — wrapping those would be harder to read, not easier. */
+  table.db-tbl td.dbname{white-space:normal; overflow-wrap:anywhere; min-width:120px}
+  table.db-tbl td.wrapcell{white-space:normal; overflow-wrap:anywhere}
+  table.db-tbl tr:last-child td{border-bottom:none}
+  .src-tag{display:inline-block; margin-left:5px; font-family:var(--mono); font-size:9.5px; font-weight:500;
+    color:var(--faint); background:var(--surface-2); border:1px solid var(--line); border-radius:4px; padding:0 4px}
+  .warns{margin:12px 0 0; padding:0; list-style:none; display:flex; flex-direction:column; gap:5px}
+  .warns li{font-size:12px; padding:6px 10px; border-radius:6px; background:var(--warn-bg); border:1px solid var(--warn-line); color:#7c4a09}
+  .warns li.cfg{background:var(--info-bg); border-color:var(--info-line); color:#1e40af}
+
+  .legend{display:flex; flex-wrap:wrap; gap:16px; font-size:12px; color:var(--muted); margin-top:10px}
+  .legend span{display:inline-flex; align-items:center}
+
+  footer{margin-top:40px; padding-top:16px; border-top:1px solid var(--line); font-size:11.5px; color:var(--faint); display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px}
+
+  /* ---------- Print ---------- */
+  @media print{
+    body{background:#fff; font-size:11px}
+    .wrap{max-width:none; padding:0 8px}
+    header.masthead{margin-bottom:14px; padding:18px 0; -webkit-print-color-adjust:exact}
+    section{margin-top:18px; page-break-inside:avoid}
+    .tcard,details.srv-detail,.tbl-scroll{page-break-inside:avoid}
+    details.srv-detail[open]{page-break-inside:auto}
+    .no-print{display:none !important}
+    a[href]:after{content:""}
+  }
+  @media (max-width:820px){
+    .kpi-strip{grid-template-columns:repeat(3,1fr)}
+    .d-grid{grid-template-columns:repeat(2,1fr)}
+    .tcard{grid-template-columns:auto 1fr}
+    .sev{grid-column:2; justify-self:start; margin-top:4px}
+  }
+  .toolbar{display:flex; gap:8px; justify-content:flex-end; margin-bottom:-8px}
+  .btn{font-size:12px; font-family:var(--sans); border:1px solid var(--line); background:var(--surface); color:var(--muted); padding:6px 12px; border-radius:7px; cursor:pointer}
+  .btn:hover{color:var(--ink); border-color:var(--faint)}
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <p class="eyebrow">A1A / TRX — Database Operations</p>
+    <h1 class="title">Database Inventory &amp; Health Report</h1>
+    <p class="subtitle">Snapshot <b>__SNAPSHOT_DATE__</b> · generated from <code>architecture/database-inventory.json</code> (full inventory + merged health). Lab/test VMs and credentials excluded.</p>
+    <div class="kpi-strip" id="kpiStrip"></div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div class="toolbar no-print">
+    <button class="btn" onclick="window.print()">⎙ Print / Save as PDF</button>
+    <button class="btn" onclick="document.querySelectorAll('details.srv-detail').forEach(d=>d.open=true)">Expand all</button>
+    <button class="btn" onclick="document.querySelectorAll('details.srv-detail').forEach(d=>d.open=false)">Collapse all</button>
+  </div>
+
+  <!-- ============ PRIORITY ATTENTION ============ -->
+  <section>
+    <div class="sec-head">
+      <h2>🔺 Priority Attention</h2>
+      <span class="hint">What to act on first — ordered by severity, with a recommended next step.</span>
+    </div>
+    <div class="triage" id="triage"></div>
+  </section>
+
+  <!-- ============ FLEET HEALTH MATRIX ============ -->
+  <section>
+    <div class="sec-head">
+      <h2>🖥️ Fleet Health Matrix</h2>
+      <span class="hint">One row per target. Sorted worst-first.</span>
+    </div>
+    <div class="tbl-scroll">
+      <table id="matrix">
+        <thead><tr>
+          <th>Server</th><th>Platform</th><th>DBs online</th><th>Backup</th>
+          <th>HA / DR</th><th class="num-cell">PLE</th><th class="num-cell">Sessions</th>
+          <th>Lowest disk</th><th class="center">Cfg ⚠</th><th>Status</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="legend">
+      <span><span class="dot crit"></span>Critical — needs action</span>
+      <span><span class="dot warn"></span>Warning — review</span>
+      <span><span class="dot ok"></span>Healthy</span>
+      <span><span class="dot idle"></span>No data / unreachable</span>
+      <span>PLE = Page Life Expectancy (memory pressure indicator)</span>
+    </div>
+  </section>
+
+  <!-- ============ BACKUP POSTURE ============ -->
+  <section>
+    <div class="sec-head">
+      <h2>💾 Backup &amp; Recovery Posture</h2>
+      <span class="hint">Last successful backup evidence within the inventory window.</span>
+    </div>
+    <div class="tbl-scroll">
+      <table id="backup">
+        <thead><tr>
+          <th>Server</th><th>Coverage</th><th>Last FULL</th><th>Last DIFF</th><th>Last LOG</th><th>Assessment</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============ CONFIG GOVERNANCE ============ -->
+  <section>
+    <div class="sec-head">
+      <h2>⚙️ SQL Configuration Baseline</h2>
+      <span class="hint">Fleet-wide drift. ✓ = aligned to recommended baseline, ✗ = deviates.</span>
+    </div>
+    <div class="tbl-scroll">
+      <table id="config">
+        <thead><tr>
+          <th>Server</th><th class="num-cell">vCPU</th><th class="num-cell">MAXDOP</th>
+          <th class="num-cell">Cost thr.</th><th class="num-cell">Max mem</th>
+          <th class="center">Backup&nbsp;compr.</th><th class="center">Remote&nbsp;DAC</th>
+          <th class="center">Opt.&nbsp;adhoc</th><th class="center">Blocked&nbsp;thr.</th><th class="center">xp_cmdshell</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="legend">
+      <span><span class="badge b-ok" style="padding:1px 6px">✓</span> aligned</span>
+      <span><span class="badge b-warn" style="padding:1px 6px">✗</span> deviates from baseline</span>
+      <span><span class="badge b-crit" style="padding:1px 6px">!</span> security review</span>
+    </div>
+  </section>
+
+  <!-- ============ LINKED SERVERS (fleet-wide) ============ -->
+  <section id="linkedSection" hidden>
+    <div class="sec-head">
+      <h2>🔗 Linked Servers</h2>
+      <span class="hint">Every linked server on the estate — keep, fix or drop. Reachability and usage decide together.</span>
+    </div>
+    <div class="tbl-scroll">
+      <table id="linked">
+        <thead><tr>
+          <th>Verdict</th><th>On server</th><th>Linked server</th><th>State</th>
+          <th class="num-cell">Procs</th><th class="num-cell">Objects</th><th class="num-cell">DBs</th>
+          <th>What to do</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="legend" id="linkedLegend"></div>
+  </section>
+
+  <!-- ============ SERVER DETAIL ============ -->
+  <section>
+    <div class="sec-head">
+      <h2>📋 Server Detail</h2>
+      <span class="hint">Click a row to expand full inventory + health.</span>
+    </div>
+    <div id="details"></div>
+  </section>
+
+  <footer>
+    <span>Database Inventory Report · template v2 · A1A/TRX DBA Operations</span>
+    <span>Source: <code style="font-family:var(--mono)">architecture/database-inventory.json</code> · __SNAPSHOT_DATE__</span>
+  </footer>
+</div>
+
+<script>
+/* ============================================================
+   DATA  — replace this object from database-inventory.json.
+   Everything below renders automatically. Keys map 1:1 to the
+   fields already produced by the DBA collector.
+   ============================================================ */
+const SCOPE = __SCOPE__;
+const SERVERS = __SERVERS__;
+
+/* ---------- helpers ---------- */
+const esc = s => String(s ?? "").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmt = n => n==null ? "—" : n.toLocaleString("en-US");
+const SEVRANK = {crit:0, warn:1, idle:2, ok:3};
+const diskColor = d => d.sev==="crit"?"var(--crit)" : d.sev==="warn"?"var(--warn)" : d.sev==="ok"?"var(--ok)" : "var(--faint)";
+const diskText = d => {
+  const capacity = d.freeGB!=null && d.totalGB!=null ? `${fmt(d.freeGB)}/${fmt(d.totalGB)} GB free`
+                 : d.freeGB!=null ? `${fmt(d.freeGB)} GB free (capacity unknown)` : "";
+  const percent = d.free!=null ? `${fmt(d.free)}%` : "";
+  const value = capacity && percent ? `${capacity} (${percent})` : capacity || percent || d.flag || "unknown";
+  return `${d.m} ${value}`;
+};
+const pleClass = p => p==null?"b-idle" : p<500?"b-crit" : p<2000?"b-warn" : "b-ok";
+
+/* ---------- Scope KPIs ---------- */
+const critCount = SERVERS.filter(s=>s.status==="crit").length;
+const warnCount = SERVERS.filter(s=>s.status==="warn").length;
+const idleCount = SERVERS.filter(s=>s.status==="idle").length;
+const onlineDBs = SERVERS.reduce((a,s)=>a+(s.online||0),0);
+document.getElementById("kpiStrip").innerHTML = `
+  <div class="kpi"><div class="num">${SCOPE.servers}</div><div class="lbl">Servers in scope</div></div>
+  <div class="kpi"><div class="num">${SCOPE.sqlserver}/${SCOPE.oracle}/${SCOPE.postgresql || 0}</div><div class="lbl">SQL Server / Oracle / PostgreSQL</div></div>
+  <div class="kpi"><div class="num">${SCOPE.os_only || 0}</div><div class="lbl">OS only (no DB)</div></div>
+  <div class="kpi good"><div class="num">${onlineDBs}</div><div class="lbl">Databases online</div></div>
+  <div class="kpi alert"><div class="num">${critCount}</div><div class="lbl">Critical</div></div>
+  <div class="kpi warnum"><div class="num">${warnCount}</div><div class="lbl">Warnings</div></div>
+  <div class="kpi"><div class="num">${idleCount}</div><div class="lbl">Unreachable / no data</div></div>`;
+
+/* ---------- Priority Attention (curated triage) ---------- */
+const TRIAGE = __TRIAGE__;
+/* One row per linked server per instance, already carrying its verdict — built by
+   inventory_report.build_fleet_linked_servers(), which reuses the same rules as the per-server
+   page so the two cannot disagree about what is droppable. */
+const LINKED_SERVERS = __LINKED_SERVERS__;
+document.getElementById("triage").innerHTML = TRIAGE.map((t,i)=>`
+  <div class="tcard ${t.sev}">
+    <div class="tnum">${String(i+1).padStart(2,"0")}</div>
+    <div class="tbody">
+      <h3>${esc(t.title)}</h3>
+      <p>${esc(t.body)}</p>
+      <div class="action"><b>Action:</b> ${esc(t.action)}</div>
+      <div class="tags">${t.tags.map(x=>`<span class="pill">${esc(x)}</span>`).join("")}</div>
+    </div>
+    <span class="sev ${t.sev}">${t.sev==="info"?"Note":t.sev}</span>
+  </div>`).join("");
+
+/* ---------- Fleet matrix ---------- */
+/* Every tab renders servers in server_order (set per server in the inventory JSON, defaulting
+   to the file order 1,2,3...). Server_id breaks ties so the order is always stable. */
+const sorted = [...SERVERS].sort((a,b)=>(a.server_order-b.server_order)||String(a.server_id||"").localeCompare(String(b.server_id||"")));
+const statusBadge = s => ({crit:'<span class="badge b-crit">Critical</span>',
+  warn:'<span class="badge b-warn">Warning</span>', ok:'<span class="badge b-ok">Healthy</span>',
+  idle:'<span class="badge b-idle">No data</span>'}[s]);
+const lowestDisk = s => {
+  const d = (s.disks||[]).filter(x=>x.free!=null);
+  if(!d.length){ const flagged=(s.disks||[]).find(x=>x.flag); return flagged?`<span class="badge b-warn">${esc(diskText(flagged))}</span>`:'<span style="color:var(--faint)">—</span>'; }
+  const min = d.reduce((m,x)=>x.free<m.free?x:m);
+  const width = Math.min(100,Math.max(min.free,4));
+  return `<span class="fill-cell"><span class="bar"><i style="width:${width}%;background:${diskColor(min)}"></i></span>${esc(diskText(min))}</span>`;
+};
+/* An OS-only host has no DB/backup/HA/PLE/session columns to fill. Rather than five empty
+   cells, its row carries the OS signals that exist: running services, CPU and memory. */
+const osMatrixCells = s => {
+  const o = s.os_health || {};
+  const svc = (o.services||[]);
+  const bad = svc.filter(x=>String(x.status||'').toUpperCase()!=='OK').length;
+  const svcCell = !svc.length ? '<span style="color:var(--faint)">—</span>'
+    : bad ? `<span class="badge b-crit">${bad}/${svc.length} service down</span>`
+          : `<span class="badge b-ok">${svc.length}/${svc.length} services up</span>`;
+  const num = (v, unit) => v==null ? '—' : `<span style="color:${v>=90?'var(--crit)':v>=80?'var(--warn)':'inherit'}">${v}${unit}</span>`;
+  return `<td class="center"><span class="badge b-idle">no DB</span></td>
+    <td colspan="2" style="font-size:11.5px">${svcCell}</td>
+    <td class="num-cell">${num(o.cpuPct,'% CPU')}</td>
+    <td class="num-cell">${num(o.memPct,'% mem')}</td>`;
+};
+/* Each server row links to its own page of metric charts for the same window. */
+const srvCell = s => s.reportUrl
+  ? `<a class="srv-link" href="${esc(s.reportUrl)}"><span class="role">${esc(s.role)}</span><span class="ip">${esc(s.ip)} · charts →</span></a>`
+  : `<span class="role">${esc(s.role)}</span><span class="ip">${esc(s.ip)}</span>`;
+document.querySelector("#matrix tbody").innerHTML = sorted.map(s=>`
+  <tr>
+    <td class="srv">${srvCell(s)}</td>
+    <td>${esc(s.platform)}<div style="color:var(--faint);font-size:11px">${s.ramGB?esc(s.ramGB)+" GB RAM":""}</div></td>
+    ${s.osOnly ? osMatrixCells(s) : `
+    <td class="center">${s.total==null?'<span style="color:var(--faint)">—</span>':
+        (s.online===s.total && s.total>0 ? `<span class="badge b-ok">${s.online}/${s.total}</span>` :
+         s.total===0 ? '<span class="badge b-idle">0/0</span>' :
+         `<span class="badge b-crit">${s.online}/${s.total}</span>`)}</td>
+    <td><span class="dot ${s.backup.cov==='No metrics'?'idle':s.backup.status==='CRITICAL'?'crit':s.backup.status==='WARNING'?'warn':s.backup.status==='OK'?'ok':'idle'}"></span>${esc(s.backup.cov)}</td>
+    <td style="font-size:11.5px">${/FCI/.test(s.ha)?'<span class="badge b-info">'+esc(s.ha.split(' · ')[0])+'</span>':'<span style="color:var(--muted)">'+esc(s.ha.split(' · ')[1]||s.ha)+'</span>'}</td>
+    <td class="num-cell"><span class="badge ${pleClass(s.ple)}">${fmt(s.ple)}</span></td>
+    <td class="num-cell">${s.sessions==null?'—':(s.sessions>600?'<b style="color:var(--warn)">'+fmt(s.sessions)+'</b>':fmt(s.sessions))}</td>`}
+    <td>${lowestDisk(s)}</td>
+    <td class="center">${s.cfg.warns?`<span class="badge ${s.cfg.warns>=5?'b-warn':'b-idle'}">${s.cfg.warns}</span>`:'<span style="color:var(--faint)">0</span>'}</td>
+    <td>${statusBadge(s.status)}</td>
+  </tr>`).join("");
+
+/* ---------- Backup table ---------- */
+/* The verdict is the per-database policy result (compliant/eligible), not "does any backup of
+   this type exist somewhere on the instance". And it never says "chain broken": a stale LOG
+   backup proves an RPO gap, while chain continuity needs backup LSNs nothing here collects —
+   and a DBA who reads "broken" takes a fresh FULL that may discard a working restore path. */
+const bkAssess = s => {
+  if(s.backup.cov==="No metrics") return '<span class="badge b-idle">Unverified</span>';
+  const n = `${s.backup.compliant??0}/${s.backup.eligible??0} DB`;
+  if(s.backup.status==="CRITICAL") return `<span class="badge b-crit" title="${esc((s.backup.worstDatabases||[]).join(', '))}">Policy violated · ${n}</span>`;
+  if(s.backup.status==="WARNING") return `<span class="badge b-warn" title="${esc((s.backup.worstDatabases||[]).join(', '))}">Aging · ${n}</span>`;
+  if(s.backup.status==="OK") return `<span class="badge b-ok">Compliant · ${n}</span>`;
+  return '<span class="badge b-idle">Unverified</span>';
+};
+const backupStamp = (value, stale=false) => value
+  ? (stale ? `<b style="color:var(--crit)">${esc(value)}</b>` : esc(value))
+  : '<span style="color:var(--faint)">—</span>';
+/* Backup evidence (FULL/DIFF/LOG) is a SQL Server shape; Oracle, PostgreSQL and hosts with
+   no database do not have it and would render as a row of dashes. */
+document.querySelector("#backup tbody").innerHTML = sorted.filter(s=>s.dbType==="sqlserver").map(s=>`
+  <tr>
+    <td class="srv"><span class="role">${esc(s.role)}</span><span class="ip">${esc(s.ip)}</span></td>
+    <td>${esc(s.backup.cov)}</td>
+    <td class="num-cell">${backupStamp(s.backup.full)}</td>
+    <td class="num-cell">${backupStamp(s.backup.diff)}</td>
+    <td class="num-cell">${backupStamp(s.backup.log,s.backup.logStale)}</td>
+    <td>${bkAssess(s)}</td>
+  </tr>`).join("");
+
+/* ---------- Config governance ---------- */
+const yn = (v, good) => v==null ? '<span class="badge b-idle">—</span>'
+  : (v===good ? '<span class="badge b-ok">✓</span>' : '<span class="badge b-warn">✗</span>');
+const maxMem = mb => mb==null?'—' : mb===2147483647?'<span class="badge b-warn">∞ uncapped</span>' : (mb/1024).toFixed(0)+" GB";
+document.querySelector("#config tbody").innerHTML = sorted.filter(s=>!s.oracle && !s.cfg.govMissing).map(s=>`
+  <tr>
+    <td class="srv"><span class="role">${esc(s.role)}</span><span class="ip">${esc(s.ip)}</span></td>
+    <td class="num-cell">${fmt(s.cfg.cpu)}</td>
+    <td class="num-cell">${s.cfg.maxdop===s.cfg.cpu&&s.cfg.cpu?'<b style="color:var(--warn)">'+s.cfg.maxdop+'</b>':fmt(s.cfg.maxdop)}</td>
+    <td class="num-cell">${s.cfg.cost<30?'<span style="color:var(--warn)">'+s.cfg.cost+'</span>':fmt(s.cfg.cost)}</td>
+    <td class="num-cell">${maxMem(s.cfg.maxmemMB)}</td>
+    <td class="center">${yn(s.cfg.backupCompr,1)}</td>
+    <td class="center">${yn(s.cfg.remoteDac,1)}</td>
+    <td class="center">${yn(s.cfg.optAdhoc,1)}</td>
+    <td class="center">${s.cfg.blockedThr==null?'<span class="badge b-idle">—</span>':(s.cfg.blockedThr>0?'<span class="badge b-ok">✓</span>':'<span class="badge b-warn">✗</span>')}</td>
+    <td class="center">${s.cfg.xpcmd==null?'<span class="badge b-idle">—</span>':(s.cfg.xpcmd===1?'<span class="badge b-crit">! on</span>':'<span class="badge b-ok">off</span>')}</td>
+  </tr>`).join("");
+
+/* ---------- Per-database table ---------- */
+/* "4 databases" told a reader nothing about any of them. These columns are the ones a DBA
+   judges a database by, and every value comes from the metric overlay, so a log at 99% used
+   or a LOG backup 121 days behind is visible on the row it belongs to. */
+const ageH = h => h==null ? '<span style="color:var(--faint)">—</span>'
+  : h < 48 ? Math.round(h)+'h' : Math.round(h/24)+'d';
+const bkAge = (h, warnAt, critAt) => h==null ? '<span style="color:var(--faint)">—</span>'
+  : `<span style="color:${h>=critAt?'var(--crit)':h>=warnAt?'var(--warn)':'inherit'};font-weight:${h>=warnAt?'600':'400'}">${ageH(h)}</span>`;
+/* A blank DIFF column on a database whose policy does not require one is not a gap. Saying
+   "n/r" is the difference between "we are not taking this backup" and "we do not need to". */
+const bkTypeCell = (d, type, h, warnAt, critAt) => {
+  const required = d.requiredTypes;
+  if(Array.isArray(required) && !required.includes(type))
+    return '<span style="color:var(--faint)" title="Not required by data/backup_policy.json">n/r</span>';
+  return bkAge(h, warnAt, critAt);
+};
+const gb = v => v==null ? '—' : (v>=1024 ? (v/1024).toFixed(2)+' TB' : v.toFixed(v<10?2:0)+' GB');
+const logCell = d => {
+  if(d.logGB==null && d.logUsedPct==null) return '—';
+  const pct = d.logUsedPct;
+  const col = pct==null ? 'inherit' : pct>=95 ? 'var(--crit)' : pct>=85 ? 'var(--warn)' : 'inherit';
+  return `${gb(d.logGB)}${pct==null?'':` · <span style="color:${col};font-weight:${pct>=85?'600':'400'}">${pct}%</span>`}`;
+};
+const checkdbCell = v => !v || v==='unknown'
+  ? '<span class="badge b-warn" title="No last-known-good CHECKDB reported">unknown</span>'
+  : esc(v);
+const pageVerifyCell = v => !v ? '<span style="color:var(--faint)">—</span>'
+  : (v==='CHECKSUM' ? esc(v)
+     : `<span class="badge b-warn" title="CHECKSUM is the current page verification; anything else misses corruption it would catch">${esc(v)}</span>`);
+/* Who can get into this database, and how many of them own it. The owner names go in the
+   tooltip: the count is the number a reader scans for, the names are what they ask about. */
+const usersCell = d => {
+  if(d.users==null) return '<span style="color:var(--faint)">—</span>';
+  const high = d.highPrivUsers||0;
+  const owners = (d.owners||[]).length ? `db_owner: ${(d.owners||[]).join(", ")}` : "no db_owner principals";
+  return `<span title="${esc(owners)}">${d.users}${high?` · <span style="color:var(--warn);font-weight:600">${high} high</span>`:''}</span>`;
+};
+/* Query Store per database: can a slowdown on this one still be investigated afterwards?
+   The badge shows the ACTUAL state, never the configured one — a Query Store that reached its
+   max_storage_size flips itself to READ_ONLY and stops capturing while is_query_store_on still
+   reads 1, so a page built on the configured value calls that database covered when it has
+   recorded nothing since the day it filled up. Blank means the collector has not reported this
+   database, which is a different thing from off. */
+const qsCell = d => {
+  const state = d.queryStore || '';
+  const q = d.queryStoreDetail || {};
+  if(!state) return '<span class="badge b-idle" title="QUERY_STORE_COVERAGE has not reported this database">—</span>';
+  const parts = [];
+  /* Why, not just whether: "switched off" is a decision, "stopped after an error" is a fault. */
+  if(q.off_reason_desc) parts.push(q.off_reason_desc);
+  if(q.desired_state && q.actual_state && q.desired_state!==q.actual_state)
+    parts.push(`configured ${q.desired_state}, actually ${q.actual_state}`);
+  if(q.readonly_reason_desc && q.readonly_reason_desc!==q.off_reason_desc)
+    parts.push(q.readonly_reason_desc);
+  if(q.storage_used_pct!=null) parts.push(`storage ${q.storage_used_pct}% of ${q.max_storage_mb} MB`);
+  if(q.capture_mode) parts.push(`capture ${q.capture_mode}`);
+  const tip = parts.join(' · ') || state;
+  if(state==='READ_WRITE') return `<span class="badge b-ok" title="${esc(tip)}">on</span>`;
+  if(state==='OFF') return `<span class="badge b-warn" title="${esc(tip)}">off</span>`;
+  if(state==='ERROR') return `<span class="badge b-crit" title="${esc(tip)}">error</span>`;
+  if(state==='AG_SECONDARY') return `<span class="badge b-idle" title="${esc(tip)}">secondary</span>`;
+  /* READ_ONLY / ERROR / NOT_ONLINE: switched on but not recording. */
+  return `<span class="badge b-warn" title="${esc(tip)}">${esc(state.toLowerCase())}</span>`;
+};
+const dbTable = s => {
+  const rows = s.databases||[];
+  if(!rows.length) return '';
+  const asOf = rows.map(d=>d.asOf).filter(Boolean).sort().pop();
+  return `<div class="f" style="margin-top:12px">
+    <div class="k" style="color:var(--muted);font-size:11px;text-transform:uppercase">Databases (${rows.length})
+      ${asOf?`<span class="src-tag">live · ${esc(String(asOf).replace('T',' ').replace('Z',''))}</span>`:''}</div>
+    <div class="tbl-scroll" style="margin-top:5px"><table class="db-tbl">
+      <thead><tr><th>Database</th><th>State</th><th>Recovery</th><th class="num-cell">Data</th>
+        <th class="num-cell">Log (used)</th><th class="center">Compat</th><th>Page verify</th>
+        <th>Last CHECKDB</th><th class="num-cell">Users</th><th class="center">Query Store</th>
+        <th class="num-cell">FULL</th><th class="num-cell">DIFF</th><th class="num-cell">LOG</th></tr></thead>
+      <tbody>${rows.map(d=>`<tr>
+        <td class="mono dbname" style="font-weight:600">${esc(d.name)}</td>
+        <td>${d.state==='ONLINE'?'<span class="badge b-ok">ONLINE</span>':`<span class="badge b-crit">${esc(d.state||'?')}</span>`}</td>
+        <td>${esc(d.recovery||'—')}${d.logReuseWait&&d.logReuseWait!=='NOTHING'?`<span class="src-tag" title="log_reuse_wait: why the log cannot truncate">${esc(d.logReuseWait)}</span>`:''}</td>
+        <td class="num-cell">${gb(d.dataGB)}${d.staticSize?'<span class="src-tag">static</span>':''}</td>
+        <td class="num-cell">${logCell(d)}</td>
+        <td class="center mono">${d.compat==null?'—':esc(String(d.compat))}</td>
+        <td>${pageVerifyCell(d.pageVerify)}</td>
+        <td class="mono wrapcell" style="font-size:11px">${checkdbCell(d.checkdb)}</td>
+        <td class="num-cell">${usersCell(d)}</td>
+        <td class="center">${qsCell(d)}</td>
+        <td class="num-cell">${bkTypeCell(d,'FULL',d.fullAgeHours,26,48)}</td>
+        <td class="num-cell">${bkTypeCell(d,'DIFF',d.diffAgeHours,26,48)}</td>
+        <td class="num-cell">${bkTypeCell(d,'LOG',d.logAgeHours,4,24)}</td>
+      </tr>`).join("")}</tbody>
+    </table></div></div>`;
+};
+
+/* ---------- Security ---------- */
+/* Failed logins and password age were collected all along and reported nowhere, so a server
+   taking ~10k failed attempts a day on one login looked as healthy as one taking none. */
+const securityBlock = s => {
+  const sec = s.security||{};
+  if(!sec.collected) return '';
+  const bits = [];
+  if(sec.failed24h!=null){
+    const bad = sec.failed24h >= 1000;
+    bits.push(`<span class="dbchip"${bad?' style="color:var(--crit);border-color:var(--crit-line)"':''}>failed logins 24h: ${fmt(sec.failed24h)}</span>`);
+  }
+  (sec.principals||[]).slice(0,5).forEach(p=>{
+    const bad = (p.attempts||0) >= 1000;
+    bits.push(`<span class="dbchip"${bad?' style="color:var(--crit);border-color:var(--crit-line)"':''}>${esc(p.login)}: ${fmt(p.attempts)} attempts</span>`);
+  });
+  const pw = sec.passwordsOld||[];
+  if(pw.length){
+    bits.push(`<span class="dbchip" style="color:var(--warn);border-color:var(--warn-line)" title="${esc(pw.map(p=>p.login+" "+p.age_days+"d").join(", "))}">${pw.length} login(s) password &gt; ${sec.passwordThresholdDays||180}d · oldest ${fmt(sec.oldestPasswordDays)}d</span>`);
+  }
+  if(sec.certsExpired) bits.push(`<span class="dbchip" style="color:var(--crit);border-color:var(--crit-line)">${sec.certsExpired} certificate(s) expired</span>`);
+  if(sec.certsExpiring30d) bits.push(`<span class="dbchip" style="color:var(--warn);border-color:var(--warn-line)">${sec.certsExpiring30d} certificate(s) expiring &lt; 30d</span>`);
+  if(!bits.length) bits.push('<span class="dbchip">no failed logins · no stale passwords</span>');
+  return `<div class="f" style="margin-top:12px"><div class="k" style="color:var(--muted);font-size:11px;text-transform:uppercase">Security</div>
+    <div class="dblist" style="margin-top:5px">${bits.join("")}</div></div>`;
+};
+
+/* ---------- Data freshness ---------- */
+/* Static inventory and live metrics used to render identically, so a backup time from June
+   sat next to one from an hour ago with nothing to tell them apart. */
+const freshBadge = s => {
+  const f = s.freshness||{};
+  if(f.collectFailed) return `<span class="badge b-crit" title="${esc(f.collectReason||'')}">⚠ collection failed</span>`;
+  if(f.stale) return `<span class="badge b-warn" title="Showing the last values collected, not current ones">⚠ stale${f.lastChecked?' · last '+esc(f.lastChecked):''}</span>`;
+  return '';
+};
+const freshLine = s => {
+  /* The reason itself is already spelled out in the inventory line that follows, so this
+     says only which kind of data the row above is. */
+  const f = s.freshness||{};
+  if(f.collectFailed) return '<span style="color:var(--crit)">collection failed — values below are the last known ones</span>';
+  if(!f.asOf) return '<span style="color:var(--warn)">no live metrics — values are the last known inventory snapshot</span>';
+  const age = f.ageHours==null || f.ageHours < 1 ? '' : ` (${ageH(f.ageHours)} ago)`;
+  return `live metrics as of ${esc(String(f.asOf).replace('T',' ').replace('Z',''))}${age}`;
+};
+
+/* ---------- Linked servers (fleet-wide) ----------
+   Reachability alone is a status; reachability NEXT TO the reference count is a decision. An
+   unreachable linked server nothing calls is cleanup, the same one with a procedure behind it is
+   the next outage — so both facts sit on one row and the verdict column states the conclusion.
+   Fleet-wide because a dead target is usually referenced from several instances at once, and the
+   drop list is a piece of work somebody schedules once. */
+const LINKED_BADGE = {FIX:"b-crit", DROP:"b-warn", REVIEW:"b-warn", KEEP:"b-ok"};
+(function renderLinked(){
+  const rows = LINKED_SERVERS || [];
+  const section = document.getElementById("linkedSection");
+  if(!rows.length) return;                 /* nothing configured anywhere: no empty table */
+  section.hidden = false;
+  document.querySelector("#linked tbody").innerHTML = rows.map(r=>`<tr>
+    <td><span class="badge ${LINKED_BADGE[r.verdict]||'b-idle'}">${esc(r.verdict)}</span></td>
+    <td style="white-space:nowrap">${esc(r.server_id)}</td>
+    <td style="white-space:nowrap"><b>${esc(r.name)}</b>${
+        r.dataSource && r.dataSource!=='?' ? `<div style="font-size:10px;color:var(--faint);font-family:var(--mono)">${esc(r.dataSource)}</div>` : ''}</td>
+    <td style="white-space:nowrap;font-family:var(--mono);font-size:11px">${esc(r.state)}</td>
+    <td class="num-cell">${r.procedures}</td>
+    <td class="num-cell">${r.objects}</td>
+    <td class="num-cell">${r.databases}</td>
+    <td class="prose" style="font-size:11.5px">${esc(r.why)}</td>
+  </tr>`).join("");
+
+  const n = v => rows.filter(r=>r.verdict===v).length;
+  /* The counts are the summary an operator acts on: how much is broken, how much is cleanup. */
+  document.getElementById("linkedLegend").innerHTML = [
+    ['b-crit','FIX', n('FIX'), 'unreachable and code calls it — fails next run'],
+    ['b-warn','DROP', n('DROP'), 'unreachable and unreferenced — safe to remove'],
+    ['b-warn','REVIEW', n('REVIEW'), 'reachable but unreferenced — remove, or find who uses it'],
+    ['b-ok','KEEP', n('KEEP'), 'reachable and depended on'],
+  ].map(([cls,label,count,note])=>
+      `<span><span class="badge ${cls}" style="padding:1px 6px">${label}</span> ${count} — ${note}</span>`
+    ).join("") + `<span>${rows.length} linked server(s) across ${
+      new Set(rows.map(r=>r.server_id)).size} instance(s)</span>`;
+})();
+
+/* ---------- Server detail ---------- */
+/* A host with no database has no PLE, no sessions, no backup and no HA. Showing those keys
+   empty reads as "we failed to collect"; these are the fields that actually exist for it. */
+const pctColor = v => v==null ? 'var(--faint)' : v>=90 ? 'var(--crit)' : v>=80 ? 'var(--warn)' : 'var(--text)';
+const osFields = s => {
+  const o = s.os_health || {};
+  const cpuTxt = o.cpuPct==null ? '—'
+    : `${o.logicalCpus?o.logicalCpus+' vCPU · ':''}<span style="color:${pctColor(o.cpuPct)}">${o.cpuPct}%</span>`;
+  const memTxt = o.memPct==null ? '—'
+    : `${o.memTotalGB?o.memTotalGB+' GB · ':''}${o.memUsedGB?o.memUsedGB+' GB used · ':''}<span style="color:${pctColor(o.memPct)}">${o.memPct}%</span>`;
+  return `
+    <div class="f"><div class="k">Hostname</div><div class="v" style="font-weight:500">${esc(o.hostname||'—')}</div></div>
+    <div class="f"><div class="k">Uptime</div><div class="v">${esc(o.uptime||'—')}</div></div>
+    <div class="f"><div class="k">CPU</div><div class="v mono">${cpuTxt}</div></div>
+    <div class="f"><div class="k">Memory</div><div class="v mono">${memTxt}</div></div>
+    <div class="f"><div class="k">Pending reboot</div><div class="v">${esc(o.pendingReboot||'—')}</div></div>`;
+};
+const osBlocks = s => {
+  const o = s.os_health || {};
+  if(!o || (!(o.services||[]).length && !(o.topCpu||[]).length && !(o.topMemory||[]).length && !(o.events||[]).length)) return '';
+  const svc = (o.services||[]).map(x=>{
+    const bad = String(x.status||'').toUpperCase()!=='OK';
+    return `<span class="dbchip"${bad?' style="color:var(--crit);border-color:var(--crit-line)"':''}>${esc(x.name)}: ${esc(x.state)}</span>`;
+  }).join("");
+  const procLine = p => `${esc(p.process)}${p.cpu_percent!=null?' · CPU '+p.cpu_percent+'%':''}${p.memory_mb!=null?' · RAM '+(p.memory_mb>=1024?(p.memory_mb/1024).toFixed(1)+' GB':p.memory_mb+' MB'):''}`;
+  const cpuProcs = (o.topCpu||[]).map(p=>`<span class="dbchip">${procLine(p)}</span>`).join("");
+  const memProcs = (o.topMemory||[]).map(p=>`<span class="dbchip">${procLine(p)}</span>`).join("");
+  const evt = (o.events||[]).map(e=>`<span class="dbchip" style="color:var(--warn);border-color:var(--warn-line)">${esc(e.log)}: ${e.count} error events</span>`).join("");
+  const block = (label, body) => body ? `<div class="f" style="margin-top:12px"><div class="k" style="color:var(--muted);font-size:11px;text-transform:uppercase">${label}</div><div class="dblist" style="margin-top:5px">${body}</div></div>` : '';
+  return block('Services', svc) + block('Top process by CPU', cpuProcs) + block('Top process by memory', memProcs) + block('Event log', evt);
+};
+document.getElementById("details").innerHTML = sorted.map(s=>`
+  <details class="srv-detail"${s.status==='crit'?' open':''}>
+    <summary>
+      <span class="chev">▶</span>
+      <span class="s-name">${esc(s.role)} <small>${esc(s.ip)} · ${esc(s.endpoint)}</small></span>
+      <span>${s.total==null?'':(s.online===s.total?'<span class="badge b-ok">'+s.online+'/'+s.total+' online</span>':'<span class="badge b-crit">'+s.online+'/'+s.total+'</span>')}</span>
+      <span>${freshBadge(s)}</span>
+      <span>${statusBadge(s.status)}</span>
+    </summary>
+    <div class="d-body">
+      <div class="d-grid">
+        <div class="f"><div class="k">Company</div><div class="v">${esc(s.company)}</div></div>
+        <div class="f"><div class="k">Platform</div><div class="v">${esc(s.platform)}</div></div>
+        <div class="f"><div class="k">OS</div><div class="v" style="font-weight:500">${esc(s.os)}</div></div>
+        ${s.osOnly ? osFields(s) : `
+        <div class="f"><div class="k">Host RAM</div><div class="v">${s.ramGB?esc(s.ramGB)+" GB":"—"}</div></div>
+        <div class="f"><div class="k">HA / DR</div><div class="v" style="font-weight:500">${esc(s.ha)}</div></div>
+        <div class="f"><div class="k">Backup</div><div class="v" style="font-weight:500">${esc(s.backup.cov)}${s.backup.note?' · '+esc(s.backup.note):''}</div></div>
+        <div class="f"><div class="k">PLE</div><div class="v mono">${fmt(s.ple)}</div></div>
+        <div class="f"><div class="k">Sessions</div><div class="v mono">${fmt(s.sessions)}</div></div>`}
+        ${s.cfg.cpu?`<div class="f"><div class="k">vCPU / MAXDOP</div><div class="v mono">${s.cfg.cpu} / ${s.cfg.maxdop}</div></div>
+        <div class="f"><div class="k">Max / committed mem</div><div class="v mono">${maxMem(s.cfg.maxmemMB)} / ${s.cfg.committedMB?(s.cfg.committedMB/1024).toFixed(0)+' GB':'—'}</div></div>
+        <div class="f"><div class="k">Cost threshold</div><div class="v mono">${s.cfg.cost}</div></div>
+        <div class="f"><div class="k">TempDB</div><div class="v mono" style="font-size:11px">${esc(s.cfg.tempdb||'—')}</div></div>`:''}
+      </div>
+      ${s.disks&&s.disks.length?`<div class="f"><div class="k" style="color:var(--muted);font-size:11px;text-transform:uppercase">Disks</div>
+        <div class="dblist" style="margin-top:5px">${s.disks.map(d=>`<span class="dbchip" style="${d.sev==='crit'?'color:var(--crit);border-color:var(--crit-line)':d.sev==='warn'?'color:var(--warn);border-color:var(--warn-line)':''}">${esc(diskText(d))}</span>`).join("")}</div></div>`:''}
+      ${dbTable(s)}
+      ${securityBlock(s)}
+      ${(!(s.databases||[]).length && s.dbs && s.dbs.length)?`<div class="f" style="margin-top:12px"><div class="k" style="color:var(--muted);font-size:11px;text-transform:uppercase">Databases (${s.dbs.length})</div>
+        <div class="dblist">${s.dbs.map(d=>`<span class="dbchip">${esc(d)}</span>`).join("")}</div></div>`:''}
+      ${osBlocks(s)}
+      ${s.cfg.warns?`<ul class="warns">${
+        (s.cfg.backupCompr===0?'<li class="cfg">backup compression default = 0 → enable to shrink backup size/time</li>':'')+
+        (s.cfg.blockedThr===0?'<li class="cfg">blocked process threshold = 0 → set 30–60s to capture blocking</li>':'')+
+        (s.cfg.optAdhoc===0?'<li class="cfg">optimize for ad hoc workloads = 0 → enable to reduce plan-cache bloat</li>':'')+
+        (s.cfg.remoteDac===0?'<li class="cfg">remote admin connections = 0 → enable remote DAC for prod</li>':'')+
+        (s.cfg.cost<30?'<li class="cfg">cost threshold for parallelism = '+s.cfg.cost+' → raise to 30–50</li>':'')+
+        (s.cfg.xpcmd===1?'<li>xp_cmdshell = 1 (enabled) → confirm intentional / scope it</li>':'')
+      }</ul>`:''}
+      ${s.findings&&s.findings.length?`<ul class="warns">${s.findings.map(f=>`<li>${esc(f)}</li>`).join("")}</ul>`:''}
+      ${s.detail&&s.detail.length?`<div class="d-grid" style="grid-template-columns:1fr;margin-top:12px">${s.detail.map(kv=>`<div class="f"><div class="k">${esc(kv[0])}${kv[2]==='static'?'<span class="src-tag" title="From the canonical inventory file; the metrics overlay does not refresh it">static</span>':''}</div><div class="v" style="font-weight:500;word-break:break-word">${esc(kv[1])}</div></div>`).join("")}</div>`:''}
+      ${s.reportUrl?`<div style="margin-top:12px"><a class="charts" href="${esc(s.reportUrl)}">📈 Metric history — one chart per metric item over the report window →</a></div>`:''}
+      ${s.indexUrl?`<div style="margin-top:8px"><a class="charts" href="${esc(s.indexUrl)}">🗂 Index usage — disabled indexes, drop candidates and fragmentation, with a recommended action per row →</a></div>`:''}
+      <div style="margin-top:12px;font-size:11px;color:var(--faint);font-family:var(--mono)">${freshLine(s)} · ${esc(s.inv)}</div>
+    </div>
+  </details>`).join("");
+</script>
+</body>
+</html>

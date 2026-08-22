@@ -1,0 +1,158 @@
+---
+# Phase 1 — Oracle Grid Infrastructure Installation
+# Targets: oracle_rac group
+# Run after oracle-rac-os-prep.yml and before oracle-rac-db.yml
+
+- name: Install Oracle Grid Infrastructure on all RAC nodes
+  hosts: oracle_rac
+  become: true
+  gather_facts: false
+  vars_files:
+    - ../group_vars/oracle_rac.yml
+
+  tasks:
+    - name: Check if Grid Infrastructure is already installed
+      ansible.builtin.stat:
+        path: "{{ oracle_grid_home }}/bin/crsctl"
+      register: grid_crsctl
+
+    - name: Unzip Grid Infrastructure installer into grid home (first node only)
+      ansible.builtin.unarchive:
+        src: "{{ oracle_install_stage }}/{{ oracle_grid_installer_zip }}"
+        dest: "{{ oracle_grid_home }}"
+        owner: grid
+        group: oinstall
+        remote_src: true
+        creates: "{{ oracle_grid_home }}/gridSetup.sh"
+      when: not grid_crsctl.stat.exists or oracle_grid_force_reinstall
+      run_once: true
+      delegate_to: "{{ groups['oracle_rac'][0] }}"
+
+    - name: Deploy Grid Infrastructure response file
+      ansible.builtin.template:
+        src: ../templates/oracle-grid-response.rsp.j2
+        dest: "{{ oracle_install_stage }}/grid-install.rsp"
+        owner: grid
+        group: oinstall
+        mode: "0600"
+      no_log: true
+
+    - name: Run Grid Infrastructure silent install (first node — blocks until complete)
+      ansible.builtin.shell: |
+        {{ oracle_grid_home }}/gridSetup.sh \
+          -silent \
+          -waitforcompletion \
+          -ignorePrereqFailure \
+          -responseFile {{ oracle_install_stage }}/grid-install.rsp \
+          ORACLE_HOME={{ oracle_grid_home }} \
+          ORACLE_HOME_NAME=OraGI26cHome \
+          2>&1
+      args:
+        executable: /bin/bash
+      become_user: grid
+      register: grid_install_result
+      failed_when: >
+        grid_install_result.rc != 0 and
+        'Successfully Setup Software' not in (grid_install_result.stdout | default(''))
+      changed_when: true
+      run_once: true
+      delegate_to: "{{ groups['oracle_rac'][0] }}"
+      when: not grid_crsctl.stat.exists or oracle_grid_force_reinstall
+
+    - name: Run orainstRoot.sh on all nodes
+      ansible.builtin.command:
+        cmd: "{{ oracle_inventory_dir }}/orainstRoot.sh"
+      changed_when: true
+      when: not grid_crsctl.stat.exists or oracle_grid_force_reinstall
+
+    - name: Run root.sh on first RAC node
+      ansible.builtin.command:
+        cmd: "{{ oracle_grid_home }}/root.sh"
+      changed_when: true
+      run_once: true
+      delegate_to: "{{ groups['oracle_rac'][0] }}"
+      when: not grid_crsctl.stat.exists or oracle_grid_force_reinstall
+
+    - name: Run root.sh on second RAC node
+      ansible.builtin.command:
+        cmd: "{{ oracle_grid_home }}/root.sh"
+      changed_when: true
+      run_once: true
+      delegate_to: "{{ groups['oracle_rac'][1] }}"
+      when: not grid_crsctl.stat.exists or oracle_grid_force_reinstall
+
+    - name: Run gridSetup.sh -executeConfigTools to complete cluster configuration
+      ansible.builtin.shell: |
+        {{ oracle_grid_home }}/gridSetup.sh \
+          -silent \
+          -executeConfigTools \
+          -responseFile {{ oracle_install_stage }}/grid-install.rsp \
+          -waitforcompletion \
+          2>&1
+      args:
+        executable: /bin/bash
+      become_user: grid
+      register: grid_config_result
+      failed_when: >
+        grid_config_result.rc != 0 and
+        'Successfully Setup Software' not in (grid_config_result.stdout | default(''))
+      changed_when: true
+      run_once: true
+      delegate_to: "{{ groups['oracle_rac'][0] }}"
+      when: not grid_crsctl.stat.exists or oracle_grid_force_reinstall
+
+    - name: Verify CRS cluster is running on all nodes
+      ansible.builtin.command:
+        cmd: "{{ oracle_grid_home }}/bin/crsctl check cluster -all"
+      become_user: grid
+      environment:
+        ORACLE_HOME: "{{ oracle_grid_home }}"
+        PATH: "{{ oracle_grid_home }}/bin:{{ ansible_env.PATH }}"
+      register: crs_check
+      changed_when: false
+      run_once: true
+      delegate_to: "{{ groups['oracle_rac'][0] }}"
+
+    - name: Create DATA ASM disk group
+      ansible.builtin.shell: |
+        {{ oracle_grid_home }}/bin/asmca -silent -createDiskGroup \
+          -diskGroupName {{ oracle_asm_data_group }} \
+          -diskList '{{ oracle_asm_data_disk }}' \
+          -redundancy EXTERNAL \
+          2>&1
+      args:
+        executable: /bin/bash
+      become_user: grid
+      environment:
+        ORACLE_HOME: "{{ oracle_grid_home }}"
+        PATH: "{{ oracle_grid_home }}/bin:{{ ansible_env.PATH }}"
+        ORACLE_SID: "+ASM1"
+      register: asm_data_result
+      failed_when: >
+        asm_data_result.rc != 0 and
+        'already exists' not in (asm_data_result.stderr | default('')) | lower
+      changed_when: asm_data_result.rc == 0
+      run_once: true
+      delegate_to: "{{ groups['oracle_rac'][0] }}"
+
+    - name: Create FRA ASM disk group
+      ansible.builtin.shell: |
+        {{ oracle_grid_home }}/bin/asmca -silent -createDiskGroup \
+          -diskGroupName {{ oracle_asm_fra_group }} \
+          -diskList '{{ oracle_asm_fra_disk }}' \
+          -redundancy EXTERNAL \
+          2>&1
+      args:
+        executable: /bin/bash
+      become_user: grid
+      environment:
+        ORACLE_HOME: "{{ oracle_grid_home }}"
+        PATH: "{{ oracle_grid_home }}/bin:{{ ansible_env.PATH }}"
+        ORACLE_SID: "+ASM1"
+      register: asm_fra_result
+      failed_when: >
+        asm_fra_result.rc != 0 and
+        'already exists' not in (asm_fra_result.stderr | default('')) | lower
+      changed_when: asm_fra_result.rc == 0
+      run_once: true
+      delegate_to: "{{ groups['oracle_rac'][0] }}"

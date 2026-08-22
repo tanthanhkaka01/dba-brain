@@ -6,12 +6,14 @@ scheduled collection.
 
 | | Who configures it | Status |
 | --- | --- | --- |
-| **A person, in a browser** | A web console: add an instance the way a database client does — host, port, user, password — and it collects | **Planned.** See [§4](#4-the-browser-path-what-exists-and-what-does-not) for what exists today and what is missing |
+| **A person, in a browser** | A web console: add an instance the way a database client does — host, port, user, password — and it collects | **Planned.** See [§4](#4-the-browser-path-what-exists-and-what-does-not) — the console ships, the add-an-instance flow does not |
 | **An agent, writing JSON** | Every decision is a file. An agent writes the files and runs three commands | **This is the supported path.** [§2](#2-the-agent-path) is written to be followed by a program |
 
-> **`v0.1.0` ships the agent path.** The browser path is deliberately later: the configuration
-> surface has to be right before something generates it, and a console that writes files nobody has
-> agreed the shape of is a second source of truth.
+> **The agent path is the supported one.** The browser path is deliberately later: the
+> configuration surface has to be right before something generates it, and a console that writes
+> files nobody has agreed the shape of is a second source of truth. `webhost` ships from `v0.2.0`
+> and serves the reports and a configuration editor; what it does not yet have is the flow that
+> takes a host, a port and a password and produces a collecting target.
 
 ---
 
@@ -216,7 +218,7 @@ Put the bot token in the secret store the same way the database password went in
 `data/telegram_config.json`, and put your chat id in `data/telegram_groups.json`. A bot cannot open
 a conversation, so message it once first — then `db-ops telegram get-updates` shows the chat id.
 
-**In `v0.1.0` the alert is built from the collected results and sent:**
+**The direct way — build the alert from what was collected, and send it:**
 
 ```bash
 db-ops metrics  alert-summary --include-warning     # the text, from what was just collected
@@ -226,10 +228,17 @@ db-ops telegram send-message --chat-id <id> --text "<that text>"
 `alert-summary` reads the stored results rather than re-querying anything, so it says what the last
 collection found and costs the monitored instance nothing.
 
-> **The queued path is not in this release.** `queue-metrics-reports` / `send-queue` — the
-> scheduled version that dedupes, splits long messages and routes by severity level — lives in the
-> `reports` app, which `v0.1.0` does not ship. It arrives with `reports` in `v0.2.0`. If you see
-> `No module named 'db_ops.reports'`, that is this, and not a broken install.
+**Or the scheduled way**, which is what you want once this runs unattended — it dedupes, splits
+messages over Telegram's 4096-character limit, and routes by severity level:
+
+```bash
+db-ops reports  --config config.json queue-metrics-reports
+db-ops telegram --config config.json send-queue
+```
+
+> One thing to know before the first run: **a queue run consumes the metric rows it read whether or
+> not it queued anything**, so an attempt made before `data/telegram_groups.json` has a chat marks
+> them reported and the next run says "already reported". Collect again and re-queue.
 
 The worked version, against a throwaway container, is
 [`examples/sqlserver-quickstart/README.md`](../examples/sqlserver-quickstart/README.md) step 6.
@@ -288,8 +297,9 @@ does* — host, port, user, password, test the connection, save — with the con
 `db_instances.json`, `users.json` and the encrypted secret entry itself, so that a person who has
 never read this page can get a first collection.
 
-**And `webhost` is not in the `v0.1.0` install.** The release ships the packages the agent path
-needs; the console arrives with the flow above rather than before it.
+**`webhost` ships from `v0.2.0`.** What is missing is not the app — it serves the reports and a
+console that edits configuration today — but the add-an-instance flow above, which is what turns
+the console into something a person can start from.
 
 Until then a person configures the same way an agent does — by copying an example tool root and
 editing JSON — which is why [§2](#2-the-agent-path) is written to be readable by both.

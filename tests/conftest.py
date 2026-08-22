@@ -25,6 +25,7 @@ wearing a different hat.
 
 from __future__ import annotations
 
+import importlib
 import json
 from pathlib import Path
 from typing import Any
@@ -818,3 +819,74 @@ def shipped_metric_catalog(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
     yield catalog
     server_report._METRIC_CATALOG = None
     server_report._METRIC_INTERVALS = None
+
+
+#: Notify levels the suite's own fixtures write, beyond the standard set.
+#:
+#: `logging`, `warning`, `critical`, `error`, `test` and `private` are built in; anything else is
+#: **configuration** — an operator defines a level by putting it in `telegram_config.json`'s
+#: `level_chat_map`, and `known_chat_levels()` reads that from the ambient config at parse time.
+#: The example configs beside `data/` route backups to `backup` and SQL tasks to `sql`, and so do
+#: the fixtures modelled on them.
+SUITE_NOTIFY_LEVELS: tuple[str, ...] = ("backup", "sql", "restore", "sla", "control")
+
+
+@pytest.fixture(autouse=True)
+def _notify_vocabulary_is_declared_not_inherited(monkeypatch):
+    """Pin the notify levels the suite validates against, instead of reading the machine's config.
+
+    `known_chat_levels()` answers "which levels may a notify block name" by loading the ambient
+    configuration — correct in production, and a coupling in a test suite: the same assertion
+    passed on a developer's checkout, where `config.json` defines `backup` and `sql`, and failed on
+    any tree without it with `telegram_chat must be one of ...`. **Fifty-three failures in the
+    complete export came from this one difference**, and every one of them read as a broken backup
+    or report rather than as a missing config file.
+
+    So the suite declares its own vocabulary. `test_notify_object` still monkeypatches this
+    function where the *mechanism* is the subject, and the rejection path still has teeth: a level
+    that is in neither list — `urgent` — is refused exactly as before.
+    """
+    from db_ops.lib import notify
+
+    monkeypatch.setattr(
+        notify,
+        "known_chat_levels",
+        lambda: notify.NOTIFY_CHAT_LEVELS + SUITE_NOTIFY_LEVELS,
+    )
+
+
+#: Module-level default paths that point at the operator's own `data/` file, and the shipped
+#: example each one should read in a test.
+#:
+#: These are correct in production — a running installation *does* read `data/metric_definitions
+#: .json` — and wrong in a suite, where they make the assertion depend on whichever estate the
+#: checkout belongs to. The same test then passes here and fails in an export with `StopIteration`
+#: or an empty set, naming nothing that would lead you to a missing file.
+DEFAULT_PATHS_TO_REDIRECT: tuple[tuple[str, str], ...] = (
+    ("db_ops.reports.metrics_reports.DEFAULT_METRIC_DEFINITIONS_PATH", "metric_definitions.json"),
+    ("db_ops.reports.push.DEFAULT_REPORTS_CONFIG_PATH", "reports_config.json"),
+    ("db_ops.telegram.command_processor.DEFAULT_COMMANDS_PATH", "telegram_support_commands.json"),
+)
+
+
+@pytest.fixture(autouse=True)
+def _defaults_read_the_shipped_examples(monkeypatch):
+    """Point the module defaults at the examples that ship, for the length of a test.
+
+    A test that reads a module's default path is asking "what does a real installation see", and
+    answers it with whatever this machine has. The examples are the installation every reader
+    gets, so they are the honest stand-in — and they are checked into the tree, so the answer is
+    the same on every checkout.
+
+    Redirection is skipped where the attribute does not exist, because the withheld packages are
+    absent from an exported tree and a fixture that fails on `db_ops.reports` would take the whole
+    suite with it there.
+    """
+    for target, example in DEFAULT_PATHS_TO_REDIRECT:
+        module_name, _, attribute = target.rpartition(".")
+        try:
+            module = importlib.import_module(module_name)
+        except Exception:  # noqa: BLE001 - the package is not in this distribution.
+            continue
+        if hasattr(module, attribute):
+            monkeypatch.setattr(target, shipped_config(example))

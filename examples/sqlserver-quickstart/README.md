@@ -225,10 +225,10 @@ Message: No full or differential backup found for database APPDB.
 What arrives in the chat is the finding itself, not a notification that something happened — which
 is the whole point: an alert you can act on without opening anything else.
 
-> **The scheduled path is `v0.2.0`.** `queue-metrics-reports` and `send-queue` — the version that
-> dedupes, splits long messages, routes by severity level and runs unattended — live in the
-> `reports` app, which this release does not ship. `No module named 'db_ops.reports'` is that, not
-> a broken install.
+> **There is a scheduled version of this**, and it is what you want once the toolkit runs
+> unattended: `db-ops reports queue-metrics-reports` followed by `db-ops telegram send-queue`
+> dedupes, splits messages over Telegram's length limit, and routes by severity level.
+> `alert-summary` is the direct form, which is easier to see working the first time.
 
 ### Three ways this fails, and what each one says
 

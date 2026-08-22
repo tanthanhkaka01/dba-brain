@@ -4,24 +4,26 @@
     "The token is resolved in this order: the environment variable named by 'bot_token_env', then the encrypted secret store using the ref in bot_telegram.json, then 'bot_token_secret_file', then the literal 'bot_token'. The literal exists for a throwaway test and should stay empty in anything that runs more than once.",
     "'secret_text_file' points into the folder holding encrypted_secret_text.json - the tool reads that file's DIRECTORY, so any path inside data/ works.",
     "'level_chat_map' is THE routing table: a level with a chat sends there, a level with no chat does not send. There is no second allow-list to keep in sync - mute a level by clearing its chat. Group chats come from telegram_groups.json and are merged in first; entries here override and extend them, which is where a private direct message lives (a DM has a positive chat_id, so it cannot be declared as a group).",
-    "'update_offset' is written back by the bot as it consumes updates. Leave it null on a fresh install."
+    "'update_offset' is written back by the bot as it consumes updates. Leave it null on a fresh install.",
+    "'level_chat_map' is also the VOCABULARY, not just the routing: a notify block may only name a level that exists here or as a notify_level in telegram_groups.json, and anything else is refused while the config is being parsed. That is why 'backup' and 'sql' are listed - the backup and SQL-task examples beside this file route to them, and without these entries the example set does not load at all. An empty value means the level is known and undelivered."
   ],
-
   "enabled": false,
-
   "bot_token_env": "TELEGRAM_BOT_TOKEN",
   "bot_config_file": "data/bot_telegram.json",
   "secret_text_file": "data/encrypted_secret_text.json",
   "bot_token_secret_file": "",
   "bot_token": "",
-
   "api_url": "https://api.telegram.org",
   "timeout_seconds": 20,
   "update_offset": null,
-
   "groups_file": "data/telegram_groups.json",
-
   "level_chat_map": {
+    "logging": "",
+    "warning": "",
+    "critical": "",
+    "error": "",
+    "backup": "",
+    "sql": "",
     "private": ""
   }
 }

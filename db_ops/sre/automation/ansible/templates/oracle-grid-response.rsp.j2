@@ -1,0 +1,48 @@
+################################################################################
+## Oracle Grid Infrastructure 23ai Silent Install Response File
+## Managed by Ansible — db-sre lab
+## Schema: v23.0.0 (new short-name format — oracle.install.* names are deprecated)
+################################################################################
+
+oracle.install.responseFileVersion=/oracle/install/rspfmt_crsinstall_response_schema_v23.0.0
+
+INVENTORY_LOCATION={{ oracle_inventory_dir }}
+ORACLE_BASE={{ oracle_grid_base }}
+
+installOption=CRS_CONFIG
+clusterUsage=RAC
+
+OSDBA=asmdba
+OSOPER=asmoper
+OSASM=asmadmin
+
+scanName={{ oracle_scan_name }}
+scanPort={{ oracle_scan_port }}
+
+clusterName={{ oracle_cluster_name }}
+configureGNS=false
+configureAsExtendedCluster=false
+
+# Nodes: nodename:vip-hostname
+clusterNodes={{ groups['oracle_rac'] | map('regex_replace', '(.*)', '\\1:\\1' + oracle_vip_suffix) | join(',') }}
+
+# Interfaces: name:subnet:type (1=public, 2=private, 5=ASM&private)
+networkInterfaceList={{ oracle_public_interface }}:{{ oracle_public_network }}:1,{{ oracle_private_interface }}:{{ oracle_private_network }}:5
+
+storageOption=FLEX_ASM_STORAGE
+
+useIPMI=false
+
+sysasmPassword={{ oracle_asmsnmp_password }}
+asmsnmpPassword={{ oracle_asmsnmp_password }}
+
+diskGroupName={{ oracle_asm_ocr_group }}
+redundancy=EXTERNAL
+auSize=4
+diskList={{ oracle_asm_ocr_disks }}
+diskString={{ oracle_asm_disk_discovery }}
+
+configureBackupDG=false
+
+managementOption=NONE
+executeRootScript=false

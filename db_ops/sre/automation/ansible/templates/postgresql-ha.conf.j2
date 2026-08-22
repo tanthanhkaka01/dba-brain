@@ -1,0 +1,14 @@
+# Lab HA baseline managed by Ansible.
+cluster_name = '{{ postgresql_cluster_name }}'
+listen_addresses = '{{ postgresql_listen_addresses }}'
+port = {{ postgresql_port }}
+password_encryption = '{{ postgresql_password_encryption }}'
+wal_level = '{{ postgresql_wal_level }}'
+max_wal_senders = {{ postgresql_max_wal_senders }}
+max_replication_slots = {{ postgresql_max_replication_slots }}
+hot_standby = {{ 'on' if postgresql_hot_standby else 'off' }}
+wal_log_hints = on
+{% if postgresql_is_primary and postgresql_synchronous_replication and groups['postgresql'] | length > 1 %}
+synchronous_commit = on
+synchronous_standby_names = 'FIRST 1 ({{ groups['postgresql'][1:] | join(',') }})'
+{% endif %}

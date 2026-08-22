@@ -1,0 +1,219 @@
+---
+- name: Install and configure PostgreSQL nodes for streaming replication
+  hosts: postgresql
+  become: true
+  become_user: root
+  vars_files:
+    - ../group_vars/postgresql.yml
+  vars:
+    postgresql_primary_inventory_host: "{{ groups['postgresql'][0] }}"
+    postgresql_primary_host: "{{ hostvars[postgresql_primary_inventory_host].ansible_host }}"
+    postgresql_is_primary: "{{ inventory_hostname == postgresql_primary_inventory_host }}"
+  handlers:
+    - name: Restart postgresql
+      ansible.builtin.service:
+        name: postgresql
+        state: restarted
+
+  tasks:
+    - name: Update apt metadata
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+        lock_timeout: 120
+
+    - name: Install PostgreSQL packages
+      ansible.builtin.apt:
+        name:
+          - "postgresql-{{ postgresql_major_version }}"
+          - "postgresql-client-{{ postgresql_major_version }}"
+          - postgresql-contrib
+        state: present
+        lock_timeout: 120
+
+    - name: Ensure PostgreSQL conf.d directory exists
+      ansible.builtin.file:
+        path: "{{ postgresql_config_dir }}/conf.d"
+        state: directory
+        owner: postgres
+        group: postgres
+        mode: "0755"
+
+    - name: Deploy PostgreSQL HA baseline config
+      ansible.builtin.template:
+        src: ../templates/postgresql-ha.conf.j2
+        dest: "{{ postgresql_config_dir }}/conf.d/99-db-sre-ha.conf"
+        owner: postgres
+        group: postgres
+        mode: "0644"
+      notify: Restart postgresql
+
+    - name: Deploy pg_hba.conf
+      ansible.builtin.template:
+        src: ../templates/pg_hba.conf.j2
+        dest: "{{ postgresql_config_dir }}/pg_hba.conf"
+        owner: postgres
+        group: postgres
+        mode: "0640"
+      notify: Restart postgresql
+
+    - name: Ensure postgresql service is enabled and running
+      ansible.builtin.service:
+        name: postgresql
+        enabled: true
+        state: started
+
+    - name: Flush handlers before SQL setup
+      ansible.builtin.meta: flush_handlers
+
+    - name: Wait for PostgreSQL to accept connections
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: "{{ postgresql_port }}"
+        timeout: 120
+
+    - name: Set postgres superuser password
+      ansible.builtin.shell: |
+        sudo -u postgres psql -v ON_ERROR_STOP=1 -d postgres <<'SQL'
+        ALTER USER {{ postgresql_admin_user }} WITH PASSWORD '{{ postgresql_admin_password }}';
+        SQL
+      when: postgresql_is_primary
+      changed_when: false
+
+    - name: Ensure replication user exists on primary
+      ansible.builtin.shell: |
+        sudo -u postgres psql -v ON_ERROR_STOP=1 -d postgres <<'SQL'
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1
+            FROM pg_catalog.pg_roles
+            WHERE rolname = '{{ postgresql_replication_user }}'
+          ) THEN
+            CREATE ROLE {{ postgresql_replication_user }} WITH REPLICATION LOGIN PASSWORD '{{ postgresql_replication_password }}';
+          ELSE
+            ALTER ROLE {{ postgresql_replication_user }} WITH REPLICATION LOGIN PASSWORD '{{ postgresql_replication_password }}';
+          END IF;
+        END
+        $$;
+        SQL
+      when: postgresql_is_primary
+      changed_when: false
+
+    - name: Verify PostgreSQL version
+      ansible.builtin.command: sudo -u postgres psql -tAc "SELECT version();"
+      register: postgresql_version
+      changed_when: false
+
+- name: Seed PostgreSQL replicas from primary
+  hosts: postgresql
+  become: true
+  become_user: root
+  vars_files:
+    - ../group_vars/postgresql.yml
+  vars:
+    postgresql_primary_inventory_host: "{{ groups['postgresql'][0] }}"
+    postgresql_primary_host: "{{ hostvars[postgresql_primary_inventory_host].ansible_host }}"
+    postgresql_is_primary: "{{ inventory_hostname == postgresql_primary_inventory_host }}"
+
+  tasks:
+    - name: Ensure replica pgpass exists for streaming replication reconnects
+      ansible.builtin.copy:
+        dest: /var/lib/postgresql/.pgpass
+        content: "{{ postgresql_primary_host }}:{{ postgresql_port }}:*:{{ postgresql_replication_user }}:{{ postgresql_replication_password }}\n"
+        owner: postgres
+        group: postgres
+        mode: "0600"
+      when: not postgresql_is_primary
+
+    - name: Check replica seed marker
+      ansible.builtin.stat:
+        path: "{{ postgresql_data_dir }}/.db-sre-replica-ready"
+      register: postgresql_replica_marker
+      when: not postgresql_is_primary
+
+    - name: Stop postgresql on replica before reseed
+      ansible.builtin.service:
+        name: postgresql
+        state: stopped
+      when:
+        - not postgresql_is_primary
+        - postgresql_force_reseed or not postgresql_replica_marker.stat.exists
+
+    - name: Remove existing replica data directory contents
+      ansible.builtin.shell: |
+        find "{{ postgresql_data_dir }}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+      when:
+        - not postgresql_is_primary
+        - postgresql_force_reseed or not postgresql_replica_marker.stat.exists
+
+    - name: Recreate replica data directory
+      ansible.builtin.file:
+        path: "{{ postgresql_data_dir }}"
+        state: directory
+        owner: postgres
+        group: postgres
+        mode: "0700"
+      when:
+        - not postgresql_is_primary
+        - postgresql_force_reseed or not postgresql_replica_marker.stat.exists
+
+    - name: Ensure replica pgpass exists before pg_basebackup
+      ansible.builtin.copy:
+        dest: /var/lib/postgresql/.pgpass
+        content: "{{ postgresql_primary_host }}:{{ postgresql_port }}:*:{{ postgresql_replication_user }}:{{ postgresql_replication_password }}\n"
+        owner: postgres
+        group: postgres
+        mode: "0600"
+      when:
+        - not postgresql_is_primary
+        - postgresql_force_reseed or not postgresql_replica_marker.stat.exists
+
+    - name: Clone replica from primary with pg_basebackup
+      ansible.builtin.command:
+        argv:
+          - sudo
+          - -u
+          - postgres
+          - "{{ postgresql_bin_dir }}/pg_basebackup"
+          - -h
+          - "{{ postgresql_primary_host }}"
+          - -p
+          - "{{ postgresql_port | string }}"
+          - -U
+          - "{{ postgresql_replication_user }}"
+          - -D
+          - "{{ postgresql_data_dir }}"
+          - -Fp
+          - -Xs
+          - -P
+          - -R
+      environment:
+        PGPASSFILE: /var/lib/postgresql/.pgpass
+      when:
+        - not postgresql_is_primary
+        - postgresql_force_reseed or not postgresql_replica_marker.stat.exists
+
+    - name: Write replica seed marker
+      ansible.builtin.copy:
+        dest: "{{ postgresql_data_dir }}/.db-sre-replica-ready"
+        content: "seeded-from={{ postgresql_primary_host }}\n"
+        owner: postgres
+        group: postgres
+        mode: "0600"
+      when:
+        - not postgresql_is_primary
+        - postgresql_force_reseed or not postgresql_replica_marker.stat.exists
+
+    - name: Ensure postgresql service is running after replica seed
+      ansible.builtin.service:
+        name: postgresql
+        state: started
+      when: not postgresql_is_primary
+
+    - name: Wait for replica to accept connections
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: "{{ postgresql_port }}"
+        timeout: 120
+      when: not postgresql_is_primary

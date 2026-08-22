@@ -1,13 +1,12 @@
 {
   "schema_version": 1,
   "notes": [
-    "Sample sqlserver_instance_policy.json - what is portable between two SQL Server instances when one is rebuilt from the other. Copy to sqlserver_instance_policy.json and edit.",
-    "It governs exporting one instance's SERVER-level metadata (logins, roles, permissions, Agent objects, linked servers) as reviewable SQL and replaying it onto a freshly installed instance. It does not back up or restore the system databases.",
-    "Everything here is a decision about what is portable, which is exactly why it is configuration and not a literal in Python: the answer changes per estate and per engine version.",
-    "'artifacts' is the replay order and the phase each item belongs to. 'pre-database' must run BEFORE the user databases are restored, or every restored database's users are orphaned; 'post-database' must run after, because Agent jobs name databases that have to exist first. 'min_major_version' gates replay onto an older target.",
-    "'sp_configure.portable' is replayed as-is. 'host_specific' describes the MACHINE rather than the workload, so it is exported COMMENTED OUT with the source value visible and reported as skipped - replaying a large source's memory ceiling onto a small target is worse than not replaying it. Anything unlisted is also exported commented out, because an unclassified option is an option nobody has decided about.",
-    "'logins' replays SQL logins with their identifier and password hash, which is what stops restored databases having orphaned users and lets applications keep their connection strings. Windows logins carry neither, so they are created without them.",
-    "'secrets' cannot be exported at all - the engine encrypts them with its own service key and offers no read path. Each is emitted as a placeholder naming a key in data/encrypted_secret_text.json, and replay fails closed, listing every unresolved reference BEFORE executing anything, rather than creating a credential with a placeholder string that fails at first use."
+    "Policy for db_ops.common.sqlserver_instance - exporting one SQL Server instance's server-level",
+    "metadata (logins, roles, permissions, Agent, linked servers, ...) as reviewable SQL and replaying",
+    "it onto a freshly installed instance. It does NOT back up or restore master/msdb/model.",
+    "Everything here is a decision about WHAT is portable between two instances, which is why it is",
+    "config and not a literal in Python: the answer changes per estate and per SQL Server version.",
+    "See docs/13_common.md and audits/20260806_plan_sqlserver_instance_metadata.md."
   ],
   "artifacts": {
     "note": "Each artifact is one file under server/ in the bundle, applied in this order. 'phase' says whether it must run BEFORE the user databases are restored or AFTER: logins must exist before, or every restored database's users are orphaned; Agent jobs must come after, because their steps name databases that have to exist. 'min_major_version' gates replay onto an older target.",

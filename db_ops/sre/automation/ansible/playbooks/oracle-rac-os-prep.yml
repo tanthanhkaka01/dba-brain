@@ -1,0 +1,358 @@
+---
+# Phase 1 — Oracle RAC OS Preparation
+# Targets: oracle_rac group (rac01, rac02)
+# OS: Oracle Linux R9U6 (RHEL 9.6 based, dnf)
+# Run before oracle-rac-grid.yml
+
+- name: Oracle RAC OS preparation
+  hosts: oracle_rac
+  become: true
+  gather_facts: true
+  vars_files:
+    - ../group_vars/oracle_rac.yml
+
+  tasks:
+    - name: Install required OS packages
+      ansible.builtin.dnf:
+        name:
+          - binutils
+          - compat-openssl11
+          - elfutils-libelf
+          - gcc
+          - glibc
+          - glibc-devel
+          - ksh
+          - libaio
+          - libaio-devel
+          - libgcc
+          - libstdc++
+          - libstdc++-devel
+          - libxcrypt-compat
+          - make
+          - nfs-utils
+          - sysstat
+          - unzip
+          - wget
+          - net-tools
+          - bc
+          - smartmontools
+          - numactl
+          - numactl-devel
+          - fontconfig
+          - policycoreutils-python-utils
+        state: present
+        update_cache: true
+
+    - name: Create OS groups for Oracle and Grid
+      ansible.builtin.group:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - oinstall
+        - dba
+        - asmadmin
+        - asmdba
+        - asmoper
+        - racdba
+        - backupdba
+        - dgdba
+        - kmdba
+
+    - name: Create grid user
+      ansible.builtin.user:
+        name: grid
+        group: oinstall
+        groups: asmadmin,asmdba,asmoper,dba
+        shell: /bin/bash
+        home: /home/grid
+        comment: Oracle Grid Infrastructure Owner
+        create_home: true
+        password: "{{ oracle_grid_password | password_hash('sha512') }}"
+        state: present
+      no_log: true
+
+    - name: Create oracle user
+      ansible.builtin.user:
+        name: oracle
+        group: oinstall
+        groups: dba,asmdba,backupdba,dgdba,kmdba,racdba
+        shell: /bin/bash
+        home: /home/oracle
+        comment: Oracle Database Software Owner
+        create_home: true
+        password: "{{ oracle_oracle_password | password_hash('sha512') }}"
+        state: present
+      no_log: true
+
+    - name: Deploy /etc/hosts with RAC entries
+      ansible.builtin.template:
+        src: ../templates/oracle-hosts.j2
+        dest: /etc/hosts
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Set kernel parameters for Oracle RAC
+      ansible.posix.sysctl:
+        name: "{{ item.key }}"
+        value: "{{ item.value }}"
+        sysctl_file: /etc/sysctl.d/97-oracle-rac.conf
+        reload: true
+        state: present
+      loop:
+        - { key: "kernel.sem",                      value: "250 32000 100 128" }
+        - { key: "kernel.shmmni",                   value: "4096" }
+        - { key: "kernel.shmall",                   value: "1073741824" }
+        - { key: "kernel.shmmax",                   value: "4398046511104" }
+        - { key: "kernel.panic",                     value: "1" }
+        - { key: "kernel.panic_on_oops",            value: "1" }
+        - { key: "net.core.rmem_default",           value: "262144" }
+        - { key: "net.core.rmem_max",               value: "4194304" }
+        - { key: "net.core.wmem_default",           value: "262144" }
+        - { key: "net.core.wmem_max",               value: "1048576" }
+        - { key: "net.ipv4.conf.all.rp_filter",     value: "2" }
+        - { key: "net.ipv4.conf.default.rp_filter", value: "2" }
+        - { key: "fs.aio-max-nr",                   value: "1048576" }
+        - { key: "fs.file-max",                     value: "6815744" }
+
+    - name: Configure resource limits for oracle and grid users
+      community.general.pam_limits:
+        domain: "{{ item.domain }}"
+        limit_type: "{{ item.type }}"
+        limit_item: "{{ item.item }}"
+        value: "{{ item.value }}"
+      loop:
+        - { domain: oracle, type: soft, item: nofile,  value: "1024" }
+        - { domain: oracle, type: hard, item: nofile,  value: "65536" }
+        - { domain: oracle, type: soft, item: nproc,   value: "16384" }
+        - { domain: oracle, type: hard, item: nproc,   value: "16384" }
+        - { domain: oracle, type: soft, item: stack,   value: "10240" }
+        - { domain: oracle, type: hard, item: stack,   value: "32768" }
+        - { domain: oracle, type: soft, item: memlock, value: "unlimited" }
+        - { domain: oracle, type: hard, item: memlock, value: "unlimited" }
+        - { domain: grid,   type: soft, item: nofile,  value: "1024" }
+        - { domain: grid,   type: hard, item: nofile,  value: "65536" }
+        - { domain: grid,   type: soft, item: nproc,   value: "16384" }
+        - { domain: grid,   type: hard, item: nproc,   value: "16384" }
+        - { domain: grid,   type: soft, item: stack,   value: "10240" }
+        - { domain: grid,   type: hard, item: stack,   value: "32768" }
+        - { domain: grid,   type: soft, item: memlock, value: "unlimited" }
+        - { domain: grid,   type: hard, item: memlock, value: "unlimited" }
+
+    - name: Create Oracle base directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: oracle
+        group: oinstall
+        mode: "0775"
+      loop:
+        - "{{ oracle_base }}"
+        - "{{ oracle_db_home }}"
+        - "{{ oracle_install_stage }}"
+
+    - name: Create Grid Infrastructure directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: grid
+        group: oinstall
+        mode: "0775"
+      loop:
+        - "{{ oracle_grid_base }}"
+        - "{{ oracle_grid_home }}"
+
+    - name: Create Oracle inventory directory
+      ansible.builtin.file:
+        path: "{{ oracle_inventory_dir }}"
+        state: directory
+        owner: grid
+        group: oinstall
+        mode: "0775"
+
+    - name: Deploy ASM disk udev rules
+      ansible.builtin.copy:
+        dest: /etc/udev/rules.d/99-oracle-asm.rules
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Oracle ASM shared disks — managed by db-sre
+          # Assumes 5 extra SCSI disks added by 08-add-oracle-shared-disks.ps1
+          # in order: OCR_01 OCR_02 OCR_03 DATA_01 FRA_01 (sda–sde; OS disk is NVMe nvme0n1)
+          KERNEL=="sda", OWNER="grid", GROUP="asmdba", MODE="0660", SYMLINK+="RAC_OCR_01"
+          KERNEL=="sdb", OWNER="grid", GROUP="asmdba", MODE="0660", SYMLINK+="RAC_OCR_02"
+          KERNEL=="sdc", OWNER="grid", GROUP="asmdba", MODE="0660", SYMLINK+="RAC_OCR_03"
+          KERNEL=="sdd", OWNER="grid", GROUP="asmdba", MODE="0660", SYMLINK+="RAC_DATA_01"
+          KERNEL=="sde", OWNER="grid", GROUP="asmdba", MODE="0660", SYMLINK+="RAC_FRA_01"
+
+    - name: Reload udev rules
+      ansible.builtin.command:
+        cmd: udevadm control --reload-rules
+      changed_when: true
+
+    - name: Trigger udev events for block devices
+      ansible.builtin.command:
+        cmd: udevadm trigger --type=devices --action=add
+      changed_when: true
+
+    - name: Generate SSH key pair for grid user
+      ansible.builtin.user:
+        name: grid
+        generate_ssh_key: true
+        ssh_key_type: rsa
+        ssh_key_bits: 2048
+        ssh_key_file: .ssh/id_rsa
+
+    - name: Generate SSH key pair for oracle user
+      ansible.builtin.user:
+        name: oracle
+        generate_ssh_key: true
+        ssh_key_type: rsa
+        ssh_key_bits: 2048
+        ssh_key_file: .ssh/id_rsa
+
+    - name: Collect grid public keys from all RAC nodes
+      ansible.builtin.slurp:
+        src: /home/grid/.ssh/id_rsa.pub
+      register: grid_pub_key
+
+    - name: Collect oracle public keys from all RAC nodes
+      ansible.builtin.slurp:
+        src: /home/oracle/.ssh/id_rsa.pub
+      register: oracle_pub_key
+
+    - name: Install grid authorized_keys from all nodes
+      ansible.builtin.authorized_key:
+        user: grid
+        key: "{{ hostvars[item]['grid_pub_key']['content'] | b64decode }}"
+        state: present
+      loop: "{{ groups['oracle_rac'] }}"
+
+    - name: Install oracle authorized_keys from all nodes
+      ansible.builtin.authorized_key:
+        user: oracle
+        key: "{{ hostvars[item]['oracle_pub_key']['content'] | b64decode }}"
+        state: present
+      loop: "{{ groups['oracle_rac'] }}"
+
+    - name: Set .ssh directory permissions for grid
+      ansible.builtin.file:
+        path: /home/grid/.ssh
+        owner: grid
+        group: oinstall
+        mode: "0700"
+        state: directory
+
+    - name: Set .ssh directory permissions for oracle
+      ansible.builtin.file:
+        path: /home/oracle/.ssh
+        owner: oracle
+        group: oinstall
+        mode: "0700"
+        state: directory
+
+    - name: Deploy SSH config (StrictHostKeyChecking=no) for grid
+      ansible.builtin.copy:
+        dest: /home/grid/.ssh/config
+        owner: grid
+        group: oinstall
+        mode: "0600"
+        content: |
+          Host *
+            StrictHostKeyChecking no
+
+    - name: Deploy SSH config (StrictHostKeyChecking=no) for oracle
+      ansible.builtin.copy:
+        dest: /home/oracle/.ssh/config
+        owner: oracle
+        group: oinstall
+        mode: "0600"
+        content: |
+          Host *
+            StrictHostKeyChecking no
+
+    - name: Populate known_hosts for grid user
+      ansible.builtin.shell: |
+        ssh-keyscan -H rac01 rac02 2>/dev/null > /home/grid/.ssh/known_hosts
+        chown grid:oinstall /home/grid/.ssh/known_hosts
+        chmod 0600 /home/grid/.ssh/known_hosts
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Populate known_hosts for oracle user
+      ansible.builtin.shell: |
+        ssh-keyscan -H rac01 rac02 2>/dev/null > /home/oracle/.ssh/known_hosts
+        chown oracle:oinstall /home/oracle/.ssh/known_hosts
+        chmod 0600 /home/oracle/.ssh/known_hosts
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Deploy grid user environment script
+      ansible.builtin.template:
+        src: ../templates/oracle-setenv.sh.j2
+        dest: /home/grid/.setenv.sh
+        owner: grid
+        group: oinstall
+        mode: "0644"
+      vars:
+        oracle_user: grid
+
+    - name: Deploy oracle user environment script
+      ansible.builtin.template:
+        src: ../templates/oracle-setenv.sh.j2
+        dest: /home/oracle/.setenv.sh
+        owner: oracle
+        group: oinstall
+        mode: "0644"
+      vars:
+        oracle_user: oracle
+
+    - name: Source environment in grid .bash_profile
+      ansible.builtin.lineinfile:
+        path: /home/grid/.bash_profile
+        line: "[ -f ~/.setenv.sh ] && . ~/.setenv.sh"
+        create: true
+        owner: grid
+        group: oinstall
+        mode: "0644"
+
+    - name: Source environment in oracle .bash_profile
+      ansible.builtin.lineinfile:
+        path: /home/oracle/.bash_profile
+        line: "[ -f ~/.setenv.sh ] && . ~/.setenv.sh"
+        create: true
+        owner: oracle
+        group: oinstall
+        mode: "0644"
+
+    - name: Disable transparent hugepages at runtime
+      ansible.builtin.shell: |
+        echo never > /sys/kernel/mm/transparent_hugepage/enabled
+        echo never > /sys/kernel/mm/transparent_hugepage/defrag
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Persist transparent hugepages disable via rc.local
+      ansible.builtin.lineinfile:
+        path: /etc/rc.local
+        line: "echo never > /sys/kernel/mm/transparent_hugepage/enabled && echo never > /sys/kernel/mm/transparent_hugepage/defrag"
+        create: true
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Disable firewalld for Oracle RAC lab
+      ansible.builtin.service:
+        name: firewalld
+        state: stopped
+        enabled: false
+      ignore_errors: true
+
+    - name: Set SELinux to permissive
+      ansible.posix.selinux:
+        policy: targeted
+        state: permissive

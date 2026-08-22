@@ -24,11 +24,17 @@ otherwise stop working silently.
 
 from __future__ import annotations
 
-#: Packages the thin `v0.1.0` ships, as subpackage names under ``db_ops``.
+#: Packages the public distribution ships, as subpackage names under ``db_ops``.
 #:
-#: The set is the import closure of four entry points — the metrics CLI, the Telegram CLI, the
-#: store CLI and the daemon — not a list somebody liked the look of. `jobs` earns its place because
-#: an alert nobody scheduled is a demo: the daemon is what makes collection recurring.
+#: `v0.1.0` shipped seven of these — the import closure of four entry points, chosen because a
+#: first release is easier to stand behind when it claims one path and ships exactly what that path
+#: needs. **`v0.2.0` ships the toolkit**, and the measurements that were meant to gate that came in
+#: rather than being waived: the complete tree passes its whole suite, and the identifier scan
+#: reports nothing in it.
+#:
+#: Growing this list is still a decision somebody makes here, in the open. `public_package_globs`
+#: writes it as globs so a *new subpackage of something shipped* comes along automatically while a
+#: new top-level app does not, and that asymmetry is the point.
 PUBLIC_PACKAGES: tuple[str, ...] = (
     "lib",
     "common",
@@ -37,23 +43,26 @@ PUBLIC_PACKAGES: tuple[str, ...] = (
     "metrics",
     "telegram",
     "jobs",
+    "reports",
+    "sql_tasks",
+    "backup_restore",
+    "sla",
+    "sre",
+    "webhost",
 )
 
-#: Packages the thin release leaves behind, each with the reason. They arrive in `v0.2.0`.
+#: Packages that do not ship, each with the reason.
 #:
 #: Stated as a mapping rather than a set because an unexplained exclusion is indistinguishable from
 #: an oversight, and this list decides what a stranger can and cannot do with the toolkit.
+#:
+#: Six entries left with `v0.2.0`. The one that remains is not waiting on maturity: it is
+#: structural, and no later release reverses it.
 PRIVATE_PACKAGES: dict[str, str] = {
-    "backup_restore": "backup and restore validation - the next capability after monitoring works",
-    "control": "master/worker build and deploy, and the export itself. The thing that produces the "
-               "public tree must not be in the public tree",
-    "reports": "turns metrics into periodic reports. `v0.1.0` claims threshold alerting only, so "
-               "this is the first thing to reconsider if that claim grows",
-    "sla": "SLA/SLO evaluation, which needs report history to be worth anything",
-    "sql_tasks": "the scheduled SQL runner - operator-authored SQL, a larger trust surface",
-    "sre": "host provisioning, Ansible, VMware, database-in-Docker. The largest scrub liability in "
-           "the tree and the furthest from the release claim",
-    "webhost": "the configuration console, which exposes every other app",
+    "control": "master/worker build and deploy, and the export itself. **The thing that produces "
+               "the public tree must not be in the public tree** - a copy of the export would let "
+               "a reader believe they can reproduce the private repository from the public one, "
+               "and it carries the private-forever list, which is a map of what is being withheld",
 }
 
 
@@ -148,6 +157,44 @@ PRIVATE_PATHS: dict[str, str] = {
     "wal": "test scratch",
 }
 
+#: Paths *inside* a shipped package that are still operator data.
+#:
+#: Named file by file rather than by folder, and that is not fussiness: the first version withheld
+#: `db_ops/sre/data_folder` whole, which took `deploy_sqlserver_ag.py` — the script that *reads*
+#: those files, and product code — out of the export with them. `docs/10_sre_app.md` names it, so
+#: the doc guard caught it in the exported tree. The captured run does not ship; the code does.
+#:
+#: `PRIVATE_PATHS` above is matched on the top-level name, which is the right shape for `audits`
+#: or `data` and cannot express "this folder, three levels down". Everything here is the same
+#: argument those entries make — content that belongs to one estate rather than to the product —
+#: and each is kept out **by name**, because the alternative is scrubbing a file whose whole value
+#: is being a true record.
+#:
+#: Note what does *not* protect these: `check-identifiers` derives its terms from the inventory, so
+#: a developer workstation, a Windows account or a lab VM that was never a monitored target reads
+#: as clean. A path list is the only thing that can refuse them.
+PRIVATE_SUBPATHS: dict[str, str] = {
+    "db_ops/sre/data_folder/20260612_install_sql_server.json":
+        "the input to one real lab install: three lab hosts by address",
+    "db_ops/sre/data_folder/20260612_result_install_sql_server.json":
+        "its captured output - 18.9 KB of stdout carrying a workstation name, a Windows account "
+        "and the SSH key path under it, VM and template names, and the lab subnet",
+}
+
+
+def is_private_subpath(relative: str) -> str | None:
+    """The reason *relative* is withheld, or ``None`` if it ships.
+
+    Takes the path relative to the repository root, in POSIX form, and matches a prefix so a whole
+    folder can be named once.
+    """
+    candidate = relative.replace("\\", "/")
+    for prefix, reason in PRIVATE_SUBPATHS.items():
+        if candidate == prefix or candidate.startswith(prefix + "/"):
+            return reason
+    return None
+
+
 #: Documentation that describes a package the thin release does not ship.
 #:
 #: Derived rather than listed: `docs/NN_<slug>.md` is one file per component, and
@@ -217,4 +264,4 @@ PRIVATE_TESTS: dict[str, str] = {
 #: version is immutable** — it cannot be re-uploaded after deletion, so the mistake is permanent.
 #: The public tree starts where a first release starts.
 PUBLIC_DISTRIBUTION_NAME = "dbabrain"
-PUBLIC_VERSION = "0.1.1"
+PUBLIC_VERSION = "0.2.0"

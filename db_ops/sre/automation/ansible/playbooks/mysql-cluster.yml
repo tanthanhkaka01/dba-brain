@@ -1,0 +1,218 @@
+---
+- name: Install and configure MySQL nodes for InnoDB Cluster
+  hosts: mysql
+  become: true
+  gather_facts: true
+  vars_files:
+    - ../group_vars/mysql.yml
+  vars:
+    mysql_primary_inventory_host: "{{ groups['mysql'][0] }}"
+    mysql_server_id: "{{ 100 + groups['mysql'].index(inventory_hostname) + 1 }}"
+    mysql_group_seeds: >-
+      {{ groups['mysql']
+         | map('extract', hostvars, 'ansible_host')
+         | map('regex_replace', '$', ':33061')
+         | join(',') }}
+    mysql_local_address: "{{ ansible_host }}:33061"
+    mysql_apt_repo: >-
+      deb [trusted=yes] http://repo.mysql.com/apt/ubuntu/ {{ mysql_ubuntu_codename }}
+      {{ mysql_apt_repo_components | join(' ') }}
+    mysql_root_cli: >-
+      {{ 'mysql --protocol=socket'
+         if (mysql_root_password | default('') | length == 0)
+         else 'mysql --protocol=socket -uroot' }}
+
+  tasks:
+    - name: Install prerequisite packages
+      ansible.builtin.apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - debconf-utils
+          - gnupg
+          - lsb-release
+          - python-is-python3
+        state: present
+        update_cache: true
+
+    - name: Download MySQL repository signing key
+      ansible.builtin.get_url:
+        url: "{{ mysql_apt_key_url }}"
+        dest: /tmp/mysql-apt-signing-key.asc
+        mode: "0644"
+
+    - name: Install MySQL repository keyring
+      ansible.builtin.command:
+        cmd: >-
+          gpg --dearmor
+          --yes
+          --output {{ mysql_apt_keyring_path }}
+          /tmp/mysql-apt-signing-key.asc
+      changed_when: true
+
+    - name: Allow insecure MySQL APT repository for lab bootstrap
+      ansible.builtin.copy:
+        dest: /etc/apt/apt.conf.d/99mysql-insecure-repo
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          Acquire::AllowInsecureRepositories "true";
+          Acquire::AllowDowngradeToInsecureRepositories "true";
+          APT::Get::AllowUnauthenticated "true";
+
+    - name: Configure MySQL APT repository
+      ansible.builtin.apt_repository:
+        repo: "{{ mysql_apt_repo }}"
+        filename: mysql-community
+        state: present
+
+    - name: Seed MySQL root password for unattended install
+      ansible.builtin.debconf:
+        name: mysql-community-server
+        question: "{{ item.question }}"
+        value: "{{ mysql_root_password }}"
+        vtype: password
+      loop:
+        - question: mysql-community-server/root-pass
+        - question: mysql-community-server/re-root-pass
+      no_log: true
+      when: mysql_root_password | length > 0
+
+    - name: Disable apt HTTP pipeline to prevent CDN hash mismatch
+      ansible.builtin.copy:
+        dest: /etc/apt/apt.conf.d/99-no-pipeline
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          Acquire::http::Pipeline-Depth "0";
+          Acquire::http::No-Cache "true";
+
+    - name: Install MySQL server and shell
+      ansible.builtin.apt:
+        name:
+          - mysql-server
+          - mysql-shell
+        state: present
+        update_cache: true
+        allow_unauthenticated: true
+      environment:
+        DEBIAN_FRONTEND: noninteractive
+
+    - name: Deploy MySQL cluster baseline config
+      ansible.builtin.template:
+        src: ../templates/mysql-cluster.cnf.j2
+        dest: /etc/mysql/conf.d/z99-cluster.cnf
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Restart mysql
+
+    - name: Ensure mysql service is enabled and running
+      ansible.builtin.service:
+        name: mysql
+        state: started
+        enabled: true
+
+    - name: Flush handlers before cluster bootstrap
+      ansible.builtin.meta: flush_handlers
+
+    - name: Wait for MySQL to accept connections
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: 3306
+        delay: 5
+        timeout: 120
+
+    - name: Check whether InnoDB Cluster was already bootstrapped
+      ansible.builtin.stat:
+        path: /var/lib/mysql/.innodb-cluster-ready
+      delegate_to: "{{ mysql_primary_inventory_host }}"
+      register: mysql_cluster_bootstrap_marker
+
+    - name: Create cluster admin user on every MySQL node
+      ansible.builtin.shell: |
+        {{ mysql_root_cli }} <<'SQL'
+        CREATE USER IF NOT EXISTS '{{ mysql_cluster_admin_user }}'@'%' IDENTIFIED BY '{{ mysql_cluster_admin_password }}';
+        ALTER USER '{{ mysql_cluster_admin_user }}'@'%' IDENTIFIED BY '{{ mysql_cluster_admin_password }}';
+        GRANT ALL PRIVILEGES ON *.* TO '{{ mysql_cluster_admin_user }}'@'%' WITH GRANT OPTION;
+        FLUSH PRIVILEGES;
+        SQL
+      args:
+        executable: /bin/bash
+      environment:
+        MYSQL_PWD: "{{ mysql_root_password }}"
+      no_log: true
+      when: not mysql_cluster_bootstrap_marker.stat.exists
+
+    - name: Verify MySQL version
+      ansible.builtin.shell: |
+        {{ mysql_root_cli }} -NBe "SELECT VERSION();"
+      register: mysql_version
+      changed_when: false
+      args:
+        executable: /bin/bash
+      environment:
+        MYSQL_PWD: "{{ mysql_root_password }}"
+
+  handlers:
+    - name: Restart mysql
+      ansible.builtin.service:
+        name: mysql
+        state: restarted
+
+- name: Bootstrap MySQL InnoDB Cluster from primary node
+  hosts: mysql
+  become: true
+  gather_facts: false
+  vars_files:
+    - ../group_vars/mysql.yml
+  vars:
+    mysql_primary_inventory_host: "{{ groups['mysql'][0] }}"
+  tasks:
+    - name: Render bootstrap script on primary node
+      ansible.builtin.template:
+        src: ../templates/bootstrap-mysql-cluster.js.j2
+        dest: /tmp/bootstrap-mysql-cluster.js
+        owner: root
+        group: root
+        mode: "0700"
+      delegate_to: "{{ mysql_primary_inventory_host }}"
+      run_once: true
+
+    - name: Check cluster bootstrap marker
+      ansible.builtin.stat:
+        path: /var/lib/mysql/.innodb-cluster-ready
+      register: mysql_cluster_marker
+      delegate_to: "{{ mysql_primary_inventory_host }}"
+      run_once: true
+
+    - name: Verify mysqlsh is available on primary node
+      ansible.builtin.shell: command -v mysqlsh
+      args:
+        executable: /bin/bash
+      register: mysqlsh_path
+      changed_when: false
+      delegate_to: "{{ mysql_primary_inventory_host }}"
+      run_once: true
+
+    - name: Bootstrap MySQL InnoDB Cluster
+      ansible.builtin.command: mysqlsh --js --file /tmp/bootstrap-mysql-cluster.js
+      delegate_to: "{{ mysql_primary_inventory_host }}"
+      run_once: true
+      register: mysql_cluster_bootstrap
+      environment:
+        MYSQL_CLUSTER_ADMIN_PASSWORD: "{{ mysql_cluster_admin_password }}"
+      when: mysql_cluster_force_rebootstrap or not mysql_cluster_marker.stat.exists
+
+    - name: Create cluster bootstrap marker
+      ansible.builtin.copy:
+        dest: /var/lib/mysql/.innodb-cluster-ready
+        content: "bootstrap complete\n"
+        owner: mysql
+        group: mysql
+        mode: "0640"
+      delegate_to: "{{ mysql_primary_inventory_host }}"
+      run_once: true
+      when: mysql_cluster_force_rebootstrap or not mysql_cluster_marker.stat.exists

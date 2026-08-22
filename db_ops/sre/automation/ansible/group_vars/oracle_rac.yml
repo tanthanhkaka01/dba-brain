@@ -1,0 +1,74 @@
+# Oracle 23ai Enterprise RAC — Oracle Linux R9U6
+oracle_version: "23ai"
+oracle_version_num: "23.0.0.0.0"
+oracle_edition: EE
+
+# Base paths
+oracle_base: /u01/app/oracle
+oracle_grid_base: /u01/app/grid
+oracle_grid_home: /u01/app/23c/grid
+oracle_db_home: /u01/app/product/db23c
+oracle_inventory_dir: /u01/app/oraInventory
+oracle_install_stage: /u01/app/stage
+
+# Installer zip names (must be placed in oracle_install_stage before running)
+oracle_grid_installer_zip: LINUX.X64_2326100_grid_home.zip
+oracle_db_installer_zip: LINUX.X64_2326100_db_home.zip
+
+# Cluster identification
+oracle_cluster_name: rac
+oracle_db_name: pridb
+oracle_db_unique_name: pridb
+oracle_pdb_name: pridbpdb1
+oracle_db_charset: AL32UTF8
+oracle_db_ncharset: AL16UTF16
+
+# Network — public interface (ens160), private/interconnect (ens224)
+oracle_public_interface: ens160
+oracle_private_interface: ens256
+oracle_public_network: 192.168.18.0
+oracle_private_network: 192.168.10.0
+
+# SCAN — DNS or /etc/hosts entries must resolve these
+oracle_scan_name: rac-scan
+oracle_scan_port: 1521
+oracle_scan_ips:
+  - 192.168.18.61
+  - 192.168.18.62
+  - 192.168.18.63
+
+# VIPs — one per node
+oracle_vip_suffix: "-vip"
+
+# Interconnect IPs (must match /etc/hosts entries rac01-priv, rac02-priv)
+oracle_priv_ips:
+  rac01: 192.168.10.41
+  rac02: 192.168.10.42
+
+# ASM disk groups
+oracle_asm_ocr_group: OCR
+oracle_asm_data_group: DATA
+oracle_asm_fra_group: FRA
+oracle_asm_ocr_disks: /dev/RAC_OCR_01,/dev/RAC_OCR_02,/dev/RAC_OCR_03
+oracle_asm_data_disk: /dev/RAC_DATA_01
+oracle_asm_fra_disk: /dev/RAC_FRA_01
+oracle_asm_disk_discovery: /dev/RAC_*
+
+# Passwords
+oracle_sys_password: ChangeMe_OracleSYS_123!
+oracle_asmsnmp_password: ChangeMe_OracleASM_123!
+oracle_grid_password: ChangeMe_GridUser_123!
+oracle_oracle_password: ChangeMe_OracleUser_123!
+
+# Memory (MB) — sized for lab VMs (~8GB RAM per node)
+oracle_sga_mb: 3072
+oracle_pga_mb: 1024
+oracle_processes: 300
+oracle_fra_size_mb: 25600
+
+# DataGuard used in Phase 2 — referenced here for tnsnames template
+oracle_redo_log_threads: 2
+
+# Rerun flags
+oracle_grid_force_reinstall: false
+oracle_db_force_recreate: false

@@ -1,0 +1,14 @@
+{% set _node_num = ansible_hostname | regex_replace('^.*?([0-9]+)$', '\\1') %}
+{% if oracle_user == 'grid' %}
+export ORACLE_BASE={{ oracle_grid_base }}
+export ORACLE_HOME={{ oracle_grid_home }}
+export ORACLE_SID=+ASM{{ _node_num }}
+{% else %}
+export ORACLE_BASE={{ oracle_base }}
+export ORACLE_HOME={{ oracle_db_home }}
+export ORACLE_SID={{ oracle_db_name }}{{ _node_num }}
+{% endif %}
+export ORACLE_INVENTORY={{ oracle_inventory_dir }}
+export LD_LIBRARY_PATH=$ORACLE_HOME/lib:/lib:/usr/lib
+export NLS_LANG=AMERICAN_AMERICA.AL32UTF8
+export PATH=$ORACLE_HOME/bin:$PATH

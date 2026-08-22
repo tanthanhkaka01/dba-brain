@@ -1370,6 +1370,60 @@ here. **Zero terms means every tree scans clean.** So `collect_identifiers` refu
 inventory and names the file it expected, because the one failure this checker cannot afford is the
 one it would report as success.
 
+## Refreshing an example from your own file (`example_lift`)
+
+```bash
+python -m db_ops.common.cli lift-example '{"source": "data/metric_definitions.json"}'
+python -m db_ops.common.cli lift-example '{"source": "data/sla_policies.json", "write": false}'
+```
+
+Every file under `data/` has a `*.example.json` beside it, and **the examples ship** — they are
+what a stranger copies to get a working tool root and what the documentation points at. So the two
+drift in one direction: your file gains records as the estate grows, the example does not, and
+nobody notices until the shipped suite runs against the shipped examples and finds the metric
+catalogue describing ten of the ninety collectors the package carries.
+
+`dest` defaults to the `*.example.json` beside the source. `write: false` reports what would happen
+and writes nothing.
+
+### It refuses; it does not scrub
+
+The command copies, then runs `check-identifiers` over what it *would* write. If anything real
+would cross it writes nothing and names the terms:
+
+```json
+{"identifier_hits": 5, "terms": ["198.51.100.20", "SALESDB", "SALESCLUSTER"], "written": false}
+```
+
+(The terms above are the documentation placeholders. Printing the *real* ones here is how this
+page failed its own scan the first time it was written — an explanation of a pattern must not
+contain the pattern, and that is the second time this session that rule was learned the hard way.)
+
+That is the design and not a limitation. A tool that quietly rewrote what it found would be a
+second scrubber with its own opinions about which spelling of a hostname is which, and this project
+has one answer to that question. The fix belongs in the source: on the first real run all five
+findings were inside `note` fields — prose explaining *why* an interval or a timeout is what it is,
+which happened to name the machine it was learned on. The reasoning survives the machine's removal
+and the note gets better, so the source is where it was fixed.
+
+### And it refuses a source that would not load
+
+Every path a record names — `path`, `file`, `script` — is resolved before anything is written, in
+**both** vocabularies these files use: `assets/backup/...` through `resolve_tool_path`, and
+`sqlserver/001_....sql` relative to the shipped collectors. A lifted catalogue naming a variant that
+is not there refuses to load, and it does so on somebody else's machine, at collection time, hours
+after the mistake. An earlier hand-written lift shipped exactly that — four invented filenames in a
+catalogue nothing had ever loaded.
+
+### Why this is a command and not a script
+
+It had been done by hand three times, and each hand-lift got something different wrong: one
+invented those filenames, another carried a server id inside a Telegram prompt string that nobody
+would think to read. `CLAUDE.md`'s rule fires precisely here — the moment a task needs a throwaway
+script it belongs in `common` with a CLI — and the reason is visible in the outcome: the fourth
+lift moved 90 records and checked 183 file references in one command, and refused twice before it
+was allowed to write.
+
 ## Checking a secret still works (`secret_check`)
 
 The read-only half of the pair. `rotate-password` changes a password; this proves one, and both

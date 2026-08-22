@@ -1,0 +1,13 @@
+# /var/opt/mssql/mssql.conf — managed by Ansible for the db-sre lab.
+
+[EULA]
+accepteula = Y
+
+[sqlagent]
+enabled = {{ 'true' if mssql_sqlagent_enabled else 'false' }}
+
+[hadr]
+hadrenabled = 1
+
+[network]
+tcpport = {{ mssql_port }}

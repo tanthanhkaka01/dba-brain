@@ -1,0 +1,34 @@
+################################################################################
+## Oracle DBCA Single-Instance Database Creation Response File (DataGuard)
+## Managed by Ansible — db-sre lab
+################################################################################
+
+responseFileVersion=/oracle/assistants/rspfmt_dbca_response_schema_v26.0.0
+
+gdbName={{ oracle_primary_db_name }}
+sid={{ oracle_db_sid }}
+databaseConfigType=SI
+createAsContainerDatabase=false
+
+templateName=General_Purpose.dbc
+sysPassword={{ oracle_sys_password }}
+systemPassword={{ oracle_system_password }}
+
+storageType=FS
+datafileDestination={{ oracle_redo_log_dir }}/{{ oracle_db_unique_name }}/oradata
+recoveryAreaDestination={{ oracle_fra_dir }}
+recoveryAreaSize={{ oracle_fra_size_mb }}
+
+characterSet={{ oracle_db_charset }}
+nationalCharacterSet={{ oracle_db_ncharset }}
+listeners={{ oracle_listener_name }}
+
+totalMemory={{ oracle_sga_mb + oracle_pga_mb }}
+automaticMemoryManagement=false
+initParams=sga_target={{ oracle_sga_mb }}m,pga_aggregate_target={{ oracle_pga_mb }}m,processes={{ oracle_processes }},enable_pluggable_database=FALSE,log_archive_dest_1='LOCATION={{ oracle_fra_dir }}/{{ oracle_db_unique_name }}/archivelog'
+
+redoLogFileSize=100
+emConfiguration=NONE
+
+databaseType=OLTP
+automaticTimeZone=true
