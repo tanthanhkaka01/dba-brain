@@ -74,8 +74,25 @@ def _check_credentials_command(argv: list[str]) -> int:
         return code
     requested_dir = str((request or {}).get("data_dir") or "") if request is not None else (argv[0] if argv else "")
 
+    # An argument starting with `-` is a flag somebody expected this command to take — every other
+    # command accepts `--key-base64` — and it was being read as a folder name. The check then
+    # walked a directory that does not exist and reported "checked 0 target(s); 0 without a
+    # resolvable credential", which reads as a pass. **A verification command must never report
+    # success for having looked at nothing.**
+    if requested_dir.startswith("-"):
+        print(
+            f"check-credentials takes a folder, not a flag: {requested_dir}\n"
+            "It reads the secret store through the same resolution as everything else and needs "
+            "no key.\n\n" + CHECK_CREDENTIALS_USAGE,
+            file=sys.stderr,
+        )
+        return 2
+
     # load_metric_targets needs a concrete folder; default to the one data_sources resolves.
     data_dir = Path(requested_dir) if requested_dir else data_sources.users_path().parent
+    if not data_dir.is_dir():
+        print(f"check-credentials: no such folder: {data_dir}", file=sys.stderr)
+        return 2
     problems: list[str] = []
     checked = 0
 
