@@ -68,12 +68,11 @@ jobs:
     # Only on a real release. A manual run builds and stops, whatever `dry_run` says, because
     # "publish unless somebody unticked a box" is the wrong default for something irreversible.
     if: github.event_name == 'release'
-    # No `environment:` here. Trusted publishing only requires one when the PyPI publisher claim
-    # names one, and a workflow that requires a GitHub Environment which has not been created fails
-    # before it runs a step - with a message about the environment, not about publishing.
-    #
-    # If the claim on PyPI *does* name an environment, add `environment: <that exact name>`. The two
-    # have to agree, and PyPI is the authority.
+    # The PyPI publisher for `dbabrain` names the environment `pypi`, so this job has to run in it:
+    # the environment is part of the claim GitHub presents, and a mismatch is refused as
+    # `invalid-publisher` - which is what the first release attempt hit, with the claim reading
+    # `environment: MISSING` because this key was absent. PyPI is the authority; the two must agree.
+    environment: pypi
     permissions:
       id-token: write        # required for trusted publishing; nothing else needs it
     steps:
