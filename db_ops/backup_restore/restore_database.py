@@ -136,7 +136,7 @@ def vm_unc_to_local_path(path: str | Path, config: BackupRestoreConfig) -> Path:
     """
     backup_path = Path(path)
     relative_path = backup_path.relative_to(config.vm_import_unc)
-    return Path(PureWindowsPath(config.vm_import_local) / PureWindowsPath(relative_path))
+    return Path(str(PureWindowsPath(config.vm_import_local) / PureWindowsPath(relative_path)))
 
 
 
@@ -287,9 +287,9 @@ def build_restore_candidate(
         backup_file_unc=backup_unc,
         backup_file_on_vm=backup_on_vm,
         restore_data_file_on_vm=Path(
-            PureWindowsPath(config.restore_data_dir_on_vm) / f"{safe_restore_name}.mdf"),
+            str(PureWindowsPath(config.restore_data_dir_on_vm) / f"{safe_restore_name}.mdf")),
         restore_log_file_on_vm=Path(
-            PureWindowsPath(config.restore_data_dir_on_vm) / f"{safe_restore_name}_log.ldf"),
+            str(PureWindowsPath(config.restore_data_dir_on_vm) / f"{safe_restore_name}_log.ldf")),
     )
 
 
@@ -2280,5 +2280,5 @@ def _candidate_from_backup_argument(backup_file: str | Path, config: BackupResto
             backup_file_on_vm=backup_path,
             restore_data_file_on_vm=config.restore_data_file_on_vm or config.restore_data_dir_on_vm / f"{safe_restore_name}.mdf",
             restore_log_file_on_vm=config.restore_log_file_on_vm or Path(
-                PureWindowsPath(config.restore_data_dir_on_vm) / f"{safe_restore_name}_log.ldf"),
+                str(PureWindowsPath(config.restore_data_dir_on_vm) / f"{safe_restore_name}_log.ldf")),
         )
