@@ -1,0 +1,34 @@
+# Line endings, decided here rather than by whoever clones.
+#
+# Without this file git applies the *client's* `core.autocrlf`, and on Windows that rewrites
+# checked-out files to CRLF. For anything Linux runs, that is not a formatting preference — it is
+# a broken file: a shell script with a CRLF shebang makes the kernel look for an interpreter
+# literally called `bash\r`, and the error says
+#
+#     /usr/bin/env: 'bash\r': No such file or directory
+#
+# which names neither the file nor the cause. It cost a container build here on 2026-08-23, and it
+# would cost it again for anyone who clones this repository on Windows and builds the image.
+#
+# So the files that cross into Linux are pinned, and everything else is left to git's own
+# detection.
+
+* text=auto
+
+# Executed by a shell inside the container or on a Linux host.
+*.sh            text eol=lf
+Dockerfile      text eol=lf
+*.dockerfile    text eol=lf
+docker/**       text eol=lf
+
+# Read by Linux tooling that is likewise unforgiving about a stray carriage return.
+*.yml           text eol=lf
+*.yaml          text eol=lf
+*.toml          text eol=lf
+
+# Ansible and Jinja templates are rendered onto Linux hosts.
+*.j2            text eol=lf
+
+# PowerShell runs on Windows and Linux both; CRLF is what a Windows editor expects to find, and
+# pwsh on Linux reads either.
+*.ps1           text eol=crlf

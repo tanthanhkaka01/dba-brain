@@ -118,6 +118,10 @@ PUBLIC_PATHS: tuple[str, ...] = (
     # public repository's scan would use the defaults and go red on the same false positive this
     # file exists to answer — and nobody reading that repository would know why.
     ".gitleaks.toml",
+    # Line endings, pinned for the files Linux executes. Without it a Windows clone rewrites the
+    # entrypoint to CRLF and the image stops being able to start — an error that names neither
+    # the file nor the cause.
+    ".gitattributes",
     ".env.example",
     "config.example.json",
     "docs",

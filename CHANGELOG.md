@@ -15,7 +15,15 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+
+- **The container image runs as a normal user (uid 10001), not root.** A monitoring daemon needs no
+  privilege in its container. Bind-mounted directories have to be writable by that user — `chown -R
+  10001:10001 data logs runtime` — or run with `--user 0:0` to keep the previous behaviour. An
+  unwritable mount is now reported by name before anything starts.
+- **The image installs the package instead of only copying it**, so `db-ops` is on the PATH and
+  every command in the documentation works from any directory in the container. Previously they
+  worked only from the directory the daemon starts in, which is not where a reader would be.
 
 ## [0.2.1] - 2026-08-23
 
