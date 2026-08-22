@@ -256,10 +256,15 @@ def test_the_baseline_has_no_stale_entries() -> None:
         for module in _common_submodules(path):
             actual.setdefault(module, set()).add(app)
 
+    # Only apps that exist in this tree. The public distribution ships seven of the fourteen, so
+    # an entry naming one of the other seven is not stale there — it is describing software that
+    # was left out, and reading it as a finished migration would delete a line still doing work in
+    # the repository this baseline belongs to.
+    present = {path.relative_to(DB_OPS_ROOT).parts[0] for path in _app_files()}
     stale = sorted(
-        f"{module}: {sorted(apps - actual.get(module, set()))}"
+        f"{module}: {sorted((apps & present) - actual.get(module, set()))}"
         for module, apps in REMAINING.items()
-        if apps - actual.get(module, set())
+        if (apps & present) - actual.get(module, set())
     )
     assert not stale, (
         "REMAINING lists apps that no longer import these modules — delete the entries, the "

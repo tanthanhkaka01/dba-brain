@@ -43,9 +43,18 @@ def test_every_app_directory_is_reachable_by_name() -> None:
 
 
 def test_the_table_points_at_modules_that_exist_and_can_run() -> None:
+    """Every app this build actually has must be runnable by the name the table gives it.
+
+    Asked of `installed_apps()` rather than `APPS`: the public distribution ships seven of the
+    fourteen, and importing an entry it does not have raises `ModuleNotFoundError` — which says the
+    install is broken when it is not. `APPS` stays the full table on purpose; it is the product's
+    map, and the dispatcher already answers a missing name with a sentence.
+    """
     import importlib
 
-    for name, module_path in cli.APPS.items():
+    present = cli.installed_apps()
+    assert present, "no app is reachable at all, which cannot be right in any build"
+    for name, module_path in present.items():
         module = importlib.import_module(module_path)
         assert callable(getattr(module, "main", None)), f"{name} -> {module_path} has no main()"
 
@@ -56,7 +65,9 @@ def test_help_needs_no_app_and_no_driver(capsys) -> None:
 
     printed = capsys.readouterr().out
     assert "usage: db-ops <app>" in printed
-    for name in ("metrics", "telegram", "backup-restore"):
+    # The apps this build has, not a fixed three: the help text lists what is installed, so naming
+    # `backup-restore` here asserted the private tree's shape rather than the behaviour under test.
+    for name in cli.installed_apps():
         assert name in printed
 
 
