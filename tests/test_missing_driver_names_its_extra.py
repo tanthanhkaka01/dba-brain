@@ -30,17 +30,29 @@ DECLARED_EXTRAS = set(
     ["project"]["optional-dependencies"]
 )
 
-EXTRA_IN_MESSAGE = re.compile(r"db_ops\[([a-z]+)\]")
+EXTRA_IN_MESSAGE = re.compile(r"""db_ops\[([a-z]+)\]|install_hint\(["']([a-z]+)["']\)""")
+
+
+def _offers_an_install(text: str) -> bool:
+    """Does this message tell the reader the command that fixes it?
+
+    The command used to be a literal. It is built by `db_ops.lib.packaging.install_hint` now,
+    because the distribution is named `db_ops` here and `dbabrain` where it is published, and a
+    hard-coded literal was wrong for everyone reading the published one. So the thing to look for
+    is either form: the text, or the call that produces it.
+    """
+    return "pip install" in text or "install_hint(" in text
 
 
 def _messages() -> list[tuple[str, int, str]]:
     found = []
     for path in sorted(PACKAGE.rglob("*.py")):
         for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-            if "is required" in line and "pip install" not in line:
+            if "is required" in line and not _offers_an_install(line):
                 continue
             for match in EXTRA_IN_MESSAGE.finditer(line):
-                found.append((path.relative_to(REPO_ROOT).as_posix(), number, match.group(1)))
+                extra = match.group(1) or match.group(2)
+                found.append((path.relative_to(REPO_ROOT).as_posix(), number, extra))
     return found
 
 
@@ -78,7 +90,7 @@ def test_every_engine_driver_message_offers_an_install() -> None:
             statement = "\n".join(lines[max(0, index - 3):index + 4])
             if "raise " not in statement:
                 continue
-            if "pip install" not in statement:
+            if not _offers_an_install(statement):
                 silent.append(
                     f"{path.relative_to(REPO_ROOT).as_posix()}:{index + 1}: {line.strip()}")
 

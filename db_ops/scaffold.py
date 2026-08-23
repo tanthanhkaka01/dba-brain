@@ -98,9 +98,11 @@ EMPTY_INVENTORY = {
     "db_instances": [],
 }
 
-#: The metric catalogue is *product* data — it describes the collectors the package ships — so a
-#: first run needs one or it can collect nothing at all. This is a starter set chosen to prove the
-#: whole path on one SQL Server: is it up, is it backed up, is the disk filling.
+#: The fallback catalogue, and *only* a fallback — :func:`packaged_catalogue` ships all 90 metrics
+#: and is what `init` actually writes. This stays because `init` failing outright is a worse answer
+#: than `init` writing three metrics: package data can go missing in ways a wheel test does not
+#: cover (a `pip install --no-binary` against a broken sdist, a vendored subset), and a toolkit that
+#: still starts and says what it has beats one that cannot start.
 STARTER_METRICS = {
     "schema_version": 1,
     "notes": [
@@ -393,13 +395,41 @@ def _config(app_name: str) -> dict:
     }
 
 
+#: Where the package keeps the metric catalogue. It sits beside the collectors it names, because
+#: the two are one artifact: a catalogue entry is a `metric_code` plus the file that implements it,
+#: and a catalogue that ships without its queries — or queries that ship without the catalogue that
+#: reaches them — is half of a thing in both directions.
+PACKAGED_CATALOGUE = Path(__file__).parent / "metrics" / "catalogue" / "metric_definitions.json"
+
+
+def packaged_catalogue() -> dict:
+    """The full metric catalogue the package ships, or the starter set if it is not there.
+
+    **This is the whole reason a new install can collect anything beyond a heartbeat.** Until
+    2026-08-23 `init` wrote three hand-written SQL Server metrics, so the 90 metrics in this
+    repository — every OS metric, every Oracle, MySQL and PostgreSQL metric, every Docker metric —
+    existed for whoever cloned the repository and for nobody who installed the package. The
+    collectors were already shipping; nothing named them.
+
+    The OS metrics matter most here and are the reason this was worth changing. They need no
+    database at all — they read CPU, memory, disk and uptime over `cmd_access` — so they are the
+    part of the catalogue that works on a host the toolkit cannot log into yet. A target with no
+    `cmd_access` skips them with a line saying exactly that, so shipping them switched on costs a
+    reader nothing and shows them the capability exists.
+    """
+    try:
+        return json.loads(PACKAGED_CATALOGUE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return STARTER_METRICS
+
+
 #: What `init` writes, as (relative path, content). Directories come from the paths.
 def _files(app_name: str) -> list[tuple[str, dict]]:
     return [
         ("config.json", _config(app_name)),
         ("data/store_config.json", SQLITE_STORE),
         ("data/db_instances.json", EMPTY_INVENTORY),
-        ("data/metric_definitions.json", STARTER_METRICS),
+        ("data/metric_definitions.json", packaged_catalogue()),
         ("data/users.json", EMPTY_USERS),
         ("data/telegram_config.json", TELEGRAM_CONFIG),
         ("data/telegram_groups.json", EMPTY_TELEGRAM_GROUPS),

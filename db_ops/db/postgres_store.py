@@ -19,6 +19,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from db_ops.lib.packaging import install_hint
 from db_ops.config import PostgresStoreConfig
 
 # A maintenance database always exists and is never the one being created, so CREATE DATABASE
@@ -72,7 +73,7 @@ def _dbapi():
     except ImportError as exc:  # pragma: no cover - driver install is environmental.
         raise PostgresStoreError(
             "pg8000 is required for the PostgreSQL store. Install it with: "
-            "pip install 'db_ops[postgres]'"
+            + install_hint("postgres")
         ) from exc
     dbapi.paramstyle = "qmark"
     return dbapi

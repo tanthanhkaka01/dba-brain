@@ -23,7 +23,7 @@ it.
 
 ```bash
 python -m venv .venv
-.venv/bin/pip install 'db_ops[postgres]'         # Windows: .venv\Scripts\pip
+.venv/bin/pip install 'dbabrain[postgres]'       # Windows: .venv\Scripts\pip
 ```
 
 From a checkout:
@@ -59,7 +59,7 @@ why every driver is an extra.
 | `[all]` | all of the above | |
 | `[dev]` | `pytest` | Running the test suite. |
 
-Combine them: `pip install 'db_ops[postgres,mssql,ssh]'`.
+Combine them: `pip install 'dbabrain[postgres,mssql,ssh]'`.
 
 ## The two prerequisites that bite
 

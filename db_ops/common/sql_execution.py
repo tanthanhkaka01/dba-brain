@@ -11,6 +11,7 @@ from typing import Any
 
 # Re-exported: five modules already import load_json_file from here, and the function is
 # not SQL-specific. It now lives in common/json_io.py as the tool's single JSON reader.
+from db_ops.lib.packaging import install_hint
 from db_ops.lib.json_io import load_json_file  # noqa: F401 - re-exported for compatibility
 # Re-exported: the SQL text vocabulary — limits, the DECLARE prelude, parameter types and the
 # password lookup — moved to db_ops/lib/sql_text.py so apps can use it without importing `common`.
@@ -297,7 +298,7 @@ def connect_sqlserver_with_fallback(
     except ImportError as exc:
         raise RuntimeError(
             "pyodbc is required to connect to SQL Server. Install it with: "
-            "pip install 'db_ops[mssql]' (and a system ODBC driver)"
+            + install_hint("mssql") + " (and a system ODBC driver)"
         ) from exc
     try:
         opened = open_sqlserver_odbc(

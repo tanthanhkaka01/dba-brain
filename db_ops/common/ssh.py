@@ -26,6 +26,7 @@ from pathlib import Path
 # unchanged for callers that legitimately open a client. Finding the key file and resolving the
 # password are reads of `data/`, which has one reader; the four exception names are vocabulary an
 # app may need without importing paramiko at all. Both moved on 2026-08-15.
+from db_ops.lib.packaging import install_hint
 from db_ops.common.data_sources import (  # noqa: F401 - one definition, see that module
     SSH_KEYS_DIRNAME,
     resolve_ssh_key,
@@ -68,7 +69,7 @@ def open_ssh_client(
         import paramiko  # type: ignore[import]
     except ImportError as exc:
         raise SshError(
-            "paramiko is required for SSH. Install it with: pip install 'db_ops[ssh]'"
+            "paramiko is required for SSH. Install it with: " + install_hint("ssh")
         ) from exc
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -89,20 +90,48 @@ def open_ssh_client(
     try:
         client.connect(**connect_kwargs)
     except Exception as exc:  # noqa: BLE001 - auth/network; classify, then surface cleanly.
-        raise _connect_error(paramiko, exc, user=user, host=host, port=port, timeout=timeout) from exc
+        raise _connect_error(
+            paramiko, exc, user=user, host=host, port=port, timeout=timeout,
+            offered_password=bool(password), offered_key=bool(key_filename),
+        ) from exc
     return client
 
 
-def _connect_error(paramiko, exc: Exception, *, user: str, host: str, port: int, timeout: int) -> SshError:
+def _connect_error(
+    paramiko,
+    exc: Exception,
+    *,
+    user: str,
+    host: str,
+    port: int,
+    timeout: int,
+    offered_password: bool = True,
+    offered_key: bool = True,
+) -> SshError:
     """Map a paramiko connect exception to the SshError subclass that says what to fix.
 
     Auth vs unreachable is the distinction that decides an operator's next step (fix the
     credential, or open the port), so it is made here where the exception type is still
     available rather than by string-matching downstream.
+
+    `offered_password` / `offered_key` are what we actually sent, and they separate *the
+    credential is wrong* from **we had no credential to send**. The second case reaches paramiko
+    as `No authentication methods available`, which reads like a server-side refusal and is
+    really a configuration gap: `auth_type` defaults to `key` for SSH, so a `cmd_access` block
+    written with a password and no `auth_type` sends nothing at all. That cost an afternoon here
+    on 2026-08-23 against a container whose password was correct the whole time.
     """
     where = f"{user}@{host}:{port}"
     auth_exception = getattr(paramiko, "AuthenticationException", None)
     if auth_exception is not None and isinstance(exc, auth_exception):
+        if not offered_password and not offered_key:
+            return SshAuthError(
+                f"SSH authentication failed for {where}: no credential was sent. "
+                f"SSH defaults to auth_type 'key', so a cmd_access block with a password but no "
+                f"auth_type offers nothing. Set \"auth_type\": \"password\" on the cmd_access "
+                f"block (with credential_name naming the stored password), or set \"key_file\" "
+                f"for key auth. Detail: {exc}"
+            )
         return SshAuthError(f"SSH authentication failed for {where}: {exc}")
     if isinstance(exc, (socket.timeout, TimeoutError)):
         return SshTimeoutError(f"SSH connect to {where} timed out after {timeout} seconds.")
