@@ -7,11 +7,9 @@
     "'database_defaults' is per engine and per topology. It is the answer to 'what does a new lab cluster of this kind look like', so a rehearsal starts from a known shape instead of whatever the last person typed.",
     "Addresses use the documentation ranges. Give the lab a network of its own; a rehearsal that can reach production is not a rehearsal."
   ],
-
   "app_name": "db_ops_sre",
   "console_level": "INFO",
   "file_level": "INFO",
-
   "sre": {
     "vmware": {
       "vmrun_path": "C:/Program Files (x86)/VMware/VMware Workstation/vmrun.exe",
@@ -21,53 +19,91 @@
       "net_interface": "ens33",
       "cidr": 24,
       "gateway": "198.51.100.2",
-      "dns_servers": ["198.51.100.2"]
+      "dns_servers": [
+        "198.51.100.2"
+      ]
     },
-
     "automation": {
       "dir": "../db_ops/sre/automation",
       "powershell_dir": "../db_ops/sre/automation/powershell",
       "bash_dir": "../db_ops/sre/automation/bash",
       "ansible_dir": "../db_ops/sre/automation/ansible"
     },
-
     "credentials": {
-      "_note": "Lab-only, and the whole reason this block is acceptable: these machines are created from a template, used for a rehearsal and destroyed. Replace every value.",
+      "_note": "Lab-only. These machines are created from a template, rehearsed on and destroyed, which is why a literal password here is defensible. Prefer the ref form anyway: write \"<name>_password_ref\": \"SOME_STORE_KEY\" and keep the value in the encrypted secret store (db-ops encrypt-secret). A literal, \"<name>_password_env\", and \"<name>_password_ref\" are all read, in that order. A lab that gets kept is how a throwaway password becomes a stored one.",
       "guest_user": "labuser",
-      "guest_password": "ChangeMe_Guest_123!",
+      "guest_password_ref": "LAB_GUEST_PASSWORD",
       "root_user": "root",
-      "root_password": "ChangeMe_Root_123!",
-      "windows_administrator_password": "ChangeMe_Admin_123!",
+      "root_password_ref": "LAB_ROOT_PASSWORD",
+      "windows_administrator_password_ref": "LAB_WINDOWS_ADMINISTRATOR_PASSWORD",
       "ssh_identity_file": "~/.ssh/db_lab_id_ed25519",
       "plink_path": "C:/Program Files/PuTTY/plink.exe"
     },
-
     "inventory": {
       "dir": "../db_ops/sre/inventory",
       "groups": {
         "shared": [
-          {"name": "bastion-01", "ip": "198.51.100.3", "role": "bastion"},
-          {"name": "mon-01", "ip": "198.51.100.4", "role": "monitoring"}
+          {
+            "name": "bastion-01",
+            "ip": "198.51.100.3",
+            "role": "bastion"
+          },
+          {
+            "name": "mon-01",
+            "ip": "198.51.100.4",
+            "role": "monitoring"
+          }
         ],
         "postgresql": [
-          {"name": "pg-01", "ip": "198.51.100.21", "role": "postgresql"},
-          {"name": "pg-02", "ip": "198.51.100.22", "role": "postgresql"},
-          {"name": "pg-03", "ip": "198.51.100.23", "role": "postgresql"}
+          {
+            "name": "pg-01",
+            "ip": "198.51.100.21",
+            "role": "postgresql"
+          },
+          {
+            "name": "pg-02",
+            "ip": "198.51.100.22",
+            "role": "postgresql"
+          },
+          {
+            "name": "pg-03",
+            "ip": "198.51.100.23",
+            "role": "postgresql"
+          }
         ],
         "sqlserver": [
-          {"name": "mssql-01", "ip": "198.51.100.31", "role": "sqlserver"},
-          {"name": "mssql-02", "ip": "198.51.100.32", "role": "sqlserver"}
+          {
+            "name": "mssql-01",
+            "ip": "198.51.100.31",
+            "role": "sqlserver"
+          },
+          {
+            "name": "mssql-02",
+            "ip": "198.51.100.32",
+            "role": "sqlserver"
+          }
         ],
         "mysql": [
-          {"name": "mysql-01", "ip": "198.51.100.11", "role": "mysql"}
+          {
+            "name": "mysql-01",
+            "ip": "198.51.100.11",
+            "role": "mysql"
+          }
         ],
         "oracle_dg": [
-          {"name": "orapri", "ip": "198.51.100.51", "role": "oracle_dg"},
-          {"name": "orastb", "ip": "198.51.100.52", "role": "oracle_dg"}
+          {
+            "name": "orapri",
+            "ip": "198.51.100.51",
+            "role": "oracle_dg"
+          },
+          {
+            "name": "orastb",
+            "ip": "198.51.100.52",
+            "role": "oracle_dg"
+          }
         ]
       }
     },
-
     "oracle": {
       "version": "19c",
       "rac_template_name": "tpl-oraclelinux-r9",
@@ -76,30 +112,29 @@
       "db_installer_path": "D:/software/oracle/db_home.zip",
       "install_stage": "/u01/app/stage"
     },
-
     "database_defaults": {
       "postgresql": {
         "cluster_name": "postgresql-lab",
         "version": 16,
         "port": 5432,
         "superuser": "postgres",
-        "superuser_password": "ChangeMe_PostgresAdmin_123!",
+        "superuser_password_ref": "LAB_POSTGRESQL_SUPERUSER_PASSWORD",
         "replication_user": "replicator",
-        "replication_password": "ChangeMe_Replicator_123!"
+        "replication_password_ref": "LAB_POSTGRESQL_REPLICATION_PASSWORD"
       },
       "mysql": {
         "cluster_name": "mysql-lab",
         "cluster_admin_user": "clusteradmin",
-        "cluster_admin_password": "ChangeMe_ClusterAdmin_123!",
+        "cluster_admin_password_ref": "LAB_MYSQL_CLUSTER_ADMIN_PASSWORD",
         "classic_port": 3306
       },
       "sqlserver": {
         "port": 1433,
         "instance_name": "MSSQLSERVER",
         "sa_user": "sa",
-        "sa_password": "ChangeMe_SA_123!",
+        "sa_password_ref": "LAB_SQLSERVER_SA_PASSWORD",
         "dba_user": "dba_user",
-        "dba_password": "ChangeMe_DBA_123!",
+        "dba_password_ref": "LAB_SQLSERVER_DBA_PASSWORD",
         "ha_mode": "always_on_ag",
         "ag_name": "AG-LAB",
         "ag_listener": "mssql-ag-listener",
@@ -111,9 +146,9 @@
         "port": 1521,
         "service_name": "LABDB",
         "sys_user": "sys",
-        "sys_password": "ChangeMe_SYS_123!",
+        "sys_password_ref": "LAB_ORACLE_DATAGUARD_SYS_PASSWORD",
         "dba_user": "dba_user",
-        "dba_password": "ChangeMe_DBA_123!",
+        "dba_password_ref": "LAB_ORACLE_DATAGUARD_DBA_PASSWORD",
         "oracle_home": "/u01/app/oracle/product/19.3.0/dbhome_1",
         "oracle_base": "/u01/app/oracle",
         "primary_service": "LABDB_PRIMARY",

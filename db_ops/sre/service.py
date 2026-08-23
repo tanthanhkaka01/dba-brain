@@ -186,7 +186,9 @@ def check_mysql_cluster(
     *,
     dry_run: bool = False,
 ) -> list[subprocess.CompletedProcess[str] | list[str]]:
-    mysql_defaults = dict(sre_config.database_defaults.get("mysql") or {})
+    # Resolved, not raw: the admin password may be a `cluster_admin_password_ref` naming an
+    # entry in the secret store rather than a literal in the config file.
+    mysql_defaults = dict(sre_config.resolved_database_defaults().get("mysql") or {})
     primary = sre_config.first_node("mysql")
     cluster_name = str(mysql_defaults.get("cluster_name", "mysql-lab"))
     admin_user = str(mysql_defaults.get("cluster_admin_user", "clusteradmin"))
@@ -339,11 +341,14 @@ def _ssh_command(sre_config: SreOperationalConfig, remote_command: str, *, host:
 
 
 def _build_powershell_payload(sre_config: SreOperationalConfig) -> str:
+    # The PowerShell side creates the machines, so it needs the passwords themselves — a ref
+    # means nothing to it. This is the boundary where a `*_password_ref` becomes a value, which
+    # is why the config file never has to hold one.
     payload = {
         "vmware": sre_config.vmware,
-        "credentials": sre_config.credentials,
+        "credentials": sre_config.resolved_credentials(),
         "inventory": sre_config.inventory,
-        "database_defaults": sre_config.database_defaults,
+        "database_defaults": sre_config.resolved_database_defaults(),
         "oracle": sre_config.oracle,
     }
     raw = json.dumps(payload, ensure_ascii=True, separators=(",", ":"))

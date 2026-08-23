@@ -37,6 +37,25 @@ UNWRITABLE
 done
 
 case "${1:-daemon}" in
+  # `docker run <image> --help` is how the documentation tells a reader to check the image before
+  # trusting it with anything, and it used to fall through to `exec --help` and die on a
+  # "command not found" that names neither the image nor what it can do. An image whose first
+  # documented command fails is worse than one with no documented command.
+  --help|-h|help)
+    cat <<'USAGE'
+dbabrain - DBA operations toolkit.
+
+  docker run <image>                      run the scheduler (default; needs data/ and a config)
+  docker run <image> shell                an interactive shell in the container
+  docker run <image> db-ops --help        any toolkit command; db-ops is on the PATH
+  docker run <image> db-ops init          write a starter tool root into the working directory
+
+The scheduler reads $DB_OPS_CONFIG (default: config.json) and expects data/, logs/ and runtime/
+to be present and writable. This image runs as a non-root user, so bind mounts must be writable
+by it - the error names the uid and the fix if they are not.
+USAGE
+    exit 0
+    ;;
   daemon)
     shift || true
     exec python -m db_ops.jobs.daemon --config "$CONFIG" --delay-seconds "${DB_OPS_DAEMON_DELAY:-2}" "$@"
