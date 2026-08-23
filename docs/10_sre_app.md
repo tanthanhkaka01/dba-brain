@@ -8,6 +8,38 @@
 
 ---
 
+## Passwords in `sre_config.json`
+
+Every `<name>_password` in this config can be written three ways, read in this order:
+
+| Written as | Where the value comes from |
+| --- | --- |
+| `"sa_password": "..."` | the literal in the file |
+| `"sa_password_env": "LAB_SA"` | the environment variable `LAB_SA` |
+| `"sa_password_ref": "LAB_SA"` | the key `LAB_SA` in the encrypted secret store |
+
+**The ref is the form to use, and it is what `data/sre_config.example.json` now shows.** Put the
+value in the store once and the config file stops being a place secrets live:
+
+```bash
+# add LAB_SA to secrets/secret_text.json, then
+db-ops encrypt-secret --key-base64 <your passphrase, base64>
+```
+
+The literal stays supported because it is genuinely defensible here: these values configure a
+machine that is created from a template, rehearsed on, and destroyed. The case it does not cover
+is **the lab that gets kept** — at which point a password typed into a config file has become a
+stored credential living outside the store, outside `check-secret`, and inside a file that gets
+copied between machines.
+
+A ref is resolved **at the point of use, not at load time**. `sre` serialises whole config
+sections into a base64 payload for PowerShell and hands them to Ansible, and those consumers
+cannot look a ref up — they need the value. Resolving on load would put the secret into every dump
+of the config; not resolving at all would ship a ref to a script that cannot use it. So the raw
+section keeps the ref and `resolved_credentials()` / `resolved_database_defaults()` produce the
+values, with the `_ref` and `_env` keys dropped so the payload carries the password and not the
+name of where the password is kept.
+
 ## Supported Lab Database Versions
 
 This SRE lab is opinionated: the database version, OS template, topology, ports, and verification target are part of the runbook. The active values below come from `data/sre_config.json`, Ansible `group_vars`, and the inventory files under `db_ops/sre/inventory`.

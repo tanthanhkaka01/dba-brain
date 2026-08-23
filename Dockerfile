@@ -85,7 +85,10 @@ COPY db_ops ./db_ops
 # wrong about. `--no-deps` because requirements.txt above already resolved them, and installing
 # again would let a transitive pin drift between the two layers.
 COPY pyproject.toml README.md ./
-RUN pip install --no-deps .
+# `pip install .` runs the build backend in-tree, which leaves `build/` and `dbabrain.egg-info/`
+# beside the source — a stale second copy of the whole package inside the image, on the import path
+# under `build/lib/`. Removed in the same layer, or deleting it later would not reclaim the space.
+RUN pip install --no-deps .     && rm -rf build dbabrain.egg-info
 
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh

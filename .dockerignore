@@ -22,6 +22,14 @@ data/
 # db_ops/common/{backup,restore}_scripts, db_ops/sre/host_config) and ships
 # inside the image with the package, so the leading slash matters: it anchors this to the root.
 /assets/
+# Local build artifacts. `python -m build` leaves `build/` and `*.egg-info/` beside the source,
+# and the Dockerfile now COPYs `pyproject.toml` and installs the package — so without this the
+# image ships a **second copy** of `db_ops` under `build/lib/`, stale from whenever the last local
+# build ran. Found by listing the image: `build` and `dbabrain.egg-info` sat next to `db_ops`.
+build/
+dist/
+*.egg-info/
+
 # The legacy Oracle 8i tool: a Win32 Python 2.7 runtime and ~200MB of Oracle 10.2 client DLLs
 # that cannot execute on Linux anyway. The Dockerfile never COPYs it, but the build context is
 # the whole repo, so without this every `build-image` ships ~370MB to the daemon for nothing.

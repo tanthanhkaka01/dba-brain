@@ -82,3 +82,57 @@ jobs:
           path: dist/
 
       - uses: pypa/gh-action-pypi-publish@release/v1
+
+  # The container half of HR-4. Until 2026-08-23 a `v*` release published to PyPI and produced no
+  # image at all, while `mvp04` documented `docker run ghcr.io/.../dbabrain:<v>` as a way to use the
+  # toolkit — a documented artifact that had never existed. Four acceptance criteria across two MVPs
+  # were waiting on this one job.
+  #
+  # It runs after `publish` rather than beside it so a failed PyPI upload does not leave an image
+  # published for a version that is not on the index.
+  image:
+    needs: publish
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    permissions:
+      contents: read
+      packages: write        # to push to GHCR; nothing here needs more
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # `latest` follows a real release and never a prerelease. An `-rc` tag is published so it can
+      # be pulled by name and tested; moving `latest` to it would hand every `docker pull` with no
+      # tag a release candidate, which is the failure this rule exists to prevent.
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/dbabrain
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ github.event.release.prerelease == false }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      # The image is documented as runnable with nothing mounted, and as not running as root.
+      # Both are checked here, against the image that was just pushed, because an image nobody
+      # ran is a claim rather than an artifact.
+      - name: The published image runs, and not as root
+        run: |
+          set -euo pipefail
+          tag="$(echo '${{ steps.meta.outputs.tags }}' | head -n1)"
+          uid="$(docker run --rm --entrypoint id "$tag" -u)"
+          test "$uid" != "0" || { echo "the image runs as root"; exit 1; }
+          docker run --rm "$tag" --help > /dev/null
+          echo "ok: $tag runs as uid $uid with no config mounted"

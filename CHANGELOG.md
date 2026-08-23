@@ -15,6 +15,28 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-08-23
+
+### Added
+
+- **A release now publishes a container image** to `ghcr.io/tanthanhkaka01/dbabrain`, tagged
+  `X.Y.Z`, `X.Y` and `latest` — `latest` follows a real release and never a prerelease. Until now a
+  `v*` tag published to PyPI and produced no image, while the documentation described
+  `docker run ghcr.io/.../dbabrain:<v>` as a way to use the toolkit. The job checks the image it
+  just pushed: it runs, and it does not run as root.
+- **`docker run <image> --help`** prints what the image can do. It used to fall through to
+  `exec --help` and die on "command not found" — the first documented command failing.
+- **A password in `sre_config.json` can live in the secret store.** `<name>_password_ref` (a store
+  key) and `<name>_password_env` (an environment variable) are read alongside the literal, in that
+  precedence. The literal still works: these values configure a lab machine that is created and
+  destroyed. The case it did not cover is the lab that gets kept.
+
+### Fixed
+
+- **The image carried a stale second copy of the package.** `pip install .` runs the build backend
+  in-tree, leaving `build/lib/db_ops` on the import path inside the image. Removed in the same
+  layer.
+
 ## [0.3.0] - 2026-08-23
 
 ### Added
