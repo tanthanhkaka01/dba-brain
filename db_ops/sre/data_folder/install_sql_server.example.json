@@ -1,0 +1,29 @@
+{
+  "_note": [
+    "Input for deploy_sqlserver_ag.py - a three-node SQL Server Always On lab.",
+    "Copy this, fill in your own hosts, and pass the copy as the first argument.",
+    "",
+    "The addresses below are from the documentation range (RFC 5737) and are not routable:",
+    "replace every one. sudo_password_ref names a key in the encrypted secret store rather",
+    "than holding the password here - see docs/10_sre_app.md. A literal 'sudo_password' and",
+    "a 'sudo_password_env' are both still read, in that order."
+  ],
+  "cluster_name": "sqlserver-ag-lab",
+  "engine": "sqlserver",
+  "version": "2025",
+  "deployment_type": "always_on",
+  "ssh": {
+    "sudo_user": "labuser",
+    "sudo_password_ref": "LAB_SQLSERVER_SUDO_PASSWORD"
+  },
+  "nodes": [
+    {"name": "sql-01", "host": "203.0.113.31", "role": "primary", "is_primary": true},
+    {"name": "sql-02", "host": "203.0.113.32", "role": "secondary", "is_primary": false},
+    {"name": "sql-03", "host": "203.0.113.33", "role": "secondary", "is_primary": false}
+  ],
+  "availability_group": {
+    "name": "AG_SQLSERVER_LAB",
+    "primary_node": "203.0.113.31",
+    "replicas": ["203.0.113.31", "203.0.113.32", "203.0.113.33"]
+  }
+}

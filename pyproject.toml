@@ -23,7 +23,7 @@ license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Trieu Tan Thanh" }]
 keywords = ["dba", "database", "sqlserver", "oracle", "postgresql", "mysql", "monitoring", "operations"]
-version = "0.3.1"
+version = "0.3.2"
 
 # Measured 2026-08-21, not guessed (D-05):
 #
@@ -131,6 +131,7 @@ include = [
     "db_ops.sla*",
     "db_ops.sre*",
     "db_ops.webhost*",
+    "db_ops.control*",
 ]
 namespaces = false
 

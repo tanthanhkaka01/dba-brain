@@ -15,6 +15,27 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-08-23
+
+### Added
+
+- **The distribution is now the whole toolkit: all fourteen packages.** `control` was the last one
+  withheld — it builds and deploys the toolkit to another node, bumps the version, and runs the
+  export that produces this repository. `db-ops` gains `bump-version`, `build-image`, `deploy`,
+  `worker-status` and the inventory commands.
+- **`db_ops/sre/data_folder/install_sql_server.example.json`** — a documented input for the
+  SQL Server Always On lab script, using documentation-range addresses and a
+  `sudo_password_ref` into the secret store. It is the script's default, replacing a captured
+  record of one real install that could not ship.
+
+### Changed
+
+- **`export-public` reports a skipped identifier scan instead of raising.** With no inventory to
+  derive search terms from, the scanner refuses rather than calling a tree clean on the strength
+  of having looked for nothing — correct, and in a fresh checkout it is the normal case. It now
+  says the copy was written and nothing was verified, rather than printing a traceback after a
+  successful export.
+
 ## [0.3.1] - 2026-08-23
 
 ### Added
