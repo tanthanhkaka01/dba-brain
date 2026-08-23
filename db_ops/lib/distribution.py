@@ -1,15 +1,18 @@
 """What the public distribution contains, and what stays behind.
 
-`v0.1.0` of the public toolkit is deliberately thin: **point it at one SQL Server, collect metrics,
-add a Telegram token, get an alert.** That is a smaller product than this repository holds, and the
-reason is not tidiness — `db_ops/sre` alone carried 21 of the 46 source scrub blockers, so most of
-the remaining work to make a tree publishable leaves with the packages the thin release does not
-need.
+**As of `v0.3.2` the public distribution is the whole toolkit — all fourteen packages.** It did not
+start there. `v0.1.0` was deliberately thin (point it at one SQL Server, collect metrics, add a
+Telegram token, get an alert) because a first release is easier to stand behind when it claims one
+path and ships exactly what that path needs. `v0.2.0` added six packages, and `v0.3.2` the last one.
 
-**This module is the one place that says which packages those are.** Two things read it and they
-must not disagree: the packaging metadata that decides what a wheel contains, and the export that
-produces the public tree. A second copy of this list is how a wheel and a repository start shipping
-different software.
+**This module remains the one place that decides.** Two things read it and they must not disagree:
+the packaging metadata that decides what a wheel contains, and the export that produces the public
+tree. A second copy of this list is how a wheel and a repository start shipping different software.
+
+An empty `PRIVATE_PACKAGES` does not make the lists ceremonial. What they hold now is the *shape*
+of the decision — every exclusion states a reason, names something that exists, and is guarded by
+a test — so that a future one has to be argued for in the open rather than made by deleting a line
+from an export script.
 
 **Nothing is deleted from this repository to achieve the cut.** The worker runs the full toolkit
 and must keep running; the Docker image copies `db_ops/` wholesale rather than installing the
@@ -49,6 +52,9 @@ PUBLIC_PACKAGES: tuple[str, ...] = (
     "sla",
     "sre",
     "webhost",
+    # Last one in, 2026-08-23. It builds and deploys, bumps the version, and runs the export that
+    # produces the public tree - this project's own release process, readable by anyone using it.
+    "control",
 )
 
 #: Packages that do not ship, each with the reason.
@@ -56,14 +62,27 @@ PUBLIC_PACKAGES: tuple[str, ...] = (
 #: Stated as a mapping rather than a set because an unexplained exclusion is indistinguishable from
 #: an oversight, and this list decides what a stranger can and cannot do with the toolkit.
 #:
-#: Six entries left with `v0.2.0`. The one that remains is not waiting on maturity: it is
-#: structural, and no later release reverses it.
-PRIVATE_PACKAGES: dict[str, str] = {
-    "control": "master/worker build and deploy, and the export itself. **The thing that produces "
-               "the public tree must not be in the public tree** - a copy of the export would let "
-               "a reader believe they can reproduce the private repository from the public one, "
-               "and it carries the private-forever list, which is a map of what is being withheld",
-}
+#: Six entries left with `v0.2.0` and the last one left with `v0.3.2`, so this is **empty as of
+#: 2026-08-23: every package ships.** The mapping stays because the next exclusion has to explain
+#: itself in the same place.
+#:
+#: `control` was the last one out, withheld on the argument that "the thing that produces the
+#: public tree must not be in the public tree" — that a copy of the export would suggest the
+#: private repository could be reconstructed from the public one, and that it carries the
+#: private-forever list, which is a map of what is being withheld.
+#:
+#: That argument does not survive contact with where the code actually lives. The manifest is
+#: `db_ops/lib/distribution.py` and **it has shipped since `v0.1.0`** — this file, the one you are
+#: reading. The map was never withheld; only the copy tool that reads it was, which hid nothing
+#: and cost readers a working `bump-version`, `build-image`, `deploy` and `worker-status`.
+#:
+#: Nothing in `control` names an estate: the worker host, user and credential are all arguments.
+#: What it does carry is this project's own release process, and an open-source release process
+#: that can be read is better than one that cannot.
+#:
+#: An entry here should be rare and specific. "This package would embarrass us" is not a reason;
+#: "this package cannot work outside one estate" is.
+PRIVATE_PACKAGES: dict[str, str] = {}
 
 
 def public_package_globs() -> tuple[str, ...]:
@@ -163,6 +182,12 @@ PRIVATE_PATHS: dict[str, str] = {
     "runtime": "generated",
     "base": "test scratch shaped like a pg_basebackup tree",
     "wal": "test scratch",
+    ".ruff_cache": "lint cache",
+    # An empty directory a tool left behind. Recorded rather than deleted because the export
+    # refuses to guess: an undecided top-level path is reported on every run until somebody says
+    # which side it is on, and that prompt is the feature — a directory nobody decided about is
+    # exactly the one that ships something by accident.
+    "empty_top": "an empty directory left by a tool; nothing to ship",
 }
 
 #: Paths *inside* a shipped package that are still operator data.
@@ -181,13 +206,18 @@ PRIVATE_PATHS: dict[str, str] = {
 #: Note what does *not* protect these: `check-identifiers` derives its terms from the inventory, so
 #: a developer workstation, a Windows account or a lab VM that was never a monitored target reads
 #: as clean. A path list is the only thing that can refuse them.
-PRIVATE_SUBPATHS: dict[str, str] = {
-    "db_ops/sre/data_folder/20260612_install_sql_server.json":
-        "the input to one real lab install: three lab hosts by address",
-    "db_ops/sre/data_folder/20260612_result_install_sql_server.json":
-        "its captured output - 18.9 KB of stdout carrying a workstation name, a Windows account "
-        "and the SSH key path under it, VM and template names, and the lab subnet",
-}
+#: **Empty, and the goal is to keep it that way.** Both entries it used to hold were the captured
+#: record of one real lab install, sitting inside a shipped package because that is where the
+#: script that read them lived. They were moved to `audits/` on 2026-08-23 — a dated capture of one
+#: real run is exactly what `audits/` is for — and `db_ops/sre/data_folder/install_sql_server.example.json`
+#: took their place as the script's default: documentation range addresses, and the sudo password
+#: as a `sudo_password_ref` into the secret store rather than a literal.
+#:
+#: That is the pattern for anything that lands here: an entry means product code and operator data
+#: share a directory, and moving the data out is almost always available and always better than
+#: withholding the file. A file kept out by name is a file nobody in the public tree can see is
+#: missing.
+PRIVATE_SUBPATHS: dict[str, str] = {}
 
 
 def is_private_subpath(relative: str) -> str | None:
@@ -241,18 +271,8 @@ def private_docs() -> tuple[str, ...]:
 #: on the shape of the source tree itself, which is a different question and one the public tree
 #: cannot answer about itself.
 PRIVATE_TESTS: dict[str, str] = {
-    "test_distribution_closure.py": "asserts that the seven withheld packages exist on disk, which "
-                                    "is true of the private repository and false of the export by "
-                                    "definition. The closure it guards is a property of the source",
-    "test_legacy_oracle_tool_is_python2_safe.py": "checks tools/python32_legacy, a Win32 Python 2.7 "
-                                                  "payload that never ships",
-    "test_backup_restore_event_shape.py": "walks db_ops/backup_restore/*.py to check every event "
-                                          "call site shares one shape. The package is withheld, so "
-                                          "in the export it walks an empty path and reports that "
-                                          "no file announces a run - a true statement about "
-                                          "nothing. Listed here rather than caught by the import "
-                                          "filter because it *reads* the package instead of "
-                                          "importing it, which no static import walk can see",
+    "test_legacy_oracle_tool_is_python2_safe.py":
+        "checks tools/python32_legacy, a Win32 Python 2.7 payload that never ships",
 }
 
 
@@ -272,4 +292,4 @@ PRIVATE_TESTS: dict[str, str] = {
 #: version is immutable** — it cannot be re-uploaded after deletion, so the mistake is permanent.
 #: The public tree starts where a first release starts.
 PUBLIC_DISTRIBUTION_NAME = "dbabrain"
-PUBLIC_VERSION = "0.3.1"
+PUBLIC_VERSION = "0.3.2"

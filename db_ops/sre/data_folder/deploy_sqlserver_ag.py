@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 SQL Server 2025 Always On – deployment orchestrator.
-Reads  : <config_json>  (default: db_ops/sre/data_folder/20260612_install_sql_server.json)
+Reads  : <config_json>  (default: db_ops/sre/data_folder/install_sql_server.example.json)
 Writes : <date>_result_install_sql_server.json  in the same directory
 
 Rule   : no VMware / vmrun on the 3 SQL target nodes (18.31-18.33).
@@ -9,7 +9,7 @@ Rule   : no VMware / vmrun on the 3 SQL target nodes (18.31-18.33).
 
 Run from the db_ops project root:
     python db_ops/sre/data_folder/deploy_sqlserver_ag.py
-    python db_ops/sre/data_folder/deploy_sqlserver_ag.py db_ops/sre/data_folder/20260612_install_sql_server.json
+    python db_ops/sre/data_folder/deploy_sqlserver_ag.py my_lab.json
 """
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ from pathlib import Path
 _HERE        = Path(__file__).resolve().parent          # db_ops/sre/data_folder/
 _SRE_ROOT    = _HERE.parent                             # db_ops/sre/
 _DB_OPS      = _HERE.parent.parent.parent               # db_ops project root
-_DEFAULT_INSTALL_JSON = _HERE / "20260612_install_sql_server.json"
+_DEFAULT_INSTALL_JSON = _HERE / "install_sql_server.example.json"
 SRE_CONFIG   = _DB_OPS / "data" / "sre_config.json"
 HOSTS_YML    = _SRE_ROOT / "inventory" / "sqlserver" / "hosts.yml"
 GROUP_VARS   = _SRE_ROOT / "automation" / "ansible" / "group_vars" / "sqlserver.yml"
@@ -209,11 +209,25 @@ def step_deploy_host_key_bastion() -> StepResult:
     return s.done(rc, out, err)
 
 
+def sudo_password(install: dict) -> str:
+    """The sudo password, from the config or from the secret store.
+
+    The lab config used to carry the password as a literal, and the file that held one was
+    withheld from the distribution because of it — which took this script with it, since a
+    default pointing at a file that does not ship is a broken default. `sudo_password_ref` names
+    a key in the encrypted store instead, so the example can ship and the secret does not.
+    """
+    from db_ops.sre.config import resolve_password_fields
+
+    resolved = resolve_password_fields(install.get("ssh") or {})
+    return str(resolved.get("sudo_password") or "")
+
+
 def step_repo_sync(install: dict) -> StepResult:
     """Package db_ops/sre/ and SCP to bastion, then extract."""
     s = StepResult("repo-sync-bastion")
     user  = install["ssh"]["sudo_user"]
-    spwd  = install["ssh"]["sudo_password"]
+    spwd  = sudo_password(install)
     bip   = bastion_ip()
     idf   = ssh_key()
 
@@ -256,7 +270,7 @@ def step_bastion_key_to_sql_nodes(install: dict) -> StepResult:
     s = StepResult("bastion-key-to-sql-nodes")
     bip  = bastion_ip()
     user = install["ssh"]["sudo_user"]
-    spwd = install["ssh"]["sudo_password"]
+    spwd = sudo_password(install)
     ips  = [n["host"] for n in install["nodes"]]
 
     # 1. Install sshpass + gen bastion key
