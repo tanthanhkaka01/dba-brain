@@ -297,6 +297,37 @@ def run_scheduler_scan(
         active_commands=len(active_commands),
     )
 
+    # A daemon with nothing to run looks identical to a daemon that is working: the same tick,
+    # forever, with `active_commands=0`. Say which of the three reasons it is, because they have
+    # three different fixes and the reader cannot tell them apart from the outside.
+    #
+    # The third is the one that catches people. `data/app_commands.example.json` is written for a
+    # two-node estate where a `worker` runs the schedule, so a single-machine install copies it,
+    # starts the daemon as `master`, and watches it do nothing — with no line saying that every
+    # command was filtered out by a role it never chose.
+    if not active_commands:
+        inactive = [c for c in app_commands.values() if not c.active]
+        wrong_role = [
+            command for command in app_commands.values()
+            if command.active and not _command_runs_on_node(command, node_role)
+        ]
+        if not app_commands:
+            detail = (f"no commands are defined in {data_dir / 'app_commands.json'} - copy "
+                      f"data/app_commands.example.json and enable what you want scheduled")
+        elif wrong_role:
+            roles = sorted({(c.node_role or "all") for c in wrong_role})
+            detail = (
+                f"{len(wrong_role)} command(s) are defined for node_role {roles} and this node is "
+                f"'{node_role}', so none of them run here. Set DB_OPS_NODE_ROLE={roles[0]} on this "
+                f"process, or change node_role to 'all' in app_commands.json"
+            )
+        else:
+            detail = f"{len(inactive)} command(s) are defined but none has active=true"
+        log_app_event(
+            logger, "app.daemon.nothing_scheduled", status="warning",
+            node_role=node_role, defined=len(app_commands), detail=detail,
+        )
+
     sweep_run_requests(store, logger=logger)
     requests = open_run_requests(store, logger=logger)
 
@@ -588,6 +619,7 @@ def start_app_command(
         app_command.command_text,
         forwarded_key_args or ForwardedKeyArgs(),
     )
+    command_text = use_this_interpreter(command_text)
     try:
         process = subprocess.Popen(
             command_text,
@@ -1062,6 +1094,47 @@ def ensure_forwarded_secret_key_env(forwarded_key_args: ForwardedKeyArgs) -> Non
     secret_key = forwarded_secret_key(forwarded_key_args)
     if secret_key:
         os.environ.setdefault(SECRET_KEY_ENV_VAR, secret_key)
+
+
+#: Words a command may start with that mean "the Python I am running under".
+_INTERPRETER_WORDS = ("python", "python3", "python.exe", "python3.exe")
+
+
+def use_this_interpreter(command_text: str) -> str:
+    """Rewrite a leading bare ``python`` to the interpreter this daemon is running under.
+
+    Every scheduled command in `data/app_commands.example.json` begins ``python -m db_ops...``,
+    which resolves through `PATH` — and `PATH` is not where the toolkit is installed. After
+    `pip install dbabrain` into a virtualenv (the documented way), `db-ops daemon` starts from the
+    venv while its children get whatever `python` means on that machine: a system Python without
+    the package, or another project's venv entirely.
+
+    The symptom is the worst kind. Every command a reader ran by hand works; the moment the daemon
+    runs the same commands they all fail with ``ModuleNotFoundError: No module named 'db_ops'``,
+    once a minute, in a child process whose output nobody is watching. Measured on 2026-08-23 in a
+    clean `pip install`: three scheduled commands, three failures, and a manual run of each that
+    succeeded.
+
+    `sys.executable` is the answer to the question the config was really asking. A command naming
+    a *specific* interpreter — an absolute path, or a different runtime — is left exactly as
+    written, because that is someone being deliberate.
+    """
+    stripped = command_text.lstrip()
+    if not stripped:
+        return command_text
+    try:
+        first = shlex.split(stripped, posix=True)[0]
+    except ValueError:  # unbalanced quotes; not ours to repair
+        return command_text
+    if first.lower() not in _INTERPRETER_WORDS:
+        return command_text
+    leading = command_text[: len(command_text) - len(stripped)]
+    # These run through `shell=True`, so the quoting has to match the shell that will parse it.
+    # `shlex.quote` emits single quotes, which cmd.exe does not treat as quoting at all — it would
+    # hand the child a path with literal apostrophes around it. Only bites when the interpreter
+    # path contains a space, which is exactly where `C:\Program Files\...` lives.
+    quoted = f'"{sys.executable}"' if os.name == "nt" else shlex.quote(sys.executable)
+    return leading + quoted + stripped[len(first):]
 
 
 def append_forwarded_key_args(command_text: str, forwarded_key_args: ForwardedKeyArgs) -> str:

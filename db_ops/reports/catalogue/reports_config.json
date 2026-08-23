@@ -1,0 +1,89 @@
+{
+  "report_base_url": "",
+  "notes": [
+    "'inventory_exclude_ip_prefixes' lists server ip prefixes the inventory pages leave out. It was a constant in db_ops/lib/inventory_render.py until 2026-08-21, which meant the rendering library itself decided which of this estate's machines nobody gets to see. Empty means show everything."
+  ],
+  "inventory_exclude_ip_prefixes": [],
+  "reports": [
+    {
+      "report_code": "rp_metric_daily_logging",
+      "display_name": "Daily Metrics Logging Summary",
+      "metric_max_age_seconds": 86400,
+      "active": true,
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": 1,
+        "to_day": 31,
+        "from_hour": 10,
+        "to_hour": 11,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 72000,
+        "timeout": 1800
+      }
+    },
+    {
+      "report_code": "rp_metric_hourly_warning",
+      "display_name": "Metrics Warning Report",
+      "metric_max_age_seconds": 900,
+      "active": true,
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": 1,
+        "to_day": 31,
+        "from_hour": 0,
+        "to_hour": 23,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 180,
+        "timeout": 1800
+      }
+    },
+    {
+      "report_code": "rp_metric_hourly_critical",
+      "display_name": "Metrics Critical Report",
+      "metric_max_age_seconds": 900,
+      "active": true,
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": 1,
+        "to_day": 31,
+        "from_hour": 0,
+        "to_hour": 23,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 180,
+        "timeout": 1800
+      }
+    },
+    {
+      "report_code": "rp_backup_health_daily",
+      "display_name": "Backup Health Daily Report",
+      "metric_max_age_seconds": 604800,
+      "active": true,
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": 1,
+        "to_day": 31,
+        "from_hour": 9,
+        "to_hour": 10,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 72000,
+        "timeout": 1800
+      }
+    }
+  ]
+}

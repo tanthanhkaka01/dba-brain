@@ -15,6 +15,29 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-08-23
+
+Three defects that only appeared when the **scheduler** ran the commands. Every one of them worked
+when run by hand, which is why none had been caught: measured by installing the wheel into an empty
+virtualenv, pointing it at a database, and starting `db-ops daemon`.
+
+### Fixed
+
+- **The daemon ran the wrong Python.** Every scheduled command begins `python -m db_ops...`, which
+  resolves through `PATH` - and `PATH` is not where the toolkit is installed. After `pip install`
+  into a virtualenv, the daemon started from the venv while its children got a system Python
+  without the package, so all of them failed with `ModuleNotFoundError: No module named 'db_ops'`,
+  once a minute, in a child process whose output nobody watches. A bare `python` now becomes the
+  interpreter the daemon is running under; a command naming a specific interpreter is left alone.
+- **`db-ops init` wrote one of the four files the daemon needs.** `reports_config.json`,
+  `telegram_support_commands.json` and `app_commands.json` were missing, so scheduled reports and
+  the Telegram workflow failed every cycle on a missing file. All four now ship as package data
+  beside the component that owns them, and `init` writes them.
+- **The shipped `app_commands.example.json` could not run on one machine.** Every entry was
+  `node_role: "worker"` and a default daemon is `master`, so a single-machine install ticked
+  forever with `active_commands=0` and no explanation. The example says `"all"` now, and when a
+  daemon has nothing to run it says which of the three reasons it is, and names the fix.
+
 ## [0.3.2] - 2026-08-23
 
 ### Added
