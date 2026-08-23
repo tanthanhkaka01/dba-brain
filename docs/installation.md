@@ -150,8 +150,9 @@ file works in both.
 The five-minute version, against a throwaway PostgreSQL container, is
 [`examples/postgres-quickstart/`](../examples/postgres-quickstart). Against your own estate:
 
-1. **Create a tool root.** `db-ops init` writes one — nine files, and it prints the next six
-   commands. A directory holding `data/` or `config.json` *is* a tool root: stand in it, or point
+1. **Create a tool root.** `db-ops init` writes one — twelve files, and it prints the next six
+   commands. Four of them arrive complete because they are product data rather than your estate:
+   the 90-metric catalogue, the report definitions, the bot commands, and the daemon's schedule. A directory holding `data/` or `config.json` *is* a tool root: stand in it, or point
    `DB_OPS_HOME` at it. Do not build one by hand.
 2. **Declare one target and one credential.** `data/db_instances.json` and `data/users.json`.
 3. **Put the password in the secret store.** Write `secrets/secret_text.json`, then
@@ -160,7 +161,9 @@ The five-minute version, against a throwaway PostgreSQL container, is
    `db-ops metrics collect --dry-run`.
 5. **Collect.** `db-ops metrics --key-base64 <base64-passphrase> collect` — the key goes *before*
    the subcommand.
-6. **Only then schedule anything.** `data/app_commands.json`, and the daemon.
+6. **Only then schedule anything.** `data/app_commands.json` is already written; trim it to the
+   apps you actually run, then start the daemon. It runs the same commands you just ran by hand,
+   with its own interpreter — so a venv install schedules the Python it was installed into.
 
 **Step by step, with what to assert after each one: [`first_run.md`](./first_run.md).**
 
