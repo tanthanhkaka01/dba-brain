@@ -157,6 +157,20 @@ def test_repository_telegram_repeat_interval_is_one_second():
     assert commands["APP-TELEGRAM"].repeat_interval_seconds == 1
 
 
+def _after_interpreter(command: str) -> str:
+    """The spawned command with its leading interpreter dropped.
+
+    These tests are about **key forwarding**, not about which Python runs. The daemon rewrites a
+    bare `python` to `sys.executable`, so that a venv install schedules its own interpreter rather
+    than whatever `PATH` resolves to — see `tests/test_daemon_runs_its_own_interpreter.py`.
+    Asserting on the whole string made four of these fail for a reason none of them is about.
+    """
+    import shlex
+
+    head = shlex.split(command, posix=daemon.os.name != "nt")[0]
+    return command[command.index(head) + len(head):].lstrip()
+
+
 def test_daemon_appends_key_base64_to_spawned_command(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     write_app_commands(
@@ -180,7 +194,8 @@ def test_daemon_appends_key_base64_to_spawned_command(tmp_path, monkeypatch):
         forwarded_key_args=daemon.ForwardedKeyArgs("--key-base64", "QUJDRA=="),
     )
 
-    assert started == ["python -m db_ops.telegram.cli --config config.json --key-base64 QUJDRA== run-workflow"]
+    assert [_after_interpreter(c) for c in started] == [
+        "-m db_ops.telegram.cli --config config.json --key-base64 QUJDRA== run-workflow"]
 
 
 def test_daemon_sets_secret_key_env_for_spawned_restore_command(tmp_path, monkeypatch):
@@ -211,7 +226,7 @@ def test_daemon_sets_secret_key_env_for_spawned_restore_command(tmp_path, monkey
         forwarded_key_args=daemon.ForwardedKeyArgs("--key-base64", "c2VjcmV0LXBocmFzZQ=="),
     )
 
-    assert started[0][0].startswith("python -m db_ops.metrics.cli --key-base64")
+    assert _after_interpreter(started[0][0]).startswith("-m db_ops.metrics.cli --key-base64")
     assert started[0][1] == "secret-phrase"
 
 
@@ -238,10 +253,11 @@ def test_daemon_appends_plain_key_to_spawned_command(tmp_path, monkeypatch):
         forwarded_key_args=daemon.ForwardedKeyArgs("--key", "plain key"),
     )
 
+    tail = [_after_interpreter(c) for c in started]
     if daemon.os.name == "nt":
-        assert started == ['python -m db_ops.metrics.cli --config config.json --key "plain key" collect']
+        assert tail == ['-m db_ops.metrics.cli --config config.json --key "plain key" collect']
     else:
-        assert started == ["python -m db_ops.metrics.cli --config config.json --key 'plain key' collect"]
+        assert tail == ["-m db_ops.metrics.cli --config config.json --key 'plain key' collect"]
 
 
 def test_daemon_does_not_append_key_when_not_supplied(tmp_path, monkeypatch):
@@ -258,7 +274,7 @@ def test_daemon_does_not_append_key_when_not_supplied(tmp_path, monkeypatch):
         running_commands={},
     )
 
-    assert started == ['python -c "print(\'ok\')"']
+    assert [_after_interpreter(c) for c in started] == ['-c "print(\'ok\')"']
 
 
 def test_app_daemon_loads_only_app_commands(tmp_path, monkeypatch):

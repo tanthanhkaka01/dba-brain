@@ -395,10 +395,25 @@ def _config(app_name: str) -> dict:
     }
 
 
-#: Where the package keeps the metric catalogue. It sits beside the collectors it names, because
-#: the two are one artifact: a catalogue entry is a `metric_code` plus the file that implements it,
-#: and a catalogue that ships without its queries — or queries that ship without the catalogue that
-#: reaches them — is half of a thing in both directions.
+#: Product data the package ships, and what `init` writes it as.
+#:
+#: Each sits beside the component that owns it — the house rule for shipped assets — because these
+#: describe *what the toolkit can do*, not what one estate monitors. The metric catalogue names the
+#: collectors in `db_ops/metrics/collectors/`; the report definitions name the reports `reports`
+#: knows how to build; the support commands name the bot commands `telegram` answers; the app
+#: commands name the apps `jobs` can schedule and how often.
+#:
+#: **All four are needed before the daemon does anything**, which is what put them here. Measured
+#: on 2026-08-23 in a clean `pip install`: `db-ops init`, one target, then `db-ops daemon` — the
+#: metrics command ran and the other two failed every cycle on a missing file, in a child process
+#: whose output nobody watches. Every one of those commands worked by hand.
+PACKAGED_DEFAULTS: dict[str, str] = {
+    "data/metric_definitions.json": "metrics/catalogue/metric_definitions.json",
+    "data/reports_config.json": "reports/catalogue/reports_config.json",
+    "data/telegram_support_commands.json": "telegram/catalogue/telegram_support_commands.json",
+    "data/app_commands.json": "jobs/catalogue/app_commands.json",
+}
+
 PACKAGED_CATALOGUE = Path(__file__).parent / "metrics" / "catalogue" / "metric_definitions.json"
 
 
@@ -417,10 +432,22 @@ def packaged_catalogue() -> dict:
     `cmd_access` skips them with a line saying exactly that, so shipping them switched on costs a
     reader nothing and shows them the capability exists.
     """
+    return packaged_default("data/metric_definitions.json") or STARTER_METRICS
+
+
+def packaged_default(written_as: str) -> dict | None:
+    """The shipped default for *written_as*, or ``None`` when the package does not carry it.
+
+    ``None`` rather than an exception: a missing packaged file should cost one config file, not
+    the whole `init`. The caller decides whether it has a fallback worth using.
+    """
+    relative = PACKAGED_DEFAULTS.get(written_as)
+    if not relative:
+        return None
     try:
-        return json.loads(PACKAGED_CATALOGUE.read_text(encoding="utf-8"))
+        return json.loads((Path(__file__).parent / relative).read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return STARTER_METRICS
+        return None
 
 
 #: What `init` writes, as (relative path, content). Directories come from the paths.
@@ -430,6 +457,14 @@ def _files(app_name: str) -> list[tuple[str, dict]]:
         ("data/store_config.json", SQLITE_STORE),
         ("data/db_instances.json", EMPTY_INVENTORY),
         ("data/metric_definitions.json", packaged_catalogue()),
+        # The three the daemon needs and nothing else writes. Skipped rather than failed if the
+        # package did not carry one - a first run without scheduled reports still collects.
+        *(
+            (name, content)
+            for name in ("data/reports_config.json", "data/telegram_support_commands.json",
+                         "data/app_commands.json")
+            if (content := packaged_default(name)) is not None
+        ),
         ("data/users.json", EMPTY_USERS),
         ("data/telegram_config.json", TELEGRAM_CONFIG),
         ("data/telegram_groups.json", EMPTY_TELEGRAM_GROUPS),
