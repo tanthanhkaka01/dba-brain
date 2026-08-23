@@ -69,7 +69,10 @@ failure below is silent in a different way.
 | `data/db_instances.json` | **the estate**: one record per monitored instance | **yes** |
 | `data/users.json` | credentials by name — never a password, only a `password_ref` | **yes** |
 | `secrets/secret_text.json` | the plaintext passwords, encrypted in 2.3 and then deletable | **yes** |
-| `data/metric_definitions.json` | which metrics exist and how each grades | only to add metrics |
+| `data/metric_definitions.json` | which metrics exist and how each grades — **all 90** | only to add metrics |
+| `data/reports_config.json` | which reports exist and how often — daily, hourly warning, hourly critical | only to retime them |
+| `data/telegram_support_commands.json` | the bot commands the toolkit answers in a chat | — |
+| `data/app_commands.json` | **what the daemon runs and how often** | to enable or retime |
 | `data/telegram_config.json`, `data/telegram_groups.json` | delivery — only if you want alerts | for 2.5 |
 
 **SQLite on a first run is a decision, not a convenience.** Expecting PostgreSQL would mean the
@@ -80,6 +83,12 @@ discovery of which fields exist.
 **A scaffold is not an example.** `init` writes the *least* that is already valid; the
 `data/*.example.json` files in the repository are documentation — every field, with notes. Read the
 example when you want to know what a field is for; edit the scaffold when you want to run.
+
+**Four of those files are product data and arrive complete**, because they describe what the
+toolkit can do rather than what you monitor: the metric catalogue and its 90 collectors, the report
+definitions, the bot commands, and the schedule. You never write them from scratch. Before
+2026-08-23 three of the four were missing after `init`, and the daemon failed on every cycle
+against a file nobody had been told to create.
 
 ### 2.2 Name the instance
 
@@ -247,12 +256,30 @@ The worked version, against a throwaway container, is
 
 ### 2.6 Put it on a schedule
 
-`data/app_commands.json` is what the daemon runs and how often — write it once the commands above
-work by hand, and start the daemon last:
+`data/app_commands.json` is what the daemon runs and how often, and `init` already wrote it. Run
+the commands above by hand first — the daemon runs *those same commands*, so anything broken is
+easier to read in the foreground — then start it:
 
 ```bash
-db-ops daemon --config config.json --delay-seconds 10
+db-ops daemon --config config.json --delay-seconds 10 --key-base64 <your passphrase, base64>
 ```
+
+Each entry is one app on its own interval, inside its own allowed hours. Trim the list to what you
+actually run: the default includes SQL tasks, SLA, backup/restore and the web console, and an app
+you have not configured fails every cycle rather than doing nothing.
+
+**Two things to know when it appears to do nothing.**
+
+`node_role` decides which machine runs a command. The scaffold ships `"all"`, which runs anywhere.
+A two-node estate sets `"master"` or `"worker"` per command and declares each node's role with the
+`DB_OPS_NODE_ROLE` environment variable — deliberately not in `config.json`, so a config copied
+between nodes cannot mislabel one. If nothing runs, the daemon says which of the three reasons it
+is (nothing defined, nothing active, or everything filtered out by role) and names the fix.
+
+The daemon runs its children with **its own interpreter**, not whatever `python` means on the
+machine. Installing into a virtualenv and scheduling `python -m db_ops...` used to hand every child
+a Python without the toolkit in it — every command failing with `ModuleNotFoundError`, once a
+minute, in output nobody reads.
 
 ### 2.7 What an agent should assert at each step
 
