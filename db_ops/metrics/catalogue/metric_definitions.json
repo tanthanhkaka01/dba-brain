@@ -1,0 +1,5288 @@
+{
+  "schema_version": 2,
+  "notes": "Normalized multi-DB metric catalog. metric_code uses engine-neutral group prefixes; collector_type and variants bind each metric to SQL or command collectors or marks unsupported combinations explicitly.",
+  "collection": {
+    "max_parallel_servers": 16,
+    "note": "How many server_id groups a collect pass may walk at once. Metrics of one server_id always run one at a time, in catalog order, so a machine never gets two WinRM/SSH sessions or two metric queries at once; only different servers overlap. 1 restores the old fully serial pass."
+  },
+  "metrics": [
+    {
+      "metric_id": 1,
+      "metric_code": "INSTANCE_STATUS",
+      "db_type": "multi",
+      "category": "availability",
+      "default_importance": 5,
+      "active": true,
+      "connection_error_severity": "CRITICAL",
+      "execution_error_severity": "CRITICAL",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 60,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "max_major_version": 10,
+          "name": "sqlserver_legacy_2008r2",
+          "file": "sqlserver/legacy_2008r2/001_sqlserver_instance_status.sql"
+        },
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 11,
+          "name": "sqlserver_modern_2012_plus",
+          "file": "sqlserver/001_sqlserver_instance_status.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 9,
+          "name": "oracle_9i_plus",
+          "file": "oracle/001_oracle_instance_status.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 8,
+          "name": "oracle_8i_legacy",
+          "supported": true,
+          "file": "oracle/legacy_8i/001_oracle_instance_status.sql"
+        },
+        {
+          "db_type": "mysql",
+          "min_major_version": 5,
+          "name": "mysql_5_plus",
+          "file": "mysql/001_mysql_instance_status.sql"
+        },
+        {
+          "db_type": "postgresql",
+          "min_major_version": 10,
+          "name": "postgresql_16_plus",
+          "file": "postgresql/001_postgresql_instance_status.sql"
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 2,
+      "metric_code": "DATABASE_STATUS",
+      "db_type": "multi",
+      "category": "availability",
+      "default_importance": 5,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 300,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "max_major_version": 10,
+          "name": "sqlserver_legacy_2008r2",
+          "file": "sqlserver/legacy_2008r2/002_sqlserver_database_status.sql"
+        },
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 11,
+          "name": "sqlserver_modern_2012_plus",
+          "file": "sqlserver/002_sqlserver_database_status.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 9,
+          "name": "oracle_9i_plus",
+          "file": "oracle/002_oracle_database_status.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 8,
+          "name": "oracle_8i_legacy",
+          "supported": true,
+          "file": "oracle/legacy_8i/002_oracle_database_status.sql"
+        },
+        {
+          "db_type": "mysql",
+          "min_major_version": 5,
+          "name": "mysql_5_plus",
+          "file": "mysql/002_mysql_database_status.sql"
+        },
+        {
+          "db_type": "postgresql",
+          "min_major_version": 10,
+          "name": "postgresql_16_plus",
+          "file": "postgresql/002_postgresql_database_status.sql"
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 3,
+      "metric_code": "INSTANCE_CONNECTIONS",
+      "db_type": "multi",
+      "category": "capacity",
+      "default_importance": 4,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 300,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "max_major_version": 10,
+          "name": "sqlserver_legacy_2008r2",
+          "file": "sqlserver/legacy_2008r2/003_sqlserver_connections.sql"
+        },
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 11,
+          "name": "sqlserver_modern_2012_plus",
+          "file": "sqlserver/003_sqlserver_connections.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 9,
+          "name": "oracle_9i_plus",
+          "file": "oracle/003_oracle_sessions.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 8,
+          "name": "oracle_8i_legacy",
+          "supported": true,
+          "file": "oracle/legacy_8i/003_oracle_sessions.sql"
+        },
+        {
+          "db_type": "mysql",
+          "min_major_version": 5,
+          "name": "mysql_5_plus",
+          "file": "mysql/003_mysql_connections.sql"
+        },
+        {
+          "db_type": "postgresql",
+          "min_major_version": 10,
+          "name": "postgresql_16_plus",
+          "file": "postgresql/003_postgresql_connections.sql"
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 4,
+      "metric_code": "QUERY_LONG_RUNNING",
+      "db_type": "multi",
+      "category": "performance",
+      "default_importance": 3,
+      "empty_result_is_ok": true,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 150,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "max_major_version": 10,
+          "name": "sqlserver_legacy_2008r2",
+          "file": "sqlserver/legacy_2008r2/004_sqlserver_long_running_queries.sql"
+        },
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 11,
+          "name": "sqlserver_modern_2012_plus",
+          "file": "sqlserver/004_sqlserver_long_running_queries.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 9,
+          "name": "oracle_9i_plus",
+          "file": "oracle/004_oracle_long_running_queries.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 8,
+          "name": "oracle_8i_legacy",
+          "supported": true,
+          "file": "oracle/legacy_8i/004_oracle_long_running_queries.sql"
+        },
+        {
+          "db_type": "mysql",
+          "min_major_version": 5,
+          "name": "mysql_5_plus",
+          "file": "mysql/004_mysql_long_running_queries.sql"
+        },
+        {
+          "db_type": "postgresql",
+          "min_major_version": 10,
+          "name": "postgresql_16_plus",
+          "file": "postgresql/004_postgresql_long_running_queries.sql"
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 5,
+      "metric_code": "BACKUP_AGE",
+      "db_type": "multi",
+      "category": "backup",
+      "default_importance": 5,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 3600,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "max_major_version": 10,
+          "name": "sqlserver_legacy_2008r2",
+          "file": "sqlserver/legacy_2008r2/005_sqlserver_backup_age.sql"
+        },
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 11,
+          "name": "sqlserver_modern_2012_plus",
+          "file": "sqlserver/005_sqlserver_backup_age.sql"
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_rman",
+          "file": "oracle/005_oracle_backup_age.sql"
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_unsupported",
+          "supported": false,
+          "unsupported_reason": "MySQL backup recency is not reliably available from server metadata without a backup tool integration."
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_covered_elsewhere",
+          "supported": false,
+          "unsupported_reason": "Superseded by POSTGRES_BACKUP_LAST_RESULT, which reports FULL/DIFF/LOG age in one metric. A PostgreSQL base backup is a directory on disk, not a catalog row, so it needs the docker collector and cannot be a variant here (collector_type is per metric)."
+        }
+      ],
+      "report_policy": {
+        "technical_error": {
+          "collapse_enabled": true,
+          "event_code_template": "MONITORING_{collector_type}_UNAVAILABLE",
+          "key_fields": [
+            "instance_key",
+            "collector_type",
+            "category",
+            "error_type",
+            "normalized_error_signature"
+          ],
+          "replace_raw_rows": true,
+          "max_sample_metrics": 3,
+          "max_sample_items": 5
+        },
+        "backup_health": {
+          "role": "age"
+        }
+      },
+      "max_rows": 500
+    },
+    {
+      "metric_id": 6,
+      "metric_code": "STORAGE_DATA_FILE_SPACE",
+      "db_type": "multi",
+      "category": "capacity",
+      "default_importance": 5,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 3600,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "max_major_version": 10,
+          "name": "sqlserver_legacy_2008r2",
+          "file": "sqlserver/legacy_2008r2/006_sqlserver_data_file_space.sql"
+        },
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 11,
+          "name": "sqlserver_modern_2012_plus",
+          "file": "sqlserver/006_sqlserver_data_file_space.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 9,
+          "name": "oracle_9i_plus",
+          "file": "oracle/006_oracle_data_file_space.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 8,
+          "name": "oracle_8i_legacy",
+          "supported": true,
+          "file": "oracle/legacy_8i/006_oracle_data_file_space.sql"
+        },
+        {
+          "db_type": "mysql",
+          "min_major_version": 5,
+          "name": "mysql_5_plus",
+          "file": "mysql/006_mysql_data_file_space.sql"
+        },
+        {
+          "db_type": "postgresql",
+          "min_major_version": 10,
+          "name": "postgresql_16_plus",
+          "file": "postgresql/006_postgresql_database_size.sql"
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 7,
+      "metric_code": "LOG_FILE_SPACE",
+      "db_type": "multi",
+      "category": "capacity",
+      "default_importance": 5,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 900,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "max_major_version": 10,
+          "name": "sqlserver_legacy_2008r2",
+          "file": "sqlserver/legacy_2008r2/007_sqlserver_log_space.sql"
+        },
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 11,
+          "name": "sqlserver_modern_2012_plus",
+          "file": "sqlserver/007_sqlserver_log_space.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 10,
+          "name": "oracle_fra_10g_plus",
+          "file": "oracle/007_oracle_archive_log_space.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 8,
+          "name": "oracle_8i_legacy",
+          "supported": true,
+          "file": "oracle/legacy_8i/110_oracle_archive_dest.sql"
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_unsupported",
+          "supported": false,
+          "unsupported_reason": "MySQL redo/binlog capacity is not equivalent to SQL Server transaction log space."
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_todo",
+          "supported": false,
+          "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+        }
+      ],
+      "report_policy": {
+        "technical_error": {
+          "collapse_enabled": true,
+          "event_code_template": "MONITORING_{collector_type}_UNAVAILABLE",
+          "key_fields": [
+            "instance_key",
+            "collector_type",
+            "category",
+            "error_type",
+            "normalized_error_signature"
+          ],
+          "replace_raw_rows": true,
+          "max_sample_metrics": 3,
+          "max_sample_items": 5
+        }
+      },
+      "max_rows": 500
+    },
+    {
+      "metric_id": 8,
+      "metric_code": "STORAGE_TEMP_SPACE",
+      "db_type": "multi",
+      "category": "capacity",
+      "default_importance": 4,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 1800,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "max_major_version": 10,
+          "name": "sqlserver_legacy_2008r2",
+          "file": "sqlserver/legacy_2008r2/008_sqlserver_tempdb_space.sql"
+        },
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 11,
+          "name": "sqlserver_modern_2012_plus",
+          "file": "sqlserver/008_sqlserver_tempdb_space.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 9,
+          "name": "oracle_temp_tablespace_9i_plus",
+          "file": "oracle/009_oracle_temp_usage.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 8,
+          "name": "oracle_8i_legacy",
+          "supported": true,
+          "file": "oracle/legacy_8i/008_oracle_temp_usage.sql"
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_unsupported",
+          "supported": false,
+          "unsupported_reason": "MySQL temporary table usage is not equivalent to SQL Server tempdb file utilization."
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_todo",
+          "supported": false,
+          "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 9,
+      "metric_code": "LOCK_BLOCKING_SESSIONS",
+      "db_type": "multi",
+      "category": "performance",
+      "default_importance": 4,
+      "empty_result_is_ok": true,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 150,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "max_major_version": 10,
+          "name": "sqlserver_legacy_2008r2",
+          "file": "sqlserver/legacy_2008r2/009_sqlserver_blocking_sessions.sql"
+        },
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 11,
+          "name": "sqlserver_modern_2012_plus",
+          "file": "sqlserver/009_sqlserver_blocking_sessions.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 9,
+          "name": "oracle_9i_plus",
+          "file": "oracle/009_oracle_blocking_sessions.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 8,
+          "name": "oracle_8i_legacy",
+          "supported": true,
+          "file": "oracle/legacy_8i/009_oracle_blocking_sessions.sql"
+        },
+        {
+          "db_type": "mysql",
+          "min_major_version": 5,
+          "name": "mysql_5_plus",
+          "file": "mysql/009_mysql_blocking_sessions.sql"
+        },
+        {
+          "db_type": "postgresql",
+          "min_major_version": 10,
+          "name": "postgresql_16_plus",
+          "file": "postgresql/009_postgresql_blocking_sessions.sql"
+        }
+      ],
+      "report_policy": {
+        "collapse": {
+          "enabled": true,
+          "event_code": "MONITORING_CHECK_FAILED",
+          "key_fields": [
+            "instance",
+            "collector_type",
+            "error_type",
+            "normalized_error_signature"
+          ],
+          "max_sample_metrics": 3,
+          "max_sample_items": 5
+        },
+        "severity": {
+          "default": "WARNING",
+          "prod": "WARNING",
+          "dev": "LOGGING",
+          "lab": "LOGGING",
+          "sandbox": "LOGGING"
+        },
+        "thresholds": {
+          "critical_blocked_sessions": 1,
+          "critical_min_wait_seconds": 30,
+          "warning_min_wait_seconds": 5
+        },
+        "suppress": {
+          "enabled": false
+        },
+        "technical_error": {
+          "collapse_enabled": true,
+          "event_code_template": "MONITORING_{collector_type}_UNAVAILABLE",
+          "key_fields": [
+            "instance_key",
+            "collector_type",
+            "category",
+            "error_type",
+            "normalized_error_signature"
+          ],
+          "replace_raw_rows": true,
+          "max_sample_metrics": 3,
+          "max_sample_items": 5
+        },
+        "severity_policy": {
+          "default": "KEEP",
+          "by_env": {
+            "prod": "KEEP",
+            "dev": "DOWNGRADE_TO_WARNING",
+            "lab": "DOWNGRADE_TO_LOGGING",
+            "sandbox": "DOWNGRADE_TO_LOGGING"
+          },
+          "thresholds": [
+            {
+              "field": "max_wait_seconds",
+              "op": "<",
+              "value": 5,
+              "severity": "SUPPRESS"
+            },
+            {
+              "field": "max_wait_seconds",
+              "op": "<",
+              "value": 30,
+              "severity": "WARNING"
+            }
+          ]
+        }
+      },
+      "max_rows": 500
+    },
+    {
+      "metric_id": 10,
+      "metric_code": "JOB_FAILED",
+      "db_type": "multi",
+      "category": "jobs",
+      "default_importance": 4,
+      "empty_result_is_ok": true,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 900,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "max_major_version": 10,
+          "name": "sqlserver_legacy_2008r2",
+          "file": "sqlserver/legacy_2008r2/010_sqlserver_agent_failed_jobs.sql"
+        },
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 11,
+          "name": "sqlserver_modern_2012_plus",
+          "file": "sqlserver/010_sqlserver_agent_failed_jobs.sql"
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_unsupported",
+          "supported": false,
+          "unsupported_reason": "Oracle Scheduler jobs do not map cleanly to SQL Server Agent job history."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_unsupported",
+          "supported": false,
+          "unsupported_reason": "MySQL has no built-in SQL Server Agent equivalent."
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_todo",
+          "supported": false,
+          "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+        }
+      ],
+      "report_policy": {
+        "collapse": {
+          "enabled": true,
+          "event_code": "MONITORING_CHECK_FAILED",
+          "key_fields": [
+            "instance",
+            "job_name"
+          ],
+          "max_sample_metrics": 3,
+          "max_sample_items": 5
+        },
+        "severity": {
+          "default": "WARNING",
+          "prod": "CRITICAL",
+          "dev": "LOGGING",
+          "lab": "LOGGING",
+          "sandbox": "LOGGING"
+        },
+        "thresholds": {},
+        "suppress": {
+          "enabled": false
+        }
+      },
+      "max_rows": 500
+    },
+    {
+      "metric_id": 11,
+      "metric_code": "AVAILABILITY_DATABASE_HEALTH",
+      "db_type": "multi",
+      "category": "availability",
+      "default_importance": 5,
+      "empty_result_is_ok": true,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 900,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "max_major_version": 10,
+          "name": "sqlserver_2008r2_unsupported",
+          "supported": false,
+          "unsupported_reason": "Always On Availability Groups require SQL Server 2012 or newer."
+        },
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 11,
+          "name": "sqlserver_modern_2012_plus",
+          "file": "sqlserver/011_sqlserver_ag_database_health.sql"
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_unsupported",
+          "supported": false,
+          "unsupported_reason": "Oracle Data Guard health needs a separate metric model."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_unsupported",
+          "supported": false,
+          "unsupported_reason": "MySQL replication/group replication health needs a separate metric model."
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_todo",
+          "supported": false,
+          "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 12,
+      "metric_code": "SYSTEM_CPU_MEMORY",
+      "db_type": "multi",
+      "category": "performance",
+      "default_importance": 4,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 600,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "max_major_version": 10,
+          "name": "sqlserver_legacy_2008r2",
+          "file": "sqlserver/legacy_2008r2/012_sqlserver_cpu_memory.sql"
+        },
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 11,
+          "name": "sqlserver_modern_2012_plus",
+          "file": "sqlserver/012_sqlserver_cpu_memory.sql"
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_unsupported",
+          "supported": false,
+          "unsupported_reason": "Host CPU and memory need OS or AWR access and are not portable from DB-only views."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_unsupported",
+          "supported": false,
+          "unsupported_reason": "Host CPU and memory are not reliably available from portable MySQL metadata."
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_todo",
+          "supported": false,
+          "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+        }
+      ],
+      "report_policy": {
+        "collapse": {
+          "enabled": true,
+          "event_code": "MONITORING_CHECK_FAILED",
+          "key_fields": [
+            "instance",
+            "collector_type",
+            "error_type",
+            "normalized_error_signature"
+          ],
+          "max_sample_metrics": 3,
+          "max_sample_items": 5
+        },
+        "severity": {
+          "default": "WARNING",
+          "prod": "WARNING",
+          "dev": "LOGGING",
+          "lab": "LOGGING",
+          "sandbox": "LOGGING"
+        },
+        "severity_policy": {
+          "default": "DOWNGRADE_TO_WARNING",
+          "by_env": {
+            "prod": "DOWNGRADE_TO_WARNING",
+            "dev": "DOWNGRADE_TO_WARNING",
+            "lab": "DOWNGRADE_TO_WARNING",
+            "sandbox": "DOWNGRADE_TO_WARNING"
+          },
+          "thresholds": []
+        },
+        "thresholds": {},
+        "suppress": {
+          "enabled": false
+        },
+        "technical_error": {
+          "collapse_enabled": true,
+          "event_code_template": "MONITORING_CHECK_FAILED",
+          "key_fields": [
+            "instance_key",
+            "collector_type",
+            "category",
+            "error_type",
+            "normalized_error_signature"
+          ],
+          "replace_raw_rows": true,
+          "max_sample_metrics": 3,
+          "max_sample_items": 5
+        }
+      },
+      "max_rows": 500
+    },
+    {
+      "metric_id": 13,
+      "metric_code": "STORAGE_DISK_FREE_SPACE",
+      "db_type": "multi",
+      "category": "capacity",
+      "default_importance": 5,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 3600,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "max_major_version": 10,
+          "name": "sqlserver_legacy_2008r2",
+          "file": "sqlserver/legacy_2008r2/013_sqlserver_disk_free_space.sql"
+        },
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 11,
+          "name": "sqlserver_modern_2012_plus",
+          "file": "sqlserver/013_sqlserver_disk_free_space.sql"
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_unsupported",
+          "supported": false,
+          "unsupported_reason": "Filesystem free space needs OS integration for portable Oracle monitoring."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_unsupported",
+          "supported": false,
+          "unsupported_reason": "Filesystem free space needs OS integration for portable MySQL monitoring."
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_todo",
+          "supported": false,
+          "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 14,
+      "metric_code": "PERFORMANCE_WAIT_STATS",
+      "db_type": "multi",
+      "category": "performance",
+      "default_importance": 3,
+      "empty_result_is_ok": true,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 150,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "max_major_version": 10,
+          "name": "sqlserver_legacy_2008r2",
+          "file": "sqlserver/legacy_2008r2/014_sqlserver_wait_stats.sql"
+        },
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 11,
+          "name": "sqlserver_modern_2012_plus",
+          "file": "sqlserver/014_sqlserver_wait_stats.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 9,
+          "name": "oracle_9i_plus",
+          "file": "oracle/014_oracle_wait_stats.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 8,
+          "name": "oracle_8i_legacy",
+          "supported": true,
+          "file": "oracle/legacy_8i/014_oracle_wait_stats.sql"
+        },
+        {
+          "db_type": "mysql",
+          "min_major_version": 5,
+          "name": "mysql_5_plus",
+          "file": "mysql/014_mysql_wait_stats.sql"
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_todo",
+          "supported": false,
+          "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 15,
+      "metric_code": "LOCK_DEADLOCK_RECENT",
+      "db_type": "multi",
+      "category": "performance",
+      "default_importance": 4,
+      "empty_result_is_ok": true,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 150,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "max_major_version": 10,
+          "name": "sqlserver_legacy_2008r2",
+          "file": "sqlserver/legacy_2008r2/015_sqlserver_deadlock_recent.sql"
+        },
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 11,
+          "name": "sqlserver_modern_2012_plus",
+          "file": "sqlserver/015_sqlserver_deadlock_recent.sql"
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_unsupported",
+          "supported": false,
+          "unsupported_reason": "Recent deadlock history needs alert-log or diagnostic repository parsing, not a portable SQL-only query."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_unsupported",
+          "supported": false,
+          "unsupported_reason": "Recent deadlock history requires engine-status/error-log parsing, not a portable SQL-only query."
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_todo",
+          "supported": false,
+          "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 16,
+      "metric_code": "BACKUP_JOB_STATUS",
+      "db_type": "multi",
+      "category": "backup",
+      "default_importance": 5,
+      "empty_result_is_ok": true,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 900,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "max_major_version": 10,
+          "name": "sqlserver_legacy_2008r2",
+          "file": "sqlserver/legacy_2008r2/016_sqlserver_backup_job_status.sql"
+        },
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 11,
+          "name": "sqlserver_modern_2012_plus",
+          "file": "sqlserver/016_sqlserver_backup_job_status.sql"
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_unsupported",
+          "supported": false,
+          "unsupported_reason": "Backup job status depends on RMAN/job scheduler integration."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_unsupported",
+          "supported": false,
+          "unsupported_reason": "Backup job status depends on external backup tooling."
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_covered_elsewhere",
+          "supported": false,
+          "unsupported_reason": "PostgreSQL has no in-database job scheduler, so there is no server-side job outcome to read. The equivalent evidence is db_ops's own backup job history in the job_runs table (backup_restore.backup_job.<backup_id>.<job>), which the backup app already records."
+        }
+      ],
+      "report_policy": {
+        "backup_health": {
+          "role": "job_status"
+        }
+      },
+      "max_rows": 500
+    },
+    {
+      "metric_id": 17,
+      "metric_code": "LOG_RECENT_CRITICAL",
+      "db_type": "multi",
+      "category": "errorlog",
+      "default_importance": 5,
+      "empty_result_is_ok": true,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "note": "timeout 240s: reading the error log costs whatever the busiest instance logs. On one instance here that is ~171k lines a day (it is emitting stack dumps continuously), which takes ~80s even after the SQL was fixed to bound the read and scan once. 60s failed every run there, so the one server that most needed error-log monitoring was the one not getting it. Still far inside the 3600s interval.",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 3600,
+        "timeout": 240
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "max_major_version": 10,
+          "name": "sqlserver_legacy_2008r2",
+          "file": "sqlserver/legacy_2008r2/017_sqlserver_errorlog_recent_critical.sql"
+        },
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 11,
+          "name": "sqlserver_modern_2012_plus",
+          "file": "sqlserver/017_sqlserver_errorlog_recent_critical.sql"
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_unsupported",
+          "supported": false,
+          "unsupported_reason": "Oracle alert log collection needs ADR/file access and a separate implementation."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_unsupported",
+          "supported": false,
+          "unsupported_reason": "MySQL error-log collection needs file or performance_schema log-table configuration."
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_todo",
+          "supported": false,
+          "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+        }
+      ],
+      "report_policy": {
+        "collapse": {
+          "enabled": true,
+          "event_code": "MONITORING_PERMISSION_DENIED",
+          "key_fields": [
+            "instance",
+            "collector_type",
+            "error_type",
+            "normalized_error_signature"
+          ],
+          "max_sample_metrics": 3,
+          "max_sample_items": 5
+        },
+        "severity": {
+          "default": "WARNING",
+          "prod": "WARNING",
+          "dev": "LOGGING",
+          "lab": "LOGGING",
+          "sandbox": "LOGGING"
+        },
+        "thresholds": {},
+        "suppress": {
+          "enabled": false
+        },
+        "severity_policy": {
+          "default": "DOWNGRADE_TO_WARNING",
+          "by_env": {
+            "prod": "DOWNGRADE_TO_WARNING",
+            "dev": "DOWNGRADE_TO_WARNING",
+            "lab": "DOWNGRADE_TO_WARNING",
+            "sandbox": "DOWNGRADE_TO_WARNING"
+          },
+          "thresholds": []
+        },
+        "technical_error": {
+          "collapse_enabled": true,
+          "event_code_template": "MONITORING_PERMISSION_DENIED",
+          "key_fields": [
+            "instance_key",
+            "collector_type",
+            "category",
+            "error_type",
+            "normalized_error_signature"
+          ],
+          "replace_raw_rows": true,
+          "max_sample_metrics": 3,
+          "max_sample_items": 5
+        }
+      },
+      "max_rows": 500
+    },
+    {
+      "metric_id": 18,
+      "metric_code": "LOG_REUSE_WAIT",
+      "db_type": "multi",
+      "category": "log",
+      "default_importance": 5,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 150,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "max_major_version": 10,
+          "name": "sqlserver_legacy_2008r2",
+          "file": "sqlserver/legacy_2008r2/018_sqlserver_log_reuse_wait.sql"
+        },
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 11,
+          "name": "sqlserver_modern_2012_plus",
+          "file": "sqlserver/018_sqlserver_log_reuse_wait.sql"
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_unsupported",
+          "supported": false,
+          "unsupported_reason": "SQL Server log reuse wait has no direct Oracle equivalent."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_unsupported",
+          "supported": false,
+          "unsupported_reason": "SQL Server log reuse wait has no direct MySQL equivalent."
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_todo",
+          "supported": false,
+          "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 19,
+      "metric_code": "PERFORMANCE_IO_LATENCY",
+      "db_type": "multi",
+      "category": "performance",
+      "default_importance": 5,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 900,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "max_major_version": 10,
+          "name": "sqlserver_legacy_2008r2",
+          "file": "sqlserver/legacy_2008r2/019_sqlserver_io_latency.sql"
+        },
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 11,
+          "name": "sqlserver_modern_2012_plus",
+          "file": "sqlserver/019_sqlserver_io_latency.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 9,
+          "name": "oracle_9i_plus",
+          "file": "oracle/019_oracle_io_latency.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 8,
+          "name": "oracle_8i_legacy",
+          "supported": true,
+          "file": "oracle/legacy_8i/019_oracle_io_latency.sql"
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_unsupported",
+          "supported": false,
+          "unsupported_reason": "Portable MySQL file-level IO latency needs performance_schema instrumentation that differs by version/config."
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_todo",
+          "supported": false,
+          "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 21,
+      "metric_code": "DATABASE_SUSPECT_PAGES",
+      "db_type": "multi",
+      "category": "integrity",
+      "default_importance": 5,
+      "empty_result_is_ok": true,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 3600,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "max_major_version": 10,
+          "name": "sqlserver_legacy_2008r2",
+          "file": "sqlserver/legacy_2008r2/021_sqlserver_suspect_pages.sql"
+        },
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 11,
+          "name": "sqlserver_modern_2012_plus",
+          "file": "sqlserver/021_sqlserver_suspect_pages.sql"
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_unsupported",
+          "supported": false,
+          "unsupported_reason": "Oracle corruption checks need DBVERIFY/RMAN/alert-log integration."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_unsupported",
+          "supported": false,
+          "unsupported_reason": "MySQL page corruption checks need engine/error-log integration."
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_todo",
+          "supported": false,
+          "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 22,
+      "metric_code": "BACKUP_LAST_RESULT",
+      "db_type": "multi",
+      "category": "backup",
+      "default_importance": 5,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 7200,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "max_major_version": 10,
+          "name": "sqlserver_legacy_2008r2",
+          "file": "sqlserver/legacy_2008r2/022_sqlserver_last_backup_result.sql"
+        },
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 11,
+          "name": "sqlserver_modern_2012_plus",
+          "file": "sqlserver/022_sqlserver_last_backup_result.sql"
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_rman",
+          "file": "oracle/022_oracle_last_backup_result.sql"
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_unsupported",
+          "supported": false,
+          "unsupported_reason": "MySQL last backup result depends on external backup tooling."
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_covered_elsewhere",
+          "supported": false,
+          "unsupported_reason": "Implemented as POSTGRES_BACKUP_LAST_RESULT, which emits this exact message contract from a docker collector. It cannot be a variant here because collector_type is per metric and a PostgreSQL base backup is a directory on disk rather than a catalog row. Both codes are listed in db_ops.common.backup_policy.BACKUP_LAST_RESULT_CODES so readers treat them as one."
+        }
+      ],
+      "report_policy": {
+        "backup_health": {
+          "role": "last_result"
+        }
+      },
+      "max_rows": 500
+    },
+    {
+      "metric_id": 23,
+      "metric_code": "QUERY_STORE_QUERY_ISSUES",
+      "db_type": "multi",
+      "category": "performance",
+      "default_importance": 4,
+      "empty_result_is_ok": true,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 900,
+        "timeout": 30
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "max_major_version": 10,
+          "name": "sqlserver_legacy_2008r2",
+          "file": "sqlserver/legacy_2008r2/023_sqlserver_query_store_query_issues.sql"
+        },
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 11,
+          "max_major_version": 12,
+          "name": "sqlserver_2012_2014_unsupported",
+          "supported": false,
+          "unsupported_reason": "SQL Server Query Store is available from SQL Server 2016."
+        },
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 13,
+          "name": "sqlserver_2016_plus_query_store",
+          "file": "sqlserver/023_sqlserver_query_store_query_issues.sql"
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_unsupported",
+          "supported": false,
+          "unsupported_reason": "Oracle query regression detection needs AWR/ASH or application-specific SQL history and is not equivalent to SQL Server Query Store."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_unsupported",
+          "supported": false,
+          "unsupported_reason": "MySQL does not have an equivalent SQL Server Query Store source in this metric model."
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_todo",
+          "supported": false,
+          "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+        }
+      ],
+      "report_policy": {
+        "enabled": true,
+        "condition_grouping": {
+          "enabled": true,
+          "event_code": "QUERY_STORE_QUERY_ISSUES",
+          "key_fields": [
+            "instance_key",
+            "db_name",
+            "issue_type"
+          ],
+          "aggregate_fields": {
+            "count": "count",
+            "max_duration_sec": {
+              "op": "max",
+              "field": "max_duration_sec"
+            },
+            "sample_query_ids": {
+              "op": "sample",
+              "field": "query_id",
+              "limit": 3
+            }
+          },
+          "replace_raw_rows": true,
+          "max_groups": 20
+        },
+        "severity_policy": {
+          "default": "KEEP",
+          "by_env": {
+            "prod": "KEEP",
+            "dev": "DOWNGRADE_TO_WARNING",
+            "lab": "DOWNGRADE_TO_LOGGING",
+            "sandbox": "DOWNGRADE_TO_LOGGING"
+          },
+          "thresholds": []
+        },
+        "render_policy": {
+          "mode": "compact",
+          "fields": [
+            "db_name",
+            "issue_type",
+            "count",
+            "max_duration_sec",
+            "sample_query_ids"
+          ],
+          "max_items": 3,
+          "include_raw_message": false
+        }
+      },
+      "max_rows": 500
+    },
+    {
+      "metric_id": 24,
+      "metric_code": "OS_CPU_USAGE",
+      "db_type": "multi",
+      "category": "os",
+      "default_importance": 4,
+      "empty_result_is_ok": false,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 3600,
+        "timeout": 30
+      },
+      "collector_type": "cmd",
+      "variants": [
+        {
+          "platform": "windows",
+          "name": "windows_powershell",
+          "file": "os/windows/001_os_cpu_usage.ps1"
+        },
+        {
+          "platform": "linux",
+          "name": "linux_bash",
+          "file": "os/linux/001_os_cpu_usage.sh"
+        }
+      ],
+      "report_policy": {
+        "collapse": {
+          "enabled": true,
+          "event_code": "MONITORING_CMD_UNAVAILABLE",
+          "key_fields": [
+            "instance",
+            "collector_type",
+            "error_type",
+            "normalized_error_signature"
+          ],
+          "max_sample_metrics": 3,
+          "max_sample_items": 5
+        },
+        "severity": {
+          "default": "WARNING",
+          "prod": "WARNING",
+          "dev": "LOGGING",
+          "lab": "LOGGING",
+          "sandbox": "LOGGING"
+        },
+        "thresholds": {},
+        "suppress": {
+          "enabled": false
+        }
+      },
+      "max_rows": 500
+    },
+    {
+      "metric_id": 25,
+      "metric_code": "OS_MEMORY_USAGE",
+      "db_type": "multi",
+      "category": "os",
+      "default_importance": 4,
+      "empty_result_is_ok": false,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 3600,
+        "timeout": 30
+      },
+      "collector_type": "cmd",
+      "variants": [
+        {
+          "platform": "windows",
+          "name": "windows_powershell",
+          "file": "os/windows/002_os_memory_usage.ps1"
+        },
+        {
+          "platform": "linux",
+          "name": "linux_bash",
+          "file": "os/linux/002_os_memory_usage.sh"
+        }
+      ],
+      "report_policy": {
+        "collapse": {
+          "enabled": true,
+          "event_code": "MONITORING_CMD_UNAVAILABLE",
+          "key_fields": [
+            "instance",
+            "collector_type",
+            "error_type",
+            "normalized_error_signature"
+          ],
+          "max_sample_metrics": 3,
+          "max_sample_items": 5
+        },
+        "severity": {
+          "default": "WARNING",
+          "prod": "WARNING",
+          "dev": "LOGGING",
+          "lab": "LOGGING",
+          "sandbox": "LOGGING"
+        },
+        "thresholds": {},
+        "suppress": {
+          "enabled": false
+        }
+      },
+      "max_rows": 500
+    },
+    {
+      "metric_id": 26,
+      "metric_code": "OS_DISK_USAGE",
+      "db_type": "multi",
+      "category": "os",
+      "default_importance": 4,
+      "empty_result_is_ok": false,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 3600,
+        "timeout": 30
+      },
+      "collector_type": "cmd",
+      "variants": [
+        {
+          "platform": "windows",
+          "name": "windows_powershell",
+          "file": "os/windows/003_os_disk_usage.ps1"
+        },
+        {
+          "platform": "linux",
+          "name": "linux_bash",
+          "file": "os/linux/003_os_disk_usage.sh"
+        }
+      ],
+      "report_policy": {
+        "collapse": {
+          "enabled": true,
+          "event_code": "MONITORING_CMD_UNAVAILABLE",
+          "key_fields": [
+            "instance",
+            "collector_type",
+            "error_type",
+            "normalized_error_signature"
+          ],
+          "max_sample_metrics": 3,
+          "max_sample_items": 5
+        },
+        "severity": {
+          "default": "WARNING",
+          "prod": "WARNING",
+          "dev": "LOGGING",
+          "lab": "LOGGING",
+          "sandbox": "LOGGING"
+        },
+        "thresholds": {},
+        "suppress": {
+          "enabled": false
+        }
+      },
+      "max_rows": 500
+    },
+    {
+      "metric_id": 27,
+      "metric_code": "OS_TOP_PROCESSES",
+      "retired_reason": "Superseded by OS_PROCESS_TOP_CPU and OS_PROCESS_TOP_MEMORY: this metric returned one row whose metric_value was a JSON blob, which cannot be queried, thresholded, or reported per process. Retired (active=false) rather than deleted so the collected history stays readable in metric_results.",
+      "db_type": "multi",
+      "category": "os",
+      "default_importance": 3,
+      "empty_result_is_ok": false,
+      "active": false,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 7200,
+        "timeout": 30
+      },
+      "collector_type": "cmd",
+      "variants": [
+        {
+          "platform": "windows",
+          "name": "windows_powershell",
+          "file": "os/windows/004_os_top_processes.ps1"
+        },
+        {
+          "platform": "linux",
+          "name": "linux_bash",
+          "file": "os/linux/004_os_top_processes.sh"
+        }
+      ],
+      "report_policy": {
+        "collapse": {
+          "enabled": true,
+          "event_code": "MONITORING_CMD_UNAVAILABLE",
+          "key_fields": [
+            "instance",
+            "collector_type",
+            "error_type",
+            "normalized_error_signature"
+          ],
+          "max_sample_metrics": 3,
+          "max_sample_items": 5
+        },
+        "severity": {
+          "default": "WARNING",
+          "prod": "WARNING",
+          "dev": "LOGGING",
+          "lab": "LOGGING",
+          "sandbox": "LOGGING"
+        },
+        "thresholds": {},
+        "suppress": {
+          "enabled": false
+        }
+      },
+      "max_rows": 500
+    },
+    {
+      "metric_id": 28,
+      "metric_code": "OS_SERVICE_STATUS",
+      "db_type": "multi",
+      "category": "os",
+      "default_importance": 4,
+      "empty_result_is_ok": false,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 7200,
+        "timeout": 30
+      },
+      "collector_type": "cmd",
+      "variants": [
+        {
+          "platform": "windows",
+          "name": "windows_powershell",
+          "file": "os/windows/005_os_service_status.ps1"
+        },
+        {
+          "platform": "linux",
+          "name": "linux_bash",
+          "file": "os/linux/005_os_service_status.sh"
+        }
+      ],
+      "report_policy": {
+        "collapse": {
+          "enabled": true,
+          "event_code": "MONITORING_CMD_UNAVAILABLE",
+          "key_fields": [
+            "instance",
+            "collector_type",
+            "error_type",
+            "normalized_error_signature"
+          ],
+          "max_sample_metrics": 3,
+          "max_sample_items": 5
+        },
+        "severity": {
+          "default": "WARNING",
+          "prod": "WARNING",
+          "dev": "LOGGING",
+          "lab": "LOGGING",
+          "sandbox": "LOGGING"
+        },
+        "thresholds": {},
+        "suppress": {
+          "enabled": false
+        }
+      },
+      "max_rows": 500
+    },
+    {
+      "metric_id": 29,
+      "metric_code": "OS_REBOOT_PENDING",
+      "db_type": "multi",
+      "category": "os",
+      "default_importance": 4,
+      "empty_result_is_ok": false,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": 1,
+        "to_hour": 6,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 72000,
+        "timeout": 30
+      },
+      "collector_type": "cmd",
+      "variants": [
+        {
+          "platform": "windows",
+          "name": "windows_powershell",
+          "file": "os/windows/006_os_reboot_pending.ps1"
+        },
+        {
+          "platform": "linux",
+          "name": "linux_bash",
+          "file": "os/linux/006_os_reboot_pending.sh"
+        }
+      ],
+      "report_policy": {
+        "collapse": {
+          "enabled": true,
+          "event_code": "MONITORING_CMD_UNAVAILABLE",
+          "key_fields": [
+            "instance",
+            "collector_type",
+            "error_type",
+            "normalized_error_signature"
+          ],
+          "max_sample_metrics": 3,
+          "max_sample_items": 5
+        },
+        "severity": {
+          "default": "WARNING",
+          "prod": "WARNING",
+          "dev": "LOGGING",
+          "lab": "LOGGING",
+          "sandbox": "LOGGING"
+        },
+        "thresholds": {},
+        "suppress": {
+          "enabled": false
+        }
+      },
+      "max_rows": 500
+    },
+    {
+      "metric_id": 30,
+      "metric_code": "OS_UPTIME",
+      "db_type": "multi",
+      "category": "os",
+      "default_importance": 3,
+      "empty_result_is_ok": false,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": 1,
+        "to_hour": 6,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 72000,
+        "timeout": 30
+      },
+      "collector_type": "cmd",
+      "variants": [
+        {
+          "platform": "windows",
+          "name": "windows_powershell",
+          "file": "os/windows/007_os_uptime.ps1"
+        },
+        {
+          "platform": "linux",
+          "name": "linux_bash",
+          "file": "os/linux/007_os_uptime.sh"
+        }
+      ],
+      "report_policy": {
+        "collapse": {
+          "enabled": true,
+          "event_code": "MONITORING_CMD_UNAVAILABLE",
+          "key_fields": [
+            "instance",
+            "collector_type",
+            "error_type",
+            "normalized_error_signature"
+          ],
+          "max_sample_metrics": 3,
+          "max_sample_items": 5
+        },
+        "severity": {
+          "default": "WARNING",
+          "prod": "WARNING",
+          "dev": "LOGGING",
+          "lab": "LOGGING",
+          "sandbox": "LOGGING"
+        },
+        "thresholds": {},
+        "suppress": {
+          "enabled": false
+        }
+      },
+      "max_rows": 500
+    },
+    {
+      "metric_id": 31,
+      "metric_code": "OS_TIME_SYNC",
+      "db_type": "multi",
+      "category": "os",
+      "default_importance": 4,
+      "empty_result_is_ok": false,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 7200,
+        "timeout": 30
+      },
+      "collector_type": "cmd",
+      "variants": [
+        {
+          "platform": "windows",
+          "name": "windows_powershell",
+          "file": "os/windows/008_os_time_sync.ps1"
+        },
+        {
+          "platform": "linux",
+          "name": "linux_bash",
+          "file": "os/linux/008_os_time_sync.sh"
+        }
+      ],
+      "report_policy": {
+        "collapse": {
+          "enabled": true,
+          "event_code": "MONITORING_CMD_UNAVAILABLE",
+          "key_fields": [
+            "instance",
+            "collector_type",
+            "error_type",
+            "normalized_error_signature"
+          ],
+          "max_sample_metrics": 3,
+          "max_sample_items": 5
+        },
+        "severity": {
+          "default": "WARNING",
+          "prod": "WARNING",
+          "dev": "LOGGING",
+          "lab": "LOGGING",
+          "sandbox": "LOGGING"
+        },
+        "thresholds": {},
+        "suppress": {
+          "enabled": false
+        }
+      },
+      "max_rows": 500
+    },
+    {
+      "metric_id": 32,
+      "metric_code": "OS_TCP_PORT_STATUS",
+      "db_type": "multi",
+      "category": "os",
+      "default_importance": 4,
+      "empty_result_is_ok": false,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "note": "A listening port is a front door: the ports configured here are the ones a client or a load balancer connects to, so an outage lasts from the moment it closes until the next collection. At repeat_interval 7200 that was up to two hours - on 2026-08-07 an application server dropped 443 and the first alert came ~2h later. 900 matches the other live-condition metrics. timeout is 60 because each entry can now cost two probes plus an optional TLS handshake.",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 900,
+        "timeout": 60
+      },
+      "collector_type": "cmd",
+      "variants": [
+        {
+          "platform": "windows",
+          "name": "windows_powershell",
+          "file": "os/windows/009_os_tcp_port_status.ps1"
+        },
+        {
+          "platform": "linux",
+          "name": "linux_bash",
+          "file": "os/linux/009_os_tcp_port_status.sh"
+        }
+      ],
+      "report_policy": {
+        "collapse": {
+          "enabled": true,
+          "event_code": "MONITORING_CMD_UNAVAILABLE",
+          "key_fields": [
+            "instance",
+            "collector_type",
+            "error_type",
+            "normalized_error_signature"
+          ],
+          "max_sample_metrics": 3,
+          "max_sample_items": 5
+        },
+        "severity": {
+          "default": "CRITICAL",
+          "prod": "CRITICAL",
+          "dev": "LOGGING",
+          "lab": "LOGGING",
+          "sandbox": "LOGGING"
+        },
+        "thresholds": {},
+        "suppress": {
+          "enabled": false
+        }
+      },
+      "max_rows": 500
+    },
+    {
+      "metric_id": 33,
+      "metric_code": "LOCK_SLEEPING_OPEN_TRANSACTION",
+      "db_type": "multi",
+      "category": "lock",
+      "default_importance": 4,
+      "empty_result_is_ok": true,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 150,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "max_major_version": 10,
+          "name": "sqlserver_legacy_2008r2",
+          "file": "sqlserver/legacy_2008r2/024_sqlserver_sleeping_open_transaction.sql"
+        },
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 11,
+          "name": "sqlserver_modern_2012_plus",
+          "file": "sqlserver/024_sqlserver_sleeping_open_transaction.sql"
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_unsupported",
+          "supported": false,
+          "unsupported_reason": "Sleeping open transaction detection uses SQL Server session and transaction DMVs."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_unsupported",
+          "supported": false,
+          "unsupported_reason": "Sleeping open transaction detection is not implemented for MySQL in this catalog."
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_todo",
+          "supported": false,
+          "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+        }
+      ],
+      "report_policy": {
+        "enabled": true,
+        "condition_grouping": {
+          "enabled": true,
+          "event_code": "LOCK_SLEEPING_OPEN_TRANSACTION",
+          "key_fields": [
+            "instance_key",
+            "database",
+            "login",
+            "host",
+            "program"
+          ],
+          "aggregate_fields": {
+            "count": "count",
+            "max_idle_minutes": {
+              "op": "max",
+              "field": "idle_minutes"
+            },
+            "sample_spids": {
+              "op": "sample",
+              "field": "spid",
+              "limit": 5
+            }
+          },
+          "replace_raw_rows": true,
+          "max_groups": 20
+        },
+        "severity_policy": {
+          "default": "KEEP",
+          "note": "These thresholds grade on idle_minutes / is_blocking / has_x_lock, which the Oracle and legacy-2008R2 variants emit on purpose. The modern SQL Server variant emits idle_seconds / blocked_sessions and grades itself in SQL, so these rules match nothing there and editing them will not change SQL Server behaviour - change assets/metrics/sqlserver/024_sqlserver_sleeping_open_transaction.sql instead. Pinned by tests/test_sleeping_open_transaction_grading.py.",
+          "by_env": {
+            "prod": "KEEP",
+            "dev": "DOWNGRADE_TO_WARNING",
+            "lab": "DOWNGRADE_TO_LOGGING",
+            "sandbox": "DOWNGRADE_TO_LOGGING"
+          },
+          "thresholds": [
+            {
+              "field": "idle_minutes",
+              "op": "<",
+              "value": 30,
+              "severity": "SUPPRESS",
+              "unless": [
+                {
+                  "field": "is_blocking",
+                  "op": "=",
+                  "value": true
+                },
+                {
+                  "field": "has_x_lock",
+                  "op": "=",
+                  "value": true
+                }
+              ]
+            },
+            {
+              "field": "idle_minutes",
+              "op": ">=",
+              "value": 30,
+              "severity": "WARNING"
+            },
+            {
+              "field": "idle_minutes",
+              "op": ">=",
+              "value": 120,
+              "severity": "CRITICAL"
+            },
+            {
+              "field": "is_blocking",
+              "op": "=",
+              "value": true,
+              "severity": "CRITICAL"
+            },
+            {
+              "field": "has_x_lock",
+              "op": "=",
+              "value": true,
+              "severity": "CRITICAL"
+            }
+          ]
+        },
+        "render_policy": {
+          "mode": "compact",
+          "fields": [
+            "database",
+            "login",
+            "host",
+            "program",
+            "count",
+            "max_idle_minutes",
+            "sample_spids"
+          ],
+          "max_items": 5,
+          "include_raw_message": false
+        }
+      },
+      "max_rows": 500
+    },
+    {
+      "metric_id": 34,
+      "metric_code": "LOCK_TRANSACTION_HOLDERS",
+      "db_type": "multi",
+      "category": "lock",
+      "default_importance": 4,
+      "empty_result_is_ok": true,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 300,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "max_major_version": 10,
+          "name": "sqlserver_legacy_2008r2",
+          "file": "sqlserver/legacy_2008r2/025_sqlserver_transaction_lock_holders.sql"
+        },
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 11,
+          "name": "sqlserver_modern_2012_plus",
+          "file": "sqlserver/025_sqlserver_transaction_lock_holders.sql"
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_unsupported",
+          "supported": false,
+          "unsupported_reason": "Transaction lock holder detection uses SQL Server locking DMVs."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_unsupported",
+          "supported": false,
+          "unsupported_reason": "Transaction lock holder detection is not implemented for MySQL in this catalog."
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_todo",
+          "supported": false,
+          "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 35,
+      "metric_code": "QUERY_LONG_WAITING_OR_ROLLBACK_REQUESTS",
+      "db_type": "multi",
+      "category": "performance",
+      "default_importance": 4,
+      "empty_result_is_ok": true,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 150,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "max_major_version": 10,
+          "name": "sqlserver_legacy_2008r2",
+          "file": "sqlserver/legacy_2008r2/026_long_waiting_or_rollback_requests.sql"
+        },
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 11,
+          "name": "sqlserver_modern_2012_plus",
+          "file": "sqlserver/026_long_waiting_or_rollback_requests.sql"
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_unsupported",
+          "supported": false,
+          "unsupported_reason": "Long waiting or rollback request detection is implemented with SQL Server request and session DMVs."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_unsupported",
+          "supported": false,
+          "unsupported_reason": "Long waiting or rollback request detection is not implemented for MySQL in this catalog."
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_todo",
+          "supported": false,
+          "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 36,
+      "metric_code": "SQL_CONFIGURATION",
+      "db_type": "multi",
+      "category": "configuration",
+      "default_importance": 1,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": 1,
+        "to_hour": 6,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 72000,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "name": "sqlserver_all",
+          "file": "sqlserver/050_sqlserver_configuration.sql"
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_unsupported",
+          "supported": false,
+          "unsupported_reason": "SQL Server sp_configure has no direct equivalent."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_unsupported",
+          "supported": false,
+          "unsupported_reason": "SQL Server sp_configure has no direct equivalent."
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_todo",
+          "supported": false,
+          "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 37,
+      "metric_code": "DATABASE_CONFIG",
+      "db_type": "multi",
+      "category": "database",
+      "default_importance": 1,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": 1,
+        "to_hour": 6,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 72000,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "name": "sqlserver_all",
+          "file": "sqlserver/051_sqlserver_database_config.sql"
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_unsupported",
+          "supported": false,
+          "unsupported_reason": "SQL Server database config flags have no direct equivalent."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_unsupported",
+          "supported": false,
+          "unsupported_reason": "SQL Server database config flags have no direct equivalent."
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_todo",
+          "supported": false,
+          "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 38,
+      "metric_code": "PAGE_LIFE_EXPECTANCY",
+      "db_type": "multi",
+      "category": "performance",
+      "default_importance": 1,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 600,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "name": "sqlserver_all",
+          "file": "sqlserver/052_sqlserver_page_life_expectancy.sql"
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_unsupported",
+          "supported": false,
+          "unsupported_reason": "Page life expectancy is a SQL Server buffer counter."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_unsupported",
+          "supported": false,
+          "unsupported_reason": "Page life expectancy is a SQL Server buffer counter."
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_todo",
+          "supported": false,
+          "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 39,
+      "metric_code": "SQL_AGENT_JOB_INVENTORY",
+      "db_type": "multi",
+      "category": "job",
+      "default_importance": 1,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": 1,
+        "to_hour": 6,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 72000,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "name": "sqlserver_all",
+          "file": "sqlserver/053_sqlserver_agent_job_inventory.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 10,
+          "name": "oracle_scheduler_10g_plus",
+          "file": "oracle/070_oracle_scheduler_jobs.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 8,
+          "name": "oracle_8i_legacy",
+          "supported": true,
+          "file": "oracle/legacy_8i/112_oracle_jobs.sql"
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_unsupported",
+          "supported": false,
+          "unsupported_reason": "SQL Server Agent jobs have no direct equivalent."
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_todo",
+          "supported": false,
+          "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+        }
+      ],
+      "max_rows": 500,
+      "note": "One code, both engines: 'what does this instance run on a schedule, and is it working' is the same question everywhere, and the catalog already maps codes per engine this way (LOG_FILE_SPACE reads the FRA on Oracle and the transaction log on SQL Server). Oracle 8i reads dba_jobs (DBMS_JOB), 10g+ reads dba_scheduler_jobs, SQL Server reads msdb. Every variant keeps metric_value = ENABLED/DISABLED and starts its message with enabled=/last_outcome=, because reports/inventory_health.py parses those by name."
+    },
+    {
+      "metric_id": 40,
+      "metric_code": "DATABASE_CHECKDB",
+      "db_type": "multi",
+      "category": "database",
+      "default_importance": 1,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": 1,
+        "to_hour": 6,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 72000,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "max_major_version": 10,
+          "name": "sqlserver_legacy_2008r2",
+          "file": "sqlserver/legacy_2008r2/054_sqlserver_database_checkdb.sql"
+        },
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 11,
+          "name": "sqlserver_modern_2012_plus",
+          "file": "sqlserver/054_sqlserver_database_checkdb.sql"
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_unsupported",
+          "supported": false,
+          "unsupported_reason": "Last DBCC CHECKDB is a SQL Server concept."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_unsupported",
+          "supported": false,
+          "unsupported_reason": "Last DBCC CHECKDB is a SQL Server concept."
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_todo",
+          "supported": false,
+          "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+        }
+      ],
+      "note": "Status is policy-driven since 2026-08-03: 'unknown' used to be reported as OK, so a server that has never proven its integrity looked identical to one that proves it nightly. Grouped per instance because the finding is 'this instance never runs CHECKDB', not 112 separate database findings — the metric produces one row per database and the estate has 112 of them.",
+      "report_policy": {
+        "enabled": true,
+        "condition_grouping": {
+          "enabled": true,
+          "event_code": "DATABASE_CHECKDB",
+          "key_fields": [
+            "instance_key",
+            "issue_type"
+          ],
+          "aggregate_fields": {
+            "count": "count",
+            "sample_databases": {
+              "op": "sample",
+              "field": "db_name",
+              "limit": 5
+            }
+          },
+          "replace_raw_rows": true,
+          "max_groups": 20
+        },
+        "severity_policy": {
+          "default": "KEEP",
+          "by_env": {
+            "prod": "KEEP",
+            "dev": "DOWNGRADE_TO_LOGGING",
+            "lab": "DOWNGRADE_TO_LOGGING",
+            "sandbox": "DOWNGRADE_TO_LOGGING"
+          },
+          "thresholds": []
+        },
+        "render_policy": {
+          "mode": "compact",
+          "fields": [
+            "issue_type",
+            "count",
+            "sample_databases"
+          ],
+          "max_items": 3,
+          "include_raw_message": false
+        }
+      },
+      "max_rows": 500
+    },
+    {
+      "metric_id": 41,
+      "metric_code": "STORAGE_FILE_PLACEMENT",
+      "db_type": "multi",
+      "category": "storage",
+      "default_importance": 1,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": 1,
+        "to_hour": 6,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 72000,
+        "timeout": 60
+      },
+      "max_rows": 5000,
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "name": "sqlserver_all",
+          "file": "sqlserver/055_sqlserver_file_placement.sql"
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_unsupported",
+          "supported": false,
+          "unsupported_reason": "File placement layout has no direct cross-engine equivalent here."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_unsupported",
+          "supported": false,
+          "unsupported_reason": "File placement layout has no direct cross-engine equivalent here."
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_todo",
+          "supported": false,
+          "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+        }
+      ]
+    },
+    {
+      "metric_id": 42,
+      "metric_code": "SQL_AGENT_JOB_RUNTIME",
+      "db_type": "multi",
+      "category": "job",
+      "default_importance": 1,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 300,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "name": "sqlserver_all",
+          "file": "sqlserver/056_sqlserver_agent_job_runtime.sql"
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_unsupported",
+          "supported": false,
+          "unsupported_reason": "SQL Server Agent jobs have no direct equivalent."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_unsupported",
+          "supported": false,
+          "unsupported_reason": "SQL Server Agent jobs have no direct equivalent."
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_todo",
+          "supported": false,
+          "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 43,
+      "metric_code": "TABLESPACE_FREE_SPACE",
+      "db_type": "oracle",
+      "category": "capacity",
+      "default_importance": 4,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 300,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "empty_result_is_ok": false,
+      "variants": [
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 8,
+          "name": "oracle_8i_legacy",
+          "file": "oracle/legacy_8i/101_oracle_tablespace_free.sql"
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 44,
+      "metric_code": "PROCESS_LIMIT",
+      "db_type": "oracle",
+      "category": "capacity",
+      "default_importance": 5,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 300,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "empty_result_is_ok": false,
+      "variants": [
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 8,
+          "name": "oracle_8i_legacy",
+          "file": "oracle/legacy_8i/102_oracle_process_limit.sql"
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 91,
+      "metric_code": "PROCESS_DEAD_WEIGHT",
+      "db_type": "oracle",
+      "category": "capacity",
+      "default_importance": 5,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 300,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "empty_result_is_ok": false,
+      "variants": [
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 8,
+          "name": "oracle_8i_legacy",
+          "file": "oracle/legacy_8i/113_oracle_dead_sessions_and_threads.sql"
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 45,
+      "metric_code": "SHARED_POOL_FREE",
+      "db_type": "oracle",
+      "category": "performance",
+      "default_importance": 3,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 300,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "empty_result_is_ok": false,
+      "variants": [
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 8,
+          "name": "oracle_8i_legacy",
+          "file": "oracle/legacy_8i/103_oracle_shared_pool_free.sql"
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 46,
+      "metric_code": "LIBRARY_CACHE",
+      "db_type": "oracle",
+      "category": "performance",
+      "default_importance": 3,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 300,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "empty_result_is_ok": false,
+      "variants": [
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 8,
+          "name": "oracle_8i_legacy",
+          "file": "oracle/legacy_8i/104_oracle_library_cache.sql"
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 47,
+      "metric_code": "BUFFER_CACHE_HIT",
+      "db_type": "oracle",
+      "category": "performance",
+      "default_importance": 3,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 300,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "empty_result_is_ok": false,
+      "variants": [
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 8,
+          "name": "oracle_8i_legacy",
+          "file": "oracle/legacy_8i/105_oracle_buffer_cache_hit.sql"
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 48,
+      "metric_code": "TOP_DISK_READ_SQL",
+      "db_type": "oracle",
+      "category": "performance",
+      "default_importance": 3,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 300,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "empty_result_is_ok": true,
+      "variants": [
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 8,
+          "name": "oracle_8i_legacy",
+          "file": "oracle/legacy_8i/106_oracle_top_disk_read_sql.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 9,
+          "name": "oracle_9i_plus",
+          "file": "oracle/065_oracle_top_disk_read_sql.sql"
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 49,
+      "metric_code": "POSTGRES_REPLICATION",
+      "db_type": "postgresql",
+      "category": "availability",
+      "default_importance": 5,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 120,
+        "timeout": 30
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "postgresql",
+          "min_major_version": 10,
+          "name": "postgresql_streaming",
+          "file": "postgresql/050_postgresql_replication.sql"
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 50,
+      "metric_code": "POSTGRES_IDENTITY_ROLE",
+      "db_type": "postgresql",
+      "category": "availability",
+      "default_importance": 5,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "collector_type": "sql",
+      "time_window": {
+        "repeat_interval": 300,
+        "retry_interval": 60,
+        "timeout": 15
+      },
+      "report_policy": {
+        "cost": "LIGHT",
+        "minimum_version": 10,
+        "role": "both"
+      },
+      "variants": [
+        {
+          "db_type": "postgresql",
+          "min_major_version": 10,
+          "name": "postgresql_10_plus",
+          "file": "postgresql/051_postgresql_identity_role.sql"
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 51,
+      "metric_code": "POSTGRES_REPLICATION_SLOTS",
+      "db_type": "postgresql",
+      "category": "replication",
+      "default_importance": 5,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "collector_type": "sql",
+      "empty_result_is_ok": true,
+      "time_window": {
+        "repeat_interval": 300,
+        "retry_interval": 60,
+        "timeout": 20
+      },
+      "report_policy": {
+        "cost": "LIGHT",
+        "minimum_version": 10,
+        "role": "primary",
+        "top_n": 20
+      },
+      "variants": [
+        {
+          "db_type": "postgresql",
+          "min_major_version": 10,
+          "name": "postgresql_10_plus",
+          "file": "postgresql/052_postgresql_replication_slots.sql"
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 52,
+      "metric_code": "POSTGRES_WAL_ARCHIVE",
+      "db_type": "postgresql",
+      "category": "data_protection",
+      "default_importance": 5,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "collector_type": "sql",
+      "time_window": {
+        "repeat_interval": 300,
+        "retry_interval": 60,
+        "timeout": 15
+      },
+      "report_policy": {
+        "cost": "LIGHT",
+        "minimum_version": 10,
+        "role": "both"
+      },
+      "variants": [
+        {
+          "db_type": "postgresql",
+          "min_major_version": 10,
+          "name": "postgresql_10_plus",
+          "file": "postgresql/053_postgresql_wal_archive.sql"
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 53,
+      "metric_code": "POSTGRES_LONG_TRANSACTIONS",
+      "db_type": "postgresql",
+      "category": "operational_health",
+      "default_importance": 4,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "collector_type": "sql",
+      "empty_result_is_ok": true,
+      "time_window": {
+        "repeat_interval": 150,
+        "retry_interval": 60,
+        "timeout": 15
+      },
+      "report_policy": {
+        "cost": "LIGHT",
+        "minimum_version": 10,
+        "role": "both",
+        "top_n": 20
+      },
+      "variants": [
+        {
+          "db_type": "postgresql",
+          "min_major_version": 10,
+          "name": "postgresql_10_plus",
+          "file": "postgresql/054_postgresql_transactions.sql"
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 54,
+      "metric_code": "POSTGRES_VACUUM_HEALTH",
+      "db_type": "postgresql",
+      "category": "operational_health",
+      "default_importance": 4,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "collector_type": "sql",
+      "empty_result_is_ok": true,
+      "time_window": {
+        "repeat_interval": 1800,
+        "retry_interval": 300,
+        "timeout": 30
+      },
+      "report_policy": {
+        "cost": "NORMAL",
+        "minimum_version": 10,
+        "role": "both",
+        "top_n": 20
+      },
+      "variants": [
+        {
+          "db_type": "postgresql",
+          "min_major_version": 10,
+          "name": "postgresql_10_plus",
+          "file": "postgresql/055_postgresql_vacuum_health.sql",
+          "per_database": true
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 55,
+      "metric_code": "POSTGRES_XID_WRAPAROUND",
+      "db_type": "postgresql",
+      "category": "integrity",
+      "default_importance": 5,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "collector_type": "sql",
+      "time_window": {
+        "repeat_interval": 300,
+        "retry_interval": 60,
+        "timeout": 15
+      },
+      "report_policy": {
+        "cost": "LIGHT",
+        "minimum_version": 10,
+        "role": "both"
+      },
+      "variants": [
+        {
+          "db_type": "postgresql",
+          "min_major_version": 10,
+          "name": "postgresql_10_plus",
+          "file": "postgresql/056_postgresql_xid_wraparound.sql"
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 56,
+      "metric_code": "POSTGRES_DATABASE_HEALTH",
+      "db_type": "postgresql",
+      "category": "capacity",
+      "default_importance": 3,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "collector_type": "sql",
+      "time_window": {
+        "repeat_interval": 900,
+        "retry_interval": 120,
+        "timeout": 20
+      },
+      "report_policy": {
+        "cost": "LIGHT",
+        "minimum_version": 10,
+        "role": "both"
+      },
+      "variants": [
+        {
+          "db_type": "postgresql",
+          "min_major_version": 10,
+          "name": "postgresql_10_plus",
+          "file": "postgresql/057_postgresql_database_health.sql"
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 57,
+      "metric_code": "POSTGRES_INVALID_INDEXES",
+      "db_type": "postgresql",
+      "category": "integrity",
+      "default_importance": 5,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "collector_type": "sql",
+      "empty_result_is_ok": true,
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": 1,
+        "to_hour": 6,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 72000,
+        "retry_interval": 600,
+        "timeout": 30
+      },
+      "report_policy": {
+        "cost": "HEAVY",
+        "minimum_version": 10,
+        "role": "both",
+        "top_n": 50
+      },
+      "variants": [
+        {
+          "db_type": "postgresql",
+          "min_major_version": 10,
+          "name": "postgresql_10_plus",
+          "file": "postgresql/058_postgresql_invalid_indexes.sql",
+          "per_database": true
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 58,
+      "metric_code": "OS_INFO",
+      "db_type": "multi",
+      "category": "os",
+      "default_importance": 3,
+      "empty_result_is_ok": false,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": 1,
+        "to_hour": 6,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 72000,
+        "timeout": 30
+      },
+      "collector_type": "cmd",
+      "variants": [
+        {
+          "platform": "windows",
+          "name": "windows_powershell",
+          "file": "os/windows/010_os_info.ps1"
+        },
+        {
+          "platform": "linux",
+          "name": "linux_bash",
+          "file": "os/linux/010_os_info.sh"
+        }
+      ],
+      "report_policy": {
+        "collapse": {
+          "enabled": true,
+          "event_code": "MONITORING_CMD_UNAVAILABLE",
+          "key_fields": [
+            "instance",
+            "collector_type",
+            "error_type",
+            "normalized_error_signature"
+          ],
+          "max_sample_metrics": 3,
+          "max_sample_items": 5
+        },
+        "severity": {
+          "default": "WARNING",
+          "prod": "WARNING",
+          "dev": "LOGGING",
+          "lab": "LOGGING",
+          "sandbox": "LOGGING"
+        },
+        "thresholds": {},
+        "suppress": {
+          "enabled": false
+        }
+      },
+      "max_rows": 500
+    },
+    {
+      "metric_id": 59,
+      "metric_code": "OS_NETWORK",
+      "db_type": "multi",
+      "category": "os",
+      "default_importance": 3,
+      "empty_result_is_ok": false,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 3600,
+        "timeout": 30
+      },
+      "collector_type": "cmd",
+      "variants": [
+        {
+          "platform": "windows",
+          "name": "windows_powershell",
+          "file": "os/windows/011_os_network.ps1"
+        },
+        {
+          "platform": "linux",
+          "name": "linux_bash",
+          "file": "os/linux/011_os_network.sh"
+        }
+      ],
+      "report_policy": {
+        "collapse": {
+          "enabled": true,
+          "event_code": "MONITORING_CMD_UNAVAILABLE",
+          "key_fields": [
+            "instance",
+            "collector_type",
+            "error_type",
+            "normalized_error_signature"
+          ],
+          "max_sample_metrics": 3,
+          "max_sample_items": 5
+        },
+        "severity": {
+          "default": "WARNING",
+          "prod": "WARNING",
+          "dev": "LOGGING",
+          "lab": "LOGGING",
+          "sandbox": "LOGGING"
+        },
+        "thresholds": {},
+        "suppress": {
+          "enabled": false
+        }
+      },
+      "max_rows": 500
+    },
+    {
+      "metric_id": 60,
+      "metric_code": "OS_EVENTLOG_CRITICAL",
+      "db_type": "multi",
+      "category": "os",
+      "default_importance": 4,
+      "empty_result_is_ok": false,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 3600,
+        "timeout": 60
+      },
+      "collector_type": "cmd",
+      "variants": [
+        {
+          "platform": "windows",
+          "name": "windows_powershell",
+          "file": "os/windows/012_os_eventlog_critical.ps1"
+        },
+        {
+          "platform": "linux",
+          "name": "linux_bash",
+          "file": "os/linux/012_os_eventlog_critical.sh"
+        }
+      ],
+      "report_policy": {
+        "collapse": {
+          "enabled": true,
+          "event_code": "MONITORING_CMD_UNAVAILABLE",
+          "key_fields": [
+            "instance",
+            "collector_type",
+            "error_type",
+            "normalized_error_signature"
+          ],
+          "max_sample_metrics": 3,
+          "max_sample_items": 5
+        },
+        "severity": {
+          "default": "WARNING",
+          "prod": "WARNING",
+          "dev": "LOGGING",
+          "lab": "LOGGING",
+          "sandbox": "LOGGING"
+        },
+        "thresholds": {},
+        "suppress": {
+          "enabled": false
+        }
+      },
+      "max_rows": 500
+    },
+    {
+      "metric_id": 61,
+      "metric_code": "OS_PROCESS_TOP_CPU",
+      "db_type": "multi",
+      "category": "os",
+      "default_importance": 3,
+      "empty_result_is_ok": false,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 3600,
+        "timeout": 60
+      },
+      "collector_type": "cmd",
+      "variants": [
+        {
+          "platform": "windows",
+          "name": "windows_powershell",
+          "file": "os/windows/013_os_process_top_cpu.ps1"
+        },
+        {
+          "platform": "linux",
+          "name": "linux_bash",
+          "file": "os/linux/013_os_process_top_cpu.sh"
+        }
+      ],
+      "report_policy": {
+        "collapse": {
+          "enabled": true,
+          "event_code": "MONITORING_CMD_UNAVAILABLE",
+          "key_fields": [
+            "instance",
+            "collector_type",
+            "error_type",
+            "normalized_error_signature"
+          ],
+          "max_sample_metrics": 3,
+          "max_sample_items": 5
+        },
+        "severity": {
+          "default": "WARNING",
+          "prod": "WARNING",
+          "dev": "LOGGING",
+          "lab": "LOGGING",
+          "sandbox": "LOGGING"
+        },
+        "thresholds": {},
+        "suppress": {
+          "enabled": false
+        }
+      },
+      "max_rows": 500
+    },
+    {
+      "metric_id": 62,
+      "metric_code": "OS_PROCESS_TOP_MEMORY",
+      "db_type": "multi",
+      "category": "os",
+      "default_importance": 3,
+      "empty_result_is_ok": false,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 3600,
+        "timeout": 60
+      },
+      "collector_type": "cmd",
+      "variants": [
+        {
+          "platform": "windows",
+          "name": "windows_powershell",
+          "file": "os/windows/014_os_process_top_memory.ps1"
+        },
+        {
+          "platform": "linux",
+          "name": "linux_bash",
+          "file": "os/linux/014_os_process_top_memory.sh"
+        }
+      ],
+      "report_policy": {
+        "collapse": {
+          "enabled": true,
+          "event_code": "MONITORING_CMD_UNAVAILABLE",
+          "key_fields": [
+            "instance",
+            "collector_type",
+            "error_type",
+            "normalized_error_signature"
+          ],
+          "max_sample_metrics": 3,
+          "max_sample_items": 5
+        },
+        "severity": {
+          "default": "WARNING",
+          "prod": "WARNING",
+          "dev": "LOGGING",
+          "lab": "LOGGING",
+          "sandbox": "LOGGING"
+        },
+        "thresholds": {},
+        "suppress": {
+          "enabled": false
+        }
+      },
+      "max_rows": 500
+    },
+    {
+      "metric_id": 63,
+      "metric_code": "DATABASE_USER_PERMISSIONS",
+      "db_type": "multi",
+      "category": "security",
+      "default_importance": 1,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": 1,
+        "to_hour": 6,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 72000,
+        "timeout": 120
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "name": "sqlserver_all",
+          "file": "sqlserver/057_sqlserver_database_user_permissions.sql"
+        },
+        {
+          "db_type": "postgresql",
+          "min_major_version": 10,
+          "name": "postgresql_10_plus",
+          "file": "postgresql/059_postgresql_role_permissions.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 9,
+          "name": "oracle_9i_plus",
+          "file": "oracle/061_oracle_user_permissions.sql"
+        },
+        {
+          "db_type": "mysql",
+          "min_major_version": 5,
+          "name": "mysql_5_plus",
+          "file": "mysql/050_mysql_user_permissions.sql"
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 64,
+      "metric_code": "DATABASE_CONSTRAINT_HEALTH",
+      "db_type": "multi",
+      "category": "integrity",
+      "default_importance": 1,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": 1,
+        "to_hour": 6,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 72000,
+        "timeout": 120
+      },
+      "max_rows": 5000,
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "name": "sqlserver_all",
+          "file": "sqlserver/058_sqlserver_constraint_health.sql"
+        },
+        {
+          "db_type": "postgresql",
+          "min_major_version": 10,
+          "name": "postgresql_10_plus",
+          "file": "postgresql/060_postgresql_constraint_health.sql",
+          "per_database": true
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 9,
+          "name": "oracle_9i_plus",
+          "file": "oracle/062_oracle_constraint_health.sql"
+        },
+        {
+          "db_type": "mysql",
+          "min_major_version": 8,
+          "name": "mysql_8_0_16_plus",
+          "file": "mysql/051_mysql_constraint_health.sql"
+        }
+      ]
+    },
+    {
+      "metric_id": 65,
+      "metric_code": "SECURITY_CERTIFICATE_EXPIRY",
+      "db_type": "multi",
+      "category": "security",
+      "default_importance": 1,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": 1,
+        "to_hour": 6,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 72000,
+        "timeout": 120
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "name": "sqlserver_all",
+          "file": "sqlserver/059_sqlserver_certificate_expiry.sql"
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_todo",
+          "supported": false,
+          "unsupported_reason": "No core TDE/certificate store in PostgreSQL."
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_todo",
+          "supported": false,
+          "unsupported_reason": "Oracle wallet/cert expiry variant not authored yet."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_todo",
+          "supported": false,
+          "unsupported_reason": "MySQL TLS cert expiry variant not authored yet."
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 66,
+      "metric_code": "SECURITY_FAILED_LOGINS",
+      "db_type": "multi",
+      "category": "security",
+      "default_importance": 1,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": 1,
+        "to_hour": 6,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 72000,
+        "timeout": 120
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "name": "sqlserver_all",
+          "file": "sqlserver/060_sqlserver_failed_logins.sql"
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_todo",
+          "supported": false,
+          "unsupported_reason": "PostgreSQL failed logins live in the server log, not a SQL-queryable catalog."
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_todo",
+          "supported": false,
+          "unsupported_reason": "Oracle failed-login (dba_audit_session) variant not authored yet."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_todo",
+          "supported": false,
+          "unsupported_reason": "MySQL failed-login variant not authored yet."
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 67,
+      "metric_code": "MAINTENANCE_INDEX_FRAGMENTATION",
+      "db_type": "multi",
+      "category": "maintenance",
+      "default_importance": 1,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "note": "repeat_interval 72000s (matching MAINTENANCE_INDEX_USAGE), not 604800: weekly did not survive contact with the reports. index-usage-report defaults to --days 3, so on four days out of seven its whole fragmentation section was empty - not 'no fragmentation', just no rows inside the window - and the same 3-day default is what the scheduled report uses. With from_hour 1 to_hour 6 the effective cadence is one run per night: 20h after a 02:00 run it is due at 22:00, outside the window, so it waits for 01:00. timeout 1800s, not 300: the SQL is already in the cheap LIMITED mode, but it still walks every index of every database, and on the largest instance here (~1.66 TB) it measured 749s on 2026-08-01 - 300s timed out there while every other target finished in seconds. 1800 is deliberate headroom over that 749s, because the scan grows with the database. APP-METRICS in data/app_commands.json must stay above this: it is the budget for the whole pass, and raising this alone would only move the kill from the query to the daemon - which is worse, since that kill takes every other metric in the pass with it.",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": 1,
+        "to_hour": 6,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 72000,
+        "timeout": 1800
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "name": "sqlserver_all",
+          "file": "sqlserver/061_sqlserver_index_fragmentation.sql"
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_todo",
+          "supported": false,
+          "unsupported_reason": "PostgreSQL uses bloat, not fragmentation (see POSTGRES_INVALID_INDEXES / future bloat metric)."
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 12,
+          "name": "oracle_all",
+          "file": "oracle/061_oracle_index_health.sql"
+        },
+        {
+          "db_type": "mysql",
+          "min_major_version": 0,
+          "name": "mysql_all",
+          "file": "mysql/053_mysql_table_fragmentation.sql"
+        }
+      ],
+      "report_policy": {
+        "collect_only": true,
+        "sparse_items": true
+      },
+      "max_rows": 500
+    },
+    {
+      "metric_id": 68,
+      "metric_code": "MAINTENANCE_STATISTICS_AGE",
+      "db_type": "multi",
+      "category": "maintenance",
+      "default_importance": 1,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": 1,
+        "to_hour": 6,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 72000,
+        "timeout": 300
+      },
+      "max_rows": 20000,
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "name": "sqlserver_all",
+          "file": "sqlserver/062_sqlserver_statistics_age.sql"
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_todo",
+          "supported": false,
+          "unsupported_reason": "PostgreSQL analyze freshness is covered by POSTGRES_VACUUM_HEALTH."
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 12,
+          "name": "oracle_all",
+          "file": "oracle/064_oracle_statistics_age.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 8,
+          "name": "oracle_8i_legacy",
+          "supported": true,
+          "file": "oracle/legacy_8i/109_oracle_statistics_age.sql"
+        },
+        {
+          "db_type": "mysql",
+          "min_major_version": 0,
+          "name": "mysql_all",
+          "file": "mysql/054_mysql_statistics_age.sql"
+        }
+      ],
+      "report_policy": {
+        "_note": "Inventory, not a signal - the same shape as MAINTENANCE_INDEX_FRAGMENTATION above. Measured 2026-08-11: 4441 WARNINGs over 2495 distinct statistics objects in 3 days, ~1480 rows per run, none of them ever resolving because a stale statistic stays stale until someone updates it. That is a list to work through, not an alert. collect_only keeps every row in the store and in the inventory report and stops feeding them to the scheduled reports. See audits/20260811_audit_repeating_metric_alerts.md.",
+        "collect_only": true,
+        "sparse_items": true
+      }
+    },
+    {
+      "metric_id": 69,
+      "metric_code": "SECURITY_LOGIN_HEALTH",
+      "db_type": "multi",
+      "category": "security",
+      "default_importance": 1,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": 1,
+        "to_hour": 6,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 72000,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "name": "sqlserver_all",
+          "file": "sqlserver/063_sqlserver_login_health.sql"
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_todo",
+          "supported": false,
+          "unsupported_reason": "PostgreSQL failed logins live in the server log (not SQL-queryable); long sessions are covered by POSTGRES_LONG_TRANSACTIONS / connection metrics."
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_todo",
+          "supported": false,
+          "unsupported_reason": "Oracle failed-login (dba_audit_session / unified audit) variant not authored yet."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_todo",
+          "supported": false,
+          "unsupported_reason": "MySQL failed-login variant not authored yet."
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 70,
+      "metric_code": "DOCKER_CONTAINER_STATS",
+      "db_type": "multi",
+      "category": "container",
+      "default_importance": 2,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 300,
+        "timeout": 20
+      },
+      "collector_type": "docker",
+      "file": "docker/009_docker_container_stats.sh",
+      "max_rows": 500
+    },
+    {
+      "metric_id": 71,
+      "metric_code": "ORACLE_BACKUP_HEALTH",
+      "db_type": "oracle",
+      "category": "backup",
+      "default_importance": 5,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "empty_result_is_ok": false,
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 3600,
+        "timeout": 120
+      },
+      "collector_type": "docker",
+      "file": "oracle/201_oracle_backup_health.sh",
+      "report_policy": {
+        "collapse": {
+          "enabled": true,
+          "event_code": "MONITORING_CMD_UNAVAILABLE",
+          "key_fields": [
+            "instance",
+            "collector_type",
+            "error_type",
+            "normalized_error_signature"
+          ],
+          "max_sample_metrics": 3,
+          "max_sample_items": 5
+        },
+        "severity": {
+          "default": "WARNING",
+          "prod": "WARNING",
+          "dev": "LOGGING",
+          "lab": "LOGGING",
+          "sandbox": "LOGGING"
+        },
+        "thresholds": {},
+        "suppress": {
+          "enabled": false
+        }
+      },
+      "max_rows": 500
+    },
+    {
+      "metric_id": 72,
+      "metric_code": "ORACLE_RESTORE_VALIDATION",
+      "db_type": "oracle",
+      "category": "backup",
+      "default_importance": 5,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "empty_result_is_ok": false,
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": 1,
+        "to_hour": 5,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 604800,
+        "timeout": 1800
+      },
+      "collector_type": "docker",
+      "file": "oracle/202_oracle_restore_validation.sh",
+      "report_policy": {
+        "collapse": {
+          "enabled": true,
+          "event_code": "MONITORING_CMD_UNAVAILABLE",
+          "key_fields": [
+            "instance",
+            "collector_type",
+            "error_type",
+            "normalized_error_signature"
+          ],
+          "max_sample_metrics": 3,
+          "max_sample_items": 5
+        },
+        "severity": {
+          "default": "WARNING",
+          "prod": "WARNING",
+          "dev": "LOGGING",
+          "lab": "LOGGING",
+          "sandbox": "LOGGING"
+        },
+        "thresholds": {},
+        "suppress": {
+          "enabled": false
+        }
+      },
+      "max_rows": 500
+    },
+    {
+      "metric_id": 73,
+      "metric_code": "DATABASE_DATA_SIZE",
+      "db_type": "multi",
+      "category": "capacity",
+      "default_importance": 1,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 86400,
+        "timeout": 120
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "name": "sqlserver_all",
+          "file": "sqlserver/064_sqlserver_database_data_size.sql"
+        },
+        {
+          "db_type": "postgresql",
+          "min_major_version": 0,
+          "name": "postgresql_all",
+          "file": "postgresql/061_postgresql_database_data_size.sql"
+        },
+        {
+          "db_type": "mysql",
+          "min_major_version": 0,
+          "name": "mysql_all",
+          "file": "mysql/052_mysql_database_data_size.sql"
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_todo",
+          "supported": false,
+          "unsupported_reason": "An Oracle 'database' is the whole instance, so per-database size has no equivalent; TABLESPACE_FREE_SPACE covers the allocation question there."
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 74,
+      "metric_code": "DATABASE_LOG_SIZE",
+      "db_type": "multi",
+      "category": "capacity",
+      "default_importance": 1,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 86400,
+        "timeout": 120
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "name": "sqlserver_all",
+          "file": "sqlserver/065_sqlserver_database_log_size.sql"
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_todo",
+          "supported": false,
+          "unsupported_reason": "WAL is instance-level in PostgreSQL, not per-database; see POSTGRES_WAL_ARCHIVE."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_todo",
+          "supported": false,
+          "unsupported_reason": "The redo log and binlog are instance-level in MySQL, not per-schema."
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_todo",
+          "supported": false,
+          "unsupported_reason": "Redo logs are instance-level in Oracle, not per-database."
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 75,
+      "metric_code": "MAINTENANCE_HEAP_FRAGMENTATION",
+      "db_type": "multi",
+      "category": "maintenance",
+      "default_importance": 1,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "note": "repeat_interval 72000s, matching MAINTENANCE_INDEX_FRAGMENTATION and MAINTENANCE_INDEX_USAGE, so the whole maintenance group answers for the same night and index-usage-report --days 3 always finds a run. With from_hour 1 to_hour 6 that is one run per night. The SQL uses SAMPLED mode (1% of pages), which is the expensive one, but the whole estate measured 2.9s on 2026-08-01 because no instance has a heap over 1000 pages - the cost is in the heaps found, and there are none. timeout stays 600s; revisit if a large heap ever appears.",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": 1,
+        "to_hour": 6,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 72000,
+        "timeout": 600
+      },
+      "max_rows": 5000,
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "name": "sqlserver_all",
+          "file": "sqlserver/066_sqlserver_heap_fragmentation.sql"
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_todo",
+          "supported": false,
+          "unsupported_reason": "PostgreSQL has no heaps in the SQL Server sense; dead tuples are covered by POSTGRES_TABLE_BLOAT."
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_todo",
+          "supported": false,
+          "unsupported_reason": "Oracle tables are not heaps in the SQL Server sense; row migration would need a separate ANALYZE-based model."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_todo",
+          "supported": false,
+          "unsupported_reason": "InnoDB tables are clustered by the primary key; the equivalent question is answered by the MySQL variant of MAINTENANCE_INDEX_FRAGMENTATION."
+        }
+      ],
+      "report_policy": {
+        "collect_only": true,
+        "sparse_items": true
+      }
+    },
+    {
+      "metric_id": 76,
+      "metric_code": "DATABASE_VLF_COUNT",
+      "db_type": "multi",
+      "category": "maintenance",
+      "default_importance": 2,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 86400,
+        "timeout": 180
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 13,
+          "name": "sqlserver_all",
+          "file": "sqlserver/067_sqlserver_vlf_count.sql"
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_todo",
+          "supported": false,
+          "unsupported_reason": "PostgreSQL WAL has no VLF structure."
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_todo",
+          "supported": false,
+          "unsupported_reason": "Oracle redo logs are fixed-size groups, not virtual log files."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_todo",
+          "supported": false,
+          "unsupported_reason": "The InnoDB redo log has no VLF structure."
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 77,
+      "metric_code": "MAINTENANCE_INDEX_USAGE",
+      "db_type": "multi",
+      "category": "maintenance",
+      "default_importance": 1,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": 1,
+        "to_hour": 6,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 72000,
+        "timeout": 900
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "name": "sqlserver_all",
+          "file": "sqlserver/068_sqlserver_index_usage.sql"
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_index_usage",
+          "supported": true,
+          "file": "postgresql/072_postgresql_index_usage.sql",
+          "per_database": true
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_todo",
+          "supported": false,
+          "unsupported_reason": "Oracle index usage needs monitoring to be enabled per index (ALTER INDEX ... MONITORING USAGE)."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_todo",
+          "supported": false,
+          "unsupported_reason": "Index usage needs performance_schema table io waits, which differ by version/config."
+        }
+      ],
+      "max_rows": 100000,
+      "report_policy": {
+        "collect_only": true,
+        "chart_summary_only": true
+      }
+    },
+    {
+      "metric_id": 78,
+      "metric_code": "POSTGRES_TABLE_BLOAT",
+      "db_type": "postgresql",
+      "category": "maintenance",
+      "default_importance": 2,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 43200,
+        "timeout": 300
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "postgresql",
+          "min_major_version": 0,
+          "name": "postgresql_all",
+          "file": "postgresql/062_postgresql_table_bloat.sql",
+          "per_database": true
+        }
+      ],
+      "max_rows": 500
+    },
+    {
+      "metric_id": 79,
+      "metric_code": "LINKED_SERVER_STATUS",
+      "db_type": "sqlserver",
+      "category": "availability",
+      "default_importance": 4,
+      "empty_result_is_ok": true,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 21600,
+        "timeout": 300
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "max_major_version": 10,
+          "name": "sqlserver_legacy_2008r2",
+          "file": "sqlserver/legacy_2008r2/069_sqlserver_linked_server_status.sql"
+        },
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 11,
+          "name": "sqlserver_modern_2012_plus",
+          "file": "sqlserver/069_sqlserver_linked_server_status.sql"
+        }
+      ],
+      "note": "A dead or unreferenced linked server is a configuration fact, not a live condition: it stays true until somebody changes it. Reported 4x a day and grouped per instance rather than hourly per linked server, which put 4 identical WARNINGs into every hourly report. Severity still distinguishes 'unreachable and code calls it' from 'unreachable and unreferenced' - see reports/server_report.build_linked_servers.",
+      "report_policy": {
+        "enabled": true,
+        "condition_grouping": {
+          "enabled": true,
+          "event_code": "LINKED_SERVER_STATUS",
+          "key_fields": [
+            "instance_key",
+            "issue_type"
+          ],
+          "aggregate_fields": {
+            "count": "count",
+            "sample_servers": {
+              "op": "sample",
+              "field": "linked_server",
+              "limit": 5
+            }
+          },
+          "replace_raw_rows": true,
+          "max_groups": 20
+        },
+        "severity_policy": {
+          "default": "KEEP",
+          "by_env": {
+            "prod": "KEEP",
+            "dev": "DOWNGRADE_TO_LOGGING",
+            "lab": "DOWNGRADE_TO_LOGGING",
+            "sandbox": "DOWNGRADE_TO_LOGGING"
+          },
+          "thresholds": []
+        },
+        "render_policy": {
+          "mode": "compact",
+          "fields": [
+            "issue_type",
+            "count",
+            "sample_servers"
+          ],
+          "max_items": 3,
+          "include_raw_message": false
+        }
+      },
+      "max_rows": 500
+    },
+    {
+      "metric_id": 80,
+      "metric_code": "QUERY_STORE_COVERAGE",
+      "db_type": "multi",
+      "category": "performance",
+      "default_importance": 3,
+      "empty_result_is_ok": true,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "note": "Split out of QUERY_STORE_QUERY_ISSUES, which runs every 15 minutes. Whether Query Store is switched on is a configuration fact, not a live condition, so reporting it on the issues cadence produced 96 identical WARNINGs a day per database and the alert stream became mostly that one line. Once a day, in the morning, is the same finding with none of the noise.",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": 8,
+        "to_hour": 10,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 72000,
+        "timeout": 30
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "max_major_version": 12,
+          "name": "sqlserver_pre_2016_unsupported",
+          "supported": false,
+          "unsupported_reason": "SQL Server Query Store is available from SQL Server 2016, so there is no coverage to report below it."
+        },
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 13,
+          "name": "sqlserver_2016_plus_query_store",
+          "file": "sqlserver/070_sqlserver_query_store_coverage.sql"
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_unsupported",
+          "supported": false,
+          "unsupported_reason": "Oracle has no Query Store equivalent to report coverage for."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_unsupported",
+          "supported": false,
+          "unsupported_reason": "MySQL has no Query Store equivalent to report coverage for."
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_todo",
+          "supported": false,
+          "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+        }
+      ],
+      "report_policy": {
+        "enabled": true,
+        "condition_grouping": {
+          "enabled": true,
+          "event_code": "QUERY_STORE_COVERAGE",
+          "key_fields": [
+            "instance_key",
+            "issue_type"
+          ],
+          "aggregate_fields": {
+            "count": "count",
+            "sample_databases": {
+              "op": "sample",
+              "field": "db_name",
+              "limit": 5
+            }
+          },
+          "replace_raw_rows": true,
+          "max_groups": 20
+        },
+        "severity_policy": {
+          "default": "KEEP",
+          "by_env": {
+            "prod": "KEEP",
+            "dev": "DOWNGRADE_TO_LOGGING",
+            "lab": "DOWNGRADE_TO_LOGGING",
+            "sandbox": "DOWNGRADE_TO_LOGGING"
+          },
+          "thresholds": []
+        },
+        "render_policy": {
+          "mode": "compact",
+          "fields": [
+            "issue_type",
+            "count",
+            "sample_databases"
+          ],
+          "max_items": 3,
+          "include_raw_message": false
+        }
+      },
+      "max_rows": 500
+    },
+    {
+      "metric_id": 81,
+      "metric_code": "CLUSTER_FCI_HEALTH",
+      "db_type": "multi",
+      "category": "availability",
+      "default_importance": 5,
+      "empty_result_is_ok": false,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "note": "Windows Failover Cluster health for FCI pairs. AVAILABILITY_DATABASE_HEALTH queries Always On AG DMVs, so on an FCI it truthfully returns NOT_CONFIGURED and that was read as 'HA is fine' - an FCI pair and its listener had no cluster monitoring at all. Runs on every Windows target; a host that is not a cluster node reports NOT_CLUSTERED/OK rather than failing. Role-aware: on the passive node SQL Server is stopped by design and must not be alerted on, while ClusSvc must run everywhere.",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 1800,
+        "timeout": 60
+      },
+      "collector_type": "cmd",
+      "variants": [
+        {
+          "platform": "windows",
+          "name": "windows_powershell",
+          "file": "os/windows/015_os_failover_cluster.ps1"
+        },
+        {
+          "platform": "linux",
+          "name": "linux_unsupported",
+          "supported": false,
+          "unsupported_reason": "Windows Server Failover Clustering is a Windows feature."
+        }
+      ],
+      "report_policy": {
+        "enabled": true,
+        "condition_grouping": {
+          "enabled": true,
+          "event_code": "CLUSTER_FCI_HEALTH",
+          "key_fields": [
+            "instance_key",
+            "cluster"
+          ],
+          "aggregate_fields": {
+            "count": "count"
+          },
+          "replace_raw_rows": true,
+          "max_groups": 20
+        },
+        "severity_policy": {
+          "default": "KEEP",
+          "by_env": {
+            "prod": "KEEP",
+            "dev": "DOWNGRADE_TO_WARNING",
+            "lab": "DOWNGRADE_TO_LOGGING",
+            "sandbox": "DOWNGRADE_TO_LOGGING"
+          },
+          "thresholds": []
+        },
+        "render_policy": {
+          "mode": "compact",
+          "fields": [
+            "cluster",
+            "node",
+            "state"
+          ],
+          "max_items": 5,
+          "include_raw_message": false
+        }
+      },
+      "max_rows": 500
+    },
+    {
+      "metric_id": 82,
+      "metric_code": "POSTGRES_BACKUP_LAST_RESULT",
+      "db_type": "postgresql",
+      "category": "backup",
+      "default_importance": 5,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "collector_type": "docker",
+      "file": "postgresql/022_postgresql_last_backup_result.sh",
+      "time_window": {
+        "repeat_interval": 3600,
+        "retry_interval": 300,
+        "timeout": 120
+      },
+      "report_policy": {
+        "backup_health": {
+          "role": "last_result"
+        },
+        "collapse": {
+          "enabled": true,
+          "event_code": "MONITORING_CMD_UNAVAILABLE",
+          "key_fields": [
+            "instance",
+            "collector_type",
+            "error_type",
+            "normalized_error_signature"
+          ],
+          "max_sample_metrics": 3,
+          "max_sample_items": 5
+        }
+      },
+      "note": "The PostgreSQL half of BACKUP_LAST_RESULT. It cannot be a variant of that metric because collector_type is per metric, not per variant, and a base backup is a directory on disk rather than a row in a catalog - so this needs the docker collector while BACKUP_LAST_RESULT is sql. It emits the identical message contract, and db_ops.common.backup_policy.BACKUP_LAST_RESULT_CODES lists both codes so the policy engine and the inventory report read them as one.",
+      "max_rows": 500
+    },
+    {
+      "metric_id": 83,
+      "metric_code": "SECURITY_SERVER_PRINCIPALS",
+      "db_type": "multi",
+      "category": "security",
+      "default_importance": 1,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": 1,
+        "to_hour": 6,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 72000,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "name": "sqlserver_all",
+          "file": "sqlserver/071_sqlserver_server_principals.sql"
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_todo",
+          "supported": false,
+          "unsupported_reason": "Cluster roles are already inventoried per database by DATABASE_USER_PERMISSIONS' postgresql variant - PostgreSQL roles are cluster-global, so there is no separate server-scope list to collect."
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_todo",
+          "supported": false,
+          "unsupported_reason": "Oracle has no server-scope principal separate from the database's own users; DATABASE_USER_PERMISSIONS' oracle variant already lists them."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_todo",
+          "supported": false,
+          "unsupported_reason": "MySQL accounts are server-scope and already listed by DATABASE_USER_PERMISSIONS' mysql variant."
+        }
+      ],
+      "max_rows": 500,
+      "note": "Instance login inventory for the server-metrics report: one row per server principal with its roles, notable server-scope permissions and password age. Status is always OK on purpose - this is the list, and the alerting on the same principals belongs to SECURITY_LOGIN_HEALTH and SECURITY_FAILED_LOGINS. Exists because those two are exception-based and so can never answer 'who can connect to this instance'."
+    },
+    {
+      "metric_id": 84,
+      "metric_code": "TOP_BUFFER_GETS_SQL",
+      "db_type": "oracle",
+      "category": "performance",
+      "default_importance": 3,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 300,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "empty_result_is_ok": true,
+      "variants": [
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 8,
+          "name": "oracle_8i_legacy",
+          "file": "oracle/legacy_8i/107_oracle_top_buffer_gets_sql.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 9,
+          "name": "oracle_9i_plus",
+          "file": "oracle/066_oracle_top_buffer_gets_sql.sql"
+        }
+      ],
+      "max_rows": 500,
+      "note": "The other half of TOP_DISK_READ_SQL. disk_reads finds the SQL that hurts the storage; buffer_gets finds the SQL that burns the CPU, and on a well-cached instance those are different statements - a nested-loop join over cached blocks is invisible to disk_reads and is the usual reason a box is pinned at 100% CPU with idle disks. Status is always OK: an inventory of the current worst offenders, not a threshold."
+    },
+    {
+      "metric_id": 85,
+      "metric_code": "INDEX_UNUSABLE",
+      "db_type": "oracle",
+      "category": "maintenance",
+      "default_importance": 5,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 3600,
+        "timeout": 120
+      },
+      "collector_type": "sql",
+      "empty_result_is_ok": true,
+      "variants": [
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "name": "oracle_all",
+          "file": "oracle/067_oracle_index_unusable.sql"
+        }
+      ],
+      "max_rows": 500,
+      "note": "An UNUSABLE index is not a slow index, it is an absent one: queries silently full-scan and DML on the table fails with ORA-01502. ALTER TABLE MOVE, partition maintenance and direct-path loads all produce it as a side effect without announcing what they broke. Checks dba_ind_partitions as well as dba_indexes, because a partitioned index carries its state per partition and reads N/A at the index level - looking only at dba_indexes misses exactly the indexes partition maintenance breaks."
+    },
+    {
+      "metric_id": 86,
+      "metric_code": "INVALID_OBJECTS",
+      "db_type": "oracle",
+      "category": "integrity",
+      "default_importance": 3,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 3600,
+        "timeout": 120
+      },
+      "collector_type": "sql",
+      "empty_result_is_ok": true,
+      "variants": [
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "name": "oracle_all",
+          "file": "oracle/068_oracle_invalid_objects.sql"
+        }
+      ],
+      "max_rows": 500,
+      "report_policy": {
+        "_note": "First run against a real instance (1.236, run 28781) found 76 objects already invalid in one application schema - 73 views, 2 functions, 1 procedure. That is a true finding and a real backlog, but it is a backlog: it stays exactly as it is until someone recompiles, so alerting on it would repeat every report cycle forever, which is the pattern audits/20260811_audit_repeating_metric_alerts.md exists to stop. collect_only keeps every row in the store and in the inventory report while keeping it out of the warning/critical reports. Turn this off once a schema is clean, and a newly invalidated object after a release becomes the alert it should be.",
+        "collect_only": true
+      },
+      "note": "INVALID stored code does not fail when it breaks, it fails when it is next called - ORA-04068 in the middle of a business transaction hours later. Grouped by owner and object type rather than one row per object: a failed release invalidates a whole schema at once, and 300 rows saying so is one finding, not 300."
+    },
+    {
+      "metric_id": 87,
+      "metric_code": "TOP_SEGMENT_SIZE",
+      "db_type": "oracle",
+      "category": "capacity",
+      "default_importance": 2,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 21600,
+        "timeout": 300
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "name": "oracle_all",
+          "file": "oracle/069_oracle_top_segments.sql"
+        }
+      ],
+      "max_rows": 500,
+      "note": "TABLESPACE_FREE_SPACE answers 'is there room left'; this answers 'what used the room', which had no metric on any Oracle release. Status is always OK - size is not a fault. The value is the trend across runs: a segment that doubles in a week is visible in the stored history, while no single reading of it would justify an alert. Every six hours because a dba_segments aggregate is not free on a large dictionary."
+    },
+    {
+      "metric_id": 88,
+      "metric_code": "SEGMENT_EXTENT_LIMIT",
+      "db_type": "oracle",
+      "category": "capacity",
+      "default_importance": 4,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 21600,
+        "timeout": 300
+      },
+      "collector_type": "sql",
+      "empty_result_is_ok": true,
+      "variants": [
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 8,
+          "name": "oracle_8i_legacy",
+          "file": "oracle/legacy_8i/108_oracle_segment_extent_limit.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 9,
+          "name": "oracle_lmt_not_applicable",
+          "supported": false,
+          "unsupported_reason": "Locally managed tablespaces, the default from 9i on, make the extent ceiling effectively unlimited; looking for it there would only produce noise."
+        }
+      ],
+      "max_rows": 500,
+      "note": "A dictionary-managed segment that reaches MAX_EXTENTS fails with ORA-01631 while the tablespace still shows gigabytes free - so TABLESPACE_FREE_SPACE reports healthy right up to the failed insert. 8i-only by design; see the unsupported reason on the 9i+ variant."
+    },
+    {
+      "metric_id": 90,
+      "metric_code": "INDEX_INVENTORY",
+      "db_type": "oracle",
+      "category": "maintenance",
+      "default_importance": 1,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": 1,
+        "to_hour": 6,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 72000,
+        "timeout": 300
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "name": "oracle_all",
+          "file": "oracle/071_oracle_index_inventory.sql"
+        }
+      ],
+      "max_rows": 1000,
+      "report_policy": {
+        "_note": "An inventory of several hundred rows per instance, all status OK - the same shape as MAINTENANCE_INDEX_USAGE, and kept out of the warning/critical reports for the same reason. It feeds the per-server index page.",
+        "collect_only": true
+      },
+      "note": "Deliberately not an Oracle variant of MAINTENANCE_INDEX_USAGE. Oracle records no per-index usage unless each index is put into ALTER INDEX ... MONITORING USAGE, which is a change to the database rather than to the monitor; filing Oracle rows under the usage metric would fill a page with zero-seek indexes that look unused and are not - the reading that gets an index dropped and a report query broken. These rows state what Oracle can say without being asked to start recording: what exists, its size, whether it is still usable, and how old its statistics are."
+    },
+    {
+      "metric_id": 89,
+      "metric_code": "ROLLBACK_SEGMENT_CONTENTION",
+      "db_type": "oracle",
+      "category": "performance",
+      "default_importance": 3,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 300,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 8,
+          "name": "oracle_8i_legacy",
+          "file": "oracle/legacy_8i/111_oracle_rollback_contention.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 9,
+          "name": "oracle_undo_not_applicable",
+          "supported": false,
+          "unsupported_reason": "Automatic undo management replaces manually sized rollback segments from 9i on, so header contention is not a question the DBA can act on there."
+        }
+      ],
+      "max_rows": 500,
+      "note": "Too few rollback segments for the transaction concurrency makes sessions queue on the segment headers: a general slowdown with no slow SQL to point at, which is the kind of incident that gets blamed on 'the database' for a week. The waits/gets ratio is the standard reading; shrinks and extends are in the message because a segment that repeatedly extends and shrinks back to OPTIMAL needs a bigger OPTIMAL, not more segments."
+    }
+  ]
+}

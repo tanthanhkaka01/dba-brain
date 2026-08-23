@@ -15,6 +15,20 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-23
+
+### Added
+
+- **`db-ops init` now writes the whole metric catalogue — 90 metrics, up from three.** The
+  collectors were always in the wheel (150 SQL queries, 29 shell and PowerShell scripts); nothing
+  named them, so an installed package carried every Oracle, MySQL, PostgreSQL, Docker and OS
+  collector on disk and could reach none of them. The full catalogue ships as package data and is
+  what a first run gets.
+- **The 14 OS metrics are reachable, and documented.** CPU, memory, disk, uptime, load, service
+  state, listening ports, time sync, top processes — none of which need a database credential or a
+  database at all. They need `cmd_access` on the target; `first_run.md` §2.8 has the SSH and WinRM
+  shapes, verified end to end from a bare `init` against a live host.
+
 ### Changed
 
 - **The container image runs as a normal user (uid 10001), not root.** A monitoring daemon needs no
@@ -24,6 +38,15 @@ do about it. Not the internal refactor that made it possible.
 - **The image installs the package instead of only copying it**, so `db-ops` is on the PATH and
   every command in the documentation works from any directory in the container. Previously they
   worked only from the directory the daemon starts in, which is not where a reader would be.
+
+### Fixed
+
+- **Two errors on the OS-metric path now name the setting and the fix.** SSH `auth_type` defaults
+  to `key`, so a `cmd_access` block with a password and no `auth_type` sent no credential at all
+  and failed with paramiko's `No authentication methods available` — which reads as a server
+  refusing you. It now says a credential was not sent, and which field to set. Likewise a target
+  missing `platform` failed with `Target platform is required for cmd metric` without saying that
+  the field goes on the instance rather than inside `cmd_access`.
 
 ## [0.2.1] - 2026-08-23
 

@@ -28,6 +28,7 @@ and nowhere else, so deleting the directory leaves nothing behind.
 
 ```bash
 pip install 'dbabrain[mssql]'      # or [postgres], [oracle], [mysql]
+                                   # add [ssh] or [winrm] for the OS metrics (2.8)
 mkdir my-estate && cd my-estate
 db-ops init
 ```
@@ -119,9 +120,9 @@ Four fields are easy to get wrong, and each fails in a way that does not name it
   fails *every* SQL Server target at once with `Cannot open database`.
 - **`env` changes severity.** A metric can be graded differently in `prod` and `lab`; a lab machine
   labelled `prod` pages somebody.
-- **`disabled_collector_types`** switches off whole families. `cmd` and `docker` need a shell on the
-  machine (`cmd_access`); leave them off until you have configured one, or every cycle records
-  failures for collectors you never intended to run.
+- **`disabled_collector_types`** switches off whole families. `cmd` and `docker` need a shell on
+  the machine (`cmd_access`, below); a target without one **skips** those metrics with a line
+  saying so, so leaving them enabled costs nothing but tells you nothing either.
 
 Then the credential, in `data/users.json` — a name and a reference, never a password:
 
@@ -153,6 +154,7 @@ encrypted store. Renaming either silently breaks the join.
 **Grant the login as little as possible.** [`security.md`](./security.md) has the measured
 least-privilege set per engine — two server permissions on SQL Server, `pg_monitor` on PostgreSQL,
 and the two that are not guessable on Oracle and MySQL.
+
 
 ### 2.3 Put the password in the store, not in a file
 
@@ -266,6 +268,96 @@ db-ops daemon --config config.json --delay-seconds 10
 Each of these fails silently if skipped: a target that cannot be resolved is reported as a target
 with no results, a secret that cannot be decrypted looks like an empty store, and a queue that
 delivered nothing looks the same as a quiet estate.
+
+That is one database, monitored and delivering. **2.8 adds the other kind of target** — the host
+itself, which needs no database credential at all.
+### 2.8 The OS metrics: monitoring a host with no database on it
+
+`db-ops init` writes the whole catalogue — 90 metrics, of which **14 read the operating system
+rather than a database**: CPU, memory, disk, uptime, load, service state, the top processes by
+memory. They are worth doing early for a reason that is easy to miss: **they need no database
+credential and no database at all.** A host you cannot log into yet still answers them, and "the
+disk is full" explains most of the database alarms you would otherwise go on to debug.
+
+They need two things. **The SSH or WinRM extra**, which is not installed by default:
+
+```bash
+pip install 'dbabrain[ssh]'        # or [winrm] for Windows targets
+```
+
+Without it every OS metric warns `paramiko is required for SSH`, naming this command.
+
+And **a way onto the machine**, which is a `cmd_access` block on the target:
+
+```json
+{
+  "server_id": "ACME-192-0-2-115-MSSQL-1433",
+  "platform": "linux",
+  "cmd_access": {
+    "enabled": true,
+    "method": "ssh",
+    "host": "192.0.2.115",
+    "port": 22,
+    "shell": "bash",
+    "credential_name": "acme_linux_ssh",
+    "auth_type": "password"
+  }
+}
+```
+
+**`platform` sits on the target, not inside `cmd_access`** — it is a fact about the machine, and
+it is what picks the Linux or Windows variant of each OS metric. Leave it out and every `cmd`
+metric fails with `Target platform is required`. An `os` field of `"Ubuntu 22.04"` or
+`"Windows Server 2022"` is enough on its own; `platform` is the explicit form.
+
+**`auth_type` is the field that catches people, and it defaults to `key`.** A block that names a
+`credential_name` holding a password but leaves `auth_type` out sends paramiko no credential at
+all, and the failure comes back as `No authentication methods available` — which sounds like the
+server refusing you and is really this file. Set it explicitly: `"password"` with a
+`credential_name`, or `"key"` with a `key_file` (a bare name resolves inside `data/ssh_keys/`).
+
+The credential itself goes in `data/users.json` under `remote_credentials`, **nested under the
+`server_id`** — not in a flat list:
+
+```json
+{
+  "remote_credentials": [
+    {
+      "server_id": "ACME-192-0-2-115-MSSQL-1433",
+      "credentials": [
+        {"credential_name": "acme_linux_ssh", "username": "dbaops",
+         "password_ref": "ACME_LINUX_SSH_PASSWORD"}
+      ]
+    }
+  ]
+}
+```
+
+`password_ref` names an entry in `secrets/secret_text.json` — and, exactly like a database
+password, **it is not read from there at run time**. Add it to that file and encrypt, or the
+collection warns `Password ref not found in environment or the secret store`:
+
+```bash
+db-ops encrypt-secret --key-base64 <your passphrase, base64>
+```
+
+Then collect, and check that the OS rows arrived:
+
+```bash
+db-ops metrics collect
+db-ops metrics summary-latest
+```
+
+**Windows targets take the same shape** with `"method": "winrm"`, `"platform": "windows"` and
+`"shell": "powershell"`; the catalogue carries a PowerShell variant of every OS metric and picks
+it from `platform`, so nothing else changes.
+
+If a target has no `cmd_access`, nothing breaks — collection skips those metrics and says why:
+
+```
+METRIC_SKIP target=... metric=OS_CPU_USAGE reason=unsupported: no cmd_access is configured
+on this target (an OS metric needs a way onto the host)
+```
 
 ---
 

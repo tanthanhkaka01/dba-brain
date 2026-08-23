@@ -83,7 +83,7 @@ to install an ODBC driver and an Oracle client to start.
 
 ```bash
 python -m venv .venv
-.venv/bin/pip install 'db_ops[postgres]'        # Windows: .venv\Scripts\pip
+.venv/bin/pip install 'dbabrain[postgres]'      # Windows: .venv\Scripts\pip
 ```
 
 | Extra | For |

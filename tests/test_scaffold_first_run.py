@@ -98,9 +98,26 @@ def test_the_starter_catalogue_names_queries_that_exist(root: Path) -> None:
 
     assert catalogue["metrics"], "a first run with no metrics collects nothing"
     for metric in catalogue["metrics"]:
-        for variant in metric["variants"]:
-            assert (metrics_root / variant["file"]).exists(), (
-                f"{metric['metric_code']} names {variant['file']}, which the package does not ship"
+        # A metric names its collector either per variant (a different query per engine or
+        # platform) or once at the top (the docker metrics, where one script serves every
+        # target). Both are valid, and a variant without `file` inherits the metric's.
+        for variant in metric.get("variants", []):
+            # Three valid shapes, and only the first has a file to check. A variant may name its
+            # own collector (a different query per engine or platform); it may inherit the
+            # metric's single `file` (the docker metrics, one script for every target); or it may
+            # be `supported: false`, which is a deliberate record that this engine *cannot* answer
+            # this metric, carrying the reason instead of a query. Treating the third as missing
+            # would make the catalogue's own documentation look like a packaging bug.
+            if variant.get("supported") is False:
+                assert variant.get("unsupported_reason"), (
+                    f"{metric['metric_code']}/{variant.get('name')} is marked unsupported without "
+                    f"saying why, which leaves a reader nowhere to go"
+                )
+                continue
+            named = variant.get("file") or metric.get("file")
+            assert named, f"{metric['metric_code']} names no collector at all"
+            assert (metrics_root / named).exists(), (
+                f"{metric['metric_code']} names {named}, which the package does not ship"
             )
 
 

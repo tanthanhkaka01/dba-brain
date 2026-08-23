@@ -24,6 +24,7 @@ Import the driver lazily, per engine: a node that only monitors SQL Server must 
 """
 
 from __future__ import annotations
+from db_ops.lib.packaging import install_hint
 from db_ops.lib.sql_text import DEFAULT_CONNECT_TIMEOUT_SECONDS  # noqa: F401 - one definition
 
 from typing import Any
@@ -195,7 +196,7 @@ def _connect_postgresql(*, host, port, database, username, password, connect_tim
     except ImportError as exc:  # pragma: no cover - driver install is environmental.
         raise DbConnectError(
             "pg8000 is required to reach PostgreSQL. Install it with: "
-            "pip install 'db_ops[postgres]'"
+            + install_hint("postgres")
         ) from exc
 
     conn = pg8000_dbapi.connect(
@@ -231,7 +232,7 @@ def _connect_mysql(*, host, port, database, username, password, connect_timeout,
         except ImportError as exc:
             raise DbConnectError(
                 "pymysql (or mysql-connector-python) is required to reach MySQL. "
-                "Install it with: pip install 'db_ops[mysql]'"
+                "Install it with: " + install_hint("mysql")
             ) from exc
         return mysql.connector.connect(
             host=host, port=port, user=username, password=password,
@@ -260,7 +261,7 @@ def _init_oracle_thick_client() -> None:
     except ImportError as exc:  # pragma: no cover - driver install is environmental.
         raise DbConnectError(
             "oracledb is required for oracle_client_mode='thick'. Install it with: "
-            "pip install 'db_ops[oracle]'"
+            + install_hint("oracle")
         ) from exc
     init = getattr(oracledb, "init_oracle_client", None)
     if init is None:  # pragma: no cover - cx_Oracle is thick by construction.
@@ -285,7 +286,7 @@ def _connect_oracle(*, host, port, database, username, password, service_name,
         except ImportError as exc:
             raise DbConnectError(
                 "oracledb (or cx_Oracle) is required to reach Oracle. Install it with: "
-                "pip install 'db_ops[oracle]'"
+                + install_hint("oracle")
             ) from exc
 
     # Oracle connects to a service, not a database name; callers that only have `database`

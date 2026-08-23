@@ -1381,7 +1381,15 @@ def _resolve_metric_file_path(metric: MetricDefinition, target: MetricTarget) ->
     profile = _target_profile(target)
     if metric.collector_type == "cmd":
         if not profile.platform:
-            raise RuntimeError(f"Target platform is required for cmd metric: {target.target_id}")
+            # Names the field and where it goes: this fires on a target that has `cmd_access`
+            # configured and working, so the reader's attention is on that block — and `platform`
+            # is not in it. It belongs on the target itself, because it describes the machine
+            # rather than the way in.
+            raise RuntimeError(
+                f"Target platform is required for cmd metric: {target.target_id}. "
+                f"Set \"platform\": \"linux\" or \"windows\" on the db instance (not inside "
+                f"cmd_access), or an \"os\" field it can be inferred from."
+            )
         if profile.platform not in SUPPORTED_CMD_PLATFORMS:
             raise RuntimeError(f"Unsupported target platform for cmd metric: {profile.platform}")
         variants = candidate_variants(metric.variants, profile, match_platform=True)
