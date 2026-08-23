@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -39,8 +39,18 @@ from db_ops.db.run_requests import (
 )
 from db_ops.jobs import daemon
 
-#: An app command that is emphatically *not* due: it repeats daily and only between 03:00 and
-#: 04:00. Anything that starts it in a test can only have come from the request queue.
+#: An hour range that is closed *now*, wherever and whenever this runs.
+#:
+#: The window used to be a literal 03:00-04:00, which made "not due" a claim about the clock on the
+#: machine running the suite. It held on a developer's laptop in UTC+7 and was false on a CI runner
+#: in UTC for one hour a day — and on 2026-08-23 a push landed at 03:26 UTC and two tests failed
+#: for a reason that had nothing to do with the change in them. A fixture that says "emphatically
+#: not due" has to be true at 3am.
+_CLOSED_FROM_HOUR = (datetime.now().hour + 6) % 24
+_CLOSED_TO_HOUR = (datetime.now().hour + 7) % 24
+
+#: An app command that is emphatically *not* due: it repeats daily, and only inside a window that
+#: is shut right now. Anything that starts it in a test can only have come from the request queue.
 NOT_DUE_COMMAND = {
     "app_command_id": "APP-TEST",
     "app_code": "APP-TEST",
@@ -53,7 +63,7 @@ NOT_DUE_COMMAND = {
     "log_scope": "app",
     "app_ord": 1,
     "time_window": {"repeat_interval": 86400, "retry_interval": 60, "timeout": 60,
-                    "from_hour": 3, "to_hour": 4},
+                    "from_hour": _CLOSED_FROM_HOUR, "to_hour": _CLOSED_TO_HOUR},
 }
 
 
