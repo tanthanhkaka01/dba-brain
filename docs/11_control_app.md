@@ -768,7 +768,7 @@ Two rules that command must keep:
   **not** currently tight, which was measured rather than assumed. That is a
   separate problem, and widening them further is not the fix.)
 - **Never `containers/`.** The lab DB containers bind-mount their data out of there and it belongs
-  to the database users inside them (postgres is uid 999). See the scar in `copy_bundle`.
+  to the database users inside them (postgres is uid 999). See the note in `copy_bundle`.
 
 Two backstops behind it: `config_admin._atomic_write` preserves the original mode and owner so the
 drift does not start, and a file that exists but cannot be read **aborts** the deploy

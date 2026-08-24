@@ -115,14 +115,14 @@ SQLSERVER_INSTANCE_USAGE = (
     "equivalent: their physical backups carry this state already.\n"
     "\n"
     "  export : read the instance, write server/*.sql + manifest.json. Read-only.\n"
-    '  {"target": "ACME-192-0-2-115", "output_dir": "runtime/instance_bundles/70-115"}\n'
+    '  {"target": "ACME-192-0-2-115", "output_dir": "runtime/instance_bundles/2-115"}\n'
     "\n"
     "  replay : apply a bundle to a target, in dependency order, with version/edition gates.\n"
-    '  {"target": "NEW-HOST", "bundle_dir": "runtime/instance_bundles/70-115",\n'
+    '  {"target": "NEW-HOST", "bundle_dir": "runtime/instance_bundles/2-115",\n'
     '   "phase": "pre-database", "dry_run": true}\n'
     "\n"
     "  verify : compare a target against a bundle; the headline number is orphaned users.\n"
-    '  {"target": "NEW-HOST", "bundle_dir": "runtime/instance_bundles/70-115"}\n'
+    '  {"target": "NEW-HOST", "bundle_dir": "runtime/instance_bundles/2-115"}\n'
     "\n"
     "Fields:\n"
     "  target       (required) server_id, ip, or '<db_type> <ip> [port]'\n"

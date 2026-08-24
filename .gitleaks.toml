@@ -67,7 +67,7 @@ id = "generic-api-key"
 
   Why this matters beyond the noise: **the CI job scans incrementally**, only the commits in a
   push range, so it never sees these and reports green. A whole-tree scan is the stronger check and
-  the one `docs/release_process.md` prescribes locally — it is only usable if its findings are all
+  the one the maintainers' release gate prescribes locally — it is only usable if its findings are all
   real, so these are resolved rather than tolerated.
   """
   regexes = [

@@ -1997,16 +1997,16 @@ diffed, reviewed, and applied to a **newer** build, which is the actual requirem
 ```bash
 # Read the instance, write server/*.sql + manifest.json. Read-only.
 python -m db_ops.common.cli sqlserver-export-instance \
-  '{"target": "ACME-192-0-2-115", "output_dir": "runtime/instance_bundles/70-115"}'
+  '{"target": "ACME-192-0-2-115", "output_dir": "runtime/instance_bundles/2-115"}'
 
 # Apply a bundle to a target, in dependency order, with version/edition gates.
 python -m db_ops.common.cli sqlserver-replay-instance \
-  '{"target": "NEW-HOST", "bundle_dir": "runtime/instance_bundles/70-115",
+  '{"target": "NEW-HOST", "bundle_dir": "runtime/instance_bundles/2-115",
     "phase": "pre-database", "dry_run": true}'
 
 # Compare a target against a bundle. Read-only.
 python -m db_ops.common.cli sqlserver-verify-instance \
-  '{"target": "NEW-HOST", "bundle_dir": "runtime/instance_bundles/70-115"}'
+  '{"target": "NEW-HOST", "bundle_dir": "runtime/instance_bundles/2-115"}'
 ```
 
 They share `_gate_command` with the `host-*` and `sqlserver-*` patch commands, so the contract is

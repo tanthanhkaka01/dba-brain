@@ -45,7 +45,7 @@ WHERE destination IS NOT NULL
 UNION ALL
 -- The backlog is only a signal in ARCHIVELOG mode. In NOARCHIVELOG every non-current group reads
 -- archived='NO' by definition - nothing is ever archived - so evaluating the count there reported
--- a permanent WARNING about a backlog that does not exist (measured on 1.236, run 28781). The
+-- a permanent WARNING about a backlog that does not exist (measured on 2.236, run 28781). The
 -- mode is joined in rather than assumed, and the row still reports the count so the reading is
 -- visible either way.
 SELECT

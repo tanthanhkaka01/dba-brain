@@ -492,8 +492,8 @@ function queryStoreBlock(q){
   const rows = q.databases.map(r=>{
     /* "off" on its own cannot be acted on. Somebody switching Query Store off is a decision;
        Query Store switching itself off after an error is a fault, usually with captured data
-       still sitting in the database — AXDB on 192.168.70.115 reads desired OFF / actual ERROR
-       with 2128 MB still there, and both cases used to render as the same flat "off". */
+       still sitting in the database — one instance here reads desired OFF / actual ERROR with
+       2128 MB still there, and both cases used to render as the same flat "off". */
     const why = [r.offReasonDesc, r.readonlyReasonDesc,
                  (r.desiredState && r.actualState && r.desiredState !== r.actualState)
                    ? `configured ${r.desiredState}, actually ${r.actualState}` : ""]
@@ -545,8 +545,8 @@ function queryStoreBlock(q){
    tablespace they extend.
 
    The headline is EFFECTIVE free, not free-right-now: free space plus autoextend headroom is what
-   the tablespace can still absorb before ORA-01653. RBS on 192.168.1.236 holds 2.3 GB free inside
-   65 GB of headroom — read as "free now" it is nearly full, and the datafile somebody adds on that
+   the tablespace can still absorb before ORA-01653. One RBS tablespace here holds 2.3 GB free
+   inside 65 GB of headroom — read as "free now" it is nearly full, and the datafile added on that
    reading was never needed. The largest free extent is carried beside it because an allocation has
    to fit in one piece: 4 GB of free space in small fragments still raises ORA-01653. */
 function tablespaceBlock(t){
@@ -647,7 +647,7 @@ const oraCount = v => {
 };
 
 /* Oracle instance health: the SGA pools, the caches, and how close the instance is to its
-   process/session ceilings. SHARED_POOL_FREE on 192.168.1.236 has been CRITICAL at 9 MB free —
+   process/session ceilings. SHARED_POOL_FREE on one instance has been CRITICAL at 9 MB free —
    the instance's only critical finding — while rendering as one nameless sparkline among thirty. */
 function oracleInstanceBlock(o){
   if (!o || (!o.pools.length && !o.limits.length && !o.bufferCache)) return "";
@@ -840,7 +840,7 @@ function oracleObjectsBlock(o){
 }
 
 /* Redo and archiving — whether this instance can be recovered to a point in time at all.
-   NOARCHIVELOG is the single most consequential fact about 192.168.1.236 and no page stated it:
+   NOARCHIVELOG was the single most consequential fact about one instance and no page stated it:
    the value sat inside a card titled "Log file space", a name that on every other server means
    per-database log usage. */
 function oracleRedoBlock(o){
@@ -901,7 +901,7 @@ function oracleRedoBlock(o){
 }
 
 /* The heaviest statements, by disk reads and by buffer gets. Two lists because a statement can
-   top one and be absent from the other: on 192.168.1.236 the worst buffer-gets statement runs
+   top one and be absent from the other: on one instance here the worst buffer-gets statement runs
    91 million times at 3 gets each and does no disk I/O at all.
 
    Uncapped, from the raw rows: the chart pipeline's MAX_ITEMS_PER_METRIC dropped 18 of the 28
@@ -1138,7 +1138,7 @@ function jobsBlock(j){
 
 /* Who can reach this instance, and what they hold once inside. Two tables rather than one:
    a login is server-scope, a user is database-scope, and the mapping between them is the thing
-   that breaks. After the 2026-08-10 migration onto 172.17.100.115 all 55 database users pointed
+   that breaks. After one instance migration all 55 database users pointed
    at logins that did not exist on the target, and no view on this page could say so. */
 function accessBlock(a){
   if (!a || (!a.logins.length && !a.databaseUsers.length)) return "";
