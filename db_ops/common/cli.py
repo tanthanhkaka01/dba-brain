@@ -8,6 +8,9 @@ thin facade — all logic stays in the common modules it fronts:
                                       the Telegram ``/spbot_list_server_id`` command replies with)
 * ``run-sql``                      -> :mod:`db_ops.common.sql_run` (run SQL on one database
                                       target from a JSON request object)
+* ``copy-schema``                  -> :mod:`db_ops.common.schema_copy` (reproduce one SQL
+                                      Server schema from instance A on instance B,
+                                      planning before it writes)
 * ``rotate-password``              -> :mod:`db_ops.common.password_rotation` (change a login's
                                       password on the server and in the secret store together)
 * ``check-secret``                 -> :mod:`db_ops.common.secret_check` (prove each secret still
@@ -56,6 +59,7 @@ USAGE = (
     "  list-schemas    What schemas one database has (see --help)\n"
     "  list-jobs       What scheduled jobs a target has, and which are enabled (see --help)\n"
     "  create-table-from-xlsx  Build a table from a spreadsheet and load it (see --help)\n"
+    "  copy-schema     Reproduce one SQL Server schema on another instance; plans first (see --help)\n"
     "  run-sql         Run SQL on one database target from a JSON request object (see --help)\n"
     "  run-cmd         Run one shell command on a configured host (see --help)\n"
     "  shrink-log      EMERGENCY: shrink one database's log file to N MB (see --help)\n"
@@ -1699,6 +1703,10 @@ def main(argv: list[str] | None = None) -> int:
         from db_ops.common import cli_catalog
 
         return cli_catalog.run(argv[0], argv[1:], read_request=_read_json_request)
+    if argv[0] == "copy-schema":
+        from db_ops.common import cli_schema
+
+        return cli_schema.run(argv[0], argv[1:], read_request=_read_json_request)
     if argv[0] in {"delete-file", "delete-files"}:
         from db_ops.common import cli_delete_files
 

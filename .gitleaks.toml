@@ -27,3 +27,24 @@ id = "generic-api-key"
   Scoped to the constant's own name, so a real secret anywhere in the same file is still found.
   """
   regexes = ['''PBKDF2_ITERATIONS''']
+
+  [[rules.allowlists]]
+  description = """
+  The quickstart's passphrase, which is the word `quickstart` base64-encoded. It is printed in
+  `examples/*/README.md` on purpose — a reader has to type it to follow the walkthrough — and it
+  unlocks a throwaway container that the same page tells them to delete at the end.
+
+  The scan reads it as a `generic-api-key` because it is a base64 blob next to `--key-base64`,
+  which is the rule doing its job on a string that only looks like a credential.
+
+  It went red on 2026-08-24 after the repository's history was rewritten (to strip a commit
+  trailer). That reset the action's incremental baseline, so gitleaks re-scanned commits it had
+  already passed and found the literal in an *older* version of
+  `tests/test_first_run_reports_what_it_did.py`. The current file does not contain it — the test
+  was changed to `not-a-key` when this first came up, because a value that only looks realistic
+  costs something and buys nothing. History keeps the old commits, and rewriting history again to
+  launder a placeholder would be a far worse trade than one allowlist entry.
+
+  Scoped to this exact string, so any other key-shaped value in the same files is still reported.
+  """
+  regexes = ['''cXVpY2tzdGFydA==''']
