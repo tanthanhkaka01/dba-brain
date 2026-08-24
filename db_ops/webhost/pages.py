@@ -394,8 +394,29 @@ def overview_page(*, prefix: str, session: dict[str, Any], blocks: list[dict[str
         needs = ('<h3 class="block">Needs attention</h3>'
                  '<div class="none">Nothing is failing, overdue or queued.</div>')
 
+    # An empty dashboard is not the same as a healthy one, and it used to render identically:
+    # five zeroed tiles and "nothing is failing". The console draws *blocks*, which come from
+    # `webhost_config.json` **through the store**, so a tool root whose config has never been
+    # synced shows nothing however many app commands are configured and active. That is what a
+    # fresh install looked like until 2026-08-24 — and it looks like a working console with no
+    # work in it, which is the worst thing it could look like.
+    if not blocks:
+        empty = (
+            '<div class="alert warn" style="margin-bottom:16px">'
+            '<b>No apps to show yet.</b> The console reads its layout and schedules from the '
+            'config store, not from <code>data/*.json</code> directly, and nothing has been '
+            'loaded into it. Run:'
+            '<pre style="margin:8px 0 0">db-ops db sync-config &#39;{&quot;actor&quot;:&quot;you&quot;}&#39;</pre>'
+            'then reload. If that reports a missing <code>data/config_catalog.json</code>, this '
+            'tool root predates <code>db-ops init</code> writing one; copy '
+            '<code>data/config_catalog.example.json</code> over it.'
+            '</div>')
+    else:
+        empty = ""
+
     detail = f"""
 {banner}
+{empty}
 <h2>Overview</h2>
 <p class="lede">Every db_ops app on this node. Pick one on the left for its schedule, its run
    history and the config it owns.</p>
