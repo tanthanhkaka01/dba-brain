@@ -1,0 +1,308 @@
+{
+  "schema_version": 1,
+  "notes": [
+    "Sample config_catalog.json - which data/*.json files are mirrored into the runtime store, which component owns each, and how one record inside a file is identified. Copy to config_catalog.json and edit.",
+    "A file listed here becomes rows the web console can read and edit; a file NOT listed here is never mirrored, so this is also the allow-list. Adding a configuration file without adding it here means the console cannot see it.",
+    "'collections' names the arrays inside the file that hold one record each, together with the field(s) that identify a record. Everything else in the file - scalars, notes, nested policy objects - is stored as a single document item, so the file can be rebuilt from the store without losing a key.",
+    "'key_fields' must identify a record uniquely within its collection. The sync refuses a file whose keys collide rather than silently letting one record overwrite another.",
+    "'label_field' is display only: it gives the console a human name for a row whose key is a number.",
+    "'app_code' is the package name under db_ops/, so the console can group configuration by the component that reads it.",
+    "Deliberately absent: the encrypted secret store (it never leaves the data folder), every *.example.json, and generated output. Every file listed here must be read by some code - configuration the console can edit and nothing acts on is worse than configuration it cannot edit."
+  ],
+  "config_sources": [
+    {
+      "file": "app_commands.json",
+      "app_code": "jobs",
+      "display_name": "Scheduled app commands",
+      "description": "What the daemon runs, how often, and in which node role.",
+      "collections": [
+        {
+          "collection": "app_commands",
+          "key_fields": [
+            "app_command_id"
+          ],
+          "label_field": "display_name"
+        }
+      ]
+    },
+    {
+      "file": "db_instances.json",
+      "app_code": "metrics",
+      "display_name": "Database instances",
+      "description": "The monitored estate: one record per server_id, with metric toggles and command access.",
+      "collections": [
+        {
+          "collection": "db_instances",
+          "key_fields": [
+            "server_id"
+          ],
+          "label_field": "db_instance_name"
+        }
+      ]
+    },
+    {
+      "file": "metric_definitions.json",
+      "app_code": "metrics",
+      "display_name": "Metric definitions",
+      "description": "Every metric the collector can run, per db_type, with its schedule and severity defaults.",
+      "collections": [
+        {
+          "collection": "metrics",
+          "key_fields": [
+            "metric_code"
+          ],
+          "label_field": "metric_code"
+        }
+      ]
+    },
+    {
+      "file": "metric_importance_overrides.json",
+      "app_code": "metrics",
+      "display_name": "Metric importance overrides",
+      "description": "The importance scale and the per-instance overrides applied on top of it.",
+      "collections": []
+    },
+    {
+      "file": "capacity_policy.json",
+      "app_code": "metrics",
+      "display_name": "Capacity policy",
+      "description": "Growth and forecast thresholds used by the capacity metrics.",
+      "collections": []
+    },
+    {
+      "file": "reports_config.json",
+      "app_code": "reports",
+      "display_name": "Report schedule",
+      "description": "Which reports are built, how often, and how stale a metric may be before it is not reported.",
+      "collections": [
+        {
+          "collection": "reports",
+          "key_fields": [
+            "report_code"
+          ],
+          "label_field": "display_name"
+        }
+      ]
+    },
+    {
+      "file": "sla_policies.json",
+      "app_code": "sla",
+      "display_name": "SLA/SLO policies",
+      "description": "The objectives validated against collected metrics.",
+      "collections": [
+        {
+          "collection": "sla_policies",
+          "key_fields": [
+            "policy_id"
+          ],
+          "label_field": "name"
+        }
+      ]
+    },
+    {
+      "file": "sql_commands.json",
+      "app_code": "sql_tasks",
+      "display_name": "SQL tasks",
+      "description": "The scripts the SQL task runner can execute.",
+      "collections": [
+        {
+          "collection": "sql_commands",
+          "key_fields": [
+            "sql_id"
+          ],
+          "label_field": "sql_name"
+        }
+      ]
+    },
+    {
+      "file": "sql_targets.json",
+      "app_code": "sql_tasks",
+      "display_name": "SQL task targets",
+      "description": "Where each SQL task runs, on what schedule, and who is notified.",
+      "collections": [
+        {
+          "collection": "sql_targets",
+          "key_fields": [
+            "sql_id",
+            "target_no"
+          ],
+          "label_field": "server_id"
+        }
+      ]
+    },
+    {
+      "file": "telegram_config.json",
+      "app_code": "telegram",
+      "display_name": "Telegram transport",
+      "description": "Bot endpoint, timeouts, and the level to chat map.",
+      "collections": []
+    },
+    {
+      "file": "bot_telegram.json",
+      "app_code": "telegram",
+      "display_name": "Telegram bot identity",
+      "description": "Which bot db_ops speaks as (token by ref, never in clear).",
+      "collections": []
+    },
+    {
+      "file": "telegram_groups.json",
+      "app_code": "telegram",
+      "display_name": "Telegram groups",
+      "description": "Chats the bot knows, their notify level, and whether they may issue commands.",
+      "collections": [
+        {
+          "collection": "telegram_groups",
+          "key_fields": [
+            "group_id"
+          ],
+          "label_field": "title"
+        }
+      ]
+    },
+    {
+      "file": "telegram_users.json",
+      "app_code": "telegram",
+      "display_name": "Telegram users",
+      "description": "People the bot has seen, and the permission level each holds.",
+      "collections": [
+        {
+          "collection": "telegram_users",
+          "key_fields": [
+            "user_id"
+          ],
+          "label_field": "username"
+        }
+      ]
+    },
+    {
+      "file": "telegram_support_commands.json",
+      "app_code": "telegram",
+      "display_name": "Telegram commands",
+      "description": "Every bot command, its action and its reply template.",
+      "collections": [
+        {
+          "collection": "telegram_support_commands",
+          "key_fields": [
+            "command_id"
+          ],
+          "label_field": "command_text"
+        }
+      ]
+    },
+    {
+      "file": "backup_policy.json",
+      "app_code": "backup_restore",
+      "display_name": "Backup policy",
+      "description": "Retention, schedules and evidence rules for backups.",
+      "collections": []
+    },
+    {
+      "file": "restore_config.json",
+      "app_code": "backup_restore",
+      "display_name": "Restore configuration",
+      "description": "The restore targets and the steps each one runs.",
+      "collections": []
+    },
+    {
+      "file": "restore_drill_policy.json",
+      "app_code": "backup_restore",
+      "display_name": "Restore drill policy",
+      "description": "How often a restore must be proven, and what counts as proof.",
+      "collections": []
+    },
+    {
+      "file": "maintenance_policy.json",
+      "app_code": "backup_restore",
+      "display_name": "Maintenance policy",
+      "description": "Index and statistics maintenance windows and thresholds.",
+      "collections": []
+    },
+    {
+      "file": "docker_db_connections.json",
+      "app_code": "sre",
+      "display_name": "Lab databases",
+      "description": "Containers the SRE provisioner created, and how to reach them.",
+      "collections": [
+        {
+          "collection": "docker_db_connections",
+          "key_fields": [
+            "id"
+          ],
+          "label_field": "engine"
+        }
+      ]
+    },
+    {
+      "file": "sre_config.json",
+      "app_code": "sre",
+      "display_name": "SRE app configuration",
+      "description": "Docker host, image and network defaults for the lab provisioner.",
+      "collections": []
+    },
+    {
+      "file": "users.json",
+      "app_code": "common",
+      "display_name": "Credentials registry",
+      "description": "Database, remote OS and monitor logins - names and secret refs only, never passwords.",
+      "collections": [
+        {
+          "collection": "database_credentials",
+          "key_fields": [
+            "server_id"
+          ],
+          "label_field": "service_name"
+        },
+        {
+          "collection": "remote_credentials",
+          "key_fields": [
+            "server_id"
+          ],
+          "label_field": "host"
+        },
+        {
+          "collection": "monitor_users",
+          "key_fields": [
+            "name"
+          ],
+          "label_field": "name"
+        }
+      ]
+    },
+    {
+      "file": "emergency_operations.json",
+      "app_code": "common",
+      "display_name": "Emergency operations",
+      "description": "The break-glass actions, their levels and their guards.",
+      "collections": []
+    },
+    {
+      "file": "sqlserver_instance_policy.json",
+      "app_code": "common",
+      "display_name": "SQL Server instance policy",
+      "description": "What an instance-metadata export or replay covers, and how it is gated.",
+      "collections": []
+    },
+    {
+      "file": "webhost_config.json",
+      "app_code": "webhost",
+      "display_name": "Web console",
+      "description": "Login/session rules and the app blocks the dashboard draws.",
+      "collections": [
+        {
+          "collection": "apps",
+          "key_fields": [
+            "app_code"
+          ],
+          "label_field": "display_name"
+        }
+      ]
+    },
+    {
+      "file": "store_config.json",
+      "app_code": "db",
+      "display_name": "Runtime store declaration",
+      "description": "Which database db_ops itself stores its runtime data in.",
+      "collections": []
+    }
+  ]
+}

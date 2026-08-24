@@ -15,6 +15,23 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-08-24
+
+### Fixed
+
+- **The web console showed no apps at all on a fresh install.** Five zeroed tiles and "nothing is
+  failing" — which is what a healthy console with nothing wrong looks like, so it did not read as a
+  fault. Nothing was wrong with the data: `db-ops init` wrote nine app commands, all active.
+
+  The console reads its layout from `webhost_config.json` **through the config store**, not from
+  `data/` directly, and `init` did not write that file — so there were no blocks to hang the
+  commands off, and the dashboard came out empty. The repair, `db-ops db sync-config`, then refused
+  outright because `data/config_catalog.json` was missing too. The console could neither be
+  populated nor say why.
+
+  `init` writes both now (14 files, up from 12), and an empty dashboard says which command fills it
+  instead of rendering zeros — for the tool roots created before this release, which stay empty.
+
 ## [0.3.3] - 2026-08-23
 
 Three defects that only appeared when the **scheduler** ran the commands. Every one of them worked

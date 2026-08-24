@@ -412,6 +412,14 @@ PACKAGED_DEFAULTS: dict[str, str] = {
     "data/reports_config.json": "reports/catalogue/reports_config.json",
     "data/telegram_support_commands.json": "telegram/catalogue/telegram_support_commands.json",
     "data/app_commands.json": "jobs/catalogue/app_commands.json",
+    # The two the **web console** needs, and the reason it showed "0 apps" on a fresh install
+    # until 2026-08-24. `config_catalog.json` says which files the store may hold and under which
+    # app - without it `db sync-config` refuses outright, so nothing reaches the store at all.
+    # `webhost_config.json` is the console's own layout: the blocks it draws and which app command
+    # each one owns. The console iterates *blocks*, so with that file absent it rendered an empty
+    # dashboard however many commands were configured and active.
+    "data/config_catalog.json": "db/catalogue/config_catalog.json",
+    "data/webhost_config.json": "webhost/catalogue/webhost_config.json",
 }
 
 PACKAGED_CATALOGUE = Path(__file__).parent / "metrics" / "catalogue" / "metric_definitions.json"
@@ -462,7 +470,8 @@ def _files(app_name: str) -> list[tuple[str, dict]]:
         *(
             (name, content)
             for name in ("data/reports_config.json", "data/telegram_support_commands.json",
-                         "data/app_commands.json")
+                         "data/app_commands.json", "data/config_catalog.json",
+                         "data/webhost_config.json")
             if (content := packaged_default(name)) is not None
         ),
         ("data/users.json", EMPTY_USERS),
