@@ -181,6 +181,26 @@ def main(argv: list[str]) -> int:
         if args.command in ("save-updates", "run-workflow") and args.offset is None:
             args.offset = config.telegram.update_offset
         log_function_call(logger, function_name=f"telegram.{args.command}", text=getattr(args, "text", ""))
+
+        # No token is a *state*, not a fault. A fresh tool root has none until somebody creates a
+        # bot, and `db-ops init` schedules this workflow every second — so treating "nothing to
+        # deliver with" as an error wrote one to the log per second, on an install where nothing
+        # was wrong. It also took `APP-CONTROL` down with it, which reports through the same chat.
+        #
+        # A token that is *named and missing* still raises: that is a real misconfiguration, and
+        # `config.resolve_bot_token` is where it belongs.
+        missing = _missing_bot_token(config)
+        if missing:
+            skipped = {
+                "skipped": True,
+                "reason": missing,
+                "fix": ("create a bot with @BotFather, put the token in secrets/secret_text.json "
+                        "under the ref named by telegram_bot_token_ref, then run "
+                        "db-ops encrypt-secret"),
+            }
+            print(json.dumps(skipped, ensure_ascii=False, indent=2))
+            return 0
+
         result = call_telegram_function(telegram_function=args.telegram_function, args=args, config=config, config_path=config_path)
         if args.command in ("save-updates", "run-workflow"):
             save_next_update_offset(config_path, result.get("next_update_offset"))
@@ -192,6 +212,31 @@ def main(argv: list[str]) -> int:
 
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
+
+
+def _missing_bot_token(config: Any) -> str:
+    """Why there is no usable bot token, or "" when there is one.
+
+    Deliberately *not* the `enabled` flag: `enabled` decides routing, this decides whether the
+    toolkit holds the one thing without which no Telegram command can do anything. It answers by
+    resolving the token exactly as the sender would.
+
+    **A named-but-absent ref counts as "not configured", not as a fault**, and that is the whole
+    point. `db-ops init` writes `telegram_bot_token_ref` as a template — deliberately, because an
+    earlier scaffold left it out and a real send failed with "bot token is empty", naming the
+    symptom and not the missing field. So the shipped, correct, nothing-is-wrong state of a fresh
+    tool root *is* a ref pointing at a secret nobody has added yet. Treating that as an error made
+    a new install log one per second, and took `APP-CONTROL` down with it.
+
+    The reason is returned rather than swallowed, so the caller can print what is missing. A
+    mistyped ref is therefore still reported by name — it is just reported as "this is not set up"
+    rather than as a crash, which is what it looks like from the outside either way.
+    """
+    try:
+        token = str(config.telegram.resolved_bot_token or "").strip()
+    except Exception as exc:  # noqa: BLE001 - a missing ref is a state; report it, do not raise.
+        return str(exc)
+    return "" if token else "no bot token is configured"
 
 
 def save_next_update_offset(config_path: str, next_update_offset: Any) -> None:

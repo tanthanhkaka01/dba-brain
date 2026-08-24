@@ -685,10 +685,26 @@ def _ops_status_command(argv: list[str]) -> int:
         chat_id = str(request.get("chat_id") or "").strip()
         if not chat_id:
             level = str(request.get("telegram_chat") or "control").strip().lower()
-            chat_id = chat_id_for_level(_active_group_levels(data_dir), level)
+            active_levels = _active_group_levels(data_dir)
+            chat_id = chat_id_for_level(active_levels, level)
             if not chat_id:
-                # Not an exception: an unmapped level is a config fact the operator can fix, and
-                # saying which level was not mapped is the whole content of the answer.
+                # Two different situations, and only one of them is anybody's mistake.
+                #
+                # **No groups at all** is a fresh tool root: nobody has set Telegram up yet. This
+                # command is scheduled by default, so reporting that as a failure meant a new
+                # install logged an error every minute with nothing wrong. It is a skip.
+                #
+                # **Groups exist but none carries this level** is a real misconfiguration — the
+                # operator meant to route this somewhere and the routing does not reach. Saying
+                # which level was not mapped is the whole content of that answer, so it stays a
+                # failure.
+                if not active_levels:
+                    return response.emit(response.ok(
+                        "ops-status",
+                        message=("No Telegram groups are configured, so there is nowhere to "
+                                 "report to. Add one to data/telegram_groups.json with a "
+                                 "notify_level."),
+                        data={"skipped": True, "reason": "telegram_not_configured"}))
                 return response.emit(response.fail(
                     "ops-status",
                     f"No active Telegram group carries notify_level '{level}'."))

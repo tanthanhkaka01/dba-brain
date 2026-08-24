@@ -128,6 +128,18 @@ talking; the file on disk is English, so that it can be searched and read by eve
 - [ ] No real host, account, or credential anywhere in the diff.
 - [ ] Nothing production-facing changed without saying so explicitly in the PR description.
 
+## Committing and releasing
+
+Maintainers: the gate a change has to pass before it can be committed, and the separate gate a
+version has to pass before it can be released, are in
+**[`docs/release_process.md`](./docs/release_process.md)**. It is not advisory — every rule in it
+is there because skipping it broke something, and each one names what and when.
+
+The short form: the **full** suite, lint, the export gate and the secret scan all pass locally
+before a commit; and a release additionally needs green CI on that exact commit, a clean-room
+install of the built wheel that actually runs, and `docs/releases/vX.Y.Z.md` written **before** the
+tag.
+
 ## Reporting bugs and security issues
 
 - **Bugs:** open an issue with the version, the engine and its version, what you expected, what

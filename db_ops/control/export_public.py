@@ -193,6 +193,7 @@ class ExportPlan:
     skipped_subpaths: list[str] = field(default_factory=list)
     refused_binaries: list[str] = field(default_factory=list)
     missing_paths: list[str] = field(default_factory=list)
+    uncommitted: list[str] = field(default_factory=list)
 
     @property
     def missing_required(self) -> list[str]:
@@ -231,6 +232,46 @@ def _walk(source: Path, *, root: Path | None = None) -> list[Path]:
     return kept
 
 
+def _uncommitted_files(root: Path) -> set[str]:
+    """Repo-relative paths git does not have committed: untracked, staged or modified.
+
+    The export copies the **working tree**, which is what makes it able to ship a change before it
+    is committed — convenient, and the reason it once published five half-written modules from
+    another session that happened to be open at the time. CI caught those on a duplicate-definition
+    guard, which is the kind of thing unfinished code trips.
+
+    A file nobody has committed is a file nobody has decided is done. This does not stop an export
+    — the operator may deliberately be shipping a work in progress — but it is named, loudly,
+    because the failure mode is silent and public.
+
+    Returns an empty set when git cannot answer (not a repository, git absent). Not being able to
+    check is not the same as there being nothing to report, and the caller says so.
+    """
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=all"],
+            cwd=root, capture_output=True, text=True, timeout=60, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    if result.returncode != 0:
+        return set()
+
+    paths: set[str] = set()
+    for line in result.stdout.splitlines():
+        if len(line) < 4:
+            continue
+        # Porcelain v1: two status characters, a space, then the path. A rename is `old -> new`
+        # and the new name is the one that would be copied.
+        path = line[3:].strip().strip('"')
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        paths.add(path.replace("\\", "/"))
+    return paths
+
+
 def build_plan(root: Path, *, allow_binaries: frozenset[str] | set[str] = frozenset()) -> ExportPlan:
     """Decide the whole copy before writing a byte of it.
 
@@ -241,6 +282,7 @@ def build_plan(root: Path, *, allow_binaries: frozenset[str] | set[str] = frozen
     """
     plan = ExportPlan()
     dropped_docs = set(private_docs())
+    in_flight = _uncommitted_files(root)
 
     for name in PUBLIC_PATHS:
         source = root / name
@@ -305,6 +347,15 @@ def build_plan(root: Path, *, allow_binaries: frozenset[str] | set[str] = frozen
     if secrets.is_dir():
         for child in sorted(secrets.glob("*.example.json")):
             plan.files.append((child, child.relative_to(root)))
+
+    # Which of the files about to ship has nobody committed? Computed last, against the finished
+    # plan, so it reports what would actually be published rather than everything dirty in the
+    # checkout — `data/` and `audits/` are always changing and never cross.
+    if in_flight:
+        plan.uncommitted = sorted(
+            relative.as_posix() for _, relative in plan.files
+            if relative.as_posix() in in_flight
+        )
 
     return plan
 

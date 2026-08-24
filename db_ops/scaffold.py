@@ -237,6 +237,31 @@ EMPTY_TELEGRAM_GROUPS = {
     "telegram_groups": [],
 }
 
+#: What the SQL task runner executes, and where. Both are **empty**, and both have to exist: the
+#: runner opens them before it decides it has nothing to do, so their absence is a crash rather
+#: than a quiet no-op. They hold this estate's scheduled SQL — not product data — so they scaffold
+#: empty rather than from a packaged default, the way the inventory and the credentials do.
+EMPTY_SQL_COMMANDS = {
+    "schema_version": 1,
+    "notes": [
+        "SQL the task runner executes on a schedule. Each entry needs a sql_id, the statement or",
+        "a script path, and a time_window saying how often it runs.",
+        "",
+        "Pair each sql_id with one or more rows in sql_targets.json - the command says what to",
+        "run, the target says where.",
+    ],
+    "sql_commands": [],
+}
+
+EMPTY_SQL_TARGETS = {
+    "schema_version": 1,
+    "notes": [
+        "Where each sql_command runs: sql_id + target_no, pointing at a server_id from",
+        "db_instances.json. One command can have several targets.",
+    ],
+    "sql_targets": [],
+}
+
 #: The plaintext side of the secret store. Never committed, and `.gitignore` already anticipates
 #: the path — the encrypted file beside it is what the toolkit actually reads.
 SECRET_TEXT = {
@@ -420,6 +445,13 @@ PACKAGED_DEFAULTS: dict[str, str] = {
     # dashboard however many commands were configured and active.
     "data/config_catalog.json": "db/catalogue/config_catalog.json",
     "data/webhost_config.json": "webhost/catalogue/webhost_config.json",
+    # `sla validate` reads this and nothing else writes it, so without it the SLA app is
+    # installed and cannot run. The policies are definitions - which SLIs exist, how each
+    # grades - not this estate's targets, so they are product data like the rest here.
+    "data/sla_policies.json": "sla/catalogue/sla_policies.json",
+    # The payload APP-CONTROL passes to `ops-status`. A file rather than inline JSON so it
+    # survives both shells the daemon might run under - see the note inside it.
+    "data/ops_status_request.json": "db/catalogue/ops_status_request.json",
 }
 
 PACKAGED_CATALOGUE = Path(__file__).parent / "metrics" / "catalogue" / "metric_definitions.json"
@@ -471,12 +503,15 @@ def _files(app_name: str) -> list[tuple[str, dict]]:
             (name, content)
             for name in ("data/reports_config.json", "data/telegram_support_commands.json",
                          "data/app_commands.json", "data/config_catalog.json",
-                         "data/webhost_config.json")
+                         "data/webhost_config.json", "data/sla_policies.json",
+                         "data/ops_status_request.json")
             if (content := packaged_default(name)) is not None
         ),
         ("data/users.json", EMPTY_USERS),
         ("data/telegram_config.json", TELEGRAM_CONFIG),
         ("data/telegram_groups.json", EMPTY_TELEGRAM_GROUPS),
+        ("data/sql_commands.json", EMPTY_SQL_COMMANDS),
+        ("data/sql_targets.json", EMPTY_SQL_TARGETS),
         ("secrets/secret_text.json", SECRET_TEXT),
     ]
 

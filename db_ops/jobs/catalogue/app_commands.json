@@ -146,7 +146,7 @@
       "log_scope": "reports_inventory_workflow",
       "working_dir": "tools/db_ops",
       "command_text": "python -m db_ops.reports.cli inventory-workflow --days 7 --beauty 1",
-      "active": true,
+      "active": false,
       "time_window": {
         "from_year": null,
         "to_year": null,
@@ -161,7 +161,8 @@
         "repeat_interval": 3600,
         "retry_interval": 600,
         "timeout": 1800
-      }
+      },
+      "note": "Off until configured - needs an inventory, which control inventory-health builds. "
     },
     {
       "node_role": "all",
@@ -173,7 +174,7 @@
       "log_scope": "webhost",
       "working_dir": "tools/db_ops",
       "command_text": "python -m db_ops.webhost.cli --config config.json serve --root runtime/reports --mount report_dba --port 8080",
-      "active": true,
+      "active": false,
       "time_window": {
         "from_year": null,
         "to_year": null,
@@ -188,7 +189,8 @@
         "repeat_interval": 0,
         "retry_interval": 0,
         "timeout": 0
-      }
+      },
+      "note": "Off until configured - a web server: it never exits, so the daemon would wait on it forever (and `--once` would never return). Start the console yourself: db-ops webhost serve. "
     },
     {
       "node_role": "all",
@@ -200,7 +202,7 @@
       "log_scope": "backup",
       "working_dir": "tools/db_ops",
       "command_text": "python -m db_ops.backup_restore.cli workflow --config config.json",
-      "active": true,
+      "active": false,
       "time_window": {
         "from_year": null,
         "to_year": null,
@@ -215,7 +217,8 @@
         "repeat_interval": 300,
         "retry_interval": 300,
         "timeout": 7200
-      }
+      },
+      "note": "Off until configured - needs restore_config.json with real backup shares. "
     },
     {
       "node_role": "all",
@@ -226,7 +229,7 @@
       "display_name": "Watch db_ops itself: alert on an app that starts failing, summarise every app hourly",
       "log_scope": "control",
       "working_dir": "tools/db_ops",
-      "command_text": "python -m db_ops.db.cli ops-status '{\"mode\": \"auto\", \"telegram_chat\": \"control\", \"summary_from_hour\": 8, \"summary_to_hour\": 20, \"summary_interval_seconds\": 3600, \"window_hours\": 24}'",
+      "command_text": "python -m db_ops.db.cli ops-status @data/ops_status_request.json",
       "note": "The one app that watches the others, and the one that must not depend on them. It reads job_runs directly and resolves its own chat from telegram_groups.json, so an estate where every other app is failing is exactly the estate it still reports from. Runs around the clock every 60s: the failure alert fires the moment an app command goes from working to failing, at any hour, while the app-by-app summary is confined to 08:00-20:00 local and one per hour (both decided inside ops-status, not by this schedule). Added 2026-08-13 after a NameError stopped every scheduled SQL task for a day with nothing to notice it - see db_ops/db/ops_status.py.",
       "active": true,
       "time_window": {
@@ -247,6 +250,7 @@
     }
   ],
   "notes": [
-    "node_role is 'all' here so a single-machine install works as copied: 'all' runs on any node. A two-node estate sets 'master' or 'worker' per command and declares each node's role with the DB_OPS_NODE_ROLE environment variable - it is deliberately not in config.json, so a config copied between nodes cannot mislabel one."
+    "node_role is 'all' here so a single-machine install works as copied: 'all' runs on any node. A two-node estate sets 'master' or 'worker' per command and declares each node's role with the DB_OPS_NODE_ROLE environment variable - it is deliberately not in config.json, so a config copied between nodes cannot mislabel one.",
+    "Six commands are active out of the box - the ones that work with nothing configured but one database target. Three are off: backup/restore and the inventory workflow need estate config, and the web console is a server that never exits, so scheduling it would make the daemon wait on it forever. Turn one on by setting active: true once you have configured it."
   ]
 }
