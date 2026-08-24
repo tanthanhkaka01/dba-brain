@@ -1,0 +1,15 @@
+{
+  "_note": [
+    "The default request for `db-ops db ops-status`, which APP-CONTROL runs on a schedule.",
+    "",
+    "It lives in a file rather than inline in app_commands.json because the daemon runs each",
+    "command through the platform's shell, and single-quoted JSON only survives a POSIX one -",
+    "on Windows cmd.exe hands the command literal apostrophes and the parse fails."
+  ],
+  "mode": "auto",
+  "telegram_chat": "control",
+  "summary_from_hour": 8,
+  "summary_to_hour": 20,
+  "summary_interval_seconds": 3600,
+  "window_hours": 24
+}

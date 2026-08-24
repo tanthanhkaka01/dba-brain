@@ -48,3 +48,32 @@ id = "generic-api-key"
   Scoped to this exact string, so any other key-shaped value in the same files is still reported.
   """
   regexes = ['''cXVpY2tzdGFydA==''']
+
+  [[rules.allowlists]]
+  description = """
+  Test placeholders that are shaped like credentials because the code under test takes a
+  credential. Each was decoded and compared against the real store passphrase before being listed
+  here; none matches, and each decodes to a phrase that says what it is — `forwarded-by-the-daemon`,
+  `secret-phrase`, and two invented passphrases used to exercise `--key-base64` parsing. The last
+  is not base64 at all: `abc123notmasked` is the input to the assertion that error text gets
+  masked, so the test's whole subject is that this string must NOT survive into a log.
+
+  `generic-api-key` reads them as keys because they are high-entropy strings next to `--key-base64`
+  or `token:`, which is the rule working correctly on values that only look like credentials.
+
+  Listed one literal at a time, deliberately. A path allowlist over `tests/` would have been two
+  lines and would have hidden a genuine key checked into a test — which is exactly the accident
+  this scan exists to catch.
+
+  Why this matters beyond the noise: **the CI job scans incrementally**, only the commits in a
+  push range, so it never sees these and reports green. A whole-tree scan is the stronger check and
+  the one `docs/release_process.md` prescribes locally — it is only usable if its findings are all
+  real, so these are resolved rather than tolerated.
+  """
+  regexes = [
+    '''Zm9yd2FyZGVkLWJ5LXRoZS1kYWVtb24=''',
+    '''QWhkc2YjaHNkZiQlMjM4SGZzIw==''',
+    '''SkZuc2gjJDcyM0hzM2g=''',
+    '''c2VjcmV0LXBocmFzZQ==''',
+    '''abc123notmasked''',
+  ]

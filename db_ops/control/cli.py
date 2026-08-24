@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 from db_ops.common.identifier_scan import IdentifierScanError
 from db_ops.lib.secret_text import encrypt_secret_text_file, resolve_cli_key, resolve_key
@@ -386,6 +387,22 @@ def _export_public_command(args) -> int:
     print(f"  component docs left behind: {len(plan.skipped_docs)}")
     print(f"  tests for those packages left behind: {len(plan.skipped_tests)}")
 
+    # Uncommitted files are the export's sharpest edge. It copies the working tree, so anything
+    # another session happens to be part-way through goes out with whatever change is exported
+    # next — which is how five half-written modules reached the public repository on 2026-08-24,
+    # caught only by a duplicate-definition guard in CI. A file nobody has committed is a file
+    # nobody has said is finished. Loud, and not fatal: shipping a work in progress on purpose is
+    # the operator's call to make, not this command's.
+    if plan.uncommitted:
+        print("")
+        print(f"  !! {len(plan.uncommitted)} file(s) in this copy are NOT COMMITTED in the source:")
+        for relative in plan.uncommitted[:15]:
+            print(f"       {relative}")
+        if len(plan.uncommitted) > 15:
+            print(f"       ... and {len(plan.uncommitted) - 15} more")
+        print("     Commit them, or stash them, before publishing this tree. If another session is")
+        print("     mid-edit, what ships is whatever they had saved at this instant.")
+
     if args.plan_only or args.skip_scan:
         return 0
 
@@ -451,6 +468,18 @@ def _run(args) -> int:
         deploy_ops.build_image(platform=args.platform, no_cache=args.no_cache, skip_build=args.skip_build)
         return 0
     if args.command == "inventory-summary":
+        # The inventory JSON is *produced* by `inventory-health`, so on a fresh install it is
+        # legitimately absent — that is a sequence a reader has not run yet, not a broken toolkit.
+        # It used to surface as a `FileNotFoundError` traceback out of `pathlib.open`, which names
+        # the file and nothing about what makes one.
+        inventory_path = Path(args.inventory)
+        if not inventory_path.is_file():
+            print(f"ERROR: no inventory at {inventory_path}.", file=sys.stderr)
+            print("This file is generated, not written by hand. Build it first:", file=sys.stderr)
+            print("  db-ops control inventory-health      # collects, then merges", file=sys.stderr)
+            print("  db-ops control inventory-workflow    # health + summary in one step",
+                  file=sys.stderr)
+            return 2
         inventory_ops.build_inventory_summary(inventory=args.inventory, output_dir=args.output_dir, date=args.date)
         return 0
     if args.command == "encrypt-secret-text":

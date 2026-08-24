@@ -623,6 +623,8 @@ with an import in it.
 | `xlsx_import.py` | **Single source of truth** for *reading a spreadsheet* — the mirror of `xlsx_export`, and **standard library only** for the same reason: openpyxl would be a new image dependency, so loading a file would need a rebuild and a redeploy first. Handles what the format actually does rather than what it looks like it does: Excel **omits empty cells**, so rows are placed by their `A1` reference (reading positionally shifts every later value one column left, on that row only); text is usually a pointer into a shared string pool and a formatted heading is split across runs; `sheet1.xml` is not reliably the first tab. Dates are the one interpretation: a date is *a number plus a style*, so `xl/styles.xml` is parsed far enough to know which cells are date-formatted and those are rendered ISO — otherwise the most common column in an operational sheet arrives as `45678`. Header blanks become `column_N` and duplicates get a suffix, because a header row is written for a human and column names cannot be either. | `read_sheet`, `header_names`, `decode_payload`, `generate_table_name`, `column_index`; `XlsxImportError`; `MAX_TEXT_LENGTH`, `DEFAULT_MAX_ROWS` |
 | `delimited_import.py` | **Single source of truth** for *reading a delimited text file* as a header row plus data rows — the sibling of `xlsx_import`, same output shape, same promise that every value stays text. It exists because what operators attach is rarely a clean `.xlsx`: it is a block selected in Excel and pasted into Notepad, or an export from a tool that only writes text, and those were refused with *"Not an XLSX file (it is not a zip)"* — true, and useless against a file that looks exactly like a spreadsheet. Three things are guessed, each with a wrong guess that corrupts silently: the **encoding** (Excel's "Unicode Text" is UTF-16 with a BOM and decodes under UTF-8 without raising, into NUL-riddled column names; plain "Text (Tab delimited)" is the Windows codepage; cp1252 is the last resort because it maps every byte), the **delimiter** (counted outside quotes on the header line, tab first — a comma is data in half the files that use tabs), and where the **header** is (the first line that says anything). Quoting is `csv`'s, not `str.split`'s: a cell containing the delimiter is written quoted by everything that writes these files. A trailing delimiter on the header does **not** become `column_N` (a pasted line always ends with one), but a blank heading *between* named ones does — dropping it would shift every column after it. A row with more values than the header names is **refused with its line number**, because padding or clipping loads the file one column out of step and says nothing. Header naming is `xlsx_import.header_names`, shared, so the same data gives the same table whichever format it arrived in. | `read_table`, `decode_text`, `sniff_delimiter`, `resolve_delimiter`, `describe_delimiter`; `DelimitedImportError` |
 | `table_load.py` | **Single source of truth** for *building a table from an uploaded file and loading it*, on any engine — an `.xlsx` **or** a delimited text file, decided by the file's first bytes and never by its name (a workbook is a zip; a renamed attachment is routine), then read through `xlsx_import` or `delimited_import` so nothing below this point knows which arrived. The file key is `file_base64` / `file_path`; `xlsx_base64` / `xlsx_path` still mean the same thing, because that is what the shipped Telegram command config and every saved shell payload say. Owns exactly three things `sql_run` does not: quoting an identifier per engine, binding values per driver, and the create-then-load transaction. **Every column is text** (`NVARCHAR(4000)` / `varchar(n)` / `VARCHAR2(n CHAR)` / `TEXT`) — a type guessed from the first twenty rows is wrong on row two thousand in a way nobody notices until a join returns nothing. Two hazards it exists to contain: a **column name comes out of a file somebody was emailed** and cannot be a bind parameter, so quoting with a doubled closing quote is the whole defence; and the **placeholder depends on the process, not the engine** — pg8000 reads `paramstyle` from a module global that `db/backend.py` sets to `qmark`, so PostgreSQL wants `?` in the daemon and `%s` in a bare CLI run (asked of `db_connect.parameter_style`, never assumed). An existing table is **never** overwritten unless `if_exists` says so, and an over-long value is refused naming its row and column rather than clipped. | `create_table_from_xlsx`, `read_source`, `quote_identifier`, `placeholder_style`, `build_placeholders`, `two_placeholders`, `build_create_table`; `TableLoadError`; `BATCH_SIZE`, `IF_EXISTS_CHOICES`, `DEFAULT_TEXT_LENGTH` |
+| `schema_copy.py` | **Single source of truth** for *reproducing one SQL Server schema on another instance*. `table_load.py` covers a file into one table; this covers "make schema `X` on instance B look like schema `X` on instance A". Nine phases in dependency order — partition function/scheme, change tracking on the database, tables, change tracking per table, indexes, checks, data, modules, foreign keys — with **FKs after data**, so load order cannot violate them. Every phase is **idempotent** (`IF OBJECT_ID(...) IS NULL`, `IF NOT EXISTS`, `CREATE OR ALTER`), because a run that dies in phase 4 has to resume by being run again rather than by being repaired. `plan` prints counts and statements and writes nothing; `apply` takes an `sp_getapplock` around the whole operation, because the "already has rows" guard is read-then-write and two appliers really did run against one target. Data moves **through the client** in batched `executemany` with `IDENTITY_INSERT` per table — `INSERT ... SELECT FROM [OtherDb]...` only works when both databases share an instance. **Input is a JSON object**, like `run-sql` and `rotate-password`. See [the section below](#copying-a-schema-between-instances-schema_copy). | `copy_schema`, `build_plan`, `apply_plan`, `plan_steps`, `verify_copy`, `copy_table_data`, `select_tables`, `select_modules`, `assert_destination`, `application_lock`, `format_plan`; `SchemaCopyError`; `SchemaCopyRequest`, `Endpoint`, `Step`; `PHASES`, `DEFAULT_BATCH_SIZE = 2000`, `DEFAULT_TIMEOUT_SECONDS = 900`, `DEFAULT_LOCK_TIMEOUT_SECONDS = 300`, `DEFAULT_MODULE_PASSES = 4` |
+| `schema_catalog.py` | **Single source of truth** for *what SQL Server's catalogue views say a schema contains* — the read half of `schema_copy`, kept apart because reading a catalogue and writing DDL fail differently and are worth testing separately. Also owns the answer to the question the feature request called worth as much as the copying: **`unsupported_features` lists what a copy will silently drop**. Scripting from `sys.tables` alone loses partitioning (a UAT hop shipped 0 of 32 partitioned indexes), change tracking (a `CREATE PROCEDURE` failed with Msg 22105 mid-deploy), filegroups, compression, temporal tables, extended properties and permissions. Reporting them is not the same as carrying them, and saying which is which is the point. | `unsupported_features`, and the per-object readers `schema_copy` plans from |
 | `result_format.py` | **Single source of truth** for *how a result set is rendered*: `json` (default, the only one a program should parse), `txt` (aligned table for a terminal), `csv` (RFC 4180 via the stdlib writer, header row included), `xml` (structure without a JSON parser), `xlsx` (writes a workbook, via `xlsx_export`), `raw` (values only, tab-separated, no header — so `\| cut -f2` works). Chosen inside the JSON request as `"format"`, never a flag, so a config file can carry it. `xlsx` was already here but reachable only from `sql_tasks` config; the rest existed nowhere and were being improvised by piping JSON into whatever the operator remembered. **A SQL NULL stays distinguishable from an empty string in every text format** — rendering both as nothing silently answers a question nobody asked. `csv` does it PostgreSQL's way (`COPY ... WITH CSV`): an empty *unquoted* field is NULL, `""` is the empty string; numbers stay unquoted so a spreadsheet reads them as numbers. Column names become XML *attributes*, not tags: SQL returns columns called `1` or `count(*)` and neither is a legal element name. `write_result` is the single entry point for "put this result set in a file", whatever the format — callers get one call and no branch, which is what `sql_tasks` now uses for all of `xlsx`/`csv`/`txt`/`xml`. | `render_result`, `write_result`, `normalize_format`; `ResultFormatError`; `RESULT_FORMATS`, `NULL_TEXT` |
 | `file_transfer.py` | **Single source of truth** for *moving one named file* between this host and a remote one, and for *packing a set into one archive* so it can be moved as one. The apps that move files do it inside a larger job — `backup_restore.transfer` syncs a whole backup directory between two remote hosts, `backup_restore.copy_backup` pulls a window of backups off an SMB share — and neither answers "put **this** file **there**", so that kept being typed by hand as `ssh`/`scp`/`docker cp`. Every transfer is size-verified and a short copy deletes what it wrote; overwriting must be asked for and lands atomically; a same-size destination is skipped; mtime is preserved (the restore log-chain filter reads it). `pack_files` builds the archive **on the host that already holds the files** and returns its `sha256` — size catches a truncated copy, not a corrupted one. **Not** for staging a backup set: per-file SFTP across two internet hops measured 10 KB/s, which is why `backup_restore.transfer` streams a directory as one `tar`. **Input is a JSON object.** | `fetch_file`, `send_file`, `pack_files`; `FileTransferError`; `STATUS_COPIED` / `STATUS_REPLACED` / `STATUS_SKIPPED_EXISTS`, `PARTIAL_SUFFIX` |
 | `sqlserver_patch.py` | The SQL-Server-specific half of a cumulative update: the "is this instance safe to patch" gate set, the unattended `setup.exe /Action=Patch` contract with its exit-code rules (**3010 = applied, restart required — never re-run**), and the build verification that reads `SERVERPROPERTY` first and registry **`PatchLevel`** (not `Version`) as corroboration. Everything platform-generic underneath is `host_ops`. See [the section below](#patching-a-sql-server-instance-sqlserver_patch). | `precheck`, `apply_cu`, `verify_build` (the JSON entry points); `patch_arguments`, `patch_exit_verdict`, `sqlserver_service_names`, `sqlserver_registry_key`, `setup_log_root`, `version_tuple`; `SqlServerPatchError`; `EXIT_SUCCESS_RESTART_REQUIRED = 3010` |
@@ -1546,6 +1548,66 @@ python -m db_ops.common.cli rotate-password '{"refs": ["MSSQL_192_0_2_8_DBA_USER
 
 After rotating, **deploy with `--no-merge-worker`**: the normal deploy merges the worker's secrets
 by union, which would restore the pre-rotation values.
+
+---
+
+## Copying a schema between instances (`schema_copy`)
+
+Reproduce SQL Server schema `X` from one instance on another. Raised from a real deployment
+(`audits/DB_OPS_FEATURE_REQUEST_schema_copy_20260822.md`) where the whole thing was done by hand
+outside db_ops, and every requirement below is something that cost time on that run.
+
+```bash
+python -m db_ops.common.cli copy-schema '{
+  "source": {"target": "SRC-SERVER-ID", "database": "APPDB_TEST", "schema": "schedule"},
+  "dest":   {"target": "DST-SERVER-ID", "database": "APPDB_PROD", "schema": "schedule"},
+  "assert_dest_instance": "APPHOST\INSTANCE",
+  "exclude_tables": ["dataLock", "*Staging"],
+  "with_data": ["sql", "sql_version", "CalendarDay"],
+  "exclude_modules": ["usp_ORD38_*"],
+  "plan": true
+}'
+```
+
+**`plan` is the default posture, not a flag you remember to add.** It reports counts, the ordered
+statements and what it will *not* carry, and writes nothing. `"plan": false` applies.
+
+**Nine phases, in dependency order**, each idempotent:
+
+| # | Phase | Why here |
+| :-: | --- | --- |
+| 1 | `partitions` | A partition scheme has to exist before a table can sit on it |
+| 2 | `change_tracking_database` | `ALTER DATABASE ... SET CHANGE_TRACKING` precedes any per-table setting |
+| 3 | `tables` | `IF OBJECT_ID(...) IS NULL`, so a resumed run skips what exists |
+| 4 | `change_tracking_tables` | Per table, and **before modules**: a procedure referencing `CHANGETABLE` on a table without tracking fails with **Msg 22105**, mid-deploy |
+| 5 | `indexes` | |
+| 6 | `checks` | |
+| 7 | `data` | `IF NOT EXISTS (SELECT 1 FROM <t>)`, per table in `with_data` |
+| 8 | `modules` | Re-tried in passes: views over views and functions used by functions resolve at create time, so one ordered pass is not enough. Each pass must reduce the failure count or the loop stops |
+| 9 | `foreign_keys` | **After data**, so load order cannot violate them |
+
+**A run that dies resumes by being run again.** Every phase is written to be re-runnable —
+`IF OBJECT_ID(...) IS NULL`, `IF NOT EXISTS`, `CREATE OR ALTER` — because the deployment this came
+from crashed in phase 4 and needed no repair, and that is the property worth keeping.
+
+**Two guards that exist because their absence was survived by luck:**
+
+- **`sp_getapplock` around the whole operation.** The "destination already has rows" check is
+  read-then-write and does not stop a second applier. Two ran against one target on 2026-08-22;
+  nothing was corrupted only because every catalogue table had a primary key.
+- **`assert_dest_instance`.** `DB_NAME()` is not an address — the same database name exists on
+  several instances. The request may demand a specific `SERVERPROPERTY('ServerName')` and abort
+  otherwise.
+
+**Data moves through the client**, batched `executemany` with `IDENTITY_INSERT` per table. The
+obvious implementation, `INSERT ... SELECT FROM [OtherDb].[schema].[table]`, only works when both
+databases share an instance.
+
+**What it will not carry, it says.** `report_unsupported` (on by default) lists the features
+catalogue-based scripting silently drops — partitioning, change tracking, filegroups, compression,
+temporal tables, extended properties, permissions. Two of those had already cost a deployment each
+before anyone noticed they were missing, which is why naming them is worth as much as copying the
+rest.
 
 ---
 

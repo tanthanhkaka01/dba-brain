@@ -336,7 +336,7 @@ def rotate_ref(
         return result
 
     if dry_run:
-        _close(connection)
+        db_connect.close_quietly(connection)
         result.update(status="READY", detail="reachable and the current password works")
         return result
 
@@ -351,17 +351,17 @@ def rotate_ref(
             # Those two run the change inside the ambient transaction; the others auto-commit DDL.
             connection.commit()
     except Exception as exc:  # noqa: BLE001
-        _close(connection)
+        db_connect.close_quietly(connection)
         result.update(status="FAILED", detail=f"change statement rejected: {str(exc)[:200]}")
         return result
-    _close(connection)
+    db_connect.close_quietly(connection)
 
     # Step 3 - prove it on a new connection, because the old session is still authenticated.
     verify_target = dict(target)
     verify_target["password"] = generated
     try:
         verify = sql_run.connect_target(verify_target, timeout_seconds=timeout_seconds)
-        _close(verify)
+        db_connect.close_quietly(verify)
     except Exception as exc:  # noqa: BLE001
         result.update(status="FAILED", detail=f"verify failed: {str(exc)[:160]}")
         result["rollback"] = _rollback(verify_target, engine, generated, old_password,
@@ -371,13 +371,6 @@ def rotate_ref(
     result.update(status="SUCCESS", detail="changed and re-authenticated on a new connection")
     result["_new_password"] = generated
     return result
-
-
-def _close(connection: Any) -> None:
-    try:
-        connection.close()
-    except Exception:  # noqa: BLE001 - closing is best-effort; the result already says what happened.
-        pass
 
 
 def _rollback(target: dict[str, Any], engine: str, current: str, previous: str,
@@ -396,7 +389,7 @@ def _rollback(target: dict[str, Any], engine: str, current: str, previous: str,
     except Exception as exc:  # noqa: BLE001
         return f"ROLLBACK FAILED: {str(exc)[:120]}"
     finally:
-        _close(connection)
+        db_connect.close_quietly(connection)
 
 
 def rotate(request: dict[str, Any], *, data_dir: str | Path | None = None,

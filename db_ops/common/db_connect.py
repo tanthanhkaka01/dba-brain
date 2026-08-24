@@ -310,6 +310,21 @@ def _connect_oracle(*, host, port, database, username, password, service_name,
     return conn
 
 
+def close_quietly(connection: Any) -> None:
+    """Close a connection and never raise doing it.
+
+    Closing is best-effort by definition: it runs in a ``finally``, after the outcome the caller
+    reports has already been decided, and a driver that raises on the close of an already-broken
+    connection would replace a real error message with a meaningless one. Lives here because this
+    module opens every connection db_ops holds, so it owns the other end too — it was written out
+    twice before that was true.
+    """
+    try:
+        connection.close()
+    except Exception:  # noqa: BLE001 - the failure being reported is never the close.
+        pass
+
+
 def server_version(connection: Any, db_type: str) -> str:
     """The version string the *server* reported, read off an already-open connection.
 

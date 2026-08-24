@@ -52,8 +52,14 @@ def test_the_config_catalog_covers_every_file_init_writes(tmp_path):
     catalogued = {entry["file"] for entry in catalog["config_sources"]}
 
     written = {path.name for path in (tmp_path / "data").glob("*.json")}
-    # The store's own descriptor and the encrypted secrets are not config rows.
-    written -= {"config_catalog.json", "encrypted_secret_text.json"}
+    # Not config rows, and so not the console's business:
+    #   - `config_catalog.json` is the catalog itself;
+    #   - `encrypted_secret_text.json` is the secret store;
+    #   - `ops_status_request.json` is a saved *argument* — the payload APP-CONTROL passes to
+    #     `ops-status`. It lives in a file only because the daemon runs commands through the
+    #     platform's shell and single-quoted JSON does not survive cmd.exe. It holds one request,
+    #     not a collection of records, so there is nothing for the console to list or edit.
+    written -= {"config_catalog.json", "encrypted_secret_text.json", "ops_status_request.json"}
     missing = sorted(written - catalogued)
     assert not missing, (
         f"init writes {missing}, which the catalog does not list, so sync-config will not load "

@@ -1,0 +1,142 @@
+{
+  "notes": [
+    "Sample sla_policies.json - the service level objectives the collected metrics are graded against. Copy to sla_policies.json and edit.",
+    "An SLO here is a claim you are prepared to be held to, computed from metric history rather than from a separate probe. That is the whole point: the numbers on the report and the numbers behind the objective come from the same measurements.",
+    "'metric_codes' names the metrics that make up the indicator; 'aggregation' says how they combine, and 'good_statuses' says which recorded outcomes count as success. Everything else is derived from those.",
+    "'window_hours' is the rolling window. 'objective_percent' is the target. 'at_risk_budget_percent' is how much of the remaining error budget triggers a warning before the objective is actually missed - reporting only the breach is reporting it too late.",
+    "'minimum_sample_count' refuses to state a verdict on too little data. Without it, one successful sample in a fresh window reads as 100%, which is the most confident wrong answer the system can give.",
+    "'expected_collection_interval_seconds' and 'freshness_threshold_seconds' turn 'we stopped measuring' into a visible outcome rather than a silent gap. 'missing_data_policy': 'unknown' records the gap as unknown instead of quietly counting it as success.",
+    "'required' false marks an objective as tracked but not committed to - useful while an objective is being calibrated against a few weeks of real data.",
+    "'notification.reminder_after_seconds' is the ceiling on re-stating a finding that has not moved. The hourly run only messages when state changes; this stops a standing problem being silently forgotten without turning the channel back into noise."
+  ],
+  "notification": {
+    "reminder_after_seconds": 86400
+  },
+  "sla_policies": [
+    {
+      "policy_id": "FLEET_AVAILABILITY",
+      "sli_code": "AVAILABILITY_SUCCESS_RATIO",
+      "name": "Multi-engine availability",
+      "description": "Every monitored instance and database reports a healthy status across the last 24 hours.",
+      "active": true,
+      "required": true,
+      "category": "availability",
+      "db_types": [
+        "sqlserver",
+        "oracle",
+        "postgresql",
+        "mysql"
+      ],
+      "metric_codes": [
+        "INSTANCE_STATUS",
+        "DATABASE_STATUS"
+      ],
+      "aggregation": "success_ratio",
+      "comparison_operator": ">=",
+      "objective_percent": 99.9,
+      "window_hours": 24,
+      "good_statuses": [
+        "OK",
+        "LOGGING"
+      ],
+      "at_risk_budget_percent": 25.0,
+      "minimum_sample_count": 20,
+      "expected_collection_interval_seconds": 300,
+      "freshness_threshold_seconds": 900,
+      "missing_data_policy": "unknown"
+    },
+    {
+      "policy_id": "RECOVERABILITY",
+      "sli_code": "BACKUP_FRESHNESS",
+      "name": "Backup freshness",
+      "description": "Every database required to be backed up has a backup inside its policy window.",
+      "active": true,
+      "required": true,
+      "category": "recoverability",
+      "db_types": [
+        "sqlserver",
+        "oracle",
+        "postgresql"
+      ],
+      "metric_codes": [
+        "BACKUP_AGE",
+        "BACKUP_LAST_RESULT"
+      ],
+      "aggregation": "success_ratio",
+      "comparison_operator": ">=",
+      "objective_percent": 99,
+      "window_hours": 168,
+      "minimum_sample_count": 12,
+      "missing_data_policy": "unknown",
+      "_note": "A week-long window, because the thing being measured is a daily-or-slower event. The per-database thresholds themselves are in backup_policy.json - this objective grades how often those were met."
+    },
+    {
+      "policy_id": "MONITORING_COVERAGE",
+      "sli_code": "MONITORING_SAMPLE_COVERAGE",
+      "name": "Monitoring coverage",
+      "description": "The monitoring itself kept running: every enabled target produced samples at the expected rate.",
+      "active": true,
+      "required": true,
+      "category": "monitoring",
+      "db_types": [
+        "sqlserver",
+        "oracle",
+        "postgresql",
+        "mysql"
+      ],
+      "metric_codes": [
+        "INSTANCE_STATUS"
+      ],
+      "aggregation": "success_ratio",
+      "comparison_operator": ">=",
+      "objective_percent": 99,
+      "window_hours": 24,
+      "expected_collection_interval_seconds": 300,
+      "freshness_threshold_seconds": 900,
+      "missing_data_policy": "unknown",
+      "_note": "The objective that watches the watcher. Without it, an estate that silently stopped being collected from scores perfectly on every other objective."
+    },
+    {
+      "policy_id": "PG_REPLICATION",
+      "sli_code": "REPLICATION_HEALTH_RATIO",
+      "name": "PostgreSQL replication health",
+      "description": "Standbys stayed connected and replication slots stayed active.",
+      "active": true,
+      "required": false,
+      "category": "replication",
+      "db_types": [
+        "postgresql"
+      ],
+      "metric_codes": [
+        "POSTGRES_REPLICATION",
+        "POSTGRES_REPLICATION_SLOTS"
+      ],
+      "aggregation": "success_ratio",
+      "comparison_operator": ">=",
+      "objective_percent": 99,
+      "window_hours": 24,
+      "minimum_sample_count": 12,
+      "_note": "'required': false while the objective is being calibrated. Promote it once a few weeks of real data show what this estate normally looks like."
+    },
+    {
+      "policy_id": "PG_XID_RISK",
+      "sli_code": "XID_AGE_MAX",
+      "name": "PostgreSQL transaction ID safety",
+      "description": "No database approached transaction ID wraparound.",
+      "active": true,
+      "required": true,
+      "category": "integrity",
+      "db_types": [
+        "postgresql"
+      ],
+      "metric_codes": [
+        "POSTGRES_XID_WRAPAROUND"
+      ],
+      "aggregation": "success_ratio",
+      "comparison_operator": ">=",
+      "objective_percent": 100,
+      "window_hours": 24,
+      "_note": "One hundred percent, deliberately. Some objectives have no acceptable failure rate, and this is one of them: the failure mode is the cluster refusing to accept writes."
+    }
+  ]
+}

@@ -50,6 +50,7 @@ ALL_COMMANDS = [
     "sqlserver-export-instance", "sqlserver-replay-instance", "sqlserver-verify-instance",
     "delete-file", "delete-files", "backup-database", "prune-backup-files",
     "list-databases", "list-schemas", "list-jobs", "create-table-from-xlsx",
+    "copy-schema",
     # Left this file on 2026-08-15 and covered elsewhere now, for the same reason in each case —
     # they were not shared-layer work:
     #   check-credentials    -> db_ops/cli.py  (needs two apps' resolvers)
