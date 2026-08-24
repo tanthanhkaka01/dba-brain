@@ -60,10 +60,16 @@ DEFAULT_PATHS: tuple[str, ...] = (
 #: Text file types worth reading. A binary is not scannable and is refused by rule instead
 #: (`03-16`): the repository holds two `.xlsx` exports of real Oracle data that any text scanner
 #: would pass and that would still leak.
+#: `.html` and `.j2` are here because leaving them out meant a whole class of shipped files was
+#: never certified: the report templates carry long prose comments explaining *why* each section
+#: exists, written from the incident that motivated it — and an incident is described in terms of
+#: the environment it happened on. The scan reported those trees clean because it never opened the
+#: file. A type that ships and holds prose has to be read; term coverage is not file coverage.
 DEFAULT_EXTENSIONS: tuple[str, ...] = (
     ".py", ".sql", ".sh", ".ps1", ".bat", ".cmd",
     ".json", ".yml", ".yaml", ".toml", ".cfg", ".ini",
     ".md", ".txt", ".env", ".example",
+    ".html", ".htm", ".css", ".js", ".j2", ".jinja", ".jinja2", ".xml",
 )
 
 #: Directories never walked, whatever the requested path.
@@ -340,7 +346,31 @@ def _search_terms(terms: dict[str, str]) -> dict[str, tuple[str, str, str]]:
         for spelling in _spellings(term):
             key = spelling.lower() if level == CERTAIN else spelling
             expanded.setdefault(key, (term, kind, level))
+        for short in _address_shorthands(term):
+            expanded.setdefault(short, (term, kind, LIKELY))
     return expanded
+
+
+#: A two-octet shorthand key, in any of the three spellings prose uses.
+_SHORTHAND_KEY = re.compile(r"\d{1,3}[._-]\d{1,3}")
+
+
+def _address_shorthands(term: str) -> set[str]:
+    """How prose actually refers to a machine: by the part of its address that differs.
+
+    Nobody writing a sentence repeats the whole address — a document says "measured on 2.248", and
+    everyone on that estate knows which machine that is. The full-address spellings never match it,
+    so the scan certified documents that name the estate on every page.
+
+    `LIKELY` rather than `CERTAIN` and deliberately so: two octets are short enough to collide with
+    an ordinary number — a percentage, a duration, a version — and a tier that cries wolf is one
+    people learn to switch off. Reported, not asserted.
+    """
+    parts = term.split(".")
+    if len(parts) != 4 or not all(p.isdigit() for p in parts):
+        return set()
+    tail = f"{parts[2]}.{parts[3]}"
+    return {tail, tail.replace(".", "-"), tail.replace(".", "_")}
 
 
 def _patterns(searchable: dict[str, tuple[str, str, str]]) -> list[tuple[re.Pattern[str], bool]]:
@@ -353,14 +383,21 @@ def _patterns(searchable: dict[str, tuple[str, str, str]]) -> list[tuple[re.Patt
     """
     loose = sorted((key for key, value in searchable.items() if value[2] == CERTAIN),
                    key=len, reverse=True)
-    strict = sorted((key for key, value in searchable.items() if value[2] != CERTAIN),
-                    key=len, reverse=True)
+    rest = [key for key, value in searchable.items() if value[2] != CERTAIN]
+    # Two-octet shorthand needs a boundary the others do not: `2.3` sits inside `10.1.2.3`, so the
+    # ordinary `(?<![\w-])` lets the shorthand match the very address it was derived from and every
+    # full-address hit is counted twice. Excluding a neighbouring `.` keeps it to the prose form.
+    shorthand = sorted((k for k in rest if _SHORTHAND_KEY.fullmatch(k)), key=len, reverse=True)
+    strict = sorted((k for k in rest if not _SHORTHAND_KEY.fullmatch(k)), key=len, reverse=True)
     built: list[tuple[re.Pattern[str], bool]] = []
     if loose:
         built.append((re.compile("|".join(re.escape(k) for k in loose), re.IGNORECASE), True))
     if strict:
         built.append((re.compile(r"(?<![\w-])(?:" + "|".join(re.escape(k) for k in strict)
                                  + r")(?![\w-])"), False))
+    if shorthand:
+        built.append((re.compile(r"(?<![\w.-])(?:" + "|".join(re.escape(k) for k in shorthand)
+                                 + r")(?![\w.-])"), False))
     return built
 
 

@@ -23,7 +23,7 @@ SELECT
     -- Always OK, and not for lack of trying: the obvious threshold, max_used against
     -- total_blocks, is meaningless here. The sort segment grows to its own high-water mark and
     -- stays there, so max_used equals total on every healthy instance and the check reported a
-    -- permanent WARNING (measured on 1.236, run 28781). The real question - can the temporary
+    -- permanent WARNING (measured on 2.236, run 28781). The real question - can the temporary
     -- tablespace still grow - is about the tablespace, not the segment inside it, and
     -- TABLESPACE_FREE_SPACE answers it with the autoextend headroom included. This metric is
     -- the usage reading that metric cannot give: what sorts actually consume, and the worst

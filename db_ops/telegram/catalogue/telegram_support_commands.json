@@ -1148,52 +1148,6 @@
         },
         "parameters": []
       }
-    },
-    {
-      "node_role": "worker",
-      "command_id": 21,
-      "command_text": "spbot_trace_session",
-      "reply_default": 0,
-      "reply_text": "",
-      "reply_parse_mode": "",
-      "reply_with_name": 0,
-      "command_type": 50,
-      "is_group": 0,
-      "is_private": 1,
-      "need_file": 0,
-      "action_type": "cli_execute",
-      "action_config": {
-        "_note": "Who is holding an open transaction on SALESDB (192.0.2.115). Reads only - it runs through common.cli trace-session, which goes through sql_run and always rolls back, so this command cannot change anything and needs no confirm step (unlike spbot_kill_spid). Pinned to 70-115/SALESDB because that is the instance the blocking incidents are on (audits/20260811_audit_ax_long_open_transactions_70_115.md); a second entry can be added for another target rather than making the operator type a server_id every time. session_id 0 means 'scan everything older than min_tran_seconds' - the common case, so it is the default and the argument is optional. The `defaults` entry is what makes the no-argument form work: an optional argument that was not typed keeps its default instead of being blanked (fixed 2026-08-12 in command_processor.cli_action_values, after this command failed in production with 'request is not valid JSON').",
-        "working_dir": "tools/db_ops",
-        "command_argv": [
-          "{python}",
-          "-m",
-          "db_ops.common.cli",
-          "trace-session",
-          "{\"target\":\"ACME-192-0-2-115\",\"database\":\"SALESDB\",\"session_id\":{session_id},\"min_tran_seconds\":{min_tran_seconds}}"
-        ],
-        "defaults": {
-          "session_id": "0",
-          "min_tran_seconds": "300"
-        },
-        "requires_secret_key": true,
-        "start_text": "Tracing open transactions on ACME-192-0-2-115 / SALESDB...",
-        "success_text": "{stdout}",
-        "failure_text": "trace-session failed.\nExit code: {exit_code}\nError: {error_summary}",
-        "timeout_seconds": 120,
-        "parameters": [
-          {
-            "name": "session_id",
-            "source": "arg",
-            "position": 1,
-            "required": false,
-            "validator": "regex",
-            "pattern": "[0-9]{1,6}",
-            "validation_error": "session_id must be a number (0 = every open transaction)",
-            "prompt_text": "Which SPID? Send 0 for every open transaction older than 5 minutes."
-          }
-        ]
-      }
     }
   ]
 }

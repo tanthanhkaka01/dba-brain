@@ -1572,7 +1572,7 @@ def _job_fields(message) -> dict[str, str]:
     # block it was submitted with, newlines and all. Without it the pattern could not reach the
     # end of the value, the whole match failed, and `command` came back **missing** rather than
     # truncated — the field the section exists for, silently absent on the first real 8i job
-    # (1.236, run 28790). Whitespace is collapsed so a multi-line block renders as one line.
+    # (2.236, run 28790). Whitespace is collapsed so a multi-line block renders as one line.
     for match in re.finditer(rf"(?:^|,\s*)({names})=(.*?)(?=,\s*(?:{names})=|$)", text, re.DOTALL):
         fields[match.group(1)] = " ".join(match.group(2).split())
     return fields

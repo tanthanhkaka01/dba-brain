@@ -342,7 +342,7 @@ def _fake_ssh_target(server_id, **kwargs):
 # One decision, two restore paths.
 # --------------------------------------------------------------------------- #
 #
-# The engine path (SMB share + sqlcmd, the 100.250 -> 187.249 production flow) and the script
+# The engine path (SMB share + sqlcmd, the 2.250 -> 2.249 production flow) and the script
 # path (host-to-host transfer into a container, the CLOUD drills) share no execution machinery
 # and cannot: one selects its restore chain in Python with PITR/STOPAT, the other in bash. What
 # they do share is the decision *around* the restore - same bundle, same two phases, same

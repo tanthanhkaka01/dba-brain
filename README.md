@@ -201,7 +201,6 @@ See **[`docs/architecture.md`](./docs/architecture.md)**.
 | [`docs/configuration.md`](./docs/configuration.md) | Where configuration lives, and what every file decides |
 | [`docs/security.md`](./docs/security.md) | Secrets, least privilege, the audit trail, air-gapped operation |
 | [`docs/architecture.md`](./docs/architecture.md) | The components, the layers, and the rules that keep them apart |
-| [`docs/release_process.md`](./docs/release_process.md) | **When a change may be committed, and when a version may be released** — the gate both have to pass |
 | [`examples/`](./examples) | Worked configurations you can copy whole |
 
 | Component reference | |

@@ -258,7 +258,7 @@ Agent maintenance plan writing to `D:\DBA\SqlBK\<instance>\<db>\LOG`. A PITR att
 pattern: `ACME_TO_MSSQL2025_DOCKER` reads that host's Agent tree (`\...\SQLBK\APPDB-DB$APPDB`,
 where FULL and LOG sit together) and `ACME_MSSQL_DBOPS_TO_MSSQL2025_DOCKER` reads db_ops' own.
 One share each, no special support. `ACME_MSSQL_1_248_AGENT_PITR_TO_MSSQL25_100_115` is the same
-split for 1.248.
+split for 2.248.
 
 Pointing the *existing* entry at the Agent tree instead would work, but it silently stops
 verifying db_ops' own backups — which is what that entry is for. Two entries keep both answers.
@@ -270,11 +270,11 @@ Three things a second entry against the same source must get right:
 - **Its own target database names.** Both restore the same source databases onto the same
   instance; the PITR entry maps each to `<name>_PITR`.
 - **An explicit `databases` list.** `databases: []` means "everything found under the import
-  directory", and a long-lived maintenance-plan tree accumulates: 1.248's still holds
+  directory", and a long-lived maintenance-plan tree accumulates: 2.248's still holds
   `SALESDB_Prod`, `APPDB_Org`, `APPDB_Prod`, `APPDB_Testing` and `GLOBEX` with fulls from 2025 and
   ~190 logs each.
 
-**Not every database is eligible.** Measured on 1.248 on 2026-08-13, the Agent tree had no log
+**Not every database is eligible.** Measured on 2.248 on 2026-08-13, the Agent tree had no log
 for `APPDB` or `DtradeProduction` and no full at all for `APPDB`. Eleven databases had a complete
 current chain; those are the ones the entry names.
 
@@ -282,7 +282,7 @@ current chain; those are the ones the entry names.
 log, so two independent log-backup jobs on one database each take the records the other did not,
 and **neither set is a restorable chain**.
 
-**PITR reach is the other job's retention, not db_ops'.** On 1.248 `Job_Maintain_Backup_LOG`
+**PITR reach is the other job's retention, not db_ops'.** On 2.248 `Job_Maintain_Backup_LOG`
 runs every 15 minutes with Ola Hallengren's `@CleanupTime = 2` — that parameter is in **hours**,
 which the FULL job's `@CleanupTime = 48` confirms (exactly two daily `.bak` survive). About
 8 hours of `.trn` were on disk when measured. It is a sliding window of hours; raising

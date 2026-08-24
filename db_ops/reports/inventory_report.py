@@ -441,7 +441,7 @@ def _status(model) -> str:
     """Worst-severity status: crit > warn > idle (no data) > ok.
 
     Critical conditions (broken log chain, a disk at/over the critical threshold) win even
-    when a host has no live DB metrics — e.g. 70-101 has no DB login but a near-full disk, so
+    when a host has no live DB metrics — e.g. 2-101 has no DB login but a near-full disk, so
     it is **crit**, not 'no data'. This keeps the fleet KPI counts consistent with the crit
     items shown in Priority Attention. A host is 'idle' only when nothing actionable at all
     was collected. Disk severity follows the metric-computed ``st`` (CRITICAL/WARNING)."""
@@ -614,7 +614,7 @@ def build_models(data: dict, *, exclude_ip_prefixes=EXCLUDE_IP_PREFIXES):
 
 
 def _ip_tag(m):
-    # short tag like "70-115" from the last two IP octets, matching the template style.
+    # short tag like "2-115" from the last two IP octets, matching the template style.
     octets = str(m["ip"]).split(".")
     return "-".join(octets[-2:]) if len(octets) >= 2 else str(m["ip"])
 
@@ -851,7 +851,7 @@ def build_triage(models: list) -> list:
 
     # Disk severity follows the status the metric layer already computed (CRITICAL/WARNING),
     # falling back to the collected free% only when a status is absent. A near-full volume
-    # (CRITICAL, e.g. 70-101 D: at 0.01%) becomes its own crit item, not a lumped warning.
+    # (CRITICAL, e.g. 2-101 D: at 0.01%) becomes its own crit item, not a lumped warning.
     crit_disk, warn_disk = [], []
     for m in models:
         for d in m["disks"]:

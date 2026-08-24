@@ -130,15 +130,15 @@ talking; the file on disk is English, so that it can be searched and read by eve
 
 ## Committing and releasing
 
-Maintainers: the gate a change has to pass before it can be committed, and the separate gate a
-version has to pass before it can be released, are in
-**[`docs/release_process.md`](./docs/release_process.md)**. It is not advisory — every rule in it
-is there because skipping it broke something, and each one names what and when.
+A change has to pass one gate before it can be committed, and a version a second, stricter one
+before it can be released.
 
-The short form: the **full** suite, lint, the export gate and the secret scan all pass locally
-before a commit; and a release additionally needs green CI on that exact commit, a clean-room
-install of the built wheel that actually runs, and `docs/releases/vX.Y.Z.md` written **before** the
-tag.
+**To commit:** the **full** test suite, lint, and a secret scan all pass locally — not the tests
+you touched, the whole suite.
+
+**To release, additionally:** green CI on that exact commit, a clean-room install of the built
+wheel that is actually run end to end, and `docs/releases/vX.Y.Z.md` written **before** the tag,
+carrying the commands that were run and their results rather than a summary from memory.
 
 ## Reporting bugs and security issues
 

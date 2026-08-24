@@ -67,7 +67,7 @@ def parse_target_retention_seconds(entry: dict, *, context: str) -> int:
     newest full, nor anything at or after it). That is "clear what the next restore does not need",
     which is what :data:`clear_staging_after_restore` asks for, not "keep everything". The older
     wording here and on the dataclass field said the opposite and was believed for long enough to
-    matter — the 187.249 staging directory reached 16.7 GB under a 14-day window.
+    matter — the 2.249 staging directory reached 16.7 GB under a 14-day window.
     """
     raw = entry.get("target_retention_seconds")
     if raw is None:

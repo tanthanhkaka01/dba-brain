@@ -489,7 +489,7 @@ Oracle metrics under `db_ops/metrics/collectors/oracle/legacy_8i/`. Two rules ma
 - **`major_version` on the instance is not optional.** Without it the collector cannot tell 8.1.7
   from a current release: version-bounded variants stop filtering, and the metric falls back to
   the last supported variant in the list, so an instance quietly runs 9i+/12c+ SQL against views
-  it does not have. On 1.236 that meant `BACKUP_AGE`, `BACKUP_LAST_RESULT`,
+  it does not have. On 2.236 that meant `BACKUP_AGE`, `BACKUP_LAST_RESULT`,
   `DATABASE_USER_PERMISSIONS`, `DATABASE_CONSTRAINT_HEALTH`, `MAINTENANCE_INDEX_FRAGMENTATION` and
   `MAINTENANCE_STATISTICS_AGE` all running and failing every cycle. Set it; the four version-bounded
   ones then skip cleanly.
