@@ -245,11 +245,11 @@ def test_a_credential_secret_becomes_a_placeholder_never_a_value():
         {"name": "BackupToUrl", "credential_identity": "storageaccount"},
     ]})
 
-    sql, refs = si._export_credentials(cursor, _policy(), _INFO, "MSSQL_70_115")
+    sql, refs = si._export_credentials(cursor, _policy(), _INFO, "MSSQL_2_115")
 
     assert "IDENTITY = 'storageaccount'" in sql
-    assert "{{secret:MSSQL_70_115_CREDENTIAL_BACKUPTOURL}}" in sql
-    assert refs == ["{{secret:MSSQL_70_115_CREDENTIAL_BACKUPTOURL}}"]
+    assert "{{secret:MSSQL_2_115_CREDENTIAL_BACKUPTOURL}}" in sql
+    assert refs == ["{{secret:MSSQL_2_115_CREDENTIAL_BACKUPTOURL}}"]
 
 
 def test_replay_resolves_placeholders_and_reports_the_ones_it_cannot():

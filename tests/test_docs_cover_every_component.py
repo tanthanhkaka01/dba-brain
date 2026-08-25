@@ -124,7 +124,7 @@ def test_a_doc_is_not_empty(component: str, doc_name: str) -> None:
 
     Deliberately *not* asserting a heading format: 10 of the 14 open with a bare title
     (`# Telegram App`) and 4 with the numbered form (`# 13. Common`). That inconsistency is real
-    and is recorded in `audits/CONFORMANCE_ARCHITECTURE_RULES.md` as an observation. Pinning one
+    and is recorded in the project's architecture rules as an observation. Pinning one
     of the two here would be this test inventing a convention the repository does not have.
     """
     body = (DOCS_ROOT / doc_name).read_text(encoding="utf-8").strip()

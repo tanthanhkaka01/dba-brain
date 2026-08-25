@@ -39,7 +39,7 @@ def _config(**overrides):
         "server_id": "ACME-192-0-2-111",
         "service_name": "APPDB-PROD",
         "instance_name": "MSSQLSERVER",
-        "credential_name": "sqlserver_100.111_dba",
+        "credential_name": "sqlserver_2.111_dba",
         "database_name": "APPDB_Testing",
         "sql_file": "update_flag.sql",
         "parameters": [{"name": "ticket_id", "position": 1, "required": True}],
@@ -93,7 +93,7 @@ def test_the_target_database_and_login_come_from_the_command_config(stub):
 
     assert stub["target"] == "ACME-192-0-2-111"
     assert stub["database"] == "APPDB_Testing"
-    assert stub["credential_name"] == "sqlserver_100.111_dba"
+    assert stub["credential_name"] == "sqlserver_2.111_dba"
 
 
 def test_it_reports_the_rows_it_changed_not_the_rows_it_returned(stub):

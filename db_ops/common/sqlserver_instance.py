@@ -993,7 +993,7 @@ def export_instance(
         {"target": "ACME-192-0-2-115",
          "output_dir": "runtime/instance_bundles/ACME-192-0-2-115",
          "include": ["logins", "agent_jobs"],      # default: everything the policy declares
-         "secret_prefix": "MSSQL_70_115"}
+         "secret_prefix": "MSSQL_2_115"}
     """
     policy = load_policy(data_dir)
     report = GateReport("sqlserver-export-instance", target=str(request.get("target") or ""), echo=echo)

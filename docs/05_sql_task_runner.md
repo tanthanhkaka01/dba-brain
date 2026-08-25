@@ -406,7 +406,7 @@ scheduled run has no requester, so its rows stay on the log line as before.
 
 1. `--output-chat-id` on the run — `/spbot_run_sql_task` passes the chat that asked, so a file
    someone requested by hand comes back to them. Without this the first export went to the
-   `System - Logs` group while the operator who ran the command saw only "finished" and no file.
+   `Ops - Logging` group while the operator who ran the command saw only "finished" and no file.
 2. the target's `output.chat_id`, then its `output.telegram_chat` notify level;
 3. failing both, the target's `logging_on_run` chat — a target that sets a format but no chat
    still delivers rather than dropping the file silently.

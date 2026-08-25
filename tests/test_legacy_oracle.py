@@ -29,8 +29,8 @@ from db_ops.sql_tasks.runner import SqlCommand, SqlTarget
 def test_the_connect_string_is_built_from_the_targets_own_credential():
     connect = oracle_bridge.resolve_connect(
         {"method": "subprocess"},
-        {"ORACLE_1_236_SYS": "s3cret"},
-        credential={"username": "sys", "password_ref": "ORACLE_1_236_SYS", "role": "SYSDBA"},
+        {"ORACLE_2_236_SYS": "s3cret"},
+        credential={"username": "sys", "password_ref": "ORACLE_2_236_SYS", "role": "SYSDBA"},
         host="192.0.2.236",
         port=1521,
         service_name="LEGACYDB",
@@ -171,7 +171,7 @@ def test_a_metrics_row_cap_reaches_the_legacy_tool_like_it_reaches_every_other_e
             ip="192.0.2.236",
             db_type="oracle",
             db_name="LEGACYDB",
-            credential_name="oracle_1.236_LEGACYDB_sys",
+            credential_name="oracle_2.236_LEGACYDB_sys",
             port=1521,
             sql_access={"method": "api", "bridge_url": "http://127.0.0.1:8765/query"},
             service_name="LEGACYDB",
@@ -234,7 +234,7 @@ def test_run_sql_routes_a_legacy_target_through_the_tool_and_reports_the_normal_
         lambda spec, data_dir=None, database="", credential_name="", sql_access=None,
         profile=None, driver="", oracle_client_mode="": {
             "server_id": "ACME-192-0-2-236", "db_type": "oracle", "database_name": "LEGACYDB",
-            "credential_name": "oracle_1.236_LEGACYDB_sys", "username": "sys", "password": "x",
+            "credential_name": "oracle_2.236_LEGACYDB_sys", "username": "sys", "password": "x",
             "credential_role": "SYSDBA", "ip": "192.0.2.236", "port": 1521,
             "service_name": "LEGACYDB", "instance_name": "LEGACYDB",
             "sql_access": {"method": "subprocess"},
@@ -382,7 +382,7 @@ def _target(**overrides):
 
     base = dict(
         sql_id=19, target_no=1, server_id="ACME-192-0-2-236", db_type="oracle",
-        service_name="LEGACYDB", instance_name="", credential_name="oracle_1.236_LEGACYDB_sys",
+        service_name="LEGACYDB", instance_name="", credential_name="oracle_2.236_LEGACYDB_sys",
         time_window=TimeWindow(), active=True, database_name="LTR",
         output_format="xlsx", sql_access={"method": "api", "bridge_url": "http://h:8765/query"},
     )
@@ -476,12 +476,12 @@ def test_a_task_inherits_its_servers_transport_from_db_instances(tmp_path):
     """The transport belongs to the server: an 8i host is unreachable by every task alike."""
     (tmp_path / "db_instances.json").write_text(json.dumps({"db_instances": [{
         "server_id": "ACME-192-0-2-236", "db_type": "oracle", "ip": "192.0.2.236",
-        "default_credential_name": "oracle_1.236_LEGACYDB_sys",
+        "default_credential_name": "oracle_2.236_LEGACYDB_sys",
         "sql_access": {"method": "api", "bridge_url": "http://h:8765/query"},
     }]}), encoding="utf-8")
     (tmp_path / "sql_targets.json").write_text(json.dumps({"sql_targets": [{
         "sql_id": 19, "target_no": 1, "server_id": "ACME-192-0-2-236", "db_type": "oracle",
-        "service_name": "LEGACYDB", "credential_name": "oracle_1.236_LEGACYDB_sys", "active": True,
+        "service_name": "LEGACYDB", "credential_name": "oracle_2.236_LEGACYDB_sys", "active": True,
     }]}), encoding="utf-8")
 
     targets = runner.load_sql_targets(tmp_path / "sql_targets.json")
@@ -588,7 +588,7 @@ def test_a_dash_answers_the_prompt_with_no_values():
 def _write_task_config(tmp_path, *, parameters=None, active=True, target_active=True):
     (tmp_path / "db_instances.json").write_text(json.dumps({"db_instances": [{
         "server_id": "ACME-192-0-2-236", "db_type": "oracle", "ip": "192.0.2.236",
-        "default_credential_name": "oracle_1.236_LEGACYDB_sys",
+        "default_credential_name": "oracle_2.236_LEGACYDB_sys",
         "sql_access": {"method": "api", "bridge_url": "http://h:8765/query"},
     }]}), encoding="utf-8")
     (tmp_path / "sql_commands.json").write_text(json.dumps({"sql_commands": [{
@@ -601,7 +601,7 @@ def _write_task_config(tmp_path, *, parameters=None, active=True, target_active=
     (tmp_path / "sql_targets.json").write_text(json.dumps({"sql_targets": [{
         "sql_id": 19, "target_no": 1, "server_id": "ACME-192-0-2-236", "db_type": "oracle",
         "service_name": "LEGACYDB", "database_name": "LTR",
-        "credential_name": "oracle_1.236_LEGACYDB_sys", "active": target_active,
+        "credential_name": "oracle_2.236_LEGACYDB_sys", "active": target_active,
         "output": {"format": "xlsx"},
     }]}), encoding="utf-8")
     return tmp_path

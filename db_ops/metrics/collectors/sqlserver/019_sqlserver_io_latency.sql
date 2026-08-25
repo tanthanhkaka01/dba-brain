@@ -47,8 +47,8 @@ SELECT
     -- average since the ENGINE STARTED, not the latency right now. A file that was slow for one
     -- afternoon last winter still carries it months later, and a problem that started this morning
     -- is diluted by every good hour behind it. On 192.0.2.115 this average sat at 12.84 ms while
-    -- individual 15-minute intervals reached 269 ms and 1736 ms - see
-    -- audits/20260810_audit_axdb_log_full_outage_70_115.md. So this CASE catches a file that has
+    -- individual 15-minute intervals reached 269 ms and 1736 ms during one log-full outage.
+    -- So this CASE catches a file that has
     -- been slow *on average for as long as the instance has been up*, which is a real condition and
     -- the only one a single query on the target can see. It does not catch a spike.
     --

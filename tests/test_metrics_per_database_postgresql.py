@@ -5,7 +5,7 @@ PostgreSQL metric to `connection_info.database`, falling back to `postgres` — 
 this estate sets it. So every per-database PostgreSQL metric was describing `postgres`, which on
 the PGLAB cluster holds no user tables at all, while the real data sat in `db_ops` where nothing
 looked. Four metrics reported OK from an empty database
-(audits/20260817_audit_oracle_postgresql_report_gaps.md, section 3b).
+- four metrics reporting OK from a database with nothing in it.
 
 SQL Server never had this problem: it iterates databases inside the SQL, with a cursor and USE.
 PostgreSQL needs a connection each, so the loop moved into the collector and is opted into per

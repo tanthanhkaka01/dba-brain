@@ -181,7 +181,7 @@ def parse_args(argv):
     # Default changed on 2026-08-11: the master is the source of truth, and a deploy ships it.
     #
     # It was the other way round from 2.24.00, after a deploy destroyed config registered through
-    # the bot (audits/20260805_audit_worker_config_merge_silent_loss.md). That merge also made the
+    # the bot. That merge also made the
     # master un-editable for the fields the worker owns: `metrics.metric_overrides` is
     # worker-owned, so editing a severity map on the master and deploying silently restored the
     # worker's copy — over the master's file, before the build, so the edit was lost on both

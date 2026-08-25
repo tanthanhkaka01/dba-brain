@@ -2796,6 +2796,24 @@ def _extract_flag_words(
     return remaining, values
 
 
+def _default_worker_host(config_path: str | Path | None = None) -> str:
+    """The first worker host declared in config.json, or ``""`` when there is none.
+
+    Empty rather than raising: a master-only install has no worker, and a command that does not use
+    ``{worker_host}`` must still run there. A command that *does* use it fails on the unresolved
+    placeholder, which names the missing setting instead of connecting somewhere unintended.
+    """
+    try:
+        config = load_config(config_path or DEFAULT_CONFIG_PATH)
+    except Exception:  # noqa: BLE001 - a command must not fail because config.json is unreadable.
+        return ""
+    for node in getattr(config, "worker", ()) or ():
+        host = getattr(node, "host", "")
+        if host:
+            return str(host)
+    return ""
+
+
 def cli_action_values(
     *, command: SupportCommand, args: list[str], config_path: str | Path,
     chat_id: str | None = None,
@@ -2805,6 +2823,14 @@ def cli_action_values(
     values["config_path"] = str(config_path)
     values["command_text"] = command.command_text
     values["python"] = sys.executable
+    # The worker's address belongs to the deployment, not to the command. Writing it into
+    # `command_argv` means the shipped catalogue carries somebody else's address - a fresh install
+    # got a documentation-range one, which is nobody's worker - and moving the worker means editing
+    # every command that named it. `{worker_host}` resolves from config.json, where the cluster is
+    # already declared, so the command states *what* it wants and the deployment says where.
+    worker_host = _default_worker_host(config_path)
+    if worker_host:
+        values["worker_host"] = worker_host
     # The chat that asked. A command whose result is a *deliverable* (an xlsx from a SQL task)
     # has to be able to send it back where it was requested; without this the file goes to the
     # target's configured notify chat and the person who ran it never sees it.

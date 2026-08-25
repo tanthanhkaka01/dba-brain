@@ -1453,7 +1453,7 @@ def test_runtime_stdout_bridge_sanitizes_before_writing(tmp_path):
 
 def test_build_add_certificate_sql_checks_name_or_thumbprint_before_create():
     certificate = BackupCertificate(
-        certificate_name="APPDB_PROD_100_250_2026",
+        certificate_name="APPDB_PROD_2_250_2026",
         thumbprint="0xFA247A43A377B01DD94EDA3CAF46CAD1FF68E019",
         certificate_base64="Y2VydA==",
         private_key_base64="cHZr",
@@ -1463,9 +1463,9 @@ def test_build_add_certificate_sql_checks_name_or_thumbprint_before_create():
     sql = build_add_certificate_sql(certificate)
 
     assert "FROM sys.certificates" in sql
-    assert "name = N'APPDB_PROD_100_250_2026'" in sql
+    assert "name = N'APPDB_PROD_2_250_2026'" in sql
     assert "CONVERT(varchar(66), thumbprint, 1) = '0xFA247A43A377B01DD94EDA3CAF46CAD1FF68E019'" in sql
-    assert "CREATE CERTIFICATE [APPDB_PROD_100_250_2026]" in sql
+    assert "CREATE CERTIFICATE [APPDB_PROD_2_250_2026]" in sql
     assert "DECRYPTION BY PASSWORD = N'pass''word'" in sql
 
 
@@ -1486,7 +1486,7 @@ def test_build_add_certificate_command_runs_on_vm_and_writes_cert_files(tmp_path
         restore_sql_instance_on_vm="localhost",
     )
     certificate = BackupCertificate(
-        certificate_name="APPDB_PROD_100_250_2026",
+        certificate_name="APPDB_PROD_2_250_2026",
         thumbprint="FA247A43A377B01DD94EDA3CAF46CAD1FF68E019",
         certificate_base64="Y2VydA==",
         private_key_base64="cHZr",
@@ -1502,7 +1502,7 @@ def test_build_add_certificate_command_runs_on_vm_and_writes_cert_files(tmp_path
     assert "ScriptBlock {\n    param(" in cmd[-1]
     assert "WriteAllBytes($cerPath, [Convert]::FromBase64String($CerBase64))" in cmd[-1]
     assert "& $SqlcmdPath -S $SqlInstance -C @SqlAuthArgs -b -Q $Sql" in cmd[-1]
-    assert "CREATE CERTIFICATE [APPDB_PROD_100_250_2026]" in cmd[-1]
+    assert "CREATE CERTIFICATE [APPDB_PROD_2_250_2026]" in cmd[-1]
 
 
 def test_parse_backup_certificate_reads_vault_payload_data():
@@ -1510,13 +1510,13 @@ def test_parse_backup_certificate_reads_vault_payload_data():
         {
             "backup_cert_base64": "Y2VydA==",
             "backup_private_key_base64": "cHZr",
-            "certificate_name": "APPDB_PROD_100_250_2026",
+            "certificate_name": "APPDB_PROD_2_250_2026",
             "private_key_password": "secret",
             "thumbprint": "0xFA247A43A377B01DD94EDA3CAF46CAD1FF68E019",
         }
     )
 
-    assert certificate.certificate_name == "APPDB_PROD_100_250_2026"
+    assert certificate.certificate_name == "APPDB_PROD_2_250_2026"
     assert certificate.private_key_password == "secret"
 
 

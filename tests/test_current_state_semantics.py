@@ -1,4 +1,4 @@
-"""Regressions for the five P0 defects in ``audits/20260801_audit_check_metric_db_health.md``.
+"""Regressions for the five P0 defects found in one estate-wide metric health audit.
 
 Every case here is built from what the two production targets actually produced on 2026-08-01,
 because each defect was invisible to the tests that existed: they all asserted on data shaped the

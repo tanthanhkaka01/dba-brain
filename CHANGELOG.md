@@ -15,6 +15,63 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-08-25
+
+### Added
+
+- `db-ops common check-secret-literals` — scans files for literal values held in the secret store.
+  The store is decrypted and its values are matched exactly; a finding reports the ref, the file and
+  the line, and never the value. A passphrase is required; without one the command exits with an
+  error rather than reporting a result.
+
+### Fixed
+
+- `spbot_create_db_docker` and `spbot_report_inventory` contained a hard-coded worker address. Both
+  now resolve `{worker_host}` from `config.json`, and render it empty when no worker is configured.
+  An existing `data/telegram_support_commands.json` is not modified.
+- `check-identifiers` did not match names of the form `<name>_<octet>_<octet>`, because `_` was
+  treated as a word boundary. The boundary now excludes an adjacent digit, and a separator followed
+  by a digit.
+- `data/telegram_groups.example.json` now ships placeholder group ids and titles.
+
+## [0.4.1] - 2026-08-24
+
+### Fixed
+
+- `check-identifiers` did not read `.html` or `.j2` files, which were absent from its extension
+  list, so report templates were not scanned. Both types are now included.
+- `check-identifiers` matched full addresses only. It now also derives and matches the two-octet
+  short form, bounded so that it does not match inside the address it was derived from.
+- A Telegram command tied to a single instance was removed from the catalogue written by
+  `db-ops init` and from its example copy.
+
+## [0.4.0] - 2026-08-24
+
+### Added
+
+- `db-ops common copy-schema` — reproduce one SQL Server schema on another instance.
+
+### Fixed
+
+- Six of the fourteen packages could not complete a scheduled cycle on a clean install. All
+  fourteen now run from a fresh tool root.
+- `db-ops init` did not write `webhost_config.json` or `data/config_catalog.json`, so the web
+  console rendered no applications. Both are now written, and an empty dashboard names the command
+  that populates it. (Listed under `[0.3.4]` below, which was never published; the fix was released
+  here.)
+- `db-ops daemon --once` did not return, because the default schedule enabled the web console.
+- `sla validate` and `sql-tasks` failed to start when their configuration files were absent.
+- Telegram polling failed once per second when unconfigured, because `db-ops init` wrote a
+  placeholder token ref instead of leaving it unset.
+- `ops-status` failed on Windows, where its scheduled command quoted the request in single quotes.
+- `control inventory-summary` raised `FileNotFoundError` for a file it should report as absent.
+- Shipped examples now use documentation-range addresses and placeholder names.
+
+### Changed
+
+- The default schedule enables six commands and disables three. Backup/restore and the inventory
+  commands require configuration that does not exist on a fresh install.
+
 ## [0.3.4] - 2026-08-24
 
 ### Fixed

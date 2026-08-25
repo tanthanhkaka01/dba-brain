@@ -36,7 +36,8 @@ ALL_COMMANDS = [
     # exist is worse than no coverage: it reports a contract being kept by nothing.
     "add-sql", "metric-toggle", "list-targets",
     "run-sql", "run-cmd", "rotate-password",
-    "check-secret", "check-identifiers", "lift-example", "probe-host", "metric-severity", "trace-session",
+    "check-secret", "check-identifiers", "check-secret-literals",
+    "lift-example", "probe-host", "metric-severity", "trace-session",
     "inventory-summary", "restore-database", "list-backup-files",
     "pack-backup", "pull-file", "push-file",
     "restore-full", "restore-diff", "restore-log", "restore-key", "restore-metadata",

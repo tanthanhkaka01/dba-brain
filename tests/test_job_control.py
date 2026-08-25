@@ -1,7 +1,7 @@
 """Switching a scheduled job off, and the four ways that must not go wrong.
 
 `disable-job` exists because of `OptimizeIndex_Weekly`: five collapses of 192.0.2.115 in nine
-weeks (`audits/20260814_audit_optimizeindex_weekly_server_collapse.md`), and every time the only
+weeks, and every time the only
 way to stop the next run was to reach a workstation and untick a box.
 
 What these tests hold:

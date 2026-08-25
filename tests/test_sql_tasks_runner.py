@@ -261,7 +261,7 @@ def test_server_id_alone_finds_the_credential_of_a_single_instance_server(tmp_pa
         json.dumps({"db_instances": [{
             "server_id": "ACME-192-0-2-248", "ip": "192.0.2.248", "db_type": "sqlserver",
             "service_name": "GLOBEX", "instance_name": "SQLEXPRESS",
-            "default_credential_name": "sqlserver_1.248_MSSQLSERVER_dba_user",
+            "default_credential_name": "sqlserver_2.248_MSSQLSERVER_dba_user",
         }]}),
         encoding="utf-8",
     )
@@ -276,7 +276,7 @@ def test_server_id_alone_finds_the_credential_of_a_single_instance_server(tmp_pa
 
     target = runner.load_sql_targets(data_dir / "sql_targets.json")[0]
 
-    assert target.credential_name == "sqlserver_1.248_MSSQLSERVER_dba_user"
+    assert target.credential_name == "sqlserver_2.248_MSSQLSERVER_dba_user"
 
 
 def test_two_instances_on_one_server_refuse_to_guess_a_credential(tmp_path):

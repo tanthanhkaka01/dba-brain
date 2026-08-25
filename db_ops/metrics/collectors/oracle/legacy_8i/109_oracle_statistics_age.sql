@@ -13,7 +13,7 @@
 -- table changes no plan, and including them turned this into a list nobody read. Status is
 -- LOGGING, not WARNING: like the 12c+ variant this is an inventory to work through, and a stale
 -- statistic stays stale until someone updates it, so it would otherwise alert forever
--- (audits/20260811_audit_repeating_metric_alerts.md explains why that pattern was stopped).
+-- - the repeating-alert pattern this project deliberately stopped.
 SELECT * FROM (
     SELECT
         owner || '.' || table_name AS metric_item,

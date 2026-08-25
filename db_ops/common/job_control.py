@@ -1,7 +1,7 @@
 """Switching a scheduled job off, on whichever engine owns it.
 
 The operation the 2026-08-10 log-full outage needed and did not have. `OptimizeIndex_Weekly` has
-taken 192.0.2.115 down five times in nine weeks (`audits/20260814_audit_optimizeindex_weekly_server_collapse.md`),
+taken 192.0.2.115 down five times in nine weeks,
 and every time the only way to stop the next run was to reach a workstation, open SSMS and
 untick a box. Disabling is the *safe* half of that emergency: it changes no data, it interrupts
 nothing that is already running, and it is trivially reversible — which is exactly why it should

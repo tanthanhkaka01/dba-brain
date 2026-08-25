@@ -396,8 +396,15 @@ def _patterns(searchable: dict[str, tuple[str, str, str]]) -> list[tuple[re.Patt
         built.append((re.compile(r"(?<![\w-])(?:" + "|".join(re.escape(k) for k in strict)
                                  + r")(?![\w-])"), False))
     if shorthand:
-        built.append((re.compile(r"(?<![\w.-])(?:" + "|".join(re.escape(k) for k in shorthand)
-                                 + r")(?![\w.-])"), False))
+        # The boundary has to reject two things and accept a third, and the obvious `(?<![\w.-])`
+        # gets the third wrong. Reject a neighbouring **digit or dot**, which is what keeps the
+        # shorthand from matching inside the address it came from, or inside a version number.
+        # Accept a neighbouring letter, underscore or hyphen, because that is how prose, filenames
+        # and credential refs actually write it — treating `_` as a word boundary meant every
+        # `<something>_<octet>_<octet>` name read as clean, and 30 of them had.
+        built.append((re.compile(r"(?<![\d.])(?<!\d-)(?<!\d_)(?:"
+                                 + "|".join(re.escape(k) for k in shorthand)
+                                 + r")(?!\d)(?![.\-_]\d)"), False))
     return built
 
 

@@ -134,13 +134,13 @@ def test_new_chats_and_users_the_bot_discovered_are_carried_over(tmp_path, monke
         tmp_path, monkeypatch,
         master={
             "telegram_groups.json": {"telegram_groups": [
-                {"group_id": "-100", "title": "System - Logs", "allow_command": 100}]},
+                {"group_id": "-100", "title": "Ops - Logging", "allow_command": 100}]},
             "telegram_users.json": {"telegram_users": [{"user_id": "1", "user_type": 100}]},
         },
         worker={
             "telegram_groups.json": {"telegram_groups": [
                 # the master raised allow_command for this one; the worker still has the default
-                {"group_id": "-100", "title": "System - Logs", "allow_command": 0},
+                {"group_id": "-100", "title": "Ops - Logging", "allow_command": 0},
                 {"group_id": "-200", "title": "New group", "allow_command": 0}]},
             "telegram_users.json": {"telegram_users": [
                 {"user_id": "1", "user_type": 100}, {"user_id": "2", "user_type": 0}]},

@@ -76,8 +76,8 @@ _DEFAULT_TIME_WINDOW = {
 # artifact rather than two renderings that drift.
 
 # Where a SQL task reports, on run and on failure. Every target in `sql_targets.json` routes to
-# the dedicated "System - SQL tasks" group, and a test asserts it — a task added through the bot
-# has to follow the same convention, or its runs (and its xlsx export) land in "System - Logs"
+# the dedicated "Ops - SQL tasks" group, and a test asserts it — a task added through the bot
+# has to follow the same convention, or its runs (and its xlsx export) land in "Ops - Logging"
 # where nobody is looking for them. Not in NOTIFY_CHAT_LEVELS: that tuple is the generic set,
 # while `telegram_groups.json` also defines app-specific levels (sql, sla, backup, restore).
 SQL_TASK_NOTIFY_CHAT = "sql"

@@ -77,7 +77,7 @@ def execute_metric_sql(
             secrets=secrets,
             # The connect string is built from this target's own credential, exactly as the
             # direct path below resolves it — the bridge's `connect_ref` secret was a duplicate
-            # of a password already in the store and was deleted (audits/20260801).
+            # of a password already in the store and was deleted.
             credential=target.credential,
             host=target.ip or target.server_id,
             port=target.port,

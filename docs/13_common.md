@@ -376,7 +376,7 @@ instance before enabling this against it.** That is an operational decision, whi
 turning one on is deliberate. A ready-to-adapt entry:
 
 ```json
-{"backup_id": "ACME_MSSQL_70_115_FULL", "active": false, "db_type": "sqlserver",
+{"backup_id": "ACME_MSSQL_2_115_FULL", "active": false, "db_type": "sqlserver",
  "server_id": "ACME-192-0-2-115", "backup_dir": "E:\\SQLBK\\dbops",
  "env_secrets": {"BACKUP_ENCRYPTION_PASSWORD": "<secret ref>"},
  "jobs": [{"job": "full", "active": false,
@@ -1554,7 +1554,7 @@ by union, which would restore the pre-rotation values.
 ## Copying a schema between instances (`schema_copy`)
 
 Reproduce SQL Server schema `X` from one instance on another. Raised from a real deployment
-(`audits/DB_OPS_FEATURE_REQUEST_schema_copy_20260822.md`) where the whole thing was done by hand
+where the whole thing was done by hand
 outside db_ops, and every requirement below is something that cost time on that run.
 
 ```bash

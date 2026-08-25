@@ -4,7 +4,7 @@
 -- `PROCESS_LIMIT` (102) already reports how full `processes` and `sessions` are. It cannot say
 -- *why*, and on this platform the why is what decides the fix. Measured on 192.0.2.235 on
 -- 2026-08-19, at 549 of 550 processes: 5 sessions were ACTIVE, 336 were idle, **199 were KILLED
--- and 202 threads were orphaned**. See audits/20260819_audit_oracle_8i_1.235_killed_sessions_hold_the_wall.md.
+-- and 202 threads were orphaned**.
 --
 -- The two numbers this adds, and why neither is visible anywhere else:
 --

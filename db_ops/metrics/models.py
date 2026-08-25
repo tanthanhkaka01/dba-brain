@@ -28,7 +28,7 @@ class MetricVariant:
     #: from one connection. Every per-database PostgreSQL metric was therefore describing whichever
     #: single database the target happened to connect to — `postgres` for every target in this
     #: estate, which holds no user tables at all. Four metrics reported OK from an empty database
-    #: (audits/20260817_audit_oracle_postgresql_report_gaps.md, section 3b).
+    #: - four metrics reporting OK from a database with nothing in it.
     #:
     #: SQL Server needs nothing here: it iterates databases inside the SQL with a cursor and USE.
     per_database: bool = False

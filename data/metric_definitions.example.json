@@ -4156,7 +4156,7 @@
         }
       ],
       "report_policy": {
-        "_note": "Inventory, not a signal - the same shape as MAINTENANCE_INDEX_FRAGMENTATION above. Measured 2026-08-11: 4441 WARNINGs over 2495 distinct statistics objects in 3 days, ~1480 rows per run, none of them ever resolving because a stale statistic stays stale until someone updates it. That is a list to work through, not an alert. collect_only keeps every row in the store and in the inventory report and stops feeding them to the scheduled reports. See audits/20260811_audit_repeating_metric_alerts.md.",
+        "_note": "Inventory, not a signal - the same shape as MAINTENANCE_INDEX_FRAGMENTATION above. Measured 2026-08-11: 4441 WARNINGs over 2495 distinct statistics objects in 3 days, ~1480 rows per run, none of them ever resolving because a stale statistic stays stale until someone updates it. That is a list to work through, not an alert. collect_only keeps every row in the store and in the inventory report and stops feeding them to the scheduled reports.",
         "collect_only": true,
         "sparse_items": true
       }
@@ -5118,7 +5118,7 @@
       ],
       "max_rows": 500,
       "report_policy": {
-        "_note": "First run against a real instance (2.236, run 28781) found 76 objects already invalid in one application schema - 73 views, 2 functions, 1 procedure. That is a true finding and a real backlog, but it is a backlog: it stays exactly as it is until someone recompiles, so alerting on it would repeat every report cycle forever, which is the pattern audits/20260811_audit_repeating_metric_alerts.md exists to stop. collect_only keeps every row in the store and in the inventory report while keeping it out of the warning/critical reports. Turn this off once a schema is clean, and a newly invalidated object after a release becomes the alert it should be.",
+        "_note": "First run against a real instance (2.236, run 28781) found 76 objects already invalid in one application schema - 73 views, 2 functions, 1 procedure. That is a true finding and a real backlog, but it is a backlog: it stays exactly as it is until someone recompiles, so alerting on it would repeat every report cycle forever, which is the repeating-alert pattern this project deliberately stops. collect_only keeps every row in the store and in the inventory report while keeping it out of the warning/critical reports. Turn this off once a schema is clean, and a newly invalidated object after a release becomes the alert it should be.",
         "collect_only": true
       },
       "note": "INVALID stored code does not fail when it breaks, it fails when it is next called - ORA-04068 in the middle of a business transaction hours later. Grouped by owner and object type rather than one row per object: a failed release invalidates a whole schema at once, and 300 rows saying so is one finding, not 300."
