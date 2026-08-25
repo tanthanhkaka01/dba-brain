@@ -123,7 +123,7 @@ def test_every_allowance_is_still_used() -> None:
 #: They are recorded, not deleted, because the resolution is structural rather than a move:
 #: `common_cli` is the transport every app uses to reach `common`, so wherever it lives, something
 #: has to spawn a process. Naming the layer that owns the transport is a design decision and is
-#: open in `audits/CONFORMANCE_ARCHITECTURE_RULES.md` (V7).
+#: open in the project's architecture rules (V7).
 KNOWN_CLI_LAUNCHERS: dict[str, str] = {
     "common_cli.py": "the one client for `db_ops.common.cli` (and `db.cli` via `module=`)",
     "telegram_route.py": "falls back to `db_ops.telegram.cli` for the level -> chat map",

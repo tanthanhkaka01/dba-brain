@@ -454,7 +454,7 @@ def test_ordinary_oracle_passwords_are_accepted():
     from db_ops.sre.docker_db.provisioner import validate_password
 
     spec = _oracle_spec()
-    for good in ("Jfmdsh37d#42", "aB3-_.!%xyz", "plain12345"):
+    for good in ("Xk7q-tR2#91", "aB3-_.!%xyz", "plain12345"):
         validate_password(spec, good)          # must not raise
     validate_password(spec, None)              # dry-run: nothing resolved yet
 

@@ -23,7 +23,7 @@ Two transports carry that call, chosen per target by ``db_instances.json`` ``sql
 target's own ``users.json`` credential (username) and the encrypted secret store (password) —
 the same credential every other app resolves for that server. A hand-written
 ``ORACLE8I_CONNECT_*`` secret holding ``user/pass@host/service`` used to exist for this and was
-deleted on 2026-08-01 (``audits/20260801_audit_secret_text.md``): it duplicated a password that
+deleted on 2026-08-01: it duplicated a password that
 was already in the store under its own ref, so rotating the login left the copy behind.
 ``sql_access.connect_ref`` still overrides, for a login that exists nowhere else.
 

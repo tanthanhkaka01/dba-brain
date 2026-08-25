@@ -50,7 +50,7 @@ try {
     # and the whole thing had to finish inside this metric's 60s timeout. It did not: 22 consecutive
     # `WinRM command timed out after 60 seconds` per host, and the event log metric went blind
     # precisely while the event log was screaming. It recovered only when the storm aged out of the
-    # window. See audits/20260811_audit_repeating_metric_alerts.md.
+    # window.
     $maxEvents = 500
     if ($env:OS_EVENTLOG_MAX_EVENTS) { $maxEvents = [int]$env:OS_EVENTLOG_MAX_EVENTS }
     $logs = @('System', 'Application')

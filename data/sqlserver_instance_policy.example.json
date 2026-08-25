@@ -6,7 +6,7 @@
     "it onto a freshly installed instance. It does NOT back up or restore master/msdb/model.",
     "Everything here is a decision about WHAT is portable between two instances, which is why it is",
     "config and not a literal in Python: the answer changes per estate and per SQL Server version.",
-    "See docs/13_common.md and audits/20260806_plan_sqlserver_instance_metadata.md."
+    "See docs/13_common.md."
   ],
   "artifacts": {
     "note": "Each artifact is one file under server/ in the bundle, applied in this order. 'phase' says whether it must run BEFORE the user databases are restored or AFTER: logins must exist before, or every restored database's users are orphaned; Agent jobs must come after, because their steps name databases that have to exist. 'min_major_version' gates replay onto an older target.",

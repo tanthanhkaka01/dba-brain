@@ -249,7 +249,7 @@ that level, so files land at `vm_import/<db>/FULL` — exactly where the restore
 A restore cannot do point-in-time from a backup set that has no logs in it, and a source does
 not always write its logs next to its fulls.
 
-`192.0.2.248` is the case. db_ops runs only a FULL job there (`ACME_MSSQL_1_248_ALL_FULL`,
+`192.0.2.248` is the case. db_ops runs only a FULL job there (`ACME_MSSQL_2_248_ALL_FULL`,
 writing `.bak` to `\192.0.2.248\SQLBK_DBOPS`); the `.trn` files come from a separate SQL
 Agent maintenance plan writing to `D:\DBA\SqlBK\<instance>\<db>\LOG`. A PITR attempt on
 2026-08-13 failed with **"No transaction log backups found"** — correctly: db_ops' set had none.
@@ -257,7 +257,7 @@ Agent maintenance plan writing to `D:\DBA\SqlBK\<instance>\<db>\LOG`. A PITR att
 **The answer is a second entry, not a second mechanism.** `192.0.2.250` already shows the
 pattern: `ACME_TO_MSSQL2025_DOCKER` reads that host's Agent tree (`\...\SQLBK\APPDB-DB$APPDB`,
 where FULL and LOG sit together) and `ACME_MSSQL_DBOPS_TO_MSSQL2025_DOCKER` reads db_ops' own.
-One share each, no special support. `ACME_MSSQL_1_248_AGENT_PITR_TO_MSSQL25_100_115` is the same
+One share each, no special support. `ACME_MSSQL_2_248_AGENT_PITR_TO_MSSQL25_2_116` is the same
 split for 2.248.
 
 Pointing the *existing* entry at the Agent tree instead would work, but it silently stops

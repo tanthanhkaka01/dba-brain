@@ -69,6 +69,7 @@ USAGE = (
     "  rotate-password  Change database login passwords on the server AND in the store (see --help)\n"
     "  check-secret     Try to authenticate with each secret and say why any cannot be (see --help)\n"
     "  check-identifiers  Which of this estate's real names appear in files that ship (see --help)\n"
+    "  check-secret-literals  Which files that ship hold a VALUE from the secret store (see --help)\n"
     "  lift-example     Refresh a data/*.example.json from your own file, refusing identifiers\n"
     "  probe-host       What a host listens on, and what db_ops can do with it (see --help)\n"
     "  metric-severity  Remap one metric's statuses for one server_id, e.g. WARNING -> LOGGING (see --help)\n"
@@ -336,6 +337,26 @@ def _lift_example_command(argv: list[str]) -> int:
         "lift-example", message=summary["message"], data=summary,
         metrics={"records": summary["records"], "identifier_hits": summary["identifier_hits"]},
     ))
+
+
+CHECK_SECRET_LITERALS_USAGE = (
+    "usage: python -m db_ops.common.cli check-secret-literals <json>|@<file>|- "
+    "[--key ...|--key-base64 ...] [--config ...]\n"
+    "\n"
+    "Reports every file that ships holding a VALUE from the secret store. Not a pattern and not\n"
+    "a guess: the store is decrypted and its values are searched for literally, so a hit is a\n"
+    "real credential of yours sitting in a file that gets published.\n"
+    "\n"
+    "It exists because the other two scanners cannot see this. gitleaks matches the SHAPE of a\n"
+    "credential, so a real password written into a test as an example is allowlisted as a\n"
+    "placeholder; check-identifiers matches configured identifiers, and a password is not one.\n"
+    "A real SA password shipped in a test from v0.2.0 to v0.4.1 in exactly that gap.\n"
+    "\n"
+    "It never prints a secret. A finding names the ref, the file and the line.\n"
+    "\n"
+    "The passphrase comes from --key/--key-base64 or DB_OPS_SECRET_KEY. Without one it refuses,\n"
+    "rather than reporting a tree clean that it could not read.\n"
+)
 
 
 CHECK_IDENTIFIERS_USAGE = (
@@ -1338,6 +1359,79 @@ def _probe_host_command(argv: list[str]) -> int:
     ))
 
 
+def _check_secret_literals_command(argv: list[str]) -> int:
+    """``check-secret-literals`` — is a value from the store sitting in a file that ships?
+
+    The one scan here that *must* open the secret store, which is why it is its own command:
+    ``check-identifiers`` promises to open nothing, and that promise is worth keeping.
+    """
+    from db_ops.common import secret_literals
+    from db_ops.lib import response
+    from db_ops.lib.secret_text import resolve_cli_key
+
+    source = ""
+    config_path = "config.json"
+    key = None
+    key_base64 = None
+    rest = list(argv)
+    while rest:
+        token = rest.pop(0)
+        if token in {"-h", "--help"}:
+            print(CHECK_SECRET_LITERALS_USAGE)
+            return 0
+        if token == "--config":
+            config_path = rest.pop(0) if rest else config_path
+        elif token == "--key":
+            key = rest.pop(0) if rest else None
+        elif token in {"--key-base64", "--key_base64"}:
+            key_base64 = rest.pop(0) if rest else None
+        elif not source:
+            source = token
+        else:
+            print(f"Unexpected argument: {token}", file=sys.stderr)
+            print(CHECK_SECRET_LITERALS_USAGE, file=sys.stderr)
+            return 2
+
+    request, code = _read_json_request(source or "{}", CHECK_SECRET_LITERALS_USAGE)
+    if request is None:
+        return code
+
+    from db_ops.config import load_config
+    from db_ops.common import secret_literals as _sl  # noqa: F401 - imported above, kept explicit
+
+    try:
+        data_dir = getattr(load_config(config_path), "data_dir", None)
+    except Exception:  # noqa: BLE001 - fall back to the package default data dir.
+        data_dir = None
+
+    try:
+        resolved = resolve_cli_key(key, key_base64)
+    except ValueError as exc:
+        return response.emit(response.fail("check-secret-literals", str(exc)))
+
+    try:
+        outcome = secret_literals.scan(request, data_dir=data_dir, key=resolved)
+    except Exception as exc:  # noqa: BLE001 - report as a response like every other command.
+        return response.emit(response.fail("check-secret-literals", str(exc)))
+
+    # `success` means the scan ran. A finding is a fact about the tree - the same distinction
+    # `check-identifiers` and `check-secret` make. Callers gate on `data.hits`.
+    print(secret_literals.format_report(outcome), file=sys.stderr)
+    hits = int(outcome["hits"])
+    return response.emit(response.ok(
+        "check-secret-literals",
+        message=(f"{hits} shipped file(s) hold a stored secret value; searched "
+                 f"{outcome['secrets_searched']} value(s) across "
+                 f"{outcome['files_scanned']} file(s)."),
+        data=outcome,
+        metrics={
+            "hits": hits,
+            "files_scanned": int(outcome["files_scanned"]),
+            "secrets_searched": int(outcome["secrets_searched"]),
+        },
+    ))
+
+
 def _check_identifiers_command(argv: list[str]) -> int:
     """``check-identifiers`` — the CLI face of :mod:`db_ops.common.identifier_scan`.
 
@@ -1679,6 +1773,8 @@ def main(argv: list[str] | None = None) -> int:
         return _check_secret_command(argv[1:])
     if argv[0] == "check-identifiers":
         return _check_identifiers_command(argv[1:])
+    if argv[0] == "check-secret-literals":
+        return _check_secret_literals_command(argv[1:])
     if argv[0] == "lift-example":
         return _lift_example_command(argv[1:])
     if argv[0] == "probe-host":

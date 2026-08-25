@@ -375,7 +375,7 @@ def test_the_workbook_is_queued_as_its_own_document_message(tmp_path):
 
 def test_the_export_goes_to_whoever_asked_for_it():
     """A forced run from Telegram passes the requesting chat. Without it the file lands in the
-    target's notify chat — that is where the first xlsx went, to the "System - Logs" group,
+    target's notify chat — that is where the first xlsx went, to the "Ops - Logging" group,
     while the operator who typed /spbot_run_sql_task saw only "finished" and no file."""
     groups = {"logging": "chat-logging", "sql": "chat-sql"}
     unconfigured = sql_target(output_format="xlsx")

@@ -883,7 +883,7 @@ Example — Windows target with password auth (192.0.2.250):
     "port": 22,
     "shell": "powershell",
     "auth_type": "password",
-    "credential_name": "remote_100.250_svc_backup"
+    "credential_name": "remote_2.250_svc_backup"
   }
 }
 ```
@@ -900,7 +900,7 @@ Example — Linux target with key auth:
     "port": 22,
     "shell": "bash",
     "auth_type": "key",
-    "credential_name": "remote_100.111_dbops"
+    "credential_name": "remote_2.111_dbops"
   }
 }
 ```
