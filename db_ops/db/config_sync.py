@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import Any
 
 from db_ops.lib.json_io import atomic_write_text, dump_json_text
+from db_ops.lib.paths import CONFIG_CATALOG_FILENAME
 from db_ops.db.config_store import (
     DOCUMENT_COLLECTION,
     DOCUMENT_KEY,
@@ -50,7 +51,12 @@ from db_ops.db.config_store import (
 
 #: The catalog: which files are synced, who owns them, how a record is keyed. Lives in ``data/``
 #: with the config it describes, because it *is* config — see CLAUDE.md, "Config is data".
-CATALOG_FILENAME = "config_catalog.json"
+#:
+#: Re-exported rather than restated: ``db_ops.lib.config_bundle`` needs the same name to decide
+#: what crosses to another machine, and a filename with two definitions is a filename that has
+#: two values the week one of them changes. The alias stays because this module's readers know it
+#: by this name.
+CATALOG_FILENAME = CONFIG_CATALOG_FILENAME
 
 #: Keys whose value is a secret itself rather than a reference to one. db_ops stores secrets in
 #: ``data/encrypted_secret_text.json`` and names them by ref, so any of these carrying a non-empty

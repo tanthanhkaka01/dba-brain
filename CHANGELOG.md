@@ -15,6 +15,63 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-08-27
+
+### Added
+
+- `db-ops export-data` / `db-ops import-data` — write a whole estate's configuration to one JSON
+  file and apply it on another machine. What travels comes from `data/data_files.json`. The secret
+  store crosses as ciphertext; the passphrase is not in the file, so the receiving machine supplies
+  `DB_OPS_SECRET_KEY` itself. Every entry carries a sha256 and the bundle is verified before
+  anything is written, so a truncated transfer leaves the target untouched. `--plan` changes
+  nothing.
+- `data/data_files.json` — the inventory of `data/`: every live file, its owning app, and how it
+  moves between master and worker. `deploy`, `worker-pull-data-config` and the merges read it
+  first, and a file that is not listed does not travel in either direction.
+- `json` as a SQL task `output.format`.
+- `worker-status` reports container network reservations: `HIJACK` when a monitored address sits
+  inside a container bridge, `OVERLAP` when a routed range does, `UNCONFINED` when Docker chose a
+  network rather than you. Declare yours in `data/network_reservations.json`; the example explains
+  what to put there.
+- Six commands now ship that previously did not: `/spbot_start_job`, `/spbot_disable_job`,
+  `/spbot_restart_server`, `/spbot_shrink_log`, `/spbot_trace_session`, `/spbot_list_metrics`.
+- `MAINTENANCE_STATISTICS_AGE` grades its finding in a summary row instead of emitting every stale
+  object at `WARNING`, and names the bands (`over_90d`, `stale_and_modified`).
+- `SQLSERVER_WAIT_STATS` measures the interval between passes instead of the total since the engine
+  started.
+
+### Fixed
+
+- `/spbot_kill_spid` sent `{"session_id": N}` where `common.cli kill-spid` takes `{"spid": N}`, so
+  the shipped command failed in every installation.
+- A detached background command that finished was reported as `Exit code: 1` on Windows, because
+  the poller could not read the exit code of a process whose PID had been released and returned a
+  fixed value. The command records its own code now, and "not recorded" reads as finished.
+- `db_ops.control.deploy` could not be imported on a fresh install: it read `data/data_files.json`
+  at import time.
+- The `config_catalog.json` written by `db-ops init` was two entries behind, so a fresh install's
+  console never showed network reservations.
+- `db-ops init` wrote `data/ops_status_request.json`, which no manifest listed, so nothing carried
+  it.
+- The daemon ignored `--key-base64` when `DB_OPS_SECRET_KEY` was already in its environment.
+- `APP-CONTROL` failed every cycle on Windows: its command wrapped inline JSON in POSIX single
+  quotes, which `cmd.exe` passes through literally.
+
+### Changed
+
+- **`output` and `notify` are now required on every entry in `sql_targets.json`.** An absent
+  `output` used to mean `plain`, and a target without one is refused now. Add
+  `{"format": "plain", "telegram_chat": "sql", "chat_id": ""}` to reproduce the old behaviour.
+  Tasks registered through `db-ops common add-sql` already have both.
+- `/spbot_trace_session` takes a server and a database as its first two arguments; it had them
+  fixed in its own configuration.
+
+### Removed
+
+- `/spbot_json_exp_ticket_detail`, which pinned one installation's `--sql-id 14` in its own
+  arguments. Use `/spbot_run_sql_task <id>` with that task's `output.format` set to `json`.
+
+
 ## [0.4.2] - 2026-08-25
 
 ### Added

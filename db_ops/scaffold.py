@@ -452,6 +452,11 @@ PACKAGED_DEFAULTS: dict[str, str] = {
     # The payload APP-CONTROL passes to `ops-status`. A file rather than inline JSON so it
     # survives both shells the daemon might run under - see the note inside it.
     "data/ops_status_request.json": "db/catalogue/ops_status_request.json",
+    # The list every transfer reads first (`db_ops.lib.data_files`). Product data - every name in
+    # it is the toolkit's own - and the code falls back to the packaged copy when a tool root has
+    # none, so this entry is about giving the operator a file to *edit* rather than about making
+    # the tool work. It ships because a manifest nobody can see is one nobody maintains.
+    "data/data_files.json": "control/catalogue/data_files.json",
 }
 
 PACKAGED_CATALOGUE = Path(__file__).parent / "metrics" / "catalogue" / "metric_definitions.json"
@@ -503,6 +508,7 @@ def _files(app_name: str) -> list[tuple[str, dict]]:
             (name, content)
             for name in ("data/reports_config.json", "data/telegram_support_commands.json",
                          "data/app_commands.json", "data/config_catalog.json",
+                         "data/data_files.json",
                          "data/webhost_config.json", "data/sla_policies.json",
                          "data/ops_status_request.json")
             if (content := packaged_default(name)) is not None

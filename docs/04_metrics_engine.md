@@ -47,6 +47,30 @@ little: a row with no `metric_code` column is **kept**, and an unreadable
 `metric_definitions.json` excludes **nothing** — a report missing its rows is far worse than one
 inventory metric appearing for a cycle.
 
+### `collect_only` is not a substitute for grading the rows
+
+An inventory metric still has to say *whether there is a finding*, and it does that with a summary
+row while the detail rows stay `LOGGING`. `MAINTENANCE_INDEX_FRAGMENTATION` has always worked this
+way; `MAINTENANCE_STATISTICS_AGE` did not until 2026-08-25, and emitted every stale statistics
+object at WARNING. On 192.0.2.115 that was **4,232 WARNINGs in one pass** — 1,093 of them over 90
+days old, the oldest 953 days, 2,893 stale *and* modified since. `collect_only` kept them out of
+the scheduled reports, so nothing alerted; it also meant the finding was never stated anywhere a
+person would read, and the one object that mattered was somewhere in the middle of four thousand.
+
+Three grains, and the shape is worth copying for any inventory metric:
+
+| Row | Status | What it is for |
+| --- | --- | --- |
+| `<db>\<table>.<object>` | `LOGGING` | the worklist — "which object" is one query away |
+| `<metric> :: <db>` | `LOGGING` | the grain maintenance is scheduled at — names the database to act on |
+| `<metric> :: summary` | grades | the one line a person reads |
+
+The summary carries the bands, not just a count. "Stale" alone cannot tell a schedule that slipped
+a week from one that stopped two years ago, so the message names `over_90d`, `stale_and_modified`
+and `oldest_days`, and the per-database row names its worst object. On 192.0.2.115 that row picks
+out `NUMBERSEQUENCELIST(15778679 mods/330110 rows)` by itself — the table that appears by name in
+that instance's blocking chains.
+
 ## A live condition and a configuration fact are two metrics, not one
 
 The cadence a metric needs is decided by **how often its answer can change**, and mixing two
@@ -277,10 +301,49 @@ has been slow for as long as the instance has been up, and it does not catch a s
 counters (`io_stall_read_ms`, `io_stall_write_ms`, `reads`, `writes`, `counters_since`) are still
 carried through to the message for anyone diagnosing by hand.
 
-### Why the interval version was withdrawn
+### `PERFORMANCE_WAIT_STATS` samples its own interval
 
-Between 2026-08-10 and 2026-08-11 the collector graded this metric on the **interval** between two
-stored samples instead, which does catch spikes: on 192.0.2.115 the cumulative average read
+`014_sqlserver_wait_stats.sql` (both variants) no longer reads the DMV once. It reads it, waits
+five seconds, reads it again, and reports the **difference** — so `metric_value` is seconds of wait
+accumulated during that sample, not since boot.
+
+The reason is measured. On 192.0.2.115 with 22 days of uptime, the cumulative reading made
+`SOS_WORK_DISPATCHER` the top wait on **all 350 samples** at 361,631,036 seconds, graded OK every
+time, while users were blocked on `LCK_M_U` for up to 30 minutes. An idle-scheduler counter accrues
+a second per scheduler per second, so on a long-running instance it out-ranks every real wait
+forever and no threshold placed on it can ever move.
+
+This does **not** reopen the design below. Both samples are taken inside one execution, so nothing
+is stored on the target or in the runtime store, and the metric still grades itself in its own SQL.
+No policy module, no store lookup, no per-metric branch in the collector.
+
+Three things that fix required, each found by running it against the estate rather than by reading:
+
+- **The benign list is load-bearing now.** On a cumulative reading an idle wait is a big number; on
+  an interval it *is* the whole interval. `SOS_WORK_DISPATCHER`, the Query Store, HADR and
+  parallel-redo idle waits were all missing, and each one topped the chart on some instance until
+  it was added. Both variants now carry the same list.
+- **Each sample is materialised into a table variable before it is aggregated.** Aggregating
+  straight out of the DMV returns split groups on some builds: on a major-version-10 instance the
+  DMV held 490 rows and 490 distinct wait types under either collation, and
+  `INSERT … SELECT … GROUP BY wait_type` still failed with a duplicate-key violation.
+- **Two gates keep it quiet.** A top wait under one second is OK, and so is any interval whose
+  average waiting-task count (total wait ÷ elapsed) is below 10% of `cpu_count`. Without the second
+  gate, 4.79 s of total wait over a 5 s sample on a 60-core box — an instance doing almost nothing —
+  raised WARNING on a 49% signal-wait ratio, every 150 seconds, forever.
+
+Lock waits are deliberately **not** in the pressure list that raises WARNING. `LOCK_BLOCKING_SESSIONS`
+already alerts on blocking with the session, the chain and the SQL text. This metric's job for locks
+is to be the evidence, not a second siren.
+
+`PERFORMANCE_IO_LATENCY` has the same defect and has not had the same treatment. The technique
+transfers — two reads of `sys.dm_io_virtual_file_stats` in one execution — and it is the obvious
+next change.
+
+### Why the store-backed interval version was withdrawn
+
+Between 2026-08-10 and 2026-08-11 the collector graded `PERFORMANCE_IO_LATENCY` on the **interval**
+between two *stored* samples instead, which does catch spikes: on 192.0.2.115 the cumulative average read
 12.84 ms while single 15-minute intervals reached 269 ms and 1736 ms, every one stored green.
 
 It was removed on 2026-08-11 anyway, and the reason is worth keeping: making it work took a policy

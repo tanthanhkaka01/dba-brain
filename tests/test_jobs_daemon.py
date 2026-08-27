@@ -914,3 +914,54 @@ def test_sigterm_unwinds_instead_of_killing_the_process():
     assert not issubclass(daemon._DaemonStopped, Exception)
     assert issubclass(daemon._DaemonStopped, BaseException)
 
+
+
+def test_the_forwarded_key_wins_over_an_inherited_one(tmp_path, monkeypatch):
+    """`--key-base64` is a decision; an inherited variable is an accident of the shell.
+
+    The daemon used `env.setdefault`, so a `DB_OPS_SECRET_KEY` already in the environment beat
+    the key it had just been handed. Every child then decrypted with a passphrase nobody passed,
+    and the symptom is a wrong-key failure that does not match the command line — close to
+    undiagnosable, and silent until something fails to decrypt.
+
+    Found because an operator ran the suite in the shell they had used to start the daemon.
+    """
+    monkeypatch.setenv("DB_OPS_SECRET_KEY", "whatever-the-shell-had")
+    data_dir = tmp_path / "data"
+    write_app_commands(data_dir, [app_command(
+        "APP-METRICS", command_text="python -m db_ops.metrics.cli collect --config config.json")])
+    started = []
+
+    monkeypatch.setattr(daemon.subprocess, "Popen", lambda *a, **k: (
+        started.append(k["env"].get("DB_OPS_SECRET_KEY")), FakeProcess(returncode=None))[1])
+
+    daemon.run_scheduler_scan(
+        config=FakeConfig(tmp_path / "logs"), store=FakeStore(), data_dir=data_dir, logger=None,
+        running_commands={},
+        forwarded_key_args=daemon.ForwardedKeyArgs("--key-base64", "c2VjcmV0LXBocmFzZQ=="),
+    )
+
+    assert started[0] == "secret-phrase"
+
+
+def test_an_inherited_key_is_left_alone_when_no_flag_was_given(tmp_path, monkeypatch):
+    """The override is the *flag* winning, not the daemon insisting on emptiness.
+
+    A daemon started with no key at all must still pass on whatever the operator exported, which
+    is how the container runs it.
+    """
+    monkeypatch.setenv("DB_OPS_SECRET_KEY", "from-the-environment")
+    data_dir = tmp_path / "data"
+    write_app_commands(data_dir, [app_command(
+        "APP-METRICS", command_text="python -m db_ops.metrics.cli collect --config config.json")])
+    started = []
+
+    monkeypatch.setattr(daemon.subprocess, "Popen", lambda *a, **k: (
+        started.append(k["env"].get("DB_OPS_SECRET_KEY")), FakeProcess(returncode=None))[1])
+
+    daemon.run_scheduler_scan(
+        config=FakeConfig(tmp_path / "logs"), store=FakeStore(), data_dir=data_dir, logger=None,
+        running_commands={}, forwarded_key_args=daemon.ForwardedKeyArgs(),
+    )
+
+    assert started[0] == "from-the-environment"

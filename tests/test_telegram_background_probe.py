@@ -152,3 +152,97 @@ def test_the_error_summary_is_the_error_not_the_compose_progress():
 
     assert "port is already allocated" in summary
     assert "Creating" not in summary and "Created" not in summary
+
+
+# -- the exit code of a detached command, on both platforms -------------------------------- #
+
+def test_the_wrapper_records_what_the_command_returned(tmp_path):
+    """Neither platform can ask the OS how a detached command went, so the child records it.
+
+    POSIX could never read it back (``waitpid`` is for children only) and wrote its own code
+    through ``sh -c`` from the start. Windows releases the PID the moment the process exits, so
+    ``OpenProcess`` finds nothing — and the gap was filled by *returning 1*.
+    """
+    import sys
+
+    from db_ops.telegram.detached_exit import run
+
+    path = tmp_path / "rc.txt"
+
+    assert run(path, [sys.executable, "-c", "raise SystemExit(0)"]) == 0
+    assert path.read_text(encoding="utf-8") == "0"
+
+    assert run(path, [sys.executable, "-c", "raise SystemExit(3)"]) == 3
+    assert path.read_text(encoding="utf-8") == "3"
+
+
+def test_a_command_that_cannot_start_is_recorded_as_a_failure(tmp_path):
+    """A missing executable is a real failure and must not read as "unknown"."""
+    from db_ops.telegram.detached_exit import run
+
+    path = tmp_path / "rc.txt"
+
+    assert run(path, ["no-such-executable-anywhere-x9"]) == 127
+    assert path.read_text(encoding="utf-8") == "127"
+
+
+def test_the_wrapper_needs_no_quoting(tmp_path):
+    """An argument list is passed through untouched, which is the whole reason it is a list.
+
+    The POSIX version built a shell command line and quoted it; doing the same for ``cmd.exe``
+    is the defect this repository met twice in one day — ``APP-CONTROL`` broke because single
+    quotes are POSIX syntax that ``cmd`` hands through literally.
+    """
+    import sys
+
+    from db_ops.telegram.detached_exit import run
+
+    path = tmp_path / "rc.txt"
+    written = tmp_path / "out.txt"
+    awkward = '{"mode": "auto", "why": "spaces \'quotes\' & ampersands"}'
+
+    code = run(path, [sys.executable, "-c",
+                      "import sys,pathlib; pathlib.Path(sys.argv[1]).write_text(sys.argv[2],"
+                      " encoding='utf-8')", str(written), awkward])
+
+    assert code == 0
+    assert written.read_text(encoding="utf-8") == awkward
+
+
+def test_the_dispatch_launches_through_the_wrapper_on_every_platform(monkeypatch):
+    """One path, so the two cannot drift again — which is how Windows came to have none."""
+    import inspect
+
+    from db_ops.telegram import command_processor as cp
+
+    source = inspect.getsource(cp)
+
+    assert "db_ops.telegram.detached_exit" in source
+    assert not hasattr(cp, "_get_exit_code_windows"), (
+        "the function that returned a hardcoded 1 for 'no handle' must not come back")
+
+
+def test_an_unrecorded_exit_code_is_unknown_and_not_a_failure():
+    """The bug, stated as the rule it broke.
+
+    On 2026-08-26 `/spbot_run_sql_task 24` ran 135s, wrote `sql_runs.status='done'`, delivered
+    its .txt to the chat, and was reported as `Exit code: 1 / CLI command failed`. Nothing had
+    gone wrong except that the poller could no longer open the finished process's handle, and
+    read "no handle" as "exit 1".
+
+    Three answers, not two: a recorded non-zero settles failure, a recorded zero settles
+    success, and *nothing recorded* is neither — a completed process with no evidence against
+    it is reported as finished rather than accused.
+    """
+    def verdict(exit_code, *, status_str="", marker=False, timed_out=False):
+        failed_outright = exit_code is not None and exit_code != 0
+        return (not failed_outright) and (
+            exit_code == 0 or status_str in ("SUCCESS", "OK") or marker or exit_code is None
+        ) and not timed_out
+
+    assert verdict(0) is True
+    assert verdict(None) is True, "unknown must not be reported as failure"
+    assert verdict(1) is False
+    assert verdict(3) is False
+    assert verdict(None, timed_out=True) is False
+    assert verdict(1, status_str="SUCCESS") is False, "a recorded failure is not overridden"

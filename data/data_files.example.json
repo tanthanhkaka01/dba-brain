@@ -1,0 +1,279 @@
+{
+  "schema_version": 1,
+  "notes": [
+    "EXAMPLE. This one ships; data/data_files.json does not. It is a complete, working manifest - the file names here are the toolkit's own, not any estate's - so a fresh install can copy it and change nothing.",
+    "The inventory of data/ - every live file, who owns it, and how it moves between the master and the worker.",
+    "Read by db_ops.lib.data_files, and consulted FIRST by every control operation that moves configuration: deploy's bundle, worker-pull-data-config, and the merges that run before a deploy. A file that is not listed here does not travel, in either direction.",
+    "That rule exists because the pull used to be a directory listing. On 2026-08-25 `worker-pull-data-config --all-json` copied back two files the master had deliberately deleted on 2026-08-21 - metric_groups.json and notify_levels.json, config nothing reads - because the worker still had them and the sweep took whatever it found. A deletion that the next sweep undoes is not a deletion.",
+    "'transfer' is written from the MASTER's point of view: push = the master owns it outright and the worker only receives it; merge = the worker appends records and deploy unions them first; field_merge = the worker edits named leaves in place; secret_merge = the encrypted store, master is the source of truth; pull = the worker produces it and the master takes it back; local = it never leaves this machine.",
+    "'in_bundle' marks a file the deploy bundle is checked for. A bundle missing one of these is refused rather than shipped.",
+    "*.example.json is not listed. An example is derived from the name of the file it is an example of, ships in place of it in the public tree, and never travels to a worker.",
+    "This file is itself catalogued in config_catalog.json, so the console can show it and a config bundle carries it. Adding a data/*.json without adding it here fails tests/test_data_files_manifest.py, which is the point."
+  ],
+  "data_files": [
+    {
+      "file": "data_files.json",
+      "app_code": "control",
+      "kind": "manifest",
+      "transfer": "push",
+      "in_bundle": false,
+      "description": "This file: the inventory of data/ and how each file moves. Consulted before any transfer."
+    },
+    {
+      "file": "app_commands.json",
+      "app_code": "jobs",
+      "kind": "config",
+      "transfer": "merge",
+      "in_bundle": false,
+      "description": "What the daemon runs, how often, and in which node role."
+    },
+    {
+      "file": "backup_policy.json",
+      "app_code": "backup_restore",
+      "kind": "config",
+      "transfer": "push",
+      "in_bundle": false,
+      "description": "Retention, schedules and evidence rules for backups."
+    },
+    {
+      "file": "bot_telegram.json",
+      "app_code": "telegram",
+      "kind": "config",
+      "transfer": "push",
+      "in_bundle": false,
+      "description": "Which bot db_ops speaks as (token by ref, never in clear)."
+    },
+    {
+      "file": "capacity_policy.json",
+      "app_code": "metrics",
+      "kind": "config",
+      "transfer": "push",
+      "in_bundle": false,
+      "description": "Growth and forecast thresholds used by the capacity metrics."
+    },
+    {
+      "file": "config_catalog.json",
+      "app_code": "db",
+      "kind": "catalog",
+      "transfer": "push",
+      "in_bundle": false,
+      "description": "Which data/*.json sync into the runtime store, and how a record in each is keyed. Describes the sync rather than being synced."
+    },
+    {
+      "file": "database-inventory.json",
+      "app_code": "reports",
+      "kind": "generated",
+      "transfer": "pull",
+      "in_bundle": false,
+      "description": "The canonical estate inventory. Built on the worker by inventory-health and taken back; not configuration, and never hand-edited except for its static blocks."
+    },
+    {
+      "file": "db_instances.json",
+      "app_code": "metrics",
+      "kind": "config",
+      "transfer": "field_merge",
+      "in_bundle": false,
+      "description": "The monitored estate: one record per server_id, with metric toggles and command access."
+    },
+    {
+      "file": "docker_db_connections.json",
+      "app_code": "sre",
+      "kind": "config",
+      "transfer": "merge",
+      "in_bundle": false,
+      "description": "Containers the SRE provisioner created, and how to reach them."
+    },
+    {
+      "file": "emergency_operations.json",
+      "app_code": "common",
+      "kind": "config",
+      "transfer": "push",
+      "in_bundle": false,
+      "description": "The break-glass actions, their levels and their guards."
+    },
+    {
+      "file": "encrypted_secret_text.json",
+      "app_code": "common",
+      "kind": "secret_store",
+      "transfer": "secret_merge",
+      "in_bundle": true,
+      "description": "The encrypted secret store. Ciphertext; the passphrase is never on disk. The master is its source of truth and a worker copy is merged in, never taken wholesale."
+    },
+    {
+      "file": "maintenance_policy.json",
+      "app_code": "backup_restore",
+      "kind": "config",
+      "transfer": "push",
+      "in_bundle": false,
+      "description": "Index and statistics maintenance windows and thresholds."
+    },
+    {
+      "file": "metric_definitions.json",
+      "app_code": "metrics",
+      "kind": "config",
+      "transfer": "push",
+      "in_bundle": false,
+      "description": "Every metric the collector can run, per db_type, with its schedule and severity defaults."
+    },
+    {
+      "file": "metric_importance_overrides.json",
+      "app_code": "metrics",
+      "kind": "config",
+      "transfer": "push",
+      "in_bundle": false,
+      "description": "The importance scale and the per-instance overrides applied on top of it."
+    },
+    {
+      "file": "network_reservations.json",
+      "app_code": "control",
+      "kind": "config",
+      "transfer": "push",
+      "in_bundle": false,
+      "description": "Which address ranges the estate routes real hosts on, so a container bridge that claims one is named before it takes a database off the map."
+    },
+    {
+      "file": "ops_status_request.json",
+      "app_code": "db",
+      "kind": "config",
+      "transfer": "push",
+      "in_bundle": false,
+      "description": "The payload APP-CONTROL passes to ops-status. A file rather than inline JSON so it survives both shells the daemon might run under - single quotes are not stripped by cmd.exe, and the inline form fails there with 'Unexpected argument'."
+    },
+    {
+      "file": "postgresql_sla_examples.json",
+      "app_code": "sla",
+      "kind": "sample",
+      "transfer": "local",
+      "in_bundle": false,
+      "description": "Worked SLA examples for a reader. Nothing reads it at run time, so it stays on the master."
+    },
+    {
+      "file": "reports_config.json",
+      "app_code": "reports",
+      "kind": "config",
+      "transfer": "push",
+      "in_bundle": false,
+      "description": "Which reports are built, how often, and how stale a metric may be before it is not reported."
+    },
+    {
+      "file": "restore_config.json",
+      "app_code": "backup_restore",
+      "kind": "config",
+      "transfer": "push",
+      "in_bundle": false,
+      "description": "The restore targets and the steps each one runs."
+    },
+    {
+      "file": "restore_drill_policy.json",
+      "app_code": "backup_restore",
+      "kind": "config",
+      "transfer": "push",
+      "in_bundle": false,
+      "description": "How often a restore must be proven, and what counts as proof."
+    },
+    {
+      "file": "sla_policies.json",
+      "app_code": "sla",
+      "kind": "config",
+      "transfer": "push",
+      "in_bundle": false,
+      "description": "The objectives validated against collected metrics."
+    },
+    {
+      "file": "sql_commands.json",
+      "app_code": "sql_tasks",
+      "kind": "config",
+      "transfer": "merge",
+      "in_bundle": false,
+      "description": "The scripts the SQL task runner can execute."
+    },
+    {
+      "file": "sql_targets.json",
+      "app_code": "sql_tasks",
+      "kind": "config",
+      "transfer": "merge",
+      "in_bundle": false,
+      "description": "Where each SQL task runs, on what schedule, and who is notified."
+    },
+    {
+      "file": "sqlserver_instance_policy.json",
+      "app_code": "common",
+      "kind": "config",
+      "transfer": "push",
+      "in_bundle": false,
+      "description": "What an instance-metadata export or replay covers, and how it is gated."
+    },
+    {
+      "file": "sre_config.json",
+      "app_code": "sre",
+      "kind": "config",
+      "transfer": "push",
+      "in_bundle": false,
+      "description": "Docker host, image and network defaults for the lab provisioner."
+    },
+    {
+      "file": "sre_test_config.json",
+      "app_code": "sre",
+      "kind": "fixture",
+      "transfer": "local",
+      "in_bundle": false,
+      "description": "The fixture tests/sre_e2e_runner.py drives the SRE end-to-end run from. A test input, not config, and it has no business on a worker."
+    },
+    {
+      "file": "store_config.json",
+      "app_code": "db",
+      "kind": "config",
+      "transfer": "push",
+      "in_bundle": true,
+      "description": "Which database db_ops itself stores its runtime data in."
+    },
+    {
+      "file": "telegram_config.json",
+      "app_code": "telegram",
+      "kind": "config",
+      "transfer": "push",
+      "in_bundle": false,
+      "description": "Bot endpoint, timeouts, and the level to chat map."
+    },
+    {
+      "file": "telegram_groups.json",
+      "app_code": "telegram",
+      "kind": "config",
+      "transfer": "merge",
+      "in_bundle": false,
+      "description": "Chats the bot knows, their notify level, and whether they may issue commands."
+    },
+    {
+      "file": "telegram_support_commands.json",
+      "app_code": "telegram",
+      "kind": "config",
+      "transfer": "push",
+      "in_bundle": false,
+      "description": "Every bot command, its action and its reply template."
+    },
+    {
+      "file": "telegram_users.json",
+      "app_code": "telegram",
+      "kind": "config",
+      "transfer": "merge",
+      "in_bundle": false,
+      "description": "People the bot has seen, and the permission level each holds."
+    },
+    {
+      "file": "users.json",
+      "app_code": "common",
+      "kind": "config",
+      "transfer": "push",
+      "in_bundle": false,
+      "description": "Database, remote OS and monitor logins - names and secret refs only, never passwords."
+    },
+    {
+      "file": "webhost_config.json",
+      "app_code": "webhost",
+      "kind": "config",
+      "transfer": "push",
+      "in_bundle": false,
+      "description": "Login/session rules and the app blocks the dashboard draws."
+    }
+  ]
+}

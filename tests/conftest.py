@@ -890,3 +890,24 @@ def _defaults_read_the_shipped_examples(monkeypatch):
             continue
         if hasattr(module, attribute):
             monkeypatch.setattr(target, shipped_config(example))
+
+
+@pytest.fixture(autouse=True)
+def _the_operator_s_passphrase_is_not_in_scope(monkeypatch):
+    """No test may see the real ``DB_OPS_SECRET_KEY``, whatever the shell was exporting.
+
+    Found by an operator running the suite in the shell they had just used to start the daemon:
+    `test_daemon_sets_secret_key_env_for_spawned_restore_command` failed with
+
+        assert 'Hdhsu#4s#834^sujdfh$%sgdf' == 'secret-phrase'
+
+    Two things were wrong and only one of them was the test. The daemon was preferring an
+    inherited key over the `--key-base64` it had been given (fixed in `db_ops.jobs.daemon`), and
+    the suite was reading the ambient environment at all — so a run's outcome depended on the
+    shell, and a failure **printed the estate's passphrase into the test report**. A CI log is a
+    place that keeps things.
+
+    Cleared for every test rather than for the ones known to look: a test that starts reading it
+    tomorrow gets the isolation without anybody remembering to ask for it.
+    """
+    monkeypatch.delenv("DB_OPS_SECRET_KEY", raising=False)

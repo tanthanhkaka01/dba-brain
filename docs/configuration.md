@@ -257,3 +257,72 @@ The scheduled apps run against real databases. Before a change to anything produ
 
 A configuration change is live the moment the next scheduled pass reads it. If you deploy to
 another node, that is a separate, explicit step — see [`docs/11_control_app.md`](./11_control_app.md).
+
+## 9. Moving a whole estate to another machine
+
+Everything above describes editing one file at a time. Standing a *second* machine up on the same
+estate is a different job, and doing it by copying directories gets three things wrong: `data/`
+holds generated output and fixtures beside the config that matters, nothing checks that what
+arrived is what left, and the secret store needs different handling from everything else.
+
+Two commands do it instead.
+
+```bash
+# on the machine that already works
+db-ops export-data prod-bundle.json
+
+# on the new machine, after `pip install dbabrain`
+db-ops import-data prod-bundle.json --plan     # read this first; it writes nothing
+db-ops import-data prod-bundle.json
+export DB_OPS_SECRET_KEY='<the source machine's passphrase>'
+db-ops check-credentials                        # proves the store decrypts here
+```
+
+### What is in the bundle
+
+One JSON file, and its contents are **derived from `data/config_catalog.json`** — the same
+allow-list §4 describes and the runtime store obeys. A config file that is catalogued crosses; one
+that is not does not.
+
+| | |
+| --- | --- |
+| `config.json` | §3. Every path in it is relative to the tool root, so nothing needs rewriting on the new machine |
+| `data/config_catalog.json` | the allow-list itself. It is not listed inside itself, so it is carried by name |
+| the catalogued `data/*.json` | §4 — the estate proper |
+| `data/encrypted_secret_text.json` | **ciphertext**. See below |
+| `assets/**`, `data/ssh_keys/**` | §7. Config names these files by path, so config without them points at nothing |
+
+**`data/database-inventory.json` is deliberately absent.** It is generated output, and
+`inventory-workflow` rebuilds it on the new machine against that machine's own estate. Carrying it
+would seed a fresh install with yesterday's measurements from somewhere else.
+
+A catalogued file that does not exist on the source machine is **named in the bundle**, not
+invented — `export-data` prints the list, and so does `import-data`. An estate that runs no Oracle
+has no `docker_db_connections.json`, and that is not an error.
+
+### The passphrase does not travel
+
+The secret store crosses as ciphertext, so the new machine inherits the estate's credentials. The
+passphrase is **not in the bundle and there is no field for it to be in**: set `DB_OPS_SECRET_KEY`
+on the new machine (§6) and prove it with `db-ops check-credentials`. Use `--no-secrets` on either
+side if the new machine should keep its own.
+
+### The bundle is a credential
+
+It names every host, account and chat id in the estate. Never commit it and never attach it to an
+issue. `.gitignore` covers `<name>-bundle.json`, which is why `export-data` suggests that shape and
+warns when you pick a different one.
+
+### What import refuses to do
+
+- **Write anything at all if any checksum fails.** Every entry carries a sha256 of the bytes it
+  becomes, and all of them are verified first. A truncated transfer leaves the target untouched
+  rather than half-applied.
+- **Replace a file that already exists here with different content**, unless `--force`. The machine
+  you are importing into may already be someone's working install. A file that already *matches* is
+  not a conflict, so re-running an interrupted import finishes it.
+- **Write outside the tool root.** A path inside a bundle is data, not an instruction: `..`,
+  absolute paths and drive letters are refused.
+
+Use `--plan` to see every action before any of them happen. It is the same habit as `--dry-run`
+in §8, for the same reason.

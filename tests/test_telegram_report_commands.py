@@ -320,14 +320,43 @@ def _restore_command_config():
     )
 
 
-def _ticket_detail_export_command_config():
-    path = shipped_config("telegram_support_commands.json")
-    data = json.loads(path.read_text(encoding="utf-8"))
-    return next(
-        item
-        for item in data["telegram_support_commands"]
-        if item["command_text"] == "spbot_json_exp_ticket_detail"
-    )
+def _result_file_command_config():
+    """A `cli_execute` command that delivers one column of a SQL run as a file.
+
+    Written out here rather than read from the shipped catalogue. It used to be
+    `/spbot_json_exp_ticket_detail`, which pinned `--sql-id 14` in its argv and was removed on
+    2026-08-27 for exactly that: a command naming one estate's record shipped to installs that
+    have a different one.
+
+    The `result_file` dispatch it exercised is still real code and still the only way to deliver a
+    *single column* verbatim — `output.format: json` renders the whole result set instead. No
+    command configures it today, so this fixture is what keeps that path honest.
+    """
+    return {
+        "action_type": "cli_execute",
+        "action_config": {
+            "working_dir": "tools/db_ops",
+            "command_argv": ["{python}", "-m", "db_ops.sql_tasks.runner", "--config",
+                             "{config_path}", "run-sql-id", "--sql-id", "{sql_id}", "--force"],
+            "start_text": "Export started.",
+            "success_text": "Export completed. Preparing file...",
+            "failure_text": "Export failed.\nExit code: {exit_code}\nError: {error_summary}",
+            "timeout_seconds": 1800,
+            "requires_secret_key": True,
+            "result_file": {
+                "source": "latest_sql_run_result",
+                "sql_id": 14,
+                "status": "done",
+                "result_column": "ResultJson",
+                "validate_json": True,
+                "output_dir": "runtime/output/telegram/json_exports",
+                "folder_name_template": "export_{timestamp}",
+                "file_name_template": "export_{timestamp}.json",
+                "caption": "Ready. sql_run_id={sql_run_id}, size={file_size} bytes.",
+            },
+            "parameters": [],
+        },
+    }
 
 
 class FakeSqlRunResultStore:
@@ -353,22 +382,11 @@ class CaptureReplyStore:
         return len(self.messages)
 
 
-def test_spbot_json_exp_ticket_detail_maps_to_sql_id_14():
-    command = _ticket_detail_export_command_config()
-    config = command["action_config"]
-
-    assert command["action_type"] == "cli_execute"
-    assert config["command_argv"][-2:] == ["14", "--force"]
-    assert config["result_file"]["sql_id"] == 14
-    assert config["result_file"]["output_dir"] == "runtime/output/telegram/json_exports"
-    assert config["result_file"]["folder_name_template"] == "json_exp_ticket_detail_{timestamp}"
-
-
 def test_cli_result_file_failure_queues_failure_not_completed(monkeypatch, tmp_path):
-    command_config = _ticket_detail_export_command_config()["action_config"]
+    command_config = _result_file_command_config()["action_config"]
     command = command_processor.SupportCommand(
         command_id=7,
-        command_text="spbot_json_exp_ticket_detail",
+        command_text="spbot_export_with_result_file",
         command_type=1,
         reply_default=0,
         reply_text="",
@@ -404,13 +422,13 @@ def test_cli_result_file_failure_queues_failure_not_completed(monkeypatch, tmp_p
         )
 
     texts = [message["message_text"] for message in store.messages]
-    assert texts[0] == "Ticket detail JSON export started."
+    assert texts[0] == "Export started."
     assert texts[-1] == (
-        "Ticket detail JSON export failed.\n"
+        "Export failed.\n"
         "Exit code: 1\n"
         "Error: Result column not found in SQL run output: ResultJson"
     )
-    assert not any(text == "Ticket detail JSON export completed. Preparing file..." for text in texts)
+    assert not any(text == "Export completed. Preparing file..." for text in texts)
 
 
 def test_sql_run_result_export_creates_safe_timestamp_folder(tmp_path, monkeypatch):

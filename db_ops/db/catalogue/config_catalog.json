@@ -303,6 +303,43 @@
       "display_name": "Runtime store declaration",
       "description": "Which database db_ops itself stores its runtime data in.",
       "collections": []
+    },
+    {
+      "file": "network_reservations.json",
+      "app_code": "control",
+      "display_name": "Container network reservations",
+      "description": "Which address ranges the estate routes real hosts on, so a container bridge that claims one is named before it takes a database off the map.",
+      "collections": [
+        {
+          "collection": "routed_ranges",
+          "key_fields": [
+            "cidr"
+          ],
+          "label_field": "owner"
+        },
+        {
+          "collection": "container_ranges",
+          "key_fields": [
+            "cidr"
+          ],
+          "label_field": "owner"
+        }
+      ]
+    },
+    {
+      "file": "data_files.json",
+      "app_code": "control",
+      "display_name": "Data file manifest",
+      "description": "The inventory of data/ and how each file moves between master and worker. Every transfer reads it first; a file not listed here does not travel.",
+      "collections": [
+        {
+          "collection": "data_files",
+          "key_fields": [
+            "file"
+          ],
+          "label_field": "file"
+        }
+      ]
     }
   ]
 }

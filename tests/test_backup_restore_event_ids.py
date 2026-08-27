@@ -122,7 +122,11 @@ def test_the_id_has_its_own_line_ahead_of_a_huge_payload(queued):
 
     assert "restore_id=R1" in text.splitlines()[1]
     # Nothing is thrown away any more: the tail the operator needs is still in the body.
-    assert text.count("x") == 8000
+    #
+    # The run of 8000, not a count of the letter. Counting made the assertion depend on the
+    # machine: every event line carries the hostname, and CI's runner is `runnervmgx7h7`, which
+    # contributes one `x` of its own. 8001 != 8000, on a build where nothing was wrong.
+    assert "x" * 8000 in text
 
 
 def test_a_backup_event_carries_its_backup_id(queued):

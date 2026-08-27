@@ -23,12 +23,19 @@ class TaskOutputError(ValueError):
 
 #: Everything a task's ``output`` may say. ``none`` = status only, ``plain`` = rows in the message
 #: body, the rest = a document.
-OUTPUT_FORMATS = ("none", "plain", "xlsx", "csv", "txt", "xml")
+#:
+#: ``json`` was missing until 2026-08-27, and its absence had a cost. The renderer
+#: (``db_ops.lib.result_format.RESULT_FORMATS``) has always produced it, so ``run-sql --format
+#: json`` worked while a *scheduled* task could not ask for the same artifact — and the way round
+#: that was a bespoke Telegram command with ``--sql-id 14`` written into its argv, which then
+#: shipped to every install as a command that ran one estate's task. Two vocabularies for one
+#: question is how that happens.
+OUTPUT_FORMATS = ("none", "plain", "xlsx", "csv", "txt", "xml", "json")
 
 #: The subset of :data:`OUTPUT_FORMATS` that produces a file. Named once because four separate
 #: decisions read it — whether to build a document, whether to paste rows instead, whether a chat
 #: is required, and which formats ``/spbot_sql_export`` will accept.
-FILE_OUTPUT_FORMATS = ("xlsx", "csv", "txt", "xml")
+FILE_OUTPUT_FORMATS = ("xlsx", "csv", "txt", "xml", "json")
 
 __all__ = ["FILE_OUTPUT_FORMATS", "OUTPUT_FORMATS", "TaskOutputError", "normalize_output"]
 

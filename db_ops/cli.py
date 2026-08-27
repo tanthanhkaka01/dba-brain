@@ -340,6 +340,262 @@ def _encrypt_secret_command(argv: list[str]) -> int:
     return 0
 
 
+#: The naming convention `.gitignore` covers. Suggested rather than enforced: the operator may
+#: legitimately write a bundle to a path outside any repository, and refusing a filename would be
+#: the tool overruling that. Departing from it earns one line of warning, because the failure it
+#: prevents — an estate committed to git — is silent and permanent.
+BUNDLE_NAME_HINT = "<name>-bundle.json"
+
+
+def _looks_like_an_ignored_bundle_name(name: str) -> bool:
+    return (name.endswith("-bundle.json")
+            or name.endswith(".dbabrain-bundle.json")
+            or name.startswith("dbabrain-export"))
+
+
+EXPORT_DATA_USAGE = (
+    "usage: db-ops export-data <name>-bundle.json [--root DIR] [--no-secrets] [--no-assets]\n"
+    "                          [--force]\n"
+    "\n"
+    "Write this machine's whole configuration to one JSON file, so another machine can run the\n"
+    "same estate after nothing more than `pip install dbabrain` and `db-ops import-data`.\n"
+    "\n"
+    "What crosses: config.json, data/config_catalog.json and every data/*.json the catalog\n"
+    "lists, the encrypted secret store, and the estate's own assets/ and data/ssh_keys/.\n"
+    "Generated output does not cross - database-inventory.json is rebuilt on the new machine.\n"
+    "\n"
+    "  --root DIR     the tool root to export (default: the one this process resolved)\n"
+    "  --no-secrets   leave data/encrypted_secret_text.json out\n"
+    "  --no-assets    leave assets/ and data/ssh_keys/ out\n"
+    "  --force        overwrite an existing bundle file\n"
+    "\n"
+    "THE BUNDLE IS A CREDENTIAL. It names hosts, accounts and chat ids and carries the secret\n"
+    "store as ciphertext. Never commit it - .gitignore covers `<name>-bundle.json`, which is why\n"
+    "the usage line names that shape. The passphrase is NOT in it and cannot be: the importing\n"
+    "machine sets DB_OPS_SECRET_KEY itself.\n"
+)
+
+
+def _export_data_command(argv: list[str]) -> int:
+    """``export-data`` — one estate, one file.
+
+    The list of files is derived from ``data/config_catalog.json`` rather than written out here,
+    for the reason stated in :mod:`db_ops.lib.config_bundle`: a second list of "which files are
+    configuration" is a list that disagrees with the first one the week after somebody adds a
+    config file.
+    """
+    from db_ops import __version__
+    from db_ops.lib import config_bundle
+    from db_ops.lib.paths import TOOL_ROOT
+
+    target: str | None = None
+    root = Path(TOOL_ROOT)
+    include_secrets = True
+    include_assets = True
+    force = False
+    rest = list(argv)
+    while rest:
+        token = rest.pop(0)
+        if token in {"-h", "--help"}:
+            print(EXPORT_DATA_USAGE)
+            return 0
+        if token == "--root":
+            root = Path(rest.pop(0)) if rest else root
+        elif token == "--no-secrets":
+            include_secrets = False
+        elif token == "--no-assets":
+            include_assets = False
+        elif token == "--force":
+            force = True
+        elif token.startswith("-"):
+            print(f"export-data: unknown option {token}\n\n{EXPORT_DATA_USAGE}", file=sys.stderr)
+            return 2
+        elif target is None:
+            target = token
+        else:
+            print(f"export-data: one output file, not two ({target}, {token})", file=sys.stderr)
+            return 2
+
+    if not target:
+        print(f"export-data: name the file to write.\n\n{EXPORT_DATA_USAGE}", file=sys.stderr)
+        return 2
+    destination = Path(target).expanduser()
+    if destination.exists() and not force:
+        print(f"export-data: {destination} already exists. Use --force to replace it.",
+              file=sys.stderr)
+        return 2
+
+    try:
+        bundle = config_bundle.build_bundle(
+            root,
+            include_secrets=include_secrets,
+            include_assets=include_assets,
+            tool_version=__version__,
+        )
+    except config_bundle.BundleError as exc:
+        print(f"export-data refused: {exc}", file=sys.stderr)
+        return 1
+    except OSError as exc:
+        print(f"export-data failed: {exc}", file=sys.stderr)
+        return 1
+
+    text = config_bundle.bundle_text(bundle)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(text, encoding="utf-8")
+
+    counts: dict[str, int] = {}
+    for entry in bundle["files"].values():
+        counts[entry["role"]] = counts.get(entry["role"], 0) + 1
+    print(f"wrote {destination} ({len(text.encode('utf-8')) / 1024:.0f} KB)")
+    for role in sorted(counts):
+        print(f"  {counts[role]:>4}  {role}")
+    missing = bundle.get("missing_at_source") or []
+    if missing:
+        # Named, not silent: these are the files the *other* machine will not get, and finding
+        # that out here is cheaper than finding it out when an app cannot start there.
+        print(f"  not present here, so not carried ({len(missing)}):")
+        for name in missing:
+            print(f"      {name}")
+    if not bundle.get("includes_secret_store"):
+        print("  no secret store in this bundle - the importing machine supplies credentials.")
+    else:
+        print("  secret store carried as ciphertext; the passphrase is not in this file.")
+    if not _looks_like_an_ignored_bundle_name(destination.name):
+        print(f"  WARNING: {destination.name} is not a name .gitignore covers. This file is an "
+              f"entire estate; name it {BUNDLE_NAME_HINT} or keep it outside any repository.")
+    return 0
+
+
+IMPORT_DATA_USAGE = (
+    "usage: db-ops import-data <bundle.json> [--root DIR] [--plan] [--force]\n"
+    "                          [--no-secrets] [--no-assets]\n"
+    "\n"
+    "Apply a bundle written by `db-ops export-data`, so this machine runs the estate the\n"
+    "bundle came from.\n"
+    "\n"
+    "  --root DIR     the tool root to write into (default: the one this process resolved)\n"
+    "  --plan         report what would be written and change nothing\n"
+    "  --force        replace files that already exist here with different content\n"
+    "  --no-secrets   do not write the secret store, even if the bundle carries one\n"
+    "  --no-assets    do not write assets/ or data/ssh_keys/\n"
+    "\n"
+    "Every entry's checksum is verified before anything is written, so a truncated or edited\n"
+    "bundle leaves the tree untouched rather than half-applied.\n"
+    "\n"
+    "The passphrase does not travel in a bundle. After importing one that carries the secret\n"
+    "store, set DB_OPS_SECRET_KEY to the source machine's passphrase and run\n"
+    "`db-ops check-credentials` to prove it.\n"
+)
+
+
+def _import_data_command(argv: list[str]) -> int:
+    """``import-data`` — the second half of the sentence in :mod:`db_ops.lib.config_bundle`.
+
+    Refuses by default to replace a file that already exists with different content. The machine
+    being imported into may already be somebody's working install, and an import that silently
+    replaced ``db_instances.json`` there would destroy the only copy of it.
+    """
+    from db_ops.lib import config_bundle
+    from db_ops.lib.paths import TOOL_ROOT
+
+    source: str | None = None
+    root = Path(TOOL_ROOT)
+    plan_only = False
+    force = False
+    include_secrets = True
+    include_assets = True
+    rest = list(argv)
+    while rest:
+        token = rest.pop(0)
+        if token in {"-h", "--help"}:
+            print(IMPORT_DATA_USAGE)
+            return 0
+        if token == "--root":
+            root = Path(rest.pop(0)) if rest else root
+        elif token in {"--plan", "--plan-only", "--dry-run"}:
+            plan_only = True
+        elif token == "--force":
+            force = True
+        elif token == "--no-secrets":
+            include_secrets = False
+        elif token == "--no-assets":
+            include_assets = False
+        elif token.startswith("-"):
+            print(f"import-data: unknown option {token}\n\n{IMPORT_DATA_USAGE}", file=sys.stderr)
+            return 2
+        elif source is None:
+            source = token
+        else:
+            print(f"import-data: one bundle, not two ({source}, {token})", file=sys.stderr)
+            return 2
+
+    if not source:
+        print(f"import-data: name the bundle to read.\n\n{IMPORT_DATA_USAGE}", file=sys.stderr)
+        return 2
+    path = Path(source).expanduser()
+    if not path.is_file():
+        print(f"import-data: no such file: {path}", file=sys.stderr)
+        return 2
+
+    try:
+        document = json.loads(path.read_bytes().decode("utf-8-sig"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        print(f"import-data: {path} is not readable as JSON: {exc}", file=sys.stderr)
+        return 1
+    try:
+        entries = config_bundle.select_entries(
+            config_bundle.read_bundle(document),
+            include_secrets=include_secrets,
+            include_assets=include_assets,
+        )
+    except config_bundle.BundleError as exc:
+        print(f"import-data refused: {exc}", file=sys.stderr)
+        return 1
+    if not entries:
+        print("import-data: the flags given exclude every file in this bundle.", file=sys.stderr)
+        return 2
+
+    root = root.expanduser()
+    root.mkdir(parents=True, exist_ok=True)
+    planned = config_bundle.plan_import(entries, root)
+    if plan_only:
+        print(f"bundle: {path}")
+        print(f"exported {document.get('exported_at', '?')} "
+              f"by version {document.get('exported_by_version') or '?'}")
+        print(f"target tool root: {root.resolve()}")
+        for item in planned:
+            print(f"  {item.action:<9}  {item.path}")
+        counts: dict[str, int] = {}
+        for item in planned:
+            counts[item.action] = counts.get(item.action, 0) + 1
+        print("  " + ", ".join(f"{counts[name]} {name}" for name in sorted(counts)))
+        return 0
+
+    try:
+        result = config_bundle.apply_bundle(entries, root, force=force)
+    except config_bundle.BundleError as exc:
+        print(f"import-data refused: {exc}", file=sys.stderr)
+        return 1
+    except OSError as exc:
+        print(f"import-data failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"imported into {root.resolve()}")
+    print(f"  {len(result.created)} created, {len(result.overwritten)} replaced, "
+          f"{len(result.unchanged)} already identical")
+    missing = document.get("missing_at_source") or []
+    if missing:
+        print(f"  absent on the source machine, so not in this bundle ({len(missing)}):")
+        for name in missing:
+            print(f"      {name}")
+    if document.get("includes_secret_store") and include_secrets:
+        print("")
+        print("The secret store is here as ciphertext and the passphrase is not. Set")
+        print("DB_OPS_SECRET_KEY to the source machine's passphrase, then verify with:")
+        print("  db-ops check-credentials")
+    return 0
+
+
 def installed_apps() -> dict[str, str]:
     """The entries of :data:`APPS` this installation actually has.
 
@@ -389,6 +645,8 @@ def _usage() -> str:
         "  init                   create a tool root here: config, a SQLite store, empty inventory",
         "  encrypt-secret         encrypt secrets/secret_text.json into the store the tool reads",
         "  check-credentials      does every configured target resolve to a real login",
+        "  export-data            write this machine's whole configuration to one JSON file",
+        "  import-data            apply such a file, so this machine runs the same estate",
         "",
         "Each app takes its own arguments; ask it directly, e.g. `db-ops metrics --help`.",
         "Every app is also runnable as `python -m <module>`, which is what the daemon does.",
@@ -447,6 +705,15 @@ def main(argv: list[str] | None = None) -> int:
 
     if argv[0] in {"encrypt-secret", "encrypt-secret-text"}:
         return _encrypt_secret_command(argv[1:])
+
+    # Next to `init` on purpose: these are the other two commands that are about the tool root
+    # rather than about a database, and `import-data` is the one a second machine runs *instead*
+    # of editing the twelve files `init` writes.
+    if argv[0] in {"export-data", "export-config"}:
+        return _export_data_command(argv[1:])
+
+    if argv[0] in {"import-data", "import-config"}:
+        return _import_data_command(argv[1:])
 
     # Subcommand first, flags second. `check-credentials` is a word, and every other form this
     # entry point takes starts with `--`, so the two cannot be confused for one another.

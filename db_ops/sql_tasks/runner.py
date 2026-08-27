@@ -154,7 +154,19 @@ def parse_notify_rule(value: Any, *, default_level: str) -> NotifyRule:
 
 
 def _target_notify(item: dict[str, Any]) -> dict[str, NotifyRule]:
-    """The two notify rules of one SQL target entry, in either spelling."""
+    """The two notify rules of one SQL target entry, in either spelling.
+
+    **Required, for the same reason ``output`` is.** An absent block used to fall back to the
+    app's defaults, which meant a target's routing could only be discovered by running it.
+    """
+    if not isinstance(item.get("notify"), dict):
+        raise RuntimeError(
+            f"sql_targets.sql_id={item.get('sql_id')} target_no={item.get('target_no')}: "
+            f"'notify' is required and must be an object, e.g. "
+            f'{{"logging_on_run": {{"enabled": true, "telegram_chat": "sql", "chat_id": ""}}, '
+            f'"alert_on_error": {{"enabled": true, "telegram_chat": "sql", "chat_id": ""}}}}. '
+            f"Where a task's messages go is a decision, not a default."
+        )
     config = parse_notify_config(
         item, context=f"sql_targets[{item.get('sql_id', '?')}]", defaults=SQL_TARGET_NOTIFY_DEFAULTS
     )
@@ -999,6 +1011,68 @@ def run_one_sql_task(
         return False
 
 
+#: The Unicode range that only ever exists as half of a pair. A string holding one on its own
+#: cannot be encoded to anything, which is why every driver refuses it - pyodbc most visibly,
+#: because SQL Server takes NVARCHAR as UTF-16LE.
+_SURROGATE_RANGE = range(0xD800, 0xE000)
+
+
+def _surrogate_context(sql_text: str, index: int, *, window: int = 45) -> str:
+    """The characters either side of *index*, escaped, so the string can be recognised.
+
+    The whole point of the guard: knowing *which* string carried the surrogate is what a codec
+    error never says. Printed as ``ascii`` so a second bad character in the window cannot make
+    the report itself unprintable - which is exactly how this defect wasted an afternoon.
+    """
+    start = max(0, index - window)
+    return ascii(sql_text[start:index + window])
+
+
+def check_sql_text_is_encodable(sql_text: str, *, source: str) -> None:
+    """Refuse SQL carrying a lone surrogate, and say which character and where.
+
+    On 2026-08-27 one ``/spbot_run_sql_task 18`` run died with ``'utf-16-le' codec can't encode
+    character U+DC97 in position 350: surrogates not allowed``.
+
+    U+DC97 is byte 0x97 recovered by ``surrogateescape``, and 0x97 is the em dash in the Windows
+    ANSI code page. The script is valid UTF-8, character 350 *is* an em dash, and the file on disk
+    was byte-identical to the source tree's - so that one run received the text after a round trip
+    through cp1252 that no other run made. Four faithful reproductions, up to and including the
+    dispatch's exact argv under a detached console-less process, all succeeded.
+
+    This does not fix that round trip, because I could not find it. What it does is turn an
+    intermittent driver error naming only a codec into one that names **the file, the character
+    and its position** - the difference between "it failed again" and a report somebody can act
+    on. It costs a scan of a string already in memory, and it runs for every engine, because a
+    lone surrogate is unencodable everywhere.
+
+    **The script file is not the whole story, and that is the finding.** Its two non-ASCII
+    characters are em dashes at 286 and 346, both inside ``--`` comments, and it contains no 0x97
+    byte anywhere. The driver was handed a string whose character *350* is byte 0x97. So the
+    statement that reached the driver was not simply this file's text - something composes it, or
+    re-reads it, between the ``read_text(encoding="utf-8-sig")`` and the send. That is why the
+    message below carries the surrounding characters: the next occurrence identifies the string.
+
+    Writing this docstring hit the same class of bug: the patch script that inserted it put a real
+    lone surrogate into the source and Python refused to save the file. Hence U+DC97 in prose
+    rather than an escape.
+    """
+    for index, character in enumerate(sql_text):
+        if ord(character) not in _SURROGATE_RANGE:
+            continue
+        byte = ord(character) - 0xDC00
+        recovered = bytes([byte]).decode("cp1252", errors="replace") if 0 <= byte <= 0xFF else "?"
+        raise RuntimeError(
+            f"{source}: character {index} is a lone surrogate (U+{ord(character):04X}), which no "
+            f"encoding accepts, so the driver cannot send this statement. It is byte 0x{byte:02x} "
+            f"recovered by surrogateescape - {recovered!r} in the Windows ANSI code page - so the "
+            f"script text passed through a non-UTF-8 round trip between being read and being "
+            f"executed.\n"
+            f"  context: {_surrogate_context(sql_text, index)}\n"
+            f"  statement length: {len(sql_text)} characters."
+        )
+
+
 def execute_sql(
     *,
     command: SqlCommand,
@@ -1010,6 +1084,7 @@ def execute_sql(
     parameter_values: dict[str, Any] | None = None,
     secrets: dict[str, str] | None = None,
 ) -> dict[str, Any]:
+    check_sql_text_is_encodable(sql_text, source=f"{command.sql_code} target={target.target_no}")
     return execute_on_target(command=command, target=target, database=database,
                              credential=credential, password=password, sql_text=sql_text,
                              parameter_values=parameter_values, secrets=secrets)
@@ -1768,15 +1843,33 @@ def load_sql_access_by_server(instances: list[dict[str, Any]]) -> dict[str, dict
 def _target_output(item: dict[str, Any]) -> dict[str, str]:
     """The `output` block of a sql_targets entry: what to do with the result set.
 
-    An **absent** block means ``plain``, not ``none``. Every task written before `output` existed
-    has had its rows pasted into the run message from the start — SQLSERVER-016 exists to show
-    those rows — so defaulting to ``none`` would silently stop delivering results that operators
-    already rely on. ``none`` is a choice the operator makes, never one inferred from silence.
+    **Required, and it was not always.** An absent block used to mean ``plain``, on the reasoning
+    that tasks written before ``output`` existed had had their rows pasted into the run message
+    from the start, so inferring ``none`` would have stopped delivering results people relied on.
+    That reasoning was right about ``none`` and wrong about the inference: the very next sentence
+    of the old docstring said *"``none`` is a choice the operator makes, never one inferred from
+    silence"*, and every other format is a choice too.
+
+    What the default cost was not a wrong delivery but an unanswerable question — reading
+    ``sql_targets.json`` did not tell you whether a task sent a file, sent rows, or sent nothing,
+    because thirteen of seventeen targets said nothing at all and the answer lived in this
+    function. Those thirteen now say ``plain`` in the file, which is what they were already
+    doing, and the inference is gone.
+
+    ``add-sql`` has always asked for ``output`` and marked it required, so nothing that
+    registered a task through the documented path is affected.
     """
     raw = item.get("output")
     if not isinstance(raw, dict):
-        return {"output_format": "plain", "output_chat": "", "output_chat_id": "",
-                "output_max_rows": 0}
+        raise RuntimeError(
+            f"sql_targets.sql_id={item.get('sql_id')} target_no={item.get('target_no')}: "
+            f"'output' is required and must be an object. Add one naming what to do with the "
+            f"result set, e.g. "
+            f'{{"format": "plain", "telegram_chat": "sql", "chat_id": ""}} - '
+            f"format is one of {OUTPUT_FORMATS} ('plain' pastes the rows into the run message, "
+            f"'none' sends status only). It is not inferred: a task's delivery is a decision, "
+            f"and one that is not written down is one nobody can read back."
+        )
     output_format = _opt_str(raw.get("format")).lower() or "none"
     if output_format not in OUTPUT_FORMATS:
         raise RuntimeError(
