@@ -13,10 +13,7 @@ spbot_report_metric_history - Report one stored metric for one server over recen
 spbot_report_inventory - Rebuild the database inventory & health report (HTML)
 spbot_create_db_docker - Create a lab database container (postgres/mysql/mssql/oracle) on the worker
 spbot_master_cli - Cheat sheet of the master-side CLI commands (deploy, pull config, create DB)
-spbot_update_allow_re_inspect - Update Globex AllowReInspect by InternalBarcode
-spbot_update_package_barcode - Update Globex Package Barcode
 spbot_restore - Run point-in-time restore workflow by restore_id and point_in_time
-spbot_json_exp_ticket_detail - Export all ticket detail to json file
 spbot_add_sql - Add SQL task
 spbot_sql_to_xlsx - Run a read-only SELECT on a server and get the result as an xlsx file
 spbot_sql_export - Run a read-only SELECT and get the result as xlsx, csv, txt or xml
@@ -31,7 +28,7 @@ spbot_kill_spid - EMERGENCY: kill one session, after showing whose it is (asks y
 spbot_start_job - EMERGENCY: start one SQL Server Agent job by name (asks yes once)
 spbot_disable_job - EMERGENCY: stop a job running on its schedule; lists enabled jobs (asks yes once)
 spbot_restart_server - EMERGENCY: restart a server (asks yes, then the server id typed out)
-spbot_trace_session - Who is holding an open transaction on SALESDB: AX user, session, age, locks, who is blocked
+spbot_trace_session - Who is holding an open transaction on a database: session, age, locks, who is blocked
 ```
 
 ## Command Details
@@ -40,7 +37,7 @@ spbot_trace_session - Who is holding an open transaction on SALESDB: AX user, se
 |---|---|
 | `/spbot_shrink_log` | **EMERGENCY, clearance 50.** `DBCC SHRINKFILE` one database's log down to a size you give in MB. Asks for the server, the database, the size, then one `yes`. Before it asks it reports the file's current size, how much is in use, the recovery model and `log_reuse_wait` — a log waiting on `LOG_BACKUP` is warned about, because shrinking one frees nothing and it grows straight back. Never touches the recovery model: flipping to SIMPLE to force truncation is what breaks a log chain. |
 | `/spbot_kill_spid` | **EMERGENCY, clearance 50.** `KILL` one session. Asks for the server and the SPID, then one `yes` — but first it reports whose session it is: login, host, program, database, open transactions, how long the transaction has been open, how long the session has been idle and how many sessions are blocked behind it. Refuses system sessions (`spid <= 50`) and a SPID that is no longer active, because ids get reused. Reports the rollback estimate when there is one. |
-| `/spbot_trace_session` | **Read-only.** Every open transaction on `ACME-192-0-2-115` / SALESDB, with **who** is behind it. Through the AOS every session reads `login=axdbadmin host=ACMEAOS04 program=axOnline`, which names nobody; this decodes the AX caller out of `context_info` and resolves it through `USERINFO`, so a line reads `app_user=ACMECEN01.PU (ORDER PROCESSING PU&NON), app_session=4654, tran_age=389m, log_bytes=1875268, locks=3931, blocking=52,1266`. One optional argument: a **SPID**, or **0** (the default) for every transaction older than five minutes. It runs through `run-sql`, which always rolls back, so unlike `/spbot_kill_spid` it changes nothing and asks for no confirmation. `log_bytes` is the field to read before killing anything: static means the session is holding locks and doing nothing, growing means real work would be lost. |
+| `/spbot_trace_session` | **Read-only.** Every open transaction on the server and database you name, with **who** is behind it where the application says so. The DMV half works on any SQL Server: `tran_age`, `log_bytes`, `locks`, and the blocking chain. On a Dynamics AX database it additionally decodes the AX caller out of `context_info` and resolves the id through `USERINFO`, so a line reads `app_user=CEN01.PU (ORDER PROCESSING), app_session=4654, tran_age=389m, log_bytes=1875268, locks=3931, blocking=52,1266` — worth having where it applies, because through an AOS every session reads `login=axdbadmin program=axOnline`, which names nobody. That lookup is a separate query in a `try`, so a database with no `USERINFO` loses the name and nothing else. Arguments: **server**, **database**, and optionally a **SPID** (**0**, the default, means every transaction older than five minutes). It runs through `run-sql`, which always rolls back, so unlike `/spbot_kill_spid` it changes nothing and asks for no confirmation. `log_bytes` is the field to read before killing anything: static means the session is holding locks and doing nothing, growing means real work would be lost. |
 | `/spbot_start_job` | **EMERGENCY, clearance 50.** Start one SQL Server Agent job by exact name. Asks for the server, the job name, then one `yes`. Refuses a job that is already running, warns when the job is disabled (starting it runs it once; it stays disabled on its schedule), and says plainly that success means *started*, not *finished* — check the job history for the outcome. |
 | `/spbot_disable_job` | **EMERGENCY, clearance 50.** Stop one scheduled job running on its schedule. Asks for the server, then the job name — **listing the jobs that are actually enabled on that server**, so the exact name does not have to be recalled — then one `yes`. Works on SQL Server (Agent), Oracle (DBMS_SCHEDULER *and* the older DBMS_JOB, dispatching on whichever owns the name) and PostgreSQL (pg_cron); says plainly when a PostgreSQL server has no scheduler installed at all rather than answering "no jobs". Disable only — there is no drop-job, because a dropped Agent job takes its schedule, steps and history with it. A job already disabled reports OK, not an error. **A run already in progress is not stopped.** |
 | `/spbot_restart_server` | **EMERGENCY, clearance 100.** Restart a host. Two answers: `yes`, and then the server id typed out in full. The second answer is not a second `yes` on purpose — it cannot be given from muscle memory, and it means a message written for one host is refused by another. Every service on the host stops, sessions are lost, and an FCI may fail over. |
@@ -54,10 +51,7 @@ spbot_trace_session - Who is holding an open transaction on SALESDB: AX user, se
 | `/spbot_report_inventory` | Rebuild the Database Inventory & Health report from the last 7 days of metrics (no parameters) and reply with the report URL |
 | `/spbot_master_cli` | Reply with the master-side CLI cheat sheet (run from the repo root): worker status, deploy, pulling config/secrets back, creating a lab database, running anything inside the worker, report URLs. Static reply — it runs nothing. |
 | `/spbot_create_db_docker` | Create a lab database container, on the worker host **or directly on a remote Ubuntu VM over SSH** — one unified parameter set for every engine. Private chat only. Fourteen parameters, in order: **name · engine · version · mode · host_port · password_env (DB secret ref) · password_text (DB password value) · deploy_target · remote_user · remote_password_ref · remote_password_text · remote_key_name · recreate · install_docker**. See the Usage section below for what each means and inline examples. Both passwords come in two forms — a **ref** already in the encrypted secret store, or a **text value** (handed to the CLI through the environment, never rendered onto a command line). `deploy_target` = `worker` runs in-container on the worker host (as before); an **IP** provisions on that Ubuntu VM over SSH (`remote_user` + one of the SSH password forms). Engines: `postgres`/`mysql`/`mssql`/`oracle` (26ai = tag `23.26.2`/`latest`; oracle `ha-lab` = Data Guard 1+1). `recreate=yes` = `--force`: **destroys the existing containers and their data volumes**. Afterwards pull the new connection + secret back to the master with `control worker-pull-data-config --all-json --include-secrets --overwrite`. |
-| `/spbot_update_allow_re_inspect` | Update Globex AllowReInspect by InternalBarcode |
-| `/spbot_update_package_barcode` | Update Globex Package Barcode |
 | `/spbot_restore` | Run point-in-time restore workflow by restore_id and point_in_time |
-| `/spbot_json_exp_ticket_detail` | Export all ticket detail to JSON file and send it back as a Telegram document |
 | `/spbot_add_sql` | Register and enable a new SQL task from a conversation: **server_id → sql_name → schedule → output → sql_text**. `db_type`, instance and credential are read from `db_instances.json` by `server_id`, never typed. Schedule accepts `manual` (runs only via `/spbot_run_sql_task`), `default`, or `from_hour to_hour repeat_interval timeout`. Output accepts `xlsx` (send a workbook), `plain` (rows as text), `none` (status only). Private chat only. |
 | `/spbot_sql_export` | The same read-only SELECT as `/spbot_sql_to_xlsx`, but you choose the file: **xlsx**, **csv**, **txt** (aligned table) or **xml**. Asks for a **target**, then the **format**, then the SQL text. The format comes *before* the SQL because the SQL argument consumes the rest of the message. Clearance 10, runs on the worker. |
 | `/spbot_sql_to_xlsx` | Run a **read-only SELECT** on a server and send the first result set back as an `.xlsx` document. Asks for a **target** (a `server_id`, or `<db_type> <ip> [port]`) and the SQL text (paste it or attach a `.sql` file). Works on **any** engine in the inventory — SQL Server, PostgreSQL, MySQL, Oracle. Any statement that changes rows is refused and rolled back — but rollback is **not** a sandbox (see `db_ops/common/sql_run.py`), so this runs as the instance's DBA login. Clearance 10, runs on the worker. |
@@ -68,6 +62,19 @@ spbot_trace_session - Who is holding an open transaction on SALESDB: AX user, se
 | `/spbot_run_sql_task` | Run one SQL task now by `sql_id` (the number `/spbot_list_sql_tasks` shows). Runs every target configured for that task, in the background, and each target reports its own result as a separate message — the runner already queues those. Always `--force`, which the CLI requires for a targeted run: it ignores the time window, the repeat interval **and the active flag**, so an id that `/spbot_list_sql_tasks` hides as inactive will still run if you name it. Requires clearance 10, the same as `/spbot_restore` and `/spbot_add_sql`, because a task may be an UPDATE against production. |
 | `/spbot_list_metrics` | List every **active** metric definition (`metric_definitions.json`): metric_code, collector type, db_type, and repeat interval (`every Ns` / `run-once`). Inactive definitions are hidden and counted in a footnote. If the listing exceeds one Telegram message, it is attached as a JSON document instead. No parameters. |
 | `/spbot_metric_toggle` | Enable/disable metric collection for one `server_id` in `db_instances.json` (atomic write; the bot runs the `common.cli metric-toggle` command itself, so there is one engine and one caller path). Scope: `all` (the target's `metrics.enabled`), `collector:<sql\|cmd\|docker\|k8s>` (one collector class via `disabled_collector_types`), or one metric_code (`metric_overrides.<CODE>.enabled`; enabling also removes the code from the legacy `report_policy.disabled_metric_codes`). Clearance 10, private chat only — switching collection off produces no alert of its own. Afterwards, pull the change back to the master with `control worker-pull-data-config --all-json --overwrite`. |
+
+
+> **2026-08-27 — the two Innotex barcode update commands are gone.** Each wrote one server, one
+> database and one credential into its own configuration, which is a SQL task's job and is why
+> this command set could not ship with dba-brain. They are SQL tasks 25 and 26 now: run them with
+> `/spbot_run_sql_task 25 <InternalBarcode>` and `/spbot_run_sql_task 26 <PackageBarcode>`. The
+> scripts and the estate they run against live in `assets/tasks/sqlserver/` and
+> `data/sql_targets.json`, where every other target does.
+
+> Removed the same day: the ticket-detail JSON export, which pinned `--sql-id 14` in its
+> own argv and so shipped to every install as a command that ran *this* estate's task.
+> It is `/spbot_run_sql_task 14` now, and task 14's own `output.format` is `json`, so the
+> file arrives the same way every other task's export does.
 
 ## Usage
 
@@ -109,10 +116,6 @@ LATEST
 `point_in_time` accepts:
 - `LATEST` — restore to the newest available backup
 - `YYYY-MM-DD HH:MM:SS +HH:MM` — restore to a specific point in time (requires log backups)
-### `/spbot_json_exp_ticket_detail`
-
-Runs SQL task `SQLSERVER-014-EXPORT-TICKET-DETAIL-JSON` on server `ACME-192-0-2-245`, database `HR`, writes the `ResultJson` output to `runtime/exports/telegram/*.json`, and sends the generated JSON file back to Telegram.
-
 ### Target specs (server_id or `<db_type> <ip> [port]`)
 
 Commands that address one database accept a **target** in either form (resolved against `data/db_instances.json`). `server_id` is the unique per-instance key and is preferred; an IP can be shared by several instances (e.g. HA lab containers on one host), which is why the IP form may need a port.

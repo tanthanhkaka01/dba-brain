@@ -52,6 +52,13 @@ DATA_DIR_ENV_VAR = "DB_OPS_DATA_DIR"
 #: is enough — a deployment that keeps only one of them is still unambiguous.
 ROOT_MARKERS: tuple[str, ...] = ("data", "config.json")
 
+#: The file inside ``data/`` that says which of its neighbours are configuration at all. Two
+#: components need the name and neither owns it: ``db_ops.db.config_sync`` reads it to decide what
+#: may enter the runtime store, and ``db_ops.lib.config_bundle`` reads it to decide what crosses
+#: to another machine. Spelled here so those two can never come to disagree about which file they
+#: mean — ``tests/test_no_duplicate_definitions.py`` is what noticed they had started to.
+CONFIG_CATALOG_FILENAME = "config_catalog.json"
+
 #: The package's own location: the directory holding ``db_ops/``. Correct for a dev checkout and
 #: for the container (``/app/tools/db_ops``); meaningless for an installed copy, which is why it
 #: is the last resort and not the definition.

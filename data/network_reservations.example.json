@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "notes": [
+    "Which address ranges your container runtime may allocate, and which it must leave alone. Checked by 'db-ops control worker-status'; the rules are in db_ops/lib/network_policy.py.",
+    "WHY THIS FILE EXISTS. Docker's default address pool is 172.17.0.0/16 through 172.31.0.0/16, handed out a /16 at a time, and docker0 takes the first free one. That is private RFC-1918 space, which means it is also where a great many estates put real servers. When a Docker bridge on your monitoring host claims a range you route databases on, the HOST ROUTE TABLE starts sending that traffic into the bridge: the database vanishes from that one host while staying perfectly reachable from everywhere else, and the collector reports an ordinary connect timeout. Nothing in the error says 'routing' - it is indistinguishable from the server being down.",
+    "This is not hypothetical and it is not rare. It cost the estate db_ops was built for three separate outages on one SQL Server before this check existed, and each was diagnosed by hand from 'ip route get'.",
+    "'routed_ranges' - the ranges YOUR network routes real hosts on. Fill these in from your own inventory; a range that is routed but not declared is a range this check cannot defend. Only ranges inside 172.16.0.0/12 can ever be claimed by Docker's default pool, so a 10.x or 192.168.x estate may legitimately leave this list empty - the UNCONFINED check below still applies.",
+    "'container_ranges' - what the container runtime is confined to instead. These must not overlap 'routed_ranges'. Applying the confinement is a separate, host-side step: copy db_ops/sre/host_config/docker-daemon.json to /etc/docker/daemon.json and restart Docker. That README explains it.",
+    "A container network outside every declared 'container_ranges' entry is reported as UNCONFINED even when it collides with nothing today - because Docker, not you, chose that range, which means the next network it creates is a coin flip. That finding is the one worth acting on: it fires while nothing is broken, which is the only moment the fix is free."
+  ],
+  "routed_ranges": [
+    {
+      "cidr": "172.17.0.0/16",
+      "owner": "example - replace with your own",
+      "note": "Stated as a whole /16 because that is the granularity Docker allocates at: a bridge cannot take half of it. Declare the /16 even when you only use one /24 inside it."
+    },
+    {
+      "cidr": "172.18.99.0/24",
+      "owner": "example - replace with your own",
+      "note": "A single subnet holding two monitored database servers. Declaring it narrowly is fine and is what most entries look like."
+    }
+  ],
+  "container_ranges": [
+    {
+      "cidr": "172.30.0.0/16",
+      "owner": "networks db_ops pins by name",
+      "note": "Where db_ops puts everything it names itself: docker0 (via the 'bip' setting in docker-daemon.json), its own runtime compose network, and the lab subnets derived per lab name by db_ops.sre.docker_db.models.lab_network_subnet. That derivation is what keeps a provisioned lab safe even on a host where docker-daemon.json was never applied."
+    },
+    {
+      "cidr": "172.31.0.0/16",
+      "owner": "docker auto-allocation",
+      "note": "Where 'default-address-pools' in docker-daemon.json confines every network nobody pinned, in /24 chunks. A compose project that declares no network lands here instead of in your servers' address space."
+    }
+  ]
+}

@@ -127,3 +127,60 @@ def test_overwrite_false_skips_existing(patched, tmp_path):
 def test_specific_files_selection(patched, tmp_path):
     _pull(tmp_path, files=["sql_targets.json"])
     assert patched.got == ["sql_targets.json"]
+
+
+def test_a_worker_file_the_manifest_does_not_know_is_never_pulled(monkeypatch, tmp_path, capsys):
+    """The 2026-08-25 defect, as a test.
+
+    This sweep used to be `sorted(sftp.listdir(...))`, so it took whatever the worker had. Without
+    `--overwrite` it skips every file the master already holds, which leaves exactly one possible
+    effect: creating files the master does not have. That is the set somebody has just deleted —
+    and `metric_groups.json` and `notify_levels.json`, removed on 2026-08-21 because nothing read
+    them, were back four days later.
+
+    The manifest decides now, so the worker's copy of a file nobody listed cannot come home.
+    """
+    sftp = _FakeSFTP({
+        "sql_targets.json": "{}",
+        "metric_groups.json": '{"metric_groups": []}',
+        "notify_levels.json": '{"notify_levels": []}',
+    })
+    monkeypatch.setattr(worker_data, "ssh_connect", lambda *a, **k: _FakeClient(sftp))
+
+    _pull(tmp_path, all_json=True)
+
+    assert sftp.got == ["sql_targets.json"]
+    assert not (tmp_path / "metric_groups.json").exists()
+    assert not (tmp_path / "notify_levels.json").exists()
+
+
+def test_an_unknown_worker_file_is_named_rather_than_ignored_silently(monkeypatch, tmp_path,
+                                                                     capsys):
+    """Refusing to take it is right; saying nothing about it is not.
+
+    A file on the worker that the master has never heard of is either something new that belongs
+    in the manifest or a leftover the master already removed, and only a person can tell those
+    apart. Silence would leave a genuinely new file stranded on one host with nothing to notice.
+    """
+    sftp = _FakeSFTP({"sql_targets.json": "{}", "something_new.json": "{}"})
+    monkeypatch.setattr(worker_data, "ssh_connect", lambda *a, **k: _FakeClient(sftp))
+
+    _pull(tmp_path, all_json=True)
+
+    printed = capsys.readouterr().out
+    assert "not in the data-file manifest" in printed
+    assert "something_new.json" in printed
+
+
+def test_a_master_owned_file_is_not_swept_back(monkeypatch, tmp_path):
+    """`push` means the master decides, so a sweep must not overwrite it from the worker.
+
+    `metric_definitions.json` is the tool's own catalogue: edited on the master, shipped down. A
+    sweep that took the worker's copy would silently revert whatever was last changed here.
+    """
+    sftp = _FakeSFTP({"metric_definitions.json": '{"metrics": []}', "sql_commands.json": "{}"})
+    monkeypatch.setattr(worker_data, "ssh_connect", lambda *a, **k: _FakeClient(sftp))
+
+    _pull(tmp_path, all_json=True)
+
+    assert sftp.got == ["sql_commands.json"]

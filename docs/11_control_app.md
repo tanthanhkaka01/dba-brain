@@ -87,7 +87,7 @@ control app) — they do **not** decide this node's role. Each daemon tick logs 
 | `copy [--host --user --password --remote-dir]` | SFTP the bundle to the worker (overwrites config/data/assets/image; keeps `logs/` and `runtime/db_ops.sqlite`). The bundle also carries the canonical `architecture/database-inventory.json` (repo copy, where static blocks like `sqlserver_resources`/`deployment` are edited) into the worker's `runtime/reports/database-inventory.json` — the worker-side canonical the reports app merges health into. Health blocks are rebuilt from the runtime store on the next `inventory-workflow` run, so the overwrite loses nothing durable. After the upload it also **moves aside any top-level directory under `data/` or `assets/` that the bundle no longer carries** — see [Directories the bundle owns](#directories-the-bundle-owns). |
 | `start-daemon [... --key-base64/--key --container --node-role]` | `docker load`, replace the container, start the daemon with `DB_OPS_NODE_ROLE` (default `worker`), set `restart=unless-stopped`, verify the version, then **prune the images this deploy superseded** (see below). |
 | `deploy [... all of the above ...] [--merge]` | `build-image` → `copy` → `start-daemon` in one shot. **Master → worker**: the master's `data/` and `assets/` overwrite the worker's, so anything registered through the bot since the last deploy is deleted. `--merge` prepends **merge worker secrets** → **merge worker config** → pull `*.sql`, which pulls what the bot created on the worker (SQL tasks/targets, Telegram groups/users, new secret refs) into the master first; a secret ref that differs on both sides then aborts the deploy before anything is built. See [Syncing worker-side config](#syncing-worker-side-config-back-to-the-master). |
-| `worker-status [--host --user --key... --container --json --no-metrics]` | Read-only health check: is the daemon container up?, which db_ops version it runs, and — via the in-container `python -m db_ops.jobs.status` — every app command on that node (active?, last run time/status, due now?, last error) plus metric freshness per target. If the deployed image predates the status module the command **says so and exits** — it does not fall back to an inline query. The old fallback hard-coded a SQLite path, so against a PostgreSQL node it reported "no data" for a healthy worker; see the note at `db_ops/control/worker_status.py:17`. |
+| `worker-status [--host --user --key... --container --json --no-metrics]` | Read-only health check: is the daemon container up?, which db_ops version it runs, and — via the in-container `python -m db_ops.jobs.status` — every app command on that node (active?, last run time/status, due now?, last error) plus metric freshness per target. If the deployed image predates the status module the command **says so and exits** — it does not fall back to an inline query. The old fallback hard-coded a SQLite path, so against a PostgreSQL node it reported "no data" for a healthy worker; see the note at `db_ops/control/worker_status.py:17`. It closes with **container network reservations** — see below. |
 | `worker-run [--host --user --key... --container] -- <command...>` | Run an **arbitrary command inside the worker container** from the master. The command after `--` is passed through verbatim (each token shell-quoted), so any `python -m db_ops.<app>.cli ...` can be triggered on the worker without hard-coding. Exit code + stdout/stderr are returned. |
 | `worker-create-db-docker [--host --user --key... --container] --name --engine --version --mode --replicas --host-port --password-env [--worker-host --containers-dir --no-register --force --dry-run --pull-config]` | Convenience wrapper: runs `sre.cli create-db-docker` **inside the worker container** via `worker-run` (provisions a lab DB container, see `docs/10_sre_app.md`), then, with `--pull-config`, pulls the updated `data/` config back to the master. The `--key`/`--key-base64` is forwarded to the in-container command so it can resolve the DB password from the secret store. |
 | `worker-pull-data-config [--host --user --key... --from-worker-path --to-master-path --files --all-json --include-secrets --merge-secrets --plaintext-secret-path --overwrite --dry-run]` | Copy updated `data/` config files from the worker back to the master over SFTP (the worker's `data/` is bind-mounted on the host at `<remote-dir>/data`). Defaults to just `docker_db_connections.json`; `--all-json` widens to every `*.json` (still excluding the encrypted secret store unless `--include-secrets`). Existing master files are skipped unless `--overwrite`; `--dry-run` prints the plan. |
@@ -123,6 +123,32 @@ even where the base layers are shared.
   layers no tag references at all.
 - Best-effort (`check=False`). A deploy that worked must not be reported as failed because the
   tidying afterwards did not.
+
+### `worker-status` checks the host's container network reservations
+
+`worker-status` ends by reading the worker's own `docker network` subnets and checking them against
+[`data/network_reservations.json`](../data/network_reservations.json), via
+[`db_ops.lib.network_policy`](./14_lib.md). It answers a question no other check on this worker can:
+**can this host still reach the databases it monitors?**
+
+Docker's default address pool is `172.17.0.0/16`–`172.31.0.0/16`, and this estate routes real
+databases inside it. A bridge that claims one of those ranges changes the *host route table*, and
+the database disappears from that host alone — healthy, reachable from everywhere else, and
+reported by the collector as an ordinary connect timeout. It has happened three times to the same
+SQL Server (2026-08-05, 2026-08-14, 2026-08-26) and was diagnosed by hand every time.
+
+```
+===== container network reservations =====
+HIJACK: container network bridge (172.18.0.0/16) contains 172.18.99.10 (DB-172-18-99-10) — this
+host routes it into a local bridge, so the target is unreachable from here while healthy everywhere else
+Pin the host's allocation: db_ops/sre/host_config/README.md
+```
+
+`HIJACK` is the outage in progress. `OVERLAP` is a routed range with nothing monitored in it yet.
+**`UNCONFINED`** is the one worth running this for — a network Docker chose rather than the operator,
+on a host where nothing is broken yet. That is the state a freshly built worker is in, and the only
+moment the fix costs nothing. Pinning it is still an operator step:
+[`db_ops/sre/host_config/README.md`](../db_ops/sre/host_config/README.md).
 
 ### Authentication — only `--key-base64`, no `--password`
 
@@ -659,6 +685,43 @@ docker logs -f db_ops_daemon
 `data/encrypted_secret_text.json` must already exist (run the encrypt step first).
 This is simpler operationally (one machine builds and runs) but downloads the
 base image and packages on the server.
+
+## `data/data_files.json` — the list every transfer reads first
+
+Nothing in `data/` moves between the master and the worker unless the manifest says it does. It
+names every live file, who owns it, and how it travels; `deploy`, `worker-pull-data-config` and the
+merges below all consult it before they consult anything else.
+
+**It exists because of a defect.** `metric_groups.json` and `notify_levels.json` were deleted on
+2026-08-21 — config nothing read, and an editable setting the estate ignores is worse than one you
+cannot edit. On 2026-08-25 both were back. `worker-pull-data-config --all-json` enumerated the
+*worker's* directory and copied whatever the master did not have, and without `--overwrite` that is
+the only effect that sweep can have: it creates files the master lacks, which is precisely the set
+somebody has just removed. Nothing reported it; the guard test found it four days later.
+
+`transfer` is written from the master's point of view:
+
+| Value | What it means | Example |
+| --- | --- | --- |
+| `push` | the master owns it outright; the worker receives it and never sends it back | `metric_definitions.json` |
+| `merge` | the worker appends records; `deploy` unions them first | `sql_targets.json` |
+| `field_merge` | the worker edits named leaves in place; the master's record is the base | `db_instances.json` |
+| `secret_merge` | the encrypted store — merged, never taken wholesale | `encrypted_secret_text.json` |
+| `pull` | the worker produces it and the master takes it back | `database-inventory.json` |
+| `local` | it never leaves this machine | `sre_test_config.json` |
+
+`in_bundle` marks a file the built bundle is checked for; a bundle missing one is refused rather
+than shipped. `control.deploy` reads that rather than carrying its own list, because one list of
+data files per module is how the four that existed came to disagree.
+
+The merge *rules* — which key identifies a record, which leaves the worker owns — stay in
+`control.worker_data`, beside the code that applies them. The manifest holds only the decision that
+a file merges at all, and `tests/test_data_files_manifest.py` fails if the two describe different
+sets. Adding a `data/*.json` without listing it fails the same test, in both directions: an entry
+must not outlive its file either, or the deletion undoes itself again.
+
+Reader: `db_ops.lib.data_files`. Owner: `control`. It is catalogued like any other config file, so
+the console shows it and a config bundle carries it.
 
 ## Syncing worker-side config back to the master
 

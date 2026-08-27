@@ -107,6 +107,12 @@ def test_run_sql_id_force_selects_inactive_targets(tmp_path, capsys):
                 "sql_commands": [
                     {
                         "sql_id": 9,
+                        "output": {"format": "plain", "telegram_chat": "sql",
+                                   "chat_id": ""},
+                        "notify": {
+                            "logging_on_run": {"enabled": True, "telegram_chat": "sql"},
+                            "alert_on_error": {"enabled": True, "telegram_chat": "sql"},
+                        },
                         "sql_code": "SQLSERVER-009",
                         "sql_name": "manual force task",
                         "db_type": "sqlserver",
@@ -125,6 +131,12 @@ def test_run_sql_id_force_selects_inactive_targets(tmp_path, capsys):
                 "sql_targets": [
                     {
                         "sql_id": 9,
+                        "output": {"format": "plain", "telegram_chat": "sql",
+                                   "chat_id": ""},
+                        "notify": {
+                            "logging_on_run": {"enabled": True, "telegram_chat": "sql"},
+                            "alert_on_error": {"enabled": True, "telegram_chat": "sql"},
+                        },
                         "target_no": 1,
                         "server_id": "server",
                         "db_type": "sqlserver",
@@ -198,6 +210,12 @@ def test_sql_target_database_name_is_loaded(tmp_path):
                 "sql_targets": [
                     {
                         "sql_id": 9,
+                        "output": {"format": "plain", "telegram_chat": "sql",
+                                   "chat_id": ""},
+                        "notify": {
+                            "logging_on_run": {"enabled": True, "telegram_chat": "sql"},
+                            "alert_on_error": {"enabled": True, "telegram_chat": "sql"},
+                        },
                         "target_no": 1,
                         "server_id": "server",
                         "db_type": "sqlserver",
@@ -231,6 +249,9 @@ def test_a_target_that_skipped_instance_name_does_not_carry_the_string_None(tmp_
     (data_dir / "sql_targets.json").write_text(
         json.dumps({"sql_targets": [{
             "sql_id": 17, "target_no": 1,
+            "output": {"format": "plain", "telegram_chat": "sql", "chat_id": ""},
+            "notify": {"logging_on_run": {"enabled": True, "telegram_chat": "sql"},
+                       "alert_on_error": {"enabled": True, "telegram_chat": "sql"}},
             "server_id": "ACME-192-0-2-248", "db_type": "sqlserver",
             "service_name": None, "instance_name": None,
             "database_name": None, "credential_name": None,
@@ -267,7 +288,10 @@ def test_server_id_alone_finds_the_credential_of_a_single_instance_server(tmp_pa
     )
     (data_dir / "sql_targets.json").write_text(
         json.dumps({"sql_targets": [{
-            "sql_id": 17, "target_no": 1, "server_id": "ACME-192-0-2-248",
+            "sql_id": 17, "target_no": 1,
+            "output": {"format": "plain", "telegram_chat": "sql", "chat_id": ""},
+            "notify": {"logging_on_run": {"enabled": True, "telegram_chat": "sql"},
+                       "alert_on_error": {"enabled": True, "telegram_chat": "sql"}}, "server_id": "ACME-192-0-2-248",
             "db_type": "sqlserver", "service_name": None, "instance_name": None,
             "credential_name": None, "time_window": {"repeat_interval": 300},
         }]}),
@@ -541,6 +565,12 @@ def test_run_sql_id_dry_run_prints_folder_file_order(tmp_path, capsys):
                 "sql_targets": [
                     {
                         "sql_id": 9,
+                        "output": {"format": "plain", "telegram_chat": "sql",
+                                   "chat_id": ""},
+                        "notify": {
+                            "logging_on_run": {"enabled": True, "telegram_chat": "sql"},
+                            "alert_on_error": {"enabled": True, "telegram_chat": "sql"},
+                        },
                         "target_no": 1,
                         "server_id": "server",
                         "db_type": "sqlserver",
@@ -674,7 +704,10 @@ def test_a_due_task_actually_reaches_the_executor_on_a_scheduled_scan(tmp_path, 
     )
     (data_dir / "sql_targets.json").write_text(
         json.dumps({"sql_targets": [{
-            "sql_id": 9, "target_no": 1, "server_id": "server", "db_type": "sqlserver",
+            "sql_id": 9, "target_no": 1,
+            "output": {"format": "plain", "telegram_chat": "sql", "chat_id": ""},
+            "notify": {"logging_on_run": {"enabled": True, "telegram_chat": "sql"},
+                       "alert_on_error": {"enabled": True, "telegram_chat": "sql"}}, "server_id": "server", "db_type": "sqlserver",
             "service_name": "svc", "instance_name": "inst", "credential_name": "cred",
             "time_window": {"repeat_interval": 60}, "active": True,
         }]}),

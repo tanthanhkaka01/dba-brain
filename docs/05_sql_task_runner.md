@@ -390,10 +390,22 @@ sees in chat would have multiplied the size of every stored run row as a side ef
 budget and the reader's are different questions and now have different numbers.
 | `none` | The task runs and reports success/failure only. What a maintenance `UPDATE` wants. |
 
-**An absent `output` block means `plain`, not `none`.** Every target written before this existed
-has always pasted its rows into the run message — `SQLSERVER-016` exists precisely to show them —
-so inferring `none` from silence would quietly stop delivering results operators depend on.
-`none` is only ever a choice someone made.
+**`output` and `notify` are required on every target, and a missing one is refused by name.**
+
+An absent `output` used to mean `plain`, so that targets written before the field existed kept
+pasting their rows into the run message. The reasoning was sound and the conclusion was half
+right: `none` must never be inferred from silence — but neither must anything else. Thirteen of
+this estate's seventeen targets said nothing, which meant reading `sql_targets.json` could not
+answer *"what does `/spbot_run_sql_task 22` send back?"*; the answer lived in a default inside
+the loader. Those thirteen now say `plain` in the file, which is exactly what they were already
+doing, so nothing changed except that it is now written down.
+
+A block that is *present* and leaves `format` empty still means `none`. That inference survives
+because the operator wrote the block: the silence inside it is theirs, not the file's.
+
+`add-sql` has always asked for `output` and marked it required, so a task registered through the
+documented path is unaffected. `tests/test_sql_target_output_is_declared.py` holds both halves —
+the shipped configuration declares one everywhere, and the loader refuses an entry that does not.
 
 **The rows go to whoever asked**, in whatever form the target produces. A file always did;
 an inline table did not, so `/spbot_run_sql_task` in one chat answered "finished" there and

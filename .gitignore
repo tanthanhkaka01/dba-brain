@@ -57,6 +57,15 @@ CLAUDE.local.md
 data/ssh_keys/*
 !data/ssh_keys/.gitkeep
 
+# Configuration bundles written by `db-ops export-data`. One of these is an entire estate in
+# one file - every host, account and chat id, plus the secret store as ciphertext. It is a
+# credential, and the reason it is named here rather than left to judgement is that it is JSON
+# sitting in the tool root, which is exactly where `git add` finds things.
+*.dbabrain-bundle.json
+*-bundle.json
+dbabrain-export*.json
+*.dbabrain-import
+
 # Tool runtime outputs
 runtime/
 logs/

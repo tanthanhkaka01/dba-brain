@@ -24,6 +24,7 @@ import pytest
 
 from conftest import shipped_data_dir
 from db_ops.db import config_sync
+from db_ops.lib.data_files import known_names
 from db_ops.db.config_store import DOCUMENT_COLLECTION, DOCUMENT_KEY, ConfigStore
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -38,15 +39,14 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 #: raised during *collection*, so `pytest tests` reported two collection errors and ran nothing.
 DATA_DIR = shipped_data_dir()
 
-#: Files under ``data/`` that are deliberately not mirrored, and why. Listed here rather than
-#: pattern-matched so adding one is a decision somebody wrote down.
-NOT_SYNCED = {
-    "encrypted_secret_text.json": "the secret store itself; it never leaves data/",
-    "postgresql_sla_examples.json": "a sample, not live config",
-    "sre_test_config.json": "a test fixture",
-    "database-inventory.json": "generated report output, rebuilt every run",
-    "config_catalog.json": "the catalog itself; it describes the sync rather than being synced",
-}
+#: Files under ``data/`` that are deliberately not mirrored into the store.
+#:
+#: This was a dict written out here, in a test file, and that was the wrong place for it: it is a
+#: statement about the shipped configuration, so `control` could not read it and the operator
+#: could not see it. It now comes from ``data/data_files.json`` — anything the manifest lists that
+#: the catalog does not is by definition a file that exists and does not sync.
+NOT_SYNCED = frozenset(known_names(DATA_DIR)) - {
+    spec.file for spec in config_sync.load_catalog(DATA_DIR)}
 
 #: Catalogued files no direct filename search finds a reader for, with the reason. The guard below
 #: exists to catch **dead** config; a file whose path is built at runtime rather than spelled would
@@ -84,10 +84,11 @@ def test_every_config_file_is_either_catalogued_or_deliberately_excluded() -> No
     on_disk = {p.name for p in DATA_DIR.glob("*.json") if ".example." not in p.name}
     catalogued = {spec.file for spec in config_sync.load_catalog(DATA_DIR)}
 
-    unlisted = sorted(on_disk - catalogued - set(NOT_SYNCED))
+    unlisted = sorted(on_disk - catalogued - NOT_SYNCED)
     assert not unlisted, (
-        "data/*.json file(s) neither in data/config_catalog.json nor in this file's NOT_SYNCED: "
-        f"{unlisted}")
+        "data/*.json file(s) in neither data/config_catalog.json nor data/data_files.json: "
+        f"{unlisted}. Catalogue it if the store should hold it; either way it must be in the "
+        "manifest, or no deploy and no pull will carry it.")
 
     gone = sorted(catalogued - on_disk)
     assert not gone, f"data/config_catalog.json lists file(s) that no longer exist: {gone}"
@@ -387,3 +388,37 @@ def test_one_unreadable_file_does_not_stop_the_others(store: ConfigStore, data_c
     assert statuses["telegram_groups.json"] == "failed"
     assert statuses["metric_definitions.json"] == "ok"
     assert store.list_items(source_file="metric_definitions.json")
+
+
+def test_the_packaged_catalog_decides_the_same_as_the_operator_s() -> None:
+    """Three copies of the catalog exist, and only this holds them together.
+
+    `data/config_catalog.json` is what this estate runs, `data/config_catalog.example.json` ships
+    in place of it publicly, and `db_ops/db/catalogue/config_catalog.json` is the one `db-ops init`
+    writes into a fresh tool root. The third is the one that drifts, because nothing an operator
+    does touches it: on 2026-08-26 it was two entries behind — `network_reservations.json` since
+    the network guard landed, so a fresh install's console never showed it at all.
+
+    The prose may differ. What each entry *decides* may not, or an install would sync a different
+    set of files from the tree it was installed out of.
+    """
+    import json
+
+    from db_ops.lib.paths import PACKAGE_DIR
+
+    packaged = json.loads(
+        (PACKAGE_DIR / "db" / "catalogue" / "config_catalog.json").read_bytes()
+        .decode("utf-8-sig"))
+
+    def decisions(sources):
+        return {
+            entry["file"]: (entry["app_code"],
+                            tuple(sorted((block["collection"], tuple(block["key_fields"]))
+                                         for block in entry.get("collections") or [])))
+            for entry in sources
+        }
+
+    shipped = json.loads(
+        (DATA_DIR / config_sync.CATALOG_FILENAME).read_bytes().decode("utf-8-sig"))
+
+    assert decisions(packaged["config_sources"]) == decisions(shipped["config_sources"])

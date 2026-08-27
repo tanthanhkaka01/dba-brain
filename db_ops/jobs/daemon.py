@@ -614,7 +614,16 @@ def start_app_command(
     env = os.environ.copy()
     env[LOG_SCOPE_ENV_VAR] = app_command.log_scope
     if forwarded_key_args and forwarded_key_args.supplied:
-        env.setdefault(SECRET_KEY_ENV_VAR, forwarded_secret_key(forwarded_key_args))
+        # **Assigned, not `setdefault`.** The daemon was started with `--key-base64`, which is a
+        # statement; an inherited `DB_OPS_SECRET_KEY` is whatever happened to be in the shell that
+        # launched it. `setdefault` let the ambient value win, so the flag silently did nothing
+        # and every child decrypted with a key nobody had passed — the failure being a wrong
+        # passphrase that does not match the one on the command line, which is close to
+        # undiagnosable. Same order as `resolve_password` and `resolve_tool_root`: what the
+        # operator stated, first.
+        forwarded = forwarded_secret_key(forwarded_key_args)
+        if forwarded:
+            env[SECRET_KEY_ENV_VAR] = forwarded
     command_text = append_forwarded_key_args(
         app_command.command_text,
         forwarded_key_args or ForwardedKeyArgs(),
@@ -1089,11 +1098,16 @@ def forwarded_secret_key(forwarded_key_args: ForwardedKeyArgs) -> str:
 
 
 def ensure_forwarded_secret_key_env(forwarded_key_args: ForwardedKeyArgs) -> None:
+    """Put the key the daemon was *given* into its own environment, overriding any inherited one.
+
+    The same precedence as the child environment above, and for the same reason: a flag on the
+    command line is a decision, and an inherited variable is an accident of the shell.
+    """
     if not forwarded_key_args.supplied:
         return
     secret_key = forwarded_secret_key(forwarded_key_args)
     if secret_key:
-        os.environ.setdefault(SECRET_KEY_ENV_VAR, secret_key)
+        os.environ[SECRET_KEY_ENV_VAR] = secret_key
 
 
 #: Words a command may start with that mean "the Python I am running under".

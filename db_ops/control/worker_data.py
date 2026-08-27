@@ -28,6 +28,7 @@ from db_ops.control._support import (
 )
 from db_ops.control.worker_exec import run_worker_command
 from db_ops.lib.paths import OPERATOR_ASSET_KINDS
+from db_ops.lib.data_files import known_names, pullable_names
 
 
 # The worker's data/ is bind-mounted on the host under <remote-dir>/data.
@@ -537,14 +538,30 @@ def _merge_secret_store(
 
 
 def _remote_json_files(sftp, remote_dir: str, *, include_secrets: bool) -> list[str]:
-    names: list[str] = []
-    for name in sorted(sftp.listdir(remote_dir)):
-        if not name.endswith(".json"):
-            continue
-        if name in SECRET_FILES and not include_secrets:
-            continue
-        names.append(name)
-    return names
+    """Which of the worker's ``*.json`` a sweep may take — the manifest first, the worker second.
+
+    This was ``sorted(sftp.listdir(remote_dir))``, and that is the defect. Without ``--overwrite``
+    the sweep skips every file the master already has, so its *only* possible effect was to create
+    files the master does not have — which is exactly the set somebody has just deleted. On
+    2026-08-25 it restored ``metric_groups.json`` and ``notify_levels.json``, deleted on
+    2026-08-21 because nothing read them, and nothing said so for four days.
+
+    So the manifest decides, and the listing only narrows: a file the master does not know about
+    cannot arrive by being present on a worker. A pullable file that is *absent* there is reported
+    by the caller as ``MISSING``, which is the right place for it — the manifest says what may
+    travel, not what exists on any particular host.
+    """
+    allowed = [name for name in pullable_names() if include_secrets or name not in SECRET_FILES]
+    present = set(sftp.listdir(remote_dir))
+    unknown = sorted(name for name in present
+                     if name.endswith(".json") and name not in known_names())
+    if unknown:
+        # Named, never taken. A file on the worker that the master has never heard of is either
+        # something new that belongs in the manifest, or a leftover the master already removed —
+        # and only a person can tell those apart.
+        print(f"  IGNORED  {len(unknown)} worker file(s) not in the data-file manifest: "
+              f"{', '.join(unknown)}", flush=True)
+    return allowed
 
 
 def pull_data_config(

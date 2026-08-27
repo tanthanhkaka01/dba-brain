@@ -480,7 +480,10 @@ def test_a_task_inherits_its_servers_transport_from_db_instances(tmp_path):
         "sql_access": {"method": "api", "bridge_url": "http://h:8765/query"},
     }]}), encoding="utf-8")
     (tmp_path / "sql_targets.json").write_text(json.dumps({"sql_targets": [{
-        "sql_id": 19, "target_no": 1, "server_id": "ACME-192-0-2-236", "db_type": "oracle",
+        "sql_id": 19, "target_no": 1, "output": {"format": "plain", "telegram_chat": "sql", "chat_id": ""},
+        "notify": {"logging_on_run": {"enabled": True, "telegram_chat": "sql"},
+                   "alert_on_error": {"enabled": True, "telegram_chat": "sql"}},
+        "server_id": "ACME-192-0-2-236", "db_type": "oracle",
         "service_name": "LEGACYDB", "credential_name": "oracle_2.236_LEGACYDB_sys", "active": True,
     }]}), encoding="utf-8")
 
@@ -599,7 +602,10 @@ def _write_task_config(tmp_path, *, parameters=None, active=True, target_active=
             {"name": "job_no", "type": "varchar(50)", "required": True}],
     }]}), encoding="utf-8")
     (tmp_path / "sql_targets.json").write_text(json.dumps({"sql_targets": [{
-        "sql_id": 19, "target_no": 1, "server_id": "ACME-192-0-2-236", "db_type": "oracle",
+        "sql_id": 19, "target_no": 1,
+        "notify": {"logging_on_run": {"enabled": True, "telegram_chat": "sql"},
+                   "alert_on_error": {"enabled": True, "telegram_chat": "sql"}},
+        "server_id": "ACME-192-0-2-236", "db_type": "oracle",
         "service_name": "LEGACYDB", "database_name": "LTR",
         "credential_name": "oracle_2.236_LEGACYDB_sys", "active": target_active,
         "output": {"format": "xlsx"},

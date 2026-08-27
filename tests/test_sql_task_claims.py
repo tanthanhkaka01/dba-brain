@@ -336,11 +336,19 @@ def test_output_none_and_xlsx_keep_the_rows_out_of_the_message_body():
     assert "| a |" not in queued_text("none")
 
 
-def test_a_target_written_before_output_existed_still_shows_its_rows():
-    """The absent block must read as `plain`, not `none`. SQLSERVER-016 and friends exist to put
-    rows in front of an operator; inferring `none` from silence would quietly stop delivering
-    results people already depend on, and nothing in the config would show why."""
-    assert runner._target_output({"sql_id": 16})["output_format"] == "plain"
+def test_a_target_must_say_what_it_does_with_its_rows():
+    """This used to assert that an absent block reads as `plain`, and the concern behind it was
+    right: inferring `none` from silence would quietly stop delivering results people depend on,
+    with nothing in the config to show why.
+
+    The concern is now met by a stronger means. Silence is not interpreted at all — it is
+    refused, by name, with the block to add. And the thirteen targets that had relied on the
+    default now say `plain` in `sql_targets.json`, which is what they were already doing, so
+    nothing stopped being delivered. "Nothing in the config would show why" was the real
+    complaint, and the config shows it now."""
+    with pytest.raises(RuntimeError, match="'output' is required"):
+        runner._target_output({"sql_id": 16})
+
     assert runner._target_output({"output": {"format": "none"}})["output_format"] == "none"
     for file_format in ("xlsx", "csv", "txt", "xml"):
         assert runner._target_output(
@@ -494,6 +502,6 @@ def test_every_file_format_captures_the_whole_result_not_a_preview():
 
 
 def test_a_file_export_replaces_the_inline_table_rather_than_repeating_it():
-    assert runner.FILE_OUTPUT_FORMATS == ("xlsx", "csv", "txt", "xml")
+    assert runner.FILE_OUTPUT_FORMATS == ("xlsx", "csv", "txt", "xml", "json")
     for file_format in runner.FILE_OUTPUT_FORMATS:
         assert file_format not in {"plain", "none"}

@@ -2292,19 +2292,26 @@ def execute_cli_background_command(
             "shell": False,
             "env": child_env,
         }
-        launch_argv = argv
+        # A detached process is not a child of the workflow that later polls it, so **neither**
+        # platform can read its exit status back: `waitpid` only works for children on POSIX,
+        # and on Windows the PID is released the moment the process exits, so `OpenProcess`
+        # finds nothing. Without a recorded code the poller has to guess from the output, and a
+        # command that says nothing machine-readable (`create-db-docker` prints a human summary)
+        # is reported as FAILED even when it succeeded.
+        #
+        # POSIX recorded its own code from the start, through `sh -c`. Windows did not, and the
+        # gap was filled by returning a hardcoded 1 — which reported every completed detached
+        # task as failed. See `db_ops.telegram.detached_exit`.
+        #
+        # One wrapper now, for both, and in Python rather than a shell: an argument list needs
+        # no quoting, and building a `cmd.exe` command line is the defect this repository met
+        # twice in one day.
+        launch_argv = [sys.executable, "-m", "db_ops.telegram.detached_exit",
+                       exit_code_path, DETACHED_ARGV_SEPARATOR, *argv]
         if sys.platform == "win32":
             popen_kwargs["creationflags"] = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
         else:
             popen_kwargs["start_new_session"] = True
-            # A detached process is not a child of the workflow that later polls it, so on
-            # POSIX its exit status cannot be read back — waitpid only works for children.
-            # Without this the poller has to guess from the output, and a command that says
-            # nothing machine-readable (create-db-docker prints a human summary) is reported
-            # as FAILED even when it succeeded. So the process writes its own exit code out.
-            command_line = " ".join(shlex.quote(part) for part in argv)
-            launch_argv = ["/bin/sh", "-c",
-                           f"{command_line}; printf %s $? > {shlex.quote(exit_code_path)}"]
         popen = subprocess.Popen(launch_argv, **popen_kwargs)  # noqa: S603
         popen_kwargs["stdout"].close()
         popen_kwargs["stderr"].close()
@@ -2446,6 +2453,10 @@ def _job_run_metadata_matches(metadata_json: Any, match_metadata: dict[str, Any]
     return all(str(meta.get(key, "")) == str(value) for key, value in match_metadata.items())
 
 
+#: Re-exported so the dispatch and the module it launches cannot disagree about the separator.
+from db_ops.telegram.detached_exit import ARGV_SEPARATOR as DETACHED_ARGV_SEPARATOR
+
+
 def _probe_completion(store: Any, probe: Any, *, since_created_at: str) -> tuple[str, str] | None:
     """Authoritative completion of a background command from SQLite ``job_runs``.
 
@@ -2527,12 +2538,11 @@ def check_cli_background_tasks(*, sqlite_path: str | Path) -> dict[str, int]:
         if probe_result is None and alive:
             continue
 
-        # Windows reads the exit code from the process handle; POSIX cannot (the detached
-        # process is not our child), so the dispatch had it write its exit code to a file.
-        if sys.platform == "win32":
-            exit_code = _get_exit_code_windows(pid)
-        else:
-            exit_code = _read_exit_code_file(_exit_code_path(str(task["stdout_path"] or "")))
+        # The recorded code, on both platforms — the child writes it as its last act, so a file
+        # that exists is a finished process. `None` means "not recorded", which is unknown and
+        # must never be read as failure: that reading is what reported a successful
+        # `/spbot_run_sql_task 24` as `Exit code: 1` on 2026-08-26.
+        exit_code = _read_exit_code_file(_exit_code_path(str(task["stdout_path"] or "")))
 
         stdout_text = _read_file_safe(str(task["stdout_path"] or ""))
         stderr_text = _read_file_safe(str(task["stderr_path"] or ""))
@@ -2548,10 +2558,18 @@ def check_cli_background_tasks(*, sqlite_path: str | Path) -> dict[str, int]:
             success_marker_found = bool(
                 success_output_contains and success_output_contains in stdout_text
             )
-            success = (
+            # `exit_code is None` means the child never recorded one — killed, or the write
+            # failed. That is **unknown**, and the three sources are read in order of what they
+            # actually prove: a recorded non-zero code is a failure and settles it; otherwise
+            # any positive evidence counts; otherwise a completed process with nothing against
+            # it is reported as finished rather than accused. Reporting unknown as failure is
+            # what made every completed detached task on Windows arrive with a red cross.
+            failed_outright = exit_code is not None and exit_code != 0
+            success = (not failed_outright) and (
                 exit_code == 0
                 or status_str in ("SUCCESS", "OK")
                 or success_marker_found
+                or exit_code is None
             ) and not timed_out
 
         if timed_out:
@@ -2627,23 +2645,6 @@ def check_cli_background_tasks(*, sqlite_path: str | Path) -> dict[str, int]:
     return counts
 
 
-def _get_exit_code_windows(pid: int) -> int | None:
-    """Return exit code if the process has exited, None if still running or handle unavailable."""
-    import ctypes
-    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-    STILL_ACTIVE = 259
-    handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
-    if not handle:
-        return 1  # process gone — treat as non-zero exit (safe default)
-    try:
-        exit_code = ctypes.c_ulong(0)
-        if ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
-            return None if exit_code.value == STILL_ACTIVE else int(exit_code.value)
-        return None
-    finally:
-        ctypes.windll.kernel32.CloseHandle(handle)
-
-
 def _exit_code_path(stdout_path: str) -> str:
     """Where a detached POSIX command writes its exit code (see the dispatch)."""
     return f"{stdout_path}.rc"
@@ -2679,9 +2680,35 @@ def _is_zombie(pid: int) -> bool:
     return bool(fields) and fields[0] == "Z"
 
 
+def _is_windows_pid_alive(pid: int) -> bool:
+    """Is this PID a *running* process on Windows?
+
+    A failed ``OpenProcess`` means the process is gone, and for **liveness** that is the right
+    reading — it was only wrong as an *exit code*, which is what the function this replaces
+    returned ``1`` for. Liveness and outcome are two questions and were answered by one call.
+    """
+    import ctypes
+
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    STILL_ACTIVE = 259
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        return False
+    try:
+        code = ctypes.c_ulong()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            # The handle opened but the state cannot be read. Treated as alive so the poller
+            # waits rather than declaring an outcome it does not have.
+            return True
+        return code.value == STILL_ACTIVE
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def _is_pid_alive(pid: int) -> bool:
     if sys.platform == "win32":
-        return _get_exit_code_windows(pid) is None
+        return _is_windows_pid_alive(pid)
     else:
         try:
             os.kill(pid, 0)

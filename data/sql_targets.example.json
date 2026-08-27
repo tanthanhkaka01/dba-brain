@@ -20,17 +20,35 @@
       "credential_name": "sqlserver_192.0.2.10_MSSQLSERVER_dba_user",
       "active": true,
       "time_window": {
-        "from_year": null, "to_year": null,
-        "from_month": null, "to_month": null,
-        "from_day": 1, "to_day": 31,
-        "from_hour": 20, "to_hour": 23,
-        "from_minute": null, "to_minute": null,
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": 1,
+        "to_day": 31,
+        "from_hour": 20,
+        "to_hour": 23,
+        "from_minute": null,
+        "to_minute": null,
         "repeat_interval": 72000,
         "timeout": 1800
       },
       "notify": {
-        "logging_on_run": {"enabled": true, "telegram_chat": "sql", "chat_id": ""},
-        "alert_on_error": {"enabled": true, "telegram_chat": "sql", "chat_id": ""}
+        "logging_on_run": {
+          "enabled": true,
+          "telegram_chat": "sql",
+          "chat_id": ""
+        },
+        "alert_on_error": {
+          "enabled": true,
+          "telegram_chat": "sql",
+          "chat_id": ""
+        }
+      },
+      "output": {
+        "format": "plain",
+        "telegram_chat": "sql",
+        "chat_id": ""
       }
     },
     {
@@ -45,18 +63,35 @@
       "active": true,
       "_note": "Read-only, so it runs as the monitoring login rather than the DBA one. A scheduled export has no business holding rights it does not use.",
       "time_window": {
-        "from_year": null, "to_year": null,
-        "from_month": null, "to_month": null,
-        "from_day": 1, "to_day": 31,
-        "from_hour": 6, "to_hour": 7,
-        "from_minute": null, "to_minute": null,
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": 1,
+        "to_day": 31,
+        "from_hour": 6,
+        "to_hour": 7,
+        "from_minute": null,
+        "to_minute": null,
         "repeat_interval": 86400,
         "timeout": 1800
       },
-      "output": {"format": "xlsx", "telegram_chat": "sql", "chat_id": ""},
+      "output": {
+        "format": "xlsx",
+        "telegram_chat": "sql",
+        "chat_id": ""
+      },
       "notify": {
-        "logging_on_run": {"enabled": true, "telegram_chat": "sql", "chat_id": ""},
-        "alert_on_error": {"enabled": true, "telegram_chat": "sql", "chat_id": ""}
+        "logging_on_run": {
+          "enabled": true,
+          "telegram_chat": "sql",
+          "chat_id": ""
+        },
+        "alert_on_error": {
+          "enabled": true,
+          "telegram_chat": "sql",
+          "chat_id": ""
+        }
       }
     },
     {
@@ -71,17 +106,35 @@
       "active": true,
       "note": "Manual only. repeat_interval -1 is what keeps a backfill that writes to production from ever starting on its own; a timeout of 12 hours is what keeps it from being killed halfway through when somebody does start it.",
       "time_window": {
-        "from_year": null, "to_year": null,
-        "from_month": null, "to_month": null,
-        "from_day": 1, "to_day": 31,
-        "from_hour": 0, "to_hour": 23,
-        "from_minute": null, "to_minute": null,
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": 1,
+        "to_day": 31,
+        "from_hour": 0,
+        "to_hour": 23,
+        "from_minute": null,
+        "to_minute": null,
         "repeat_interval": -1,
         "timeout": 43200
       },
       "notify": {
-        "logging_on_run": {"enabled": true, "telegram_chat": "sql", "chat_id": ""},
-        "alert_on_error": {"enabled": true, "telegram_chat": "critical", "chat_id": ""}
+        "logging_on_run": {
+          "enabled": true,
+          "telegram_chat": "sql",
+          "chat_id": ""
+        },
+        "alert_on_error": {
+          "enabled": true,
+          "telegram_chat": "critical",
+          "chat_id": ""
+        }
+      },
+      "output": {
+        "format": "plain",
+        "telegram_chat": "sql",
+        "chat_id": ""
       }
     },
     {
@@ -96,18 +149,35 @@
       "active": true,
       "_note": "On Oracle the login and the schema owning the tables are often different accounts; 'database_name' becomes the session's current schema, which is what makes an unqualified table name resolve.",
       "time_window": {
-        "from_year": null, "to_year": null,
-        "from_month": null, "to_month": null,
-        "from_day": 1, "to_day": 31,
-        "from_hour": 0, "to_hour": 23,
-        "from_minute": null, "to_minute": null,
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": 1,
+        "to_day": 31,
+        "from_hour": 0,
+        "to_hour": 23,
+        "from_minute": null,
+        "to_minute": null,
         "repeat_interval": -1,
         "timeout": 1800
       },
-      "output": {"format": "xlsx", "telegram_chat": "sql", "chat_id": ""},
+      "output": {
+        "format": "xlsx",
+        "telegram_chat": "sql",
+        "chat_id": ""
+      },
       "notify": {
-        "logging_on_run": {"enabled": true, "telegram_chat": "sql", "chat_id": ""},
-        "alert_on_error": {"enabled": true, "telegram_chat": "sql", "chat_id": ""}
+        "logging_on_run": {
+          "enabled": true,
+          "telegram_chat": "sql",
+          "chat_id": ""
+        },
+        "alert_on_error": {
+          "enabled": true,
+          "telegram_chat": "sql",
+          "chat_id": ""
+        }
       }
     },
     {
@@ -121,17 +191,35 @@
       "credential_name": "postgresql_192.0.2.20_monitor_user",
       "active": true,
       "time_window": {
-        "from_year": null, "to_year": null,
-        "from_month": null, "to_month": null,
-        "from_day": 1, "to_day": 31,
-        "from_hour": 2, "to_hour": 4,
-        "from_minute": null, "to_minute": null,
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": 1,
+        "to_day": 31,
+        "from_hour": 2,
+        "to_hour": 4,
+        "from_minute": null,
+        "to_minute": null,
         "repeat_interval": 604800,
         "timeout": 3600
       },
       "notify": {
-        "logging_on_run": {"enabled": true, "telegram_chat": "sql", "chat_id": ""},
-        "alert_on_error": {"enabled": true, "telegram_chat": "sql", "chat_id": ""}
+        "logging_on_run": {
+          "enabled": true,
+          "telegram_chat": "sql",
+          "chat_id": ""
+        },
+        "alert_on_error": {
+          "enabled": true,
+          "telegram_chat": "sql",
+          "chat_id": ""
+        }
+      },
+      "output": {
+        "format": "plain",
+        "telegram_chat": "sql",
+        "chat_id": ""
       }
     }
   ]

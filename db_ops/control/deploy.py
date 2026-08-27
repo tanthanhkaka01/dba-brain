@@ -27,12 +27,28 @@ from db_ops.control._support import (
     ssh_connect,
     ssh_run,
 )
+from db_ops.lib.data_files import local_only_names, required_in_bundle
 from db_ops.lib.secret_text import resolve_cli_key
 from db_ops.control.worker_data import merge_worker_config, merge_worker_secrets, pull_sql_tree
 
-REQUIRED_IN_BUNDLE = ("db_ops_image.tar", "docker-compose.yml", "config.json",
-                      "data/encrypted_secret_text.json", "data/store_config.json", "assets",
-                      "runtime/reports/database-inventory.json")
+def required_in_bundle_paths() -> tuple[str, ...]:
+    """What a built bundle is checked for before it is allowed to leave the master.
+
+    The ``data/`` half is **read from the manifest** (``in_bundle``) rather than written out here.
+    One list of data files per module is how the four that existed came to disagree; the manifest
+    is the one that decides, and it states "this file must reach the worker" beside "this file is
+    pushed", where the two can be read together. The rest are artefacts of the build itself and
+    have nothing to do with ``data/``.
+
+    **A function, not a module constant.** It was a constant computed at import for one afternoon,
+    and a clean-room export caught what that costs: on a public checkout the manifest is not in
+    ``data/`` yet, so importing this module raised `DataFileError` before anything ran. Reading
+    configuration at import time makes a module's *importability* depend on a tool root, and a
+    module that cannot be imported cannot even print its own help.
+    """
+    return ("db_ops_image.tar", "docker-compose.yml", "config.json",
+            *required_in_bundle(), "assets",
+            "runtime/reports/database-inventory.json")
 
 #: Directories on the worker whose *shape* the bundle decides. Anything else under the remote
 #: directory belongs to the worker — ``logs/``, ``runtime/``, ``containers/`` — and is never
@@ -115,7 +131,16 @@ def build_image(*, platform: str = "linux/amd64", no_cache: bool = False, skip_b
     shutil.copy(DB_OPS_ROOT / "docker-compose.runtime.yml", BUNDLE_DIR / "docker-compose.yml")
     shutil.copy(DB_OPS_ROOT / "config.json", BUNDLE_DIR / "config.json")
     ignore = shutil.ignore_patterns("__pycache__", "*.pyc")
-    shutil.copytree(DB_OPS_ROOT / "data", BUNDLE_DIR / "data", ignore=ignore)
+    # `data/` is copied through the manifest, not wholesale. Two files in it are master-only —
+    # a worked SLA sample and the SRE end-to-end test fixture — and neither is read by anything
+    # the worker runs. Reported rather than silently dropped: a bundle that ships less than the
+    # last one did is exactly the shape of the 2026-08-22 defect (`BUNDLE_OWNED_DIRS`), so the
+    # build says what it left behind and why.
+    left_behind = sorted(local_only_names())
+    shutil.copytree(DB_OPS_ROOT / "data", BUNDLE_DIR / "data",
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc", *left_behind))
+    if left_behind:
+        print(f"  master-only, not in the bundle: {', '.join(left_behind)}")
     shutil.copytree(DB_OPS_ROOT / "assets", BUNDLE_DIR / "assets", ignore=ignore)
     (BUNDLE_DIR / "logs").mkdir()
     (BUNDLE_DIR / "runtime" / "reports").mkdir(parents=True)
@@ -132,7 +157,8 @@ def build_image(*, platform: str = "linux/amd64", no_cache: bool = False, skip_b
     if inv_src.exists():
         shutil.copy(inv_src, BUNDLE_DIR / "runtime" / "reports" / "database-inventory.json")
 
-    missing = [name for name in REQUIRED_IN_BUNDLE if not (BUNDLE_DIR / name).exists()]
+    missing = [name for name in required_in_bundle_paths()
+               if not (BUNDLE_DIR / name).exists()]
     if missing:
         raise SystemExit(f"Bundle is missing: {', '.join(missing)}")
     print(f"\n[4/4] Bundle ready at {BUNDLE_DIR} (image {tar_path.stat().st_size / 1048576:.0f} MB).")

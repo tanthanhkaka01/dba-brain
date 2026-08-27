@@ -83,30 +83,53 @@
           "--server-id",
           "{server_id}",
           "--summary-limit",
-          "{summary_limit}"
+          "{summary_limit}",
+          "--dedupe-seconds",
+          "{dedupe_seconds}"
         ],
         "background": true,
         "detached": true,
         "requires_secret_key": true,
         "startup_grace_seconds": 3,
         "timeout_seconds": 1800,
-        "start_text": "Metrics report started for {server_id}. Collecting...",
-        "success_text": "Metrics report completed for {server_id}",
-        "failure_text": "Metrics report failed for {server_id}\nExit code: {exit_code}\nError: {error_summary}",
-        "timeout_text": "Metrics report timed out for {server_id} after {timeout_seconds}s.",
+        "success_output_contains": "\"status\": \"success\"",
+        "start_text": "Force hourly metrics report started for {server_id} ({target_ip}). Collecting...\nMetrics restricted to a night window (CHECKDB, index fragmentation, restore validation) are skipped; add 'full' to include them.",
+        "success_text": "Force hourly metrics report completed for {server_id}",
+        "failure_text": "Force hourly metrics report failed for {server_id}\nExit code: {exit_code}\nError: {error_summary}",
+        "timeout_text": "Force hourly metrics report timed out for {server_id}. Exceeded {timeout_seconds}s.",
         "defaults": {
-          "summary_limit": 150
+          "summary_limit": 150,
+          "dedupe_seconds": 0
         },
         "parameters": [
           {
-            "name": "server_id",
+            "name": "windowed",
+            "source": "flag",
+            "flag_words": [
+              "full",
+              "all",
+              "+windowed"
+            ],
+            "present": "yes",
+            "absent": "no"
+          },
+          {
+            "name": "target",
             "source": "arg",
             "position": 1,
             "required": true,
-            "validator": "regex",
-            "pattern": "[A-Za-z0-9][A-Za-z0-9._:-]{0,127}",
-            "validation_error": "server_id may contain only letters, numbers, dot, underscore, colon and hyphen",
-            "prompt_text": "Server id? Use /spbot_list_server_id to list targets."
+            "consume_rest": true,
+            "resolve": "target",
+            "prompt_text": "Target? a server_id (e.g. <server_id>) or: <db_type> <ip>[:port] (e.g. mssql <ip> or mssql <ip>:1433). Use /spbot_list_server_id to list targets."
+          }
+        ],
+        "conditional_args": [
+          {
+            "parameter": "windowed",
+            "equals": "yes",
+            "argv": [
+              "--include-windowed"
+            ]
           }
         ]
       },
@@ -133,15 +156,15 @@
           "-m",
           "db_ops.common.cli",
           "kill-spid",
-          "{\"target\":\"{server_id}\",\"session_id\":{session_id},\"confirm\":\"{confirm}\",\"reason\":\"telegram\",\"authorized_by\":{\"channel\":\"telegram\"}}",
+          "{\"target\":\"{server_id}\",\"spid\":{spid},\"confirm\":\"{confirm}\",\"reason\":\"telegram\",\"authorized_by\":{\"channel\":\"telegram\"}}",
           "--config",
           "{config_path}"
         ],
         "requires_secret_key": true,
-        "timeout_seconds": 120,
-        "start_text": "Killing session {session_id} on {server_id}...",
+        "start_text": "Killing session...",
         "success_text": "{stdout}",
         "failure_text": "kill-spid failed.\nExit code: {exit_code}\nError: {error_summary}",
+        "timeout_seconds": 120,
         "parameters": [
           {
             "name": "server_id",
@@ -154,14 +177,24 @@
             "prompt_text": "Server id? Use /spbot_list_server_id to list targets."
           },
           {
-            "name": "session_id",
+            "name": "spid",
             "source": "arg",
             "position": 2,
             "required": true,
             "validator": "regex",
-            "pattern": "[1-9][0-9]{0,6}",
-            "validation_error": "session_id must be a whole number",
-            "prompt_text": "Session id to terminate?"
+            "pattern": "[0-9]{2,6}",
+            "validation_error": "spid must be a number",
+            "prompt_text": "Which SPID? (system sessions <= 50 are refused)"
+          },
+          {
+            "name": "confirm",
+            "source": "arg",
+            "position": 3,
+            "required": true,
+            "validator": "regex",
+            "pattern": "yes",
+            "validation_error": "Type exactly: yes",
+            "prompt_text": "This changes a LIVE system and cannot be undone. Read the target above. Type exactly: yes"
           }
         ]
       },
@@ -353,7 +386,7 @@
             "source": "arg",
             "position": 2,
             "required": true,
-            "prompt_text": "Format? xlsx (spreadsheet), csv (spreadsheet or another tool), txt (aligned table), xml (structured)."
+            "prompt_text": "Format? xlsx (spreadsheet), csv (spreadsheet or another tool), txt (aligned table), xml (structured), json (for another program to read)."
           },
           {
             "name": "sql_text",
@@ -1107,46 +1140,357 @@
     {
       "node_role": "worker",
       "command_id": 20,
-      "command_text": "spbot_json_exp_ticket_detail",
+      "command_text": "spbot_list_metrics",
+      "reply_default": 1,
+      "reply_text": "{result_listing}",
+      "reply_parse_mode": "",
+      "reply_with_name": 0,
+      "command_type": 1,
+      "is_group": 1,
+      "is_private": 1,
+      "need_file": 1,
+      "action_type": "list_metrics",
+      "action_config": {
+        "parameters": []
+      }
+    },
+    {
+      "node_role": "worker",
+      "command_id": 23,
+      "command_text": "spbot_shrink_log",
       "reply_default": 0,
       "reply_text": "",
       "reply_parse_mode": "",
       "reply_with_name": 0,
-      "command_type": 10,
-      "is_group": 1,
+      "command_type": 50,
+      "is_group": 0,
       "is_private": 1,
-      "need_file": 1,
+      "need_file": 0,
       "action_type": "cli_execute",
       "action_config": {
+        "working_dir": "tools/db_ops",
+        "emergency_operation": "shrink-log",
+        "command_argv": [
+          "{python}",
+          "-m",
+          "db_ops.common.cli",
+          "shrink-log",
+          "{\"target\":\"{server_id}\",\"database\":\"{database}\",\"size_mb\":{size_mb},\"confirm\":\"{confirm}\",\"reason\":\"telegram\",\"authorized_by\":{\"channel\":\"telegram\"}}",
+          "--config",
+          "{config_path}"
+        ],
+        "requires_secret_key": true,
+        "start_text": "Shrinking log...",
+        "success_text": "{stdout}",
+        "failure_text": "shrink-log failed.\nExit code: {exit_code}\nError: {error_summary}",
+        "timeout_seconds": 120,
+        "parameters": [
+          {
+            "name": "server_id",
+            "source": "arg",
+            "position": 1,
+            "required": true,
+            "validator": "regex",
+            "pattern": "[A-Za-z0-9][A-Za-z0-9._:-]{0,127}",
+            "validation_error": "server_id may contain only letters, numbers, dot, underscore, colon and hyphen",
+            "prompt_text": "Server id? Use /spbot_list_server_id to list targets."
+          },
+          {
+            "name": "database",
+            "source": "arg",
+            "position": 2,
+            "required": true,
+            "validator": "regex",
+            "pattern": "[A-Za-z0-9_][A-Za-z0-9_.$#-]{0,127}",
+            "validation_error": "database must be a plain SQL Server database name",
+            "prompt_text": "Database? (e.g. APPDB)"
+          },
+          {
+            "name": "size_mb",
+            "source": "arg",
+            "position": 3,
+            "required": true,
+            "validator": "regex",
+            "pattern": "[1-9][0-9]{0,6}",
+            "validation_error": "size_mb must be a whole number of MB, 1 or more",
+            "prompt_text": "Shrink the log file to how many MB? (e.g. 5120)"
+          },
+          {
+            "name": "confirm",
+            "source": "arg",
+            "position": 4,
+            "required": true,
+            "validator": "regex",
+            "pattern": "yes",
+            "validation_error": "Type exactly: yes",
+            "prompt_text": "This changes a LIVE system and cannot be undone. Read the target above. Type exactly: yes"
+          }
+        ]
+      }
+    },
+    {
+      "node_role": "worker",
+      "command_id": 25,
+      "command_text": "spbot_start_job",
+      "reply_default": 0,
+      "reply_text": "",
+      "reply_parse_mode": "",
+      "reply_with_name": 0,
+      "command_type": 50,
+      "is_group": 0,
+      "is_private": 1,
+      "need_file": 0,
+      "action_type": "cli_execute",
+      "action_config": {
+        "working_dir": "tools/db_ops",
+        "emergency_operation": "start-job",
+        "command_argv": [
+          "{python}",
+          "-m",
+          "db_ops.common.cli",
+          "start-job",
+          "{\"target\":\"{server_id}\",\"job_name\":\"{job_name}\",\"confirm\":\"{confirm}\",\"reason\":\"telegram\",\"authorized_by\":{\"channel\":\"telegram\"}}",
+          "--config",
+          "{config_path}"
+        ],
+        "requires_secret_key": true,
+        "start_text": "Starting job...",
+        "success_text": "{stdout}",
+        "failure_text": "start-job failed.\nExit code: {exit_code}\nError: {error_summary}",
+        "timeout_seconds": 120,
+        "parameters": [
+          {
+            "name": "server_id",
+            "source": "arg",
+            "position": 1,
+            "required": true,
+            "validator": "regex",
+            "pattern": "[A-Za-z0-9][A-Za-z0-9._:-]{0,127}",
+            "validation_error": "server_id may contain only letters, numbers, dot, underscore, colon and hyphen",
+            "prompt_text": "Server id? Use /spbot_list_server_id to list targets."
+          },
+          {
+            "name": "job_name",
+            "source": "arg",
+            "position": 2,
+            "required": true,
+            "validator": "regex",
+            "pattern": "[A-Za-z0-9_][A-Za-z0-9_ .$#-]{0,127}",
+            "validation_error": "job_name must be a plain Agent job name",
+            "prompt_text": "Agent job name? (exact, e.g. Backup_Log)"
+          },
+          {
+            "name": "confirm",
+            "source": "arg",
+            "position": 3,
+            "required": true,
+            "validator": "regex",
+            "pattern": "yes",
+            "validation_error": "Type exactly: yes",
+            "prompt_text": "This changes a LIVE system and cannot be undone. Read the target above. Type exactly: yes"
+          }
+        ]
+      }
+    },
+    {
+      "node_role": "worker",
+      "command_id": 26,
+      "command_text": "spbot_restart_server",
+      "reply_default": 0,
+      "reply_text": "",
+      "reply_parse_mode": "",
+      "reply_with_name": 0,
+      "command_type": 100,
+      "is_group": 0,
+      "is_private": 1,
+      "need_file": 0,
+      "action_type": "cli_execute",
+      "action_config": {
+        "working_dir": "tools/db_ops",
+        "emergency_operation": "host-restart",
+        "command_argv": [
+          "{python}",
+          "-m",
+          "db_ops.common.cli",
+          "host-restart",
+          "{\"target\":\"{server_id}\",\"confirm\":\"{confirm}\",\"confirm_target\":\"{confirm_target}\",\"reason\":\"telegram\",\"authorized_by\":{\"channel\":\"telegram\"}}",
+          "--config",
+          "{config_path}"
+        ],
+        "requires_secret_key": true,
+        "background": true,
+        "detached": true,
+        "startup_grace_seconds": 3,
+        "start_text": "Restart requested. Waiting for the host to come back...",
+        "success_text": "{stdout}",
+        "failure_text": "host-restart failed or was refused.\nExit code: {exit_code}\nError: {error_summary}",
+        "timeout_seconds": 1800,
+        "parameters": [
+          {
+            "name": "server_id",
+            "source": "arg",
+            "position": 1,
+            "required": true,
+            "validator": "regex",
+            "pattern": "[A-Za-z0-9][A-Za-z0-9._:-]{0,127}",
+            "validation_error": "server_id may contain only letters, numbers, dot, underscore, colon and hyphen",
+            "prompt_text": "Server id? Use /spbot_list_server_id to list targets."
+          },
+          {
+            "name": "confirm",
+            "source": "arg",
+            "position": 2,
+            "required": true,
+            "validator": "regex",
+            "pattern": "yes",
+            "validation_error": "Type exactly: yes",
+            "prompt_text": "RESTART A SERVER. Every service on it stops, sessions are lost, an FCI may fail over. Are you sure? Type exactly: yes"
+          },
+          {
+            "name": "confirm_target",
+            "source": "arg",
+            "position": 3,
+            "required": true,
+            "validator": "regex",
+            "pattern": "[A-Za-z0-9][A-Za-z0-9._:-]{0,127}",
+            "validation_error": "Type the server id exactly as you sent it",
+            "prompt_text": "Still sure? Type the SERVER ID again, exactly, to proceed. Anything else aborts."
+          }
+        ]
+      }
+    },
+    {
+      "node_role": "worker",
+      "command_id": 27,
+      "command_text": "spbot_trace_session",
+      "reply_default": 0,
+      "reply_text": "",
+      "reply_parse_mode": "",
+      "reply_with_name": 0,
+      "command_type": 50,
+      "is_group": 0,
+      "is_private": 1,
+      "need_file": 0,
+      "action_type": "cli_execute",
+      "action_config": {
+        "_note": "Who is holding an open transaction on a given database. Reads only - it runs through common.cli trace-session, which goes through sql_run and logs like any other task. The server and database are arguments: this command describes an operation, not a machine.",
         "working_dir": "tools/db_ops",
         "command_argv": [
           "{python}",
           "-m",
-          "db_ops.sql_tasks.runner",
-          "--config",
-          "{config_path}",
-          "run-sql-id",
-          "--sql-id",
-          "14",
-          "--force"
+          "db_ops.common.cli",
+          "trace-session",
+          "{\"target\":\"{server_id}\",\"database\":\"{database}\",\"session_id\":{session_id},\"min_tran_seconds\":{min_tran_seconds}}"
         ],
-        "start_text": "Ticket detail JSON export started.",
-        "success_text": "Ticket detail JSON export completed. Preparing file...",
-        "failure_text": "Ticket detail JSON export failed.\nExit code: {exit_code}\nError: {error_summary}",
-        "timeout_seconds": 1800,
-        "requires_secret_key": true,
-        "result_file": {
-          "source": "latest_sql_run_result",
-          "sql_id": 14,
-          "status": "done",
-          "result_column": "ResultJson",
-          "validate_json": true,
-          "output_dir": "runtime/output/telegram/json_exports",
-          "folder_name_template": "json_exp_ticket_detail_{timestamp}",
-          "file_name_template": "ticket_detail_full_{timestamp}.json",
-          "caption": "Ticket detail JSON export file is ready. sql_run_id={sql_run_id}, size={file_size} bytes."
+        "defaults": {
+          "session_id": "0",
+          "min_tran_seconds": "300"
         },
-        "parameters": []
+        "requires_secret_key": true,
+        "start_text": "Tracing open transactions on {server_id} / {database}...",
+        "success_text": "{stdout}",
+        "failure_text": "trace-session failed.\nExit code: {exit_code}\nError: {error_summary}",
+        "timeout_seconds": 120,
+        "parameters": [
+          {
+            "name": "server_id",
+            "source": "arg",
+            "position": 1,
+            "required": true,
+            "prompt_text": "Server id? Use /spbot_list_server_id to list targets."
+          },
+          {
+            "name": "database",
+            "source": "arg",
+            "position": 2,
+            "required": true,
+            "prompt_text": "Database? (e.g. the application database on that instance)"
+          },
+          {
+            "name": "session_id",
+            "source": "arg",
+            "position": 3,
+            "required": false,
+            "validator": "regex",
+            "pattern": "[0-9]{1,6}",
+            "validation_error": "session_id must be a number (0 = every open transaction)",
+            "prompt_text": "Which SPID? Send 0 for every open transaction older than 5 minutes."
+          }
+        ]
+      }
+    },
+    {
+      "node_role": "worker",
+      "command_id": 29,
+      "command_text": "spbot_disable_job",
+      "reply_default": 0,
+      "reply_text": "",
+      "reply_parse_mode": "",
+      "reply_with_name": 0,
+      "command_type": 50,
+      "is_group": 0,
+      "is_private": 1,
+      "need_file": 0,
+      "action_type": "cli_execute",
+      "_note": "Switch a scheduled job off, on SQL Server (Agent), Oracle (DBMS_SCHEDULER or the older DBMS_JOB) or PostgreSQL (pg_cron). Private-only and clearance 50, like its siblings: it changes a live system. Disable only - there is deliberately no drop-job, because a dropped Agent job takes its schedule, steps and history with it and no prompt makes that recoverable. The job_name prompt lists the jobs that are actually ENABLED on the server just named, so the operator picks from what can be acted on rather than recalling an exact name; the listing fails open, so an unreachable instance still gets the bare prompt. Note that disabling does NOT stop a run already in progress - the reply says so every time.",
+      "action_config": {
+        "working_dir": "tools/db_ops",
+        "emergency_operation": "disable-job",
+        "command_argv": [
+          "{python}",
+          "-m",
+          "db_ops.common.cli",
+          "disable-job",
+          "{\"target\":\"{server_id}\",\"job_name\":\"{job_name}\",\"confirm\":\"{confirm}\",\"reason\":\"telegram\",\"authorized_by\":{\"channel\":\"telegram\"}}",
+          "--config",
+          "{config_path}"
+        ],
+        "requires_secret_key": true,
+        "start_text": "Disabling job...",
+        "success_text": "{stdout}",
+        "failure_text": "disable-job failed.\nExit code: {exit_code}\nError: {error_summary}",
+        "timeout_seconds": 120,
+        "parameters": [
+          {
+            "name": "server_id",
+            "source": "arg",
+            "position": 1,
+            "required": true,
+            "validator": "regex",
+            "pattern": "[A-Za-z0-9][A-Za-z0-9._:-]{0,127}",
+            "validation_error": "server_id may contain only letters, numbers, dot, underscore, colon and hyphen",
+            "prompt_text": "Server id? Use /spbot_list_server_id to list targets."
+          },
+          {
+            "name": "job_name",
+            "source": "arg",
+            "position": 2,
+            "required": true,
+            "validator": "regex",
+            "pattern": "[A-Za-z0-9_][A-Za-z0-9_ .$#:-]{0,127}",
+            "validation_error": "job_name must be a plain job name",
+            "prompt_text": "Which job? (exact name - only ENABLED jobs are listed below)",
+            "_note": "enabled_only: a job that is already disabled is not something to disable.",
+            "prompt_choices": {
+              "command": "list-jobs",
+              "data_key": "jobs",
+              "request": {
+                "target": "{server_id}",
+                "enabled_only": true
+              }
+            }
+          },
+          {
+            "name": "confirm",
+            "source": "arg",
+            "position": 3,
+            "required": true,
+            "validator": "regex",
+            "pattern": "yes",
+            "validation_error": "Type exactly: yes",
+            "prompt_text": "This stops the job running on its schedule until someone re-enables it. A run already in progress is NOT stopped. Read the target above. Type exactly: yes"
+          }
+        ]
       }
     }
   ]

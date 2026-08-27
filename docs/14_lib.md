@@ -161,6 +161,34 @@ verdict; none of them reads a file.
 | `interval_rates.py` | reading structured fields back out of a collector's message text |
 | `record_form.py` | how one config record becomes editable fields, and how those fields become the record again |
 | `log_tail.py` | reading a log file from the end, a page at a time, and what one line means |
+| `network_policy.py` | can this host's container networks take a monitored database off the map. See below |
+
+#### `network_policy.py` — the failure that looks like nothing
+
+Docker's default address pool is `172.17.0.0/16`–`172.31.0.0/16`, and this estate routes real
+databases inside it. When a bridge claims one of those ranges the **host route table** starts
+sending that traffic into the bridge, so the database vanishes from that one host while staying
+reachable from everywhere else. Every symptom is an ordinary connect timeout.
+
+It has cost three outages on the same SQL Server — 2026-08-05, 2026-08-14, 2026-08-26 — and each
+was diagnosed by hand. The answer to the first two was *pinning*, in three places that all still
+matter: `db_ops.sre.docker_db.models.lab_network_subnet` (every generated lab compose file),
+`docker-compose.runtime.yml` (db_ops's own network), and `db_ops/sre/host_config/docker-daemon.json`
+(the host's own allocation). Pinning works — but only where somebody applied it, which is why the
+third happened on a worker VM built after the second.
+
+So this module does not pin anything. It **detects**, from what a host's networks actually are:
+
+| Finding | Means |
+| --- | --- |
+| `HIJACK` | a container network holds a monitored address *now* — the outage, in progress |
+| `OVERLAP` | it overlaps a routed range with nothing monitored inside yet — the next instance there vanishes on arrival |
+| `UNCONFINED` | it is outside every declared container range — Docker chose the range, so this host's pool is unpinned |
+
+`UNCONFINED` is the one that pays for the module: it fires on a host where nothing is broken yet,
+which is the only moment the fix is free. What it checks against is
+[`data/network_reservations.json`](../data/network_reservations.json) — the estate's routed ranges
+as data, not literals — and `db_ops.control.cli worker-status` is what runs it.
 
 ### Config objects parsed once
 
@@ -209,6 +237,94 @@ means — they build a request and read a response — and they are the only two
 | `shell.py` | cross-platform shell helpers |
 | `secret_text.py` | encrypted secret-text storage, and `set_secret_everywhere` — the one writer that updates **both** the encrypted store and the plaintext source the deploy regenerates it from |
 | `web_auth.py` | password hashing and session tokens for the web console |
+| `data_files.py` | what is in `data/`, and how each file moves between the master and the worker — the list every transfer consults first. See below |
+| `config_bundle.py` | what a portable configuration bundle *is* — one JSON file that carries a whole estate to a machine that has never seen this project. See below |
+
+#### `data_files.py` — the list every transfer reads first
+
+Four places in this tree answered "which files are configuration", and none of them was the whole
+answer: `config_catalog.json` (what syncs into the store), `NOT_SYNCED` in a *test file* (what
+deliberately does not), `REQUIRED_IN_BUNDLE` in `control.deploy` (what a bundle must carry), and —
+the one that cost something — `sftp.listdir` in `control.worker_data`, which is not a list at all.
+
+`data/data_files.json` is now the one that decides, and the rule it states is: **a file that is not
+in the manifest does not travel, in either direction.** The full table of `transfer` values, and
+the defect that made it necessary, are in
+[`docs/11_control_app.md`](./11_control_app.md#datadata_filesjson--the-list-every-transfer-reads-first).
+
+What belongs here rather than in `control`: the parsing and the queries — `pushed_names`,
+`pullable_names`, `local_only_names`, `required_in_bundle` — because they are a function of the
+manifest and nothing else. What stays in `control.worker_data`: the merge *rules*, which key
+identifies a record and which leaves the worker owns, beside the code that applies them. The
+manifest holds only the decision that a file merges at all, and `tests/test_data_files_manifest.py`
+fails if the two ever describe different sets.
+
+Refused, never defaulted. The default anybody reaches for on a malformed manifest is "do not move
+it", and that reads as a working deploy that quietly ships less — which is the failure this module
+exists to make impossible.
+
+#### `config_bundle.py` — one estate, one file
+
+The sentence it exists for is the acceptance test: on a machine that has never seen this project,
+`pip install dbabrain` then `db-ops import-data <bundle>` leaves the tool running **identically**
+to the machine the bundle came from. `db-ops export-data` writes the file.
+
+**The file list is derived, never enumerated here.** `data/config_catalog.json` is already the
+allow-list that decides what counts as configuration — `db_ops.db.config_sync` reads the same file
+to decide what may enter the runtime store — so this module walks it. A config file added next
+month and catalogued crosses with no edit here, and one the catalog does not name does not cross.
+That is what keeps `database-inventory.json` (generated output, rebuilt on the new host against
+its own estate) and `sre_test_config.json` (a fixture) out of a bundle that "copy the data folder"
+would have taken.
+
+Five roles cross, and the role is what `--no-secrets` / `--no-assets` filter on:
+
+| Role | What |
+| --- | --- |
+| `tool_config` | `config.json`. Every path in it is relative to the tool root by design, so a copied root stays self-consistent and nothing is rewritten on arrival |
+| `config_catalog` | `data/config_catalog.json` itself — it is not listed among its own `config_sources`, so walking the catalog cannot pick it up |
+| `config_source` | the catalogued `data/*.json` |
+| `secret_store` | `data/encrypted_secret_text.json`, as **ciphertext**. The passphrase is not in the file and there is no field for it to hide in: the importing machine sets `DB_OPS_SECRET_KEY` |
+| `estate_asset` | `assets/**` and `data/ssh_keys/**` — config names these by path, so config without them points at nothing |
+
+Two rules the format exists to enforce, both of them about a file that arrived from somewhere
+else:
+
+1. **Every entry carries a checksum and the whole bundle is verified before anything is
+   written.** A truncated transfer leaves the target untouched. Half-applying one produces a tree
+   that is neither the old estate nor the new one, which is worse than either.
+2. **A path inside a bundle is data, not an instruction.** `_safe_relative` refuses absolutes,
+   drive letters, UNC roots and `..`. Writing wherever a received file asks to be written is the
+   archive-extraction defect, and a bundle is an archive.
+
+Import also refuses, whole-bundle, to replace a file that already exists with different content
+unless `--force`: the machine being imported into may already be somebody's working install, and
+its `db_instances.json` may be the only copy. A file that already matches is *identical*, not a
+conflict — which is what lets an interrupted import be finished by running it again.
+
+A `json` entry carries the **parsed document** rather than the source bytes, so a bundle stays
+readable and two estates can be diffed by a person. Byte fidelity is then bought back, because the
+first design did not have it and that was wrong: measured on this tool root, all 26 catalogued
+files are CRLF and two-space indented, so re-emitting the canonical form would have put 26
+whole-file diffs in the next commit anybody made. Two things restore it:
+
+- `layout` records how the source file was written — indent, line ending, trailing newline, BOM,
+  and whether it was escaped to ASCII — and the entry is re-emitted through it. It is validated
+  like every other field on the way in: an indent of a million is a way to turn a four-line config
+  into gigabytes on the importing machine, and a `newline` of arbitrary text rewrites the
+  document's own separators.
+- `verbatim` carries the source text for the file no layout describes. In this estate that is
+  exactly one of 74 — `config_catalog.json`, hand-formatted with each collection on a single line
+  inside an indented array, which `json.dumps` emits at no setting. `verbatim` is what lands, and
+  it is required to parse to the same document as `content`, so the readable half stays a faithful
+  summary of the written half rather than a claim about it.
+
+Measured end to end on the real tool root: 74 files exported and imported into an empty root,
+**0 byte differences**, and `db-ops check-credentials` gives the imported root the identical
+answer — 30 targets checked, same one pre-existing problem.
+
+**A bundle is a credential.** It names hosts, accounts and chat ids and carries ciphertext. It
+must never be committed; `.gitignore` refuses the names `export-data` suggests.
 
 #### `inventory_render.py` — `EXCLUDE_IP_PREFIXES` is empty on purpose
 

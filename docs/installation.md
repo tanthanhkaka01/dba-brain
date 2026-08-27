@@ -170,6 +170,15 @@ The five-minute version, against a throwaway PostgreSQL container, is
 Steps 3 to 5 are the loop worth repeating per target. A scheduler started before a manual run has
 succeeded turns a configuration mistake into an intermittent one.
 
+### If another machine already runs this estate
+
+Do not repeat steps 1 to 3 by hand. On the machine that already works, `db-ops export-data
+prod-bundle.json` writes its whole configuration to one file; here, `db-ops import-data
+prod-bundle.json` applies it, and this machine runs the same estate. The secret store crosses as
+ciphertext, so the only thing you still have to supply is the passphrase — set `DB_OPS_SECRET_KEY`
+and confirm with `db-ops check-credentials`. Full detail, and what import refuses to do, in
+[`docs/configuration.md` §9](./configuration.md#9-moving-a-whole-estate-to-another-machine).
+
 See [`docs/configuration.md`](./configuration.md) for what each file decides, and
 [`docs/security.md`](./security.md) for what the toolkit needs on a monitored instance and what it
 sends anywhere.

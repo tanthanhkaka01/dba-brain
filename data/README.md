@@ -30,6 +30,17 @@ and pointers to the store and Telegram declarations. Everything an app *decides*
   being harmless — an editor for settings nothing acts on is a trap, because the save succeeds and
   the estate ignores it. `tests/test_config_sync.py` now fails if a catalogued file has no reader.
 
+  **Both files came back on 2026-08-25**, four days later, and nothing said so.
+  `worker-pull-data-config --all-json` listed the *worker's* directory and copied anything the
+  master did not have — which, without `--overwrite`, is the only thing that sweep can do, and is
+  exactly the set somebody has just deleted. A deletion the next sweep undoes is not a deletion.
+  That is why `data_files.json` exists.
+- **Every file here is listed in `data_files.json`, and nothing that is not listed travels.** The
+  manifest says who owns each file and how it moves between the master and the worker; deploy, the
+  pull and the merges all read it before they read anything else. Adding a `data/*.json` without
+  adding it there fails `tests/test_data_files_manifest.py` — in both directions, so an entry
+  cannot outlive its file either.
+
 ## What each file decides
 
 Grouped the way they are reached for. Several of these began life as tables in a SQL Server job
