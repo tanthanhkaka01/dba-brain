@@ -7,6 +7,8 @@ spbot_status - Get bot status
 spbot_list_all_command - List every command you can run here, built from the bot's own config
 spbot_list_restore_id - List restore IDs with source and target IP
 spbot_list_backup_id - List backup IDs with engine, level and schedule
+spbot_list_sql_runs - List the 10 most recent SQL task runs and how each one ended
+spbot_self_status - What this installation is: product, version, host, ip, cpu, memory, disk
 spbot_backup - Run one backup by backup_id, optionally forcing full/diff/log
 spbot_report_hourly_metrics - Force hourly metrics report by target IP
 spbot_report_metric_history - Report one stored metric for one server over recent hours
@@ -43,6 +45,8 @@ spbot_trace_session - Who is holding an open transaction on a database: session,
 | `/spbot_restart_server` | **EMERGENCY, clearance 100.** Restart a host. Two answers: `yes`, and then the server id typed out in full. The second answer is not a second `yes` on purpose — it cannot be given from muscle memory, and it means a message written for one host is refused by another. Every service on the host stops, sessions are lost, and an FCI may fail over. |
 | `/spbot_list_all_command` | List every command **you** can run in **this** chat, with its real arguments and clearance. Built from `telegram_support_commands.json` at run time — a command added to that file appears here with no other edit. Commands above your clearance, commands that only run in the other kind of chat, and disabled ones are hidden, each counted with its own reason. Public (clearance 0), no parameters. |
 | `/spbot_status` | Get bot status |
+| `/spbot_self_status` | What the installation answering you actually is: product (published **DBA Brain** or a private **db_ops** build), version, whether it runs in Docker or straight on the OS, which OS, host name and ip, node role, store, cpu, memory and disk. Reads itself - no SSH and no store - so it still answers when the store is the thing that is down. No parameters. |
+| `/spbot_list_sql_runs` | The 10 most recent SQL task runs, newest first, with the status of each and the reason for any that failed. `/spbot_list_sql_tasks` says what is *configured*; this says what actually **ran**. No parameters. |
 | `/spbot_list_restore_id` | List the restore IDs that can be run: **both** kinds — the SMB restores and the script-driven ones (Oracle/PostgreSQL/SQL Server drills) — with each one's source and target. Only active entries are listed; a footnote counts the inactive ones. No parameters. |
 | `/spbot_list_backup_id` | List the backup IDs that can be run: engine, target server, level (`full`/`diff`/`log`, or `auto (Sun=full, else diff)` when the script derives it) and schedule. `[encrypted]` marks a set written with a passphrase. Only active entries; a footnote counts the rest. No parameters. |
 | `/spbot_backup` | Run one backup now by `backup_id`, always with `--force` (ignores the schedule, but never a run already in flight). Optional second argument sets the level: `full` \| `diff` \| `log`, or `-` to let the script decide as it would on a scheduled run. One word for every engine — it is translated to that engine's own name (Oracle 0/1, PostgreSQL full/incr, SQL Server full/diff/log). Use `/spbot_list_backup_id` to find the id. |
@@ -184,6 +188,61 @@ Replies with every configured SQL task and its schedule, one command per block:
 ```
 
 Time windows are the node-local (+07) `from_*`/`to_*` bounds; `every Ns` is `repeat_interval` and `run-once` means `repeat_interval=0`. When the listing is longer than one Telegram message, the full `sql_commands.json` + `sql_targets.json` content is attached as a JSON document. No parameters.
+
+### `/spbot_self_status`
+
+Replies with what this installation is and how much room it has left:
+
+```
+DBA Brain / db_ops - current state
+product   : db_ops (private build)  [pip: db_ops 2.87.1]
+version   : 2.87.01  (public 0.5.0)
+running   : in Docker, on Ubuntu 24.04.4 LTS (6.8.0-generic)
+python    : 3.12.3
+host      : d247fe5052dd
+ip        : 192.0.2.115
+tool root : /app/tools/db_ops
+node_role : worker
+store     : postgresql postgres@192.0.2.115:5433/db_ops
+cpu       : 8 core(s), load 1.24 / 0.98 / 0.71 (0.16 per core)
+memory    : 3.1 GiB used of 7.8 GiB (40%), 4.7 GiB free
+            source: cgroup
+disk      : 351.0 GiB free of 489.0 GiB (26% used)
+```
+
+**The product line comes before the version, because the version cannot be read without it.** The
+published wheel and a private build are the same toolkit under two distribution names and two
+numbering schemes — `0.5.0` and `2.87.01` — and on 2026-09-03 both ran the same estate within an
+hour. `[pip: ...]` is the installed distribution; a tree that was never installed says so instead.
+
+**The memory line names its source.** Inside a container `/proc/meminfo` reports the *host's*
+memory, not the limit the process actually has, so the cgroup is read first and the source travels
+with the number. A figure that quotes the host's 64 GiB while the cgroup allows 2 is the number
+somebody uses to wrongly rule memory out.
+
+Anything the platform cannot answer — a load average on Windows, memory without `/proc` or a
+cgroup — is reported as unavailable rather than guessed. No parameters.
+
+### `/spbot_list_sql_runs`
+
+Replies with the last 10 SQL task runs, newest first — the history, not the schedule:
+
+```
+Last 10 SQL task run(s), newest first:
+#937 [DONE] sql_id=28 SQL028-ACME-RUN-ENGINE-EVERY-5-MINUTES
+    2026-09-03 12:06:51 took 256s rows=67 on ACME-192-0-2-250
+#936 [ERROR] sql_id=28 SQL028-ACME-RUN-ENGINE-EVERY-5-MINUTES
+    2026-09-03 11:57:43 took - on ACME-192-0-2-250
+    stale running exceeded timeout_seconds=900.
+```
+
+The status is first on each line because that is the column being scanned, and a run that failed
+carries the first line of its reason — without it the reader has to open the store, which is the
+trip this command exists to save. The listing stops before Telegram's 4096-character limit and says
+how many it dropped, rather than letting the transport cut the newest rows off silently.
+
+Reads `sql_runs` through `db-ops db sql-run-history`, which takes `{"limit": N, "sql_id": N}` if you
+want a different depth or one task's history. No parameters on the Telegram side.
 
 ### `/spbot_list_metrics`
 

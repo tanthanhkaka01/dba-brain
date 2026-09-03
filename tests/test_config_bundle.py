@@ -721,3 +721,94 @@ def test_a_local_only_file_still_does_not_travel(source_root: Path) -> None:
     paths = {entry.path for entry in _entries(source_root)}
 
     assert "data/fixture_only.json" not in paths
+
+
+# --------------------------------------------------------------------------- #
+# The two ways a first import went wrong on 2026-09-03
+# --------------------------------------------------------------------------- #
+def _bundle_file(root: Path, destination: Path) -> Path:
+    """A real bundle, written by the real writer, so these tests exercise the real reader."""
+    destination.write_text(dump_json_text(config_bundle.build_bundle(root)), encoding="utf-8")
+    return destination
+
+
+def test_an_import_into_site_packages_is_refused_rather_than_reported_as_success(
+    source_root: Path, tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """The tool root falls back to the package's own location, which for a pip install is
+    site-packages. On 2026-09-03 an import run from a new empty directory unpacked a whole estate
+    in there and printed `imported into .../site-packages` - which reads like success, and left a
+    configuration the next command could not find.
+
+    Refusing is the whole fix, and the message has to name the directory and both ways out,
+    because the operator's next move is to type one of them."""
+    from db_ops import cli
+
+    bundle = _bundle_file(source_root, tmp_path / "estate-bundle.json")
+    site_packages = tmp_path / "venv" / "lib" / "python3.14" / "site-packages"
+    site_packages.mkdir(parents=True)
+    monkeypatch.setattr("db_ops.lib.paths.TOOL_ROOT", site_packages)
+
+    code = cli._import_data_command([str(bundle)])
+    printed = "".join(capsys.readouterr())
+
+    assert code == 2, f"an import into site-packages must fail, not succeed: {printed}"
+    assert "site-packages" in printed
+    assert "--root" in printed and "db-ops init" in printed
+    assert not (site_packages / "config.json").exists(), "nothing may be written on a refusal"
+
+
+def test_stating_the_root_still_allows_an_unusual_destination(
+    source_root: Path, tmp_path: Path, capsys
+) -> None:
+    """The guard is about the *fallback*, not about policing where an operator may keep an estate.
+    `--root` said it on purpose, so it is honoured."""
+    from db_ops import cli
+
+    bundle = _bundle_file(source_root, tmp_path / "estate-bundle.json")
+    destination = tmp_path / "lib" / "site-packages"
+
+    code = cli._import_data_command([str(bundle), "--root", str(destination)])
+
+    assert code == 0, "".join(capsys.readouterr())
+    assert (destination / "config.json").exists()
+
+
+def test_an_estate_whose_commands_are_all_worker_says_so_after_importing(
+    source_root: Path, tmp_path: Path, capsys
+) -> None:
+    """A daemon that was not told otherwise is `master`. Import a schedule exported from a worker,
+    every command is `worker`, and the daemon starts and runs nothing - correctly, and for a reason
+    the operator has not been given. It reaches the log on the first tick; that is too late and in
+    the wrong place, so the import says it while they are still typing."""
+    from db_ops import cli
+
+    (source_root / "data" / "app_commands.json").write_text(dump_json_text({"app_commands": [
+        {"app_command_id": "APP-METRICS", "node_role": "worker", "active": True},
+        {"app_command_id": "APP-TELEGRAM", "node_role": "worker", "active": True},
+    ]}), encoding="utf-8")
+    bundle = _bundle_file(source_root, tmp_path / "estate-bundle.json")
+
+    code = cli._import_data_command([str(bundle), "--root", str(tmp_path / "estate")])
+    printed = "".join(capsys.readouterr())
+
+    assert code == 0, printed
+    assert "DB_OPS_NODE_ROLE=worker" in printed
+    assert "run nothing" in printed
+
+
+def test_an_estate_that_would_run_here_says_nothing_about_roles(
+    source_root: Path, tmp_path: Path, capsys
+) -> None:
+    """The note is only worth printing when it names a real mismatch. A schedule carrying `all`
+    runs on a default process, so saying anything about roles would be noise."""
+    from db_ops import cli
+
+    (source_root / "data" / "app_commands.json").write_text(dump_json_text({"app_commands": [
+        {"app_command_id": "APP-METRICS", "node_role": "all", "active": True},
+    ]}), encoding="utf-8")
+    bundle = _bundle_file(source_root, tmp_path / "estate-bundle.json")
+
+    cli._import_data_command([str(bundle), "--root", str(tmp_path / "estate")])
+
+    assert "DB_OPS_NODE_ROLE" not in "".join(capsys.readouterr())

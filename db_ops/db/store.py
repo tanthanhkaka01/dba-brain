@@ -1687,6 +1687,31 @@ class DbOpsStore:
             ).fetchone()
 
 
+    def fetch_recent_sql_runs(self, *, limit: int = 10, sql_id: int | None = None) -> list:
+        """The most recent SQL task runs, newest first — the history, not the schedule.
+
+        `fetch_latest_*_by_run_key` answer "where does each task stand"; this answers "what has
+        been happening", which is the question someone asks after an alert. Ordered by
+        ``sql_run_id`` rather than ``started_at`` because two runs can start in the same second
+        and the id is the only total order the table has.
+        """
+        self.initialize()
+        sql = """
+            SELECT sql_run_id, sql_id, sql_code, target_no, server_id, service_name,
+                   status, level, message, started_at, finished_at, duration_ms, row_count,
+                   error_text
+            FROM sql_runs
+        """
+        params: list = []
+        if sql_id is not None:
+            sql += " WHERE sql_id = ?"
+            params.append(int(sql_id))
+        sql += " ORDER BY sql_run_id DESC LIMIT ?;"
+        params.append(int(limit))
+        with self.connect() as conn:
+            return list(conn.execute(sql, tuple(params)).fetchall())
+
+
 def utc_now_text() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 

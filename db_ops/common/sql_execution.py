@@ -122,7 +122,9 @@ def open_sqlserver_odbc(
             attempts.append(OdbcAttempt(candidate_driver, encryption_mode, False, error_text))
             if not _is_sqlserver_tls_error(error_text):
                 raise
-    raise RuntimeError("SQL Server connect failed after driver fallback:\n- " + "\n- ".join(errors))
+    report = "SQL Server connect failed after driver fallback:\n- " + "\n- ".join(errors)
+    hint = sqlserver_tls_policy_hint(report)
+    raise RuntimeError(report + hint if hint else report)
 
 
 def build_sqlserver_conn_str(
@@ -561,6 +563,53 @@ def _is_sqlserver_tls_error(error_text: str) -> bool:
             "security package",
         )
     )
+
+
+#: What OpenSSL says when the process refuses the protocol the server offered, and what it says
+#: when the configuration meant to allow it is itself malformed. Two problems that look alike from
+#: here, and each needs a different sentence.
+_TLS_PROTOCOL_REFUSED = "unsupported protocol"
+_TLS_CONFIG_REJECTED = "cmd=minprotocol"
+
+
+def sqlserver_tls_policy_hint(error_text: str) -> str:
+    """The sentence a raw driver error does not say: this is the *process's* TLS policy.
+
+    SQL Server 2008 R2 and 2012 offer nothing above TLS 1.0, and OpenSSL 3 refuses anything below
+    TLS 1.2. The driver reports that as ``SSL routines::unsupported protocol``, which names neither
+    the instance's age nor the setting that caused it - so it reads like the network, or the
+    credential, or the driver. It is none of those, and nothing in this toolkit can fix it: the
+    policy belongs to the TLS library and is decided before any of this code runs.
+
+    The container image has always patched ``/etc/ssl/openssl.cnf`` at build time. On 2026-09-03
+    the same estate was run from a ``pip install`` on a host that had not been patched, and five
+    instances that had answered every check for months went CRITICAL together, carrying this error
+    and no explanation with it.
+
+    The second case is the trap that followed. ``MinProtocol = TLSv1.0`` is not a token OpenSSL
+    documents; 3.0 tolerated it and 3.5 rejects it, and because that is a *config* error rather
+    than a policy one it then breaks every TLS connection, modern instances included. Someone who
+    has just added the stanza needs to be told the spelling, not told about old instances.
+    """
+    lowered = error_text.lower()
+    if _TLS_CONFIG_REJECTED in lowered:
+        return (
+            "\n\nOpenSSL refused the TLS configuration itself, so every connection fails, "
+            "not only the old ones. The token is 'TLSv1' - 'TLSv1.0' is not a value OpenSSL "
+            "accepts (3.0 tolerated it, 3.5 does not). Fix MinProtocol in the openssl.cnf this "
+            "process uses (OPENSSL_CONF, or /etc/ssl/openssl.cnf)."
+        )
+    if _TLS_PROTOCOL_REFUSED in lowered:
+        return (
+            "\n\nThis is the TLS policy of the machine running the toolkit, not the "
+            "instance and not the credential. OpenSSL 3 refuses anything below TLS 1.2, and SQL "
+            "Server 2008 R2 and 2012 offer nothing above TLS 1.0. The container image lowers this "
+            "at build time; a pip install inherits the host's setting and does not. Set "
+            "MinProtocol = TLSv1 and CipherString = DEFAULT@SECLEVEL=0 in the openssl.cnf this "
+            "process uses - see docs/installation.md, 'Old instances also need OpenSSL told to "
+            "allow TLS 1.0'."
+        )
+    return ""
 
 
 def odbc_value(value: Any) -> str:

@@ -1492,6 +1492,68 @@
           }
         ]
       }
+    },
+    {
+      "node_role": "worker",
+      "command_id": 30,
+      "command_text": "spbot_list_sql_runs",
+      "reply_default": 0,
+      "reply_text": "",
+      "reply_parse_mode": "",
+      "reply_with_name": 0,
+      "command_type": 1,
+      "is_group": 1,
+      "is_private": 1,
+      "need_file": 0,
+      "action_type": "cli_execute",
+      "action_config": {
+        "working_dir": "tools/db_ops",
+        "command_argv": [
+          "{python}",
+          "-m",
+          "db_ops.db.cli",
+          "sql-run-history",
+          "{\"limit\": 10}",
+          "--config",
+          "{config_path}"
+        ],
+        "start_text": "Reading the SQL task history...",
+        "success_text": "{stdout}",
+        "failure_text": "Could not read the SQL task history.\nExit code: {exit_code}\nError: {error_summary}",
+        "timeout_seconds": 60,
+        "parameters": []
+      }
+    },
+    {
+      "node_role": "worker",
+      "command_id": 31,
+      "command_text": "spbot_self_status",
+      "reply_default": 0,
+      "reply_text": "",
+      "reply_parse_mode": "",
+      "reply_with_name": 0,
+      "command_type": 1,
+      "is_group": 1,
+      "is_private": 1,
+      "need_file": 0,
+      "action_type": "cli_execute",
+      "action_config": {
+        "working_dir": "tools/db_ops",
+        "command_argv": [
+          "{python}",
+          "-m",
+          "db_ops.common.cli",
+          "self-status",
+          "{\"format\": \"txt\"}",
+          "--config",
+          "{config_path}"
+        ],
+        "start_text": "Reading this installation's own state...",
+        "success_text": "{stdout}",
+        "failure_text": "Could not read the installation state.\nExit code: {exit_code}\nError: {error_summary}",
+        "timeout_seconds": 60,
+        "parameters": []
+      }
     }
   ]
 }

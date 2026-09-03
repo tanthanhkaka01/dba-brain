@@ -583,6 +583,77 @@ def _restore_drill_command(argv: list[str]) -> int:
     return 0 if proven else 1
 
 
+SQL_RUN_HISTORY_USAGE = (
+    "usage: python -m db_ops.db.cli sql-run-history <json>|@<file>|- [--config ...]\n"
+    "\n"
+    "The most recent SQL task runs and how each one ended - the history, not the schedule.\n"
+    "`sql_tasks list-tasks` answers what tasks exist; this answers what they did.\n"
+    "\n"
+    "The request is a JSON object, given inline, as @path/to/request.json, or on stdin (-):\n"
+    '  {"limit": 10,          // optional; default 10, capped at 200\n'
+    '   "sql_id": 28}         // optional; default = every task\n'
+)
+
+
+def _sql_run_history_command(argv: list[str]) -> int:
+    """``sql-run-history`` - read ``sql_runs`` back for a person.
+
+    Here rather than in ``sql_tasks`` for the reason ``restore-drill-status`` is here: the
+    question is asked BY operators and reports, not by the app that performs the work.
+    ``sql_tasks`` runs tasks and records them; this reads the record, and the two never import
+    each other.
+    """
+    from db_ops.common import sql_run_history
+
+    source = ""
+    config_path = None
+    rest = list(argv)
+    while rest:
+        token = rest.pop(0)
+        if token in {"-h", "--help"}:
+            print(SQL_RUN_HISTORY_USAGE)
+            return 0
+        if token == "--config":
+            config_path = rest.pop(0) if rest else None
+        elif not source:
+            source = token
+        else:
+            print(f"Unexpected argument: {token}\n\n{SQL_RUN_HISTORY_USAGE}", file=sys.stderr)
+            return 2
+
+    request, code = _read_json_request(source or "{}", SQL_RUN_HISTORY_USAGE)
+    if request is None:
+        return code
+
+    from db_ops.config import load_config, resolve_config_path
+    from db_ops.db import DbOpsStore
+
+    limit = request.get("limit", sql_run_history.DEFAULT_LIMIT)
+    sql_id = request.get("sql_id")
+    try:
+        store = DbOpsStore.from_config(load_config(resolve_config_path("sql_tasks", config_path)))
+        rows = sql_run_history.collect(
+            store, limit=int(limit), sql_id=int(sql_id) if sql_id is not None else None)
+    except (TypeError, ValueError) as exc:
+        return response.emit(response.fail(
+            "sql-run-history", f"limit and sql_id must be whole numbers: {exc}"))
+    except Exception as exc:  # noqa: BLE001 - report as a response like every other command.
+        return response.emit(response.fail("sql-run-history", str(exc)))
+
+    listing = sql_run_history.render(
+        rows, sql_id=int(sql_id) if sql_id is not None else None)
+    # The listing goes to stdout as text because a Telegram command relays {stdout} verbatim;
+    # the JSON envelope still carries it so a program does not have to parse the message.
+    print(listing)
+    response.emit(response.ok(
+        "sql-run-history",
+        message=f"{len(rows)} SQL task run(s).",
+        data={"listing": listing, "runs": [dict(row) for row in rows]},
+        metrics={"runs": len(rows)},
+    ))
+    return 0
+
+
 OPS_STATUS_USAGE = (
     "usage: python -m db_ops.db.cli ops-status <json>|@<file>|- "
     "[--config ...] [--key ... | --key-base64 ...]\n"
@@ -1141,6 +1212,7 @@ _JSON_COMMANDS = {
     "queue-telegram-message": lambda rest: _queue_telegram_message_command(rest),
     "ops-status": lambda rest: _ops_status_command(rest),
     "restore-drill-status": lambda rest: _restore_drill_command(rest),
+    "sql-run-history": lambda rest: _sql_run_history_command(rest),
     "sync-config": lambda rest: _sync_config_command(rest),
     "config-items": lambda rest: _config_items_command(rest),
     "export-config": lambda rest: _export_config_command(rest),

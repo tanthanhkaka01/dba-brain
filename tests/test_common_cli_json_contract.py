@@ -37,7 +37,7 @@ ALL_COMMANDS = [
     "add-sql", "metric-toggle", "list-targets",
     "run-sql", "run-cmd", "rotate-password",
     "check-secret", "check-identifiers", "check-secret-literals",
-    "lift-example", "probe-host", "metric-severity", "trace-session",
+    "lift-example", "probe-host", "self-status", "metric-severity", "trace-session",
     "inventory-summary", "restore-database", "list-backup-files",
     "pack-backup", "pull-file", "push-file",
     "restore-full", "restore-diff", "restore-log", "restore-key", "restore-metadata",

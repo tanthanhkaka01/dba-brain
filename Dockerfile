@@ -59,8 +59,15 @@ RUN set -eux; \
     # TLS 1.0, so without this every connect fails with \
     # "SSL routines::unsupported protocol". (Windows/SChannel allows it, which is \
     # why the same targets work from the PC but not the Linux container.) \
+    # \
+    # The value is TLSv1, not TLSv1.0. OpenSSL 3.0 tolerated the second spelling, so this \
+    # line worked for a year; OpenSSL 3.5 refuses it outright with \
+    # "bad value:cmd=MinProtocol, value=TLSv1.0", and then EVERY connect fails - including \
+    # the modern ones, because a config error takes the whole system_default section with \
+    # it. Found on 2026-09-03 running the same estate from a pip install on an OpenSSL \
+    # 3.5 host. TLSv1 is the documented token and is accepted by both. \
     sed -i '/^\[openssl_init\]/a ssl_conf = ssl_sect' /etc/ssl/openssl.cnf; \
-    printf '\n[ssl_sect]\nsystem_default = system_default_sect\n\n[system_default_sect]\nMinProtocol = TLSv1.0\nCipherString = DEFAULT@SECLEVEL=0\n' >> /etc/ssl/openssl.cnf; \
+    printf '\n[ssl_sect]\nsystem_default = system_default_sect\n\n[system_default_sect]\nMinProtocol = TLSv1\nCipherString = DEFAULT@SECLEVEL=0\n' >> /etc/ssl/openssl.cnf; \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/*
 

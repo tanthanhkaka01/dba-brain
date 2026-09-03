@@ -15,6 +15,37 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-04
+
+### Added
+
+- `db-ops db sql-run-history` and Telegram `/spbot_list_sql_runs`: the most recent SQL task runs and
+  how each ended, newest first, with the reason for any that failed. `list-tasks` says what is
+  configured; this says what actually ran. Reads `sql_runs` through the shared `common` layer.
+- `db-ops common self-status` and Telegram `/spbot_self_status`: what this installation is and how
+  much room it has left - distribution (published `dbabrain` vs a private `db_ops` build) and
+  version, Docker vs OS and which OS, host/ip, node role, store, cpu, memory, disk. Reads itself, so
+  it answers even when the store is down; memory names its source (cgroup vs the host's `/proc`).
+
+### Fixed
+
+- `import-data` refuses to unpack an estate into `site-packages` when no `--root` is given, instead
+  of writing it there and printing `imported into …/site-packages`. Names the directory and both
+  ways forward.
+- `import-data` reports, at import time, when every command in the imported schedule is for a
+  `node_role` this process does not have (a worker estate imported onto a default `master` process
+  would otherwise start and run nothing).
+- A legacy-TLS connection failure now names its real cause - the TLS policy of the machine running
+  the toolkit, not the instance or credential - and the two settings that fix it, with a distinct
+  message for the `MinProtocol = TLSv1.0` spelling trap that breaks every connection on OpenSSL 3.5.
+- The container image sets `MinProtocol = TLSv1` (was `TLSv1.0`, which OpenSSL 3.5 rejects).
+
+### Changed
+
+- `db-ops init` writes 28 Telegram commands (was 26).
+- `docs/installation.md` documents the OpenSSL TLS-1.0 prerequisite for monitoring old SQL Server
+  instances from a pip install on Linux (the container has always done this at build time).
+
 ## [0.5.0] - 2026-09-03
 
 ### Added

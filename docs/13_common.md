@@ -1186,6 +1186,42 @@ connection it opens, so no caller has to know the type code. A driver without
 
 ---
 
+## Describing this installation (`self_status`)
+
+`self-status` is the process reporting on itself and the machine under it. It is deliberately the
+odd one out among the status answers, and the distinction is the whole reason it exists:
+
+| Command | Describes | Reaches |
+| --- | --- | --- |
+| `db.cli ops-status` | whether the **apps** ran on schedule | the store |
+| `common.cli host-facts` | a **monitored host** | that host, over its `cmd_access` |
+| `control.cli worker-status` | the **worker**, from the master | SSH |
+| `common.cli self-status` | **this installation and this machine** | nothing |
+
+Reaching nothing is the point: it still answers when the store is unreachable, which is one of the
+times somebody most wants to know what version they are talking to.
+
+```bash
+python -m db_ops.common.cli self-status '{}'              # JSON envelope
+python -m db_ops.common.cli self-status '{"format":"txt"}' # the chat listing
+```
+
+Three things it takes care to get right rather than merely report:
+
+- **The product, before the version.** The published `dbabrain` wheel and a private `db_ops` build
+  are the same toolkit under two distribution names and two numbering schemes (`0.5.0` against
+  `2.87.01`). A version with no product beside it cannot be decoded, and on 2026-09-03 both were
+  running the same estate within an hour. A tree that was never pip-installed says that instead of
+  claiming a name.
+- **Memory as *this process* experiences it.** Inside a container `/proc/meminfo` is the host's
+  memory, not the cgroup limit; the cgroup is read first, an "unlimited" cgroup sentinel falls
+  through instead of reporting 8 EiB, and every figure carries the source it came from.
+- **Docker or the OS, and which OS.** `platform.platform()` answers "Linux" to both Ubuntu and RHEL,
+  which does not help anyone deciding whether a package name applies.
+
+No third-party dependency does any of this — the package has two, and neither is `psutil`. What the
+standard library cannot answer on a platform is reported as unavailable rather than guessed.
+
 ## API index — what already exists here
 
 **Read this before writing a helper in an app.** If a function below covers what you need,
