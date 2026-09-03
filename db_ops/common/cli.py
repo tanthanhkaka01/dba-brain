@@ -1184,7 +1184,13 @@ def _read_json_request(source: str, usage: str) -> tuple[dict | None, int]:
     ``rotate-password`` all accept the same three forms and report a bad payload identically.
     """
     if source == "-":
-        payload_text = sys.stdin.read()
+        # The bytes, decoded as UTF-8 by us, rather than whatever `sys.stdin` happens to be opened
+        # with. Its encoding follows the machine's ANSI code page on Windows and its errors handler
+        # is `surrogateescape`, so a byte it cannot decode becomes a lone surrogate that travels
+        # silently into a SQL statement and is refused by the driver several layers later.
+        # `db_ops.lib.common_cli.spawn` pins the writing end; this is the other half, and both are
+        # needed — one end alone just moves which side does the mis-decoding.
+        payload_text = sys.stdin.buffer.read().decode("utf-8-sig")
     elif source.startswith("@"):
         from pathlib import Path
 

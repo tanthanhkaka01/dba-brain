@@ -129,6 +129,10 @@
   table.rpt .cmdcell{white-space:normal; overflow-wrap:anywhere; word-break:break-word;
                      min-width:190px; max-width:400px; font-family:var(--mono); font-size:11px}
   table.rpt .muted{color:var(--muted)}
+  /* The band that separates one group of workload counters from the next. A table of 25
+     measures with no grouping is a wall; the bands are what make it scannable. */
+  table.rpt tr.wl-group td{background:var(--bg); font-size:10.5px; letter-spacing:.04em;
+    font-weight:700; text-transform:uppercase; color:var(--muted); padding-top:9px}
   /* Fill bar for the Volumes table. Inline with the percentage rather than a column of its own:
      the pair is one fact, and splitting them puts a bar on one side of the eye and its number on
      the other. */
@@ -457,6 +461,132 @@ function backupBlock(b){
         <td class="mono nowrap">${cell(d.types.LOG)}</td>
         <td class="detail">${esc(d.reason||"within policy")}</td>
       </tr>`).join("")}</tbody></table></div></div></details>`;
+}
+
+/* Workload — how much the instance actually did, over three intervals.
+
+   Every number here is a difference between two collections of a cumulative counter, never a
+   counter read once. That distinction is the whole reason this section exists:
+   sys.dm_os_wait_stats, sys.dm_io_virtual_file_stats, sys.dm_os_performance_counters and
+   sys.dm_exec_query_stats all report totals since the engine started, so read once they answer
+   "what has this instance done since it booted" — a question nobody asks — and divided by anything
+   they give an average over months. On one production instance that average made a nine-month-old bad
+   afternoon look like this morning's I/O latency.
+
+   Three columns because "busy right now" and "busy last night" are different questions and a
+   single column invites the reader to mistake one for the other. Each header states the span that
+   was actually measured, not the one that was asked for: a 24-hour column built from 14 hours of
+   samples says 14h. */
+const wlUnit = (v, unit) => {
+  if (v == null) return "—";
+  if (unit === "pct")    return v.toFixed(1) + "%";
+  if (unit === "ms_avg") return v.toFixed(2) + " ms";
+  if (unit === "mb")     return v >= 1024 ? (v/1024).toFixed(2) + " GB" : v.toFixed(1) + " MB";
+  if (unit === "ms")     return v >= 3600000 ? (v/3600000).toFixed(2) + " h"
+                              : v >= 1000 ? (v/1000).toFixed(1) + " s" : Math.round(v) + " ms";
+  /* Counts run to billions over a busy hour, and eleven digits in a table cell is a number nobody
+     reads. The exact value stays in the cell's title attribute. */
+  if (v >= 1e9) return (v/1e9).toFixed(2) + "B";
+  if (v >= 1e6) return (v/1e6).toFixed(2) + "M";
+  if (v >= 1e4) return (v/1e3).toFixed(1) + "k";
+  return Math.round(v).toLocaleString("en-US");
+};
+const wlRate = (cell, unit) => {
+  if (!cell || cell.perSecond == null) return "";
+  const r = cell.perSecond;
+  /* Milliseconds of something per second of wall clock is an average concurrency, and saying so
+     is the difference between a number and a reading: 8,277 ms/s of CPU is 8.28 cores busy the
+     whole time, and 174 ms/s of lock wait is 0.17 sessions blocked at any instant. "% of one core"
+     was right for the CPU row and meaningless on the lock row; this is right on both. */
+  const txt = unit === "mb" ? r.toFixed(2) + " MB/s"
+            : unit === "ms" ? (r/1000).toFixed(2) + " concurrent"
+            : (r >= 1e6 ? (r/1e6).toFixed(2)+"M" : r >= 1e4 ? (r/1e3).toFixed(1)+"k"
+               : r >= 10 ? Math.round(r).toLocaleString("en-US") : r.toFixed(2)) + "/s";
+  return `<span class="code">${esc(txt)}</span>`;
+};
+/* A plan cache can be a month old, and "733h" is a number the reader has to divide. */
+const wlSpan = s => s == null ? "—"
+  : s >= 172800 ? Math.round(s/86400) + " days"
+  : s >= 82800  ? Math.round(s/3600) + "h"
+  : s >= 5400   ? (s/3600).toFixed(1) + "h"
+  : Math.round(s/60) + " min";
+
+function workloadBlock(w){
+  if (!w) return "";
+  if (!w.available) {
+    /* Not a failure, and it must not read as one. Two collections 15 minutes apart is the
+       earliest an interval can exist at all. */
+    return `<details class="fold"><summary>Workload — no interval yet</summary><div class="in">
+      <p class="sec-note">The workload counters need <b>two</b> collections before a rate exists;
+      ${w.samples||0} so far. They run every 15 minutes, so the first reading appears about half an
+      hour after this instance was onboarded. Nothing is wrong — and the cumulative totals are
+      deliberately not shown in the meantime, because a since-boot total is not a rate.</p>
+    </div></details>`;
+  }
+  const wins = w.windows || [];
+  const head = wins.map(x=>`<th class="nowrap">${esc(x.label)}<span class="code">${esc(wlSpan(x.seconds))} measured</span></th>`).join("");
+  const cells = (row) => wins.map(x=>{
+    const c = (row.values||{})[x.key];
+    if (!c) return `<td class="mono muted">—</td>`;
+    return `<td class="mono nowrap" title="${esc(String(c.total))}">${esc(wlUnit(c.total, row.unit))}${wlRate(c, row.unit)}</td>`;
+  }).join("");
+
+  const groups = (w.groups||[]).map(g=>
+    `<tr class="wl-group"><td colspan="${wins.length+1}">${esc(g.name)}</td></tr>`
+    + g.rows.map(r=>`<tr><td class="metric">${esc(r.label)}</td>${cells(r)}</tr>`).join("")
+  ).join("");
+
+  const waits = (w.waits||[]).map(x=>`<tr><td class="metric mono">${esc(x.item)}</td>${
+    wins.map(win=>{
+      const c = (x.values||{})[win.key];
+      if (!c) return `<td class="mono muted">—</td>`;
+      return `<td class="mono nowrap">${esc(c.seconds.toLocaleString("en-US"))} s${
+        c.sharePct==null?"":`<span class="code">${c.sharePct}% of all waits</span>`}</td>`;
+    }).join("")}</tr>`).join("");
+
+  const cache = w.cache && w.cache.rows && w.cache.rows.length ? `
+    <p class="sec-note" style="margin-top:14px"><b>What the plan cache attributes the same work
+      to.</b> <span class="mono">sys.dm_exec_query_stats</span> only holds plans that are still
+      cached: an evicted plan takes its totals with it, and a batch that was never cached was never
+      counted. So these are a <i>sample</i> of the interval and always an undercount — use them to
+      find the statements to tune, never to total the instance. The CPU row above, taken from the
+      resource pools, is the one that misses nothing; the share below is these two divided.
+      ${(w.cache.evicted||[]).length?`<b>${esc(w.cache.evicted.join(", "))}</b> fell during a window 
+        because the cache dropped a plan, so ${w.cache.evicted.length>1?"those figures are":"that figure is"} 
+        left blank rather than shown as negative work.`:""}
+      ${w.cache.plans!=null?`The cache holds ${esc(wlUnit(w.cache.plans,"count"))} plans`:""}${
+        w.cache.baselineMinutes!=null?`, the oldest ${esc(wlSpan(w.cache.baselineMinutes*60))} old`:""}.</p>
+    <div class="tbl-wrap"><table class="rpt">
+      <thead><tr><th>Plan cache</th>${head}</tr></thead>
+      <tbody>${w.cache.rows.map(r=>`<tr><td class="metric">${esc(r.label)}</td>${cells(r)}</tr>`).join("")}
+        <tr><td class="metric">Share of instance CPU</td>${wins.map(x=>{
+          const v = (w.cache.coveragePct||{})[x.key];
+          return `<td class="mono nowrap">${v==null?'<span class="muted">—</span>':esc(v+"%")}</td>`;
+        }).join("")}</tr>
+      </tbody></table></div>` : "";
+
+  const waitTable = waits ? `
+    <p class="sec-note" style="margin-top:14px"><b>What it waited on, over the same intervals.</b>
+      These are the cumulative wait counters differenced, so they cover the whole window with no
+      sampling gap — unlike the wait alert, which watches for five seconds every 150 and therefore
+      sees 3% of it. Idle and background waits are excluded from the share.</p>
+    <div class="tbl-wrap"><table class="rpt">
+      <thead><tr><th>Wait type</th>${head}</tr></thead><tbody>${waits}</tbody></table></div>` : "";
+
+  return `<details class="fold" open><summary>Workload — what this instance actually did${
+      w.cpuCount?` · ${w.cpuCount} CPU`:""}</summary><div class="in">
+    <p class="sec-note">Counters differenced between two collections, so every figure is work done
+      <b>during</b> the interval — not a total since the engine started${
+      w.countersSince?` (<span class="mono">${esc(w.countersSince)}</span>)`:""}, which is what
+      those DMVs report and what makes them useless read once. The small grey line under a value is
+      the rate per second. A column is missing when there is no honest pair of samples to subtract:
+      counters that went backwards mean a restart, and a delta across one would show as work that
+      never happened.</p>
+    <div class="tbl-wrap"><table class="rpt">
+      <thead><tr><th>Measure</th>${head}</tr></thead><tbody>${groups}</tbody></table></div>
+    ${waitTable}
+    ${cache}
+    </div></details>`;
 }
 
 /* Linked servers, as a decision table. Reachability alone is a status chip; reachability NEXT
@@ -1500,6 +1630,10 @@ async function select(slug){
          d.problems.length} finding(s) · ${d.problems.reduce((a,p)=>a+p.count,0)} item(s), worst first</span></h2>`
     + problemList(d.problems)
     + coverage(d.freshness)
+    /* Before the inventory sections: "how much is this instance doing" is the question a
+       performance complaint arrives as, and it is answered by counters, not by the list of
+       what is installed. */
+    + workloadBlock(d.workload)
     /* First of the inventory sections: it is the "what is on this server" overview that every
        section below details one aspect of. */
     + databasesBlock(d.databases)

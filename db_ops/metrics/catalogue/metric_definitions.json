@@ -5283,6 +5283,178 @@
       ],
       "max_rows": 500,
       "note": "Too few rollback segments for the transaction concurrency makes sessions queue on the segment headers: a general slowdown with no slow SQL to point at, which is the kind of incident that gets blamed on 'the database' for a week. The waits/gets ratio is the standard reading; shrinks and extends are in the message because a segment that repeatedly extends and shrinks back to OPTIMAL needs a bigger OPTIMAL, not more segments."
+    },
+    {
+      "metric_id": 92,
+      "metric_code": "PERFORMANCE_WORKLOAD_COUNTERS",
+      "db_type": "multi",
+      "category": "performance",
+      "default_importance": 1,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 900,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "name": "sqlserver_all",
+          "file": "sqlserver/072_sqlserver_workload_counters.sql"
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_unsupported",
+          "supported": false,
+          "unsupported_reason": "The engine's cumulative throughput counters -- CPU, batch requests, transactions, logical and physical I/O, log bytes -- are a SQL Server feature set. The equivalent for this engine has not been authored yet."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_unsupported",
+          "supported": false,
+          "unsupported_reason": "The engine's cumulative throughput counters -- CPU, batch requests, transactions, logical and physical I/O, log bytes -- are a SQL Server feature set. The equivalent for this engine has not been authored yet."
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_todo",
+          "supported": false,
+          "unsupported_reason": "The engine's cumulative throughput counters -- CPU, batch requests, transactions, logical and physical I/O, log bytes -- are a SQL Server feature set. The equivalent for this engine has not been authored yet."
+        }
+      ],
+      "report_policy": {
+        "_note": "Raw cumulative counters, deliberately ungraded: the collector records totals and the report subtracts two collections to get an interval (db_ops.lib.interval_rates). collect_only keeps them out of the warning/critical reports -- a counter that ticks is not a finding -- and chart_summary_only keeps them out of the generic chart grid, where a since-boot total plots as a straight ramp on every item. The Workload section of the server report is what renders them, as rates.",
+        "collect_only": true,
+        "chart_summary_only": true
+      },
+      "max_rows": 100
+    },
+    {
+      "metric_id": 93,
+      "metric_code": "PERFORMANCE_QUERY_STATS_TOTALS",
+      "db_type": "multi",
+      "category": "performance",
+      "default_importance": 1,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 1800,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "name": "sqlserver_all",
+          "file": "sqlserver/073_sqlserver_query_stats_totals.sql"
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_unsupported",
+          "supported": false,
+          "unsupported_reason": "sys.dm_exec_query_stats is a SQL Server plan-cache DMV. The equivalent for this engine has not been authored yet."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_unsupported",
+          "supported": false,
+          "unsupported_reason": "sys.dm_exec_query_stats is a SQL Server plan-cache DMV. The equivalent for this engine has not been authored yet."
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_todo",
+          "supported": false,
+          "unsupported_reason": "sys.dm_exec_query_stats is a SQL Server plan-cache DMV. The equivalent for this engine has not been authored yet."
+        }
+      ],
+      "report_policy": {
+        "_note": "Raw cumulative counters, deliberately ungraded: the collector records totals and the report subtracts two collections to get an interval (db_ops.lib.interval_rates). collect_only keeps them out of the warning/critical reports -- a counter that ticks is not a finding -- and chart_summary_only keeps them out of the generic chart grid, where a since-boot total plots as a straight ramp on every item. The Workload section of the server report is what renders them, as rates.",
+        "collect_only": true,
+        "chart_summary_only": true
+      },
+      "max_rows": 50,
+      "note": "Half the cadence of the other two interval counters, and measured rather than assumed. Aggregating sys.dm_exec_query_stats scans the plan cache, and on one measured instance (86,400 cached plans, 70,109 of them with statistics) that scan exceeded the 60-second timeout three runs in a row on 2026-09-03 while the same query returned in 0.4 s once warm. A metric that fails every 15 minutes on one instance teaches its reader to ignore the metric, and one that holds a plan-cache scan open for longer is worse than a missing reading -- so the timeout stays at 60 s and the exposure is halved instead. The hour reading survives: two collections 30 minutes apart still fill it, and the page labels the span it actually measured. An instance where this keeps timing out has a plan-cache problem of its own ('optimize for ad hoc workloads'); until that is fixed, disable it for that target through metric_overrides."
+    },
+    {
+      "metric_id": 94,
+      "metric_code": "PERFORMANCE_WAIT_TOTALS",
+      "db_type": "multi",
+      "category": "performance",
+      "default_importance": 1,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 900,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "name": "sqlserver_all",
+          "file": "sqlserver/074_sqlserver_wait_totals.sql"
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_unsupported",
+          "supported": false,
+          "unsupported_reason": "sys.dm_os_wait_stats is a SQL Server DMV and the watched wait types are its own. The equivalent for this engine has not been authored yet."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_unsupported",
+          "supported": false,
+          "unsupported_reason": "sys.dm_os_wait_stats is a SQL Server DMV and the watched wait types are its own. The equivalent for this engine has not been authored yet."
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_todo",
+          "supported": false,
+          "unsupported_reason": "sys.dm_os_wait_stats is a SQL Server DMV and the watched wait types are its own. The equivalent for this engine has not been authored yet."
+        }
+      ],
+      "report_policy": {
+        "_note": "Raw cumulative counters, deliberately ungraded: the collector records totals and the report subtracts two collections to get an interval (db_ops.lib.interval_rates). collect_only keeps them out of the warning/critical reports -- a counter that ticks is not a finding -- and chart_summary_only keeps them out of the generic chart grid, where a since-boot total plots as a straight ramp on every item. The Workload section of the server report is what renders them, as rates.",
+        "collect_only": true,
+        "chart_summary_only": true
+      },
+      "max_rows": 100
     }
   ]
 }

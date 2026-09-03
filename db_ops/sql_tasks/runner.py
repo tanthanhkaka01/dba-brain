@@ -507,7 +507,9 @@ def run_scheduler_scan(
     secrets = data_sources.load_secret_text(data_dir)
     inventory = data_sources.load_inventory(data_dir)
     credentials = data_sources.load_all_credentials(data_dir)
-    mark_stale_running_sql_runs(store=store, commands=commands, targets=targets, latest_runs=latest_done_or_running_runs, logger=logger)
+    mark_stale_running_sql_runs(store=store, commands=commands, targets=targets,
+                                latest_runs=latest_done_or_running_runs,
+                                telegram_groups=telegram_groups, logger=logger)
     latest_done_or_running_runs = store.fetch_latest_done_or_running_sql_runs_by_run_key()
     # The most recent run per key REGARDLESS of status — so a task that keeps FAILING is backed
     # off (retry_interval) instead of being retried every scan tick. Without this, a task with
@@ -620,8 +622,19 @@ def mark_stale_running_sql_runs(
     commands: dict[int, SqlCommand],
     targets: list[SqlTarget],
     latest_runs: dict[str, Any],
+    telegram_groups: dict[str, str],
     logger: Any,
 ) -> None:
+    """Close out runs left `running` by a process that died, and ALERT on each one.
+
+    The alert is the point. This path used to write the error row and log it, and nothing else:
+    `alert_on_error` was only wired into the exception handler inside `run_sql_target`, and a run
+    whose process was killed never reaches that handler. On 2026-09-03 sql_id 28 overran the
+    daemon's own command timeout, was killed mid-cycle, and the failure sat in the store for half
+    an hour with no message anywhere — while the SQL it had started went on running on the server,
+    holding the task's application lock, so every following cycle reported SKIPPED. A silent error
+    class is worse than a noisy one: nobody reads a table they have no reason to open.
+    """
     now = datetime.now(timezone.utc)
     targets_by_key = {(target.sql_id, target.target_no): target for target in targets}
     for row in latest_runs.values():
@@ -648,6 +661,23 @@ def mark_stale_running_sql_runs(
             metadata={"stale_running": True},
         )
         log_function_error(logger, function_name="sql_tasks.stale_running", error_text=message)
+        # A target is how a run learns where to complain. Without one there is no notify block to
+        # read, so the log line above is all this can be - the same fallback the timeout above uses.
+        if target is not None and target.alert_on_error.enabled:
+            enqueue_sql_task_message(
+                store=store,
+                telegram_groups=telegram_groups,
+                rule=target.alert_on_error,
+                command=command,
+                target=target,
+                status="error",
+                message=(f"{message} The run process is gone, but the SQL it started may still be "
+                         f"executing on {target.server_id}/{target.service_name} - check for an "
+                         f"orphaned session before the next cycle."),
+                sql_run_id=int(row["sql_run_id"]),
+                # There are no rows to show: the process died before it reported any.
+                include_result_table=False,
+            )
 
 
 def due_sql_tasks(

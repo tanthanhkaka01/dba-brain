@@ -588,6 +588,10 @@ def build_models(data: dict, *, exclude_ip_prefixes=EXCLUDE_IP_PREFIXES):
             "dbType": dt or "",
             "freshness": _build_freshness(s),
             "security": _build_security(s),
+            # The interval counters, carried through whole rather than reduced here: the
+            # per-server page renders the same block from the same builder, and a fleet
+            # page that summarised it differently would describe the same hour two ways.
+            "workload": s.get("workload") or {},
         }
         if dt == "oracle":
             model["oracle"] = True

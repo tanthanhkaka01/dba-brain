@@ -152,7 +152,7 @@ The five-minute version, against a throwaway PostgreSQL container, is
 
 1. **Create a tool root.** `db-ops init` writes one — twelve files, and it prints the next six
    commands. Four of them arrive complete because they are product data rather than your estate:
-   the 90-metric catalogue, the report definitions, the bot commands, and the daemon's schedule. A directory holding `data/` or `config.json` *is* a tool root: stand in it, or point
+   the 93-metric catalogue, the report definitions, the bot commands, and the daemon's schedule. A directory holding `data/` or `config.json` *is* a tool root: stand in it, or point
    `DB_OPS_HOME` at it. Do not build one by hand.
 2. **Declare one target and one credential.** `data/db_instances.json` and `data/users.json`.
 3. **Put the password in the secret store.** Write `secrets/secret_text.json`, then

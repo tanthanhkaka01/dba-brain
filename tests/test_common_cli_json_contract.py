@@ -121,11 +121,9 @@ def test_a_missing_request_file_is_reported_by_path(command: str, tmp_path, caps
 
 
 @pytest.mark.parametrize("command", ALL_COMMANDS)
-def test_stdin_is_read_for_the_dash_form(command: str, monkeypatch, capsys) -> None:
+def test_stdin_is_read_for_the_dash_form(command: str, stdin_holding, capsys) -> None:
     """``-`` must read stdin. An array on stdin proves the payload was read from there."""
-    import io
-
-    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps([1, 2])))
+    stdin_holding(json.dumps([1, 2]))
     cli.main([command, "-"])
     combined = "".join(capsys.readouterr())
     assert "must be a JSON object" in combined, (

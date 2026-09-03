@@ -29,6 +29,7 @@ import re
 from pathlib import Path
 
 from db_ops.lib import backup_policy
+from db_ops.reports import workload
 from db_ops.lib import health_model
 from db_ops.db.metric_store import MetricStore
 
@@ -1287,7 +1288,8 @@ def build_os_health(code_map):
     }
 
 
-def build_server_overlay(server_id, ip, code_map, severity=None, problems=None, freshness=None):
+def build_server_overlay(server_id, ip, code_map, severity=None, problems=None,
+                         freshness=None, workload_rows=None):
     # When these blocks were true. Everything below is derived from metrics, so one stamp
     # covers them all — and a server the overlay never reaches keeps its old blocks with no
     # stamp at all, which is exactly how the report tells "live" from "last known".
@@ -1321,6 +1323,11 @@ def build_server_overlay(server_id, ip, code_map, severity=None, problems=None, 
         "sql_agent_job_health": build_sql_agent_job_health(code_map),
         "backup_jobs": build_backup_jobs(code_map),
         "performance_health": build_performance_health(code_map),
+        # How much work the instance did, as an interval rather than a since-boot total.
+        # Built from raw rows and not from `code_map`, which holds only each metric's most
+        # recent collection: a rate is two collections subtracted, so the snapshot this
+        # overlay is built from cannot produce one.
+        "workload": workload.build_workload(workload_rows or []),
         "index_health": build_index_health(code_map),
         "security_health": build_security_health(code_map),
         "config_warnings": build_config_warnings(code_map),
@@ -1398,6 +1405,13 @@ def build_inventory_health(*, sqlite_path, config=None, output_dir=None, days=2,
     rows = load_metrics(sqlite_path, int(days))
     servers = index_by_server(rows)
     store = MetricStore(sqlite_path)
+    # Fetched apart from `rows` on purpose. `index_by_server` reduces every metric to its newest
+    # collection, which is right for a current-state overlay and is exactly what a rate cannot be
+    # computed from — so these rows are read whole, and capped at their own window so the fleet
+    # page's `days` cannot decide how much history of a 15-minute metric gets loaded.
+    workload_rows: dict[str, list[dict]] = {}
+    for row in store.fetch_health_metrics(codes=workload.WORKLOAD_CODES, days=workload.WORKLOAD_DAYS):
+        workload_rows.setdefault(str(row.get("server_id") or row.get("ip") or ""), []).append(row)
     severity = store.fetch_severity_by_server(days=int(days))
     problem_rows = store.fetch_current_problems(days=int(days))
     freshness_rows = store.fetch_metric_freshness(days=int(days))
@@ -1407,6 +1421,7 @@ def build_inventory_health(*, sqlite_path, config=None, output_dir=None, days=2,
             sid, ip, code_map, severity.get(sid),
             problems=build_metric_problems(problem_rows.get(sid, []), now=now),
             freshness=_freshness_block(freshness_rows.get(sid, []), now=now, days=int(days)),
+            workload_rows=workload_rows.get(sid, []),
         )
         for sid, (ip, code_map) in sorted(servers.items())
     ]

@@ -14,9 +14,16 @@ WITH io AS
         -- latency was in fact nine months of history: a bad afternoon last winter keeps the tile
         -- red forever, and a real problem starting today is diluted to invisibility by all the
         -- good months behind it. An interval figure needs the counters themselves, differenced
-        -- between two collections — see db_ops.common.interval_rates.
+        -- between two collections — db_ops.lib.interval_rates does that, and
+        -- PERFORMANCE_WORKLOAD_COUNTERS carries the instance-wide sum of these same counters
+        -- so a report can have the hour without loading a week of per-file rows.
         vfs.io_stall_read_ms,
         vfs.io_stall_write_ms,
+        -- How much was moved, not just how many times. Two files with the same read count
+        -- and the same latency can differ by two orders of magnitude in throughput, and
+        -- "is this volume saturated" is a question about MB/s, not about IOPS.
+        vfs.num_of_bytes_read,
+        vfs.num_of_bytes_written,
 
         CONVERT(decimal(19,2),
             vfs.io_stall_read_ms * 1.0 / NULLIF(vfs.num_of_reads, 0)
@@ -80,6 +87,8 @@ SELECT
         + ', writes=' + CAST(num_of_writes AS varchar(32))
         + ', io_stall_read_ms=' + CAST(io_stall_read_ms AS varchar(32))
         + ', io_stall_write_ms=' + CAST(io_stall_write_ms AS varchar(32))
+        + ', bytes_read=' + CAST(num_of_bytes_read AS varchar(32))
+        + ', bytes_written=' + CAST(num_of_bytes_written AS varchar(32))
         -- Lets a reader (and the delta calculation) tell "counters reset" from "counters fell",
         -- without having to guess from the numbers going backwards.
         + ', counters_since=' + CONVERT(varchar(19), (SELECT sqlserver_start_time FROM sys.dm_os_sys_info), 120)

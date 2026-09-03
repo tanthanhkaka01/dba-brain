@@ -155,6 +155,11 @@ HEALTH_BLOCKS = ["instance_health", "metric_severity", "metric_problems", "metri
                  "backup_jobs", "backup_policy",
                  "database_health", "disk_health", "backup_by_database", "backup_evidence",
                  "sql_governance", "sql_agent_job_health", "performance_health", "index_health",
+                 # How much work the instance did over an interval, as against the gauges
+                 # in performance_health. Without it listed here the block reaches the
+                 # overlay and stops there, because the fleet page renders from the merged
+                 # canonical file and not from the overlay.
+                 "workload",
                  "security_health", "config_warnings", "os_health", "inventory_status",
                  # When the blocks above were collected. A server the overlay does not reach
                  # keeps its previous blocks *and* its previous stamp, so the report can say

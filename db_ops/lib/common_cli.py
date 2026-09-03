@@ -93,6 +93,19 @@ def spawn(command: str, request: dict[str, Any], *, module: str = DEFAULT_MODULE
         completed = subprocess.run(
             [sys.executable, "-m", module, command, "-"],
             input=payload, capture_output=True, text=True, timeout=timeout_seconds,
+            # **Pinned, and it was not.** `text=True` alone encodes through
+            # `locale.getpreferredencoding()`, which on Windows is the machine's ANSI code page.
+            # One program talking to itself over a pipe then depends on the console it happened to
+            # be started from — and the two ends do not always agree, because the child's
+            # `sys.stdin` is opened with `errors="surrogateescape"`.
+            #
+            # The failure that found it: a task's SQL held an em dash. The parent wrote it as
+            # cp1252 0x97; the child read UTF-8 and recovered the undecodable byte as the lone
+            # surrogate U+DC97, which pyodbc then refused to encode to UTF-16LE — reported as
+            # position 350 of a script whose own bytes hold no 0x97 anywhere. It reproduced under
+            # the daemon and never from an Administrator console, because those two had different
+            # code pages, which is what "depends on the console" costs.
+            encoding="utf-8",
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return None, f"{command} could not run: {exc}"
