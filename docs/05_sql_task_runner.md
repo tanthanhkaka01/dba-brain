@@ -202,6 +202,24 @@ ORDER BY latest_run DESC;
 - A run is `error` with `metadata_json` = `{"stale_running": true}`: nothing failed in the SQL — the
   run's *process* died and the row was reaped. See *Stale running rows*.
 
+### Reading the history back
+
+`list-tasks` answers *what tasks exist*. The other question — *what ran, and how did it end* — is
+`db-ops db sql-run-history`, a JSON-object command like every other:
+
+```bash
+python -m db_ops.db.cli sql-run-history '{"limit": 10}'
+python -m db_ops.db.cli sql-run-history '{"limit": 20, "sql_id": 28}'
+```
+
+It lives in `db.cli` rather than here for the reason `restore-drill-status` does: the question is
+asked **by** operators and reports, not by the app that performs the work. `sql_tasks` runs tasks
+and records them in `sql_runs`; `db_ops.common.sql_run_history` reads that record, and the two never
+import each other. `/spbot_list_sql_runs` is the same command from Telegram.
+
+The output is lines rather than JSON because its first reader is a person who has just been paged.
+A failed run carries the first line of its reason, so the answer does not require opening the store.
+
 ### Stale running rows
 
 Every scan begins with `mark_stale_running_sql_runs`. A run row still `running` past its target's

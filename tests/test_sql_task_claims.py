@@ -567,3 +567,90 @@ def test_a_file_export_replaces_the_inline_table_rather_than_repeating_it():
     assert runner.FILE_OUTPUT_FORMATS == ("xlsx", "csv", "txt", "xml", "json")
     for file_format in runner.FILE_OUTPUT_FORMATS:
         assert file_format not in {"plain", "none"}
+
+
+# --------------------------------------------------------------------------- #
+# Reading the history back, which nothing did until 2026-09-03
+# --------------------------------------------------------------------------- #
+def _history_row(**over):
+    row = {"sql_run_id": 77, "sql_id": 9, "sql_code": "SQLSERVER-009", "target_no": 1,
+           "server_id": "server", "service_name": "svc", "status": "done", "level": "logging",
+           "message": "finished", "started_at": "2026-09-03T11:57:43Z",
+           "finished_at": "2026-09-03T12:02:01Z", "duration_ms": 258000, "row_count": 69,
+           "error_text": None}
+    row.update(over)
+    return row
+
+
+def test_a_run_line_leads_with_the_status_because_that_is_what_is_scanned_for():
+    """Read on a phone by whoever just got an alert. Everything else on the line is context for
+    the one word they came for."""
+    from db_ops.common import sql_run_history
+
+    text = sql_run_history.render([_history_row()])
+
+    assert "#77 [DONE] sql_id=9 SQLSERVER-009" in text
+    assert "2026-09-03 11:57:43 took 258s rows=69 on server" in text
+
+
+def test_a_failed_run_carries_its_reason_so_the_store_need_not_be_opened():
+    """The trip to the store is exactly what this command exists to save. A listing that says
+    ERROR and stops has not saved it."""
+    from db_ops.common import sql_run_history
+
+    text = sql_run_history.render([_history_row(
+        status="error", duration_ms=None, row_count=None,
+        error_text="stale running exceeded timeout_seconds=900.\nsecond line ignored")])
+
+    assert "[ERROR]" in text
+    assert "stale running exceeded timeout_seconds=900." in text
+    assert "second line ignored" not in text, "one line of the reason, not the whole traceback"
+
+
+def test_a_successful_run_does_not_repeat_a_stale_error_column():
+    """`error_text` outlives the row it belonged to in some shapes; printing it beside DONE would
+    report a failure that did not happen."""
+    from db_ops.common import sql_run_history
+
+    text = sql_run_history.render([_history_row(error_text="an error from a previous attempt")])
+
+    assert "an error from a previous attempt" not in text
+
+
+def test_the_listing_stops_before_telegram_truncates_it_and_says_so():
+    """Telegram cuts at 4096 characters. A listing the transport truncates loses its NEWEST rows
+    with nothing to say it happened, which is the wrong end and a silent one."""
+    from db_ops.common import sql_run_history
+
+    rows = [_history_row(sql_run_id=n, sql_code="SQLSERVER-%03d-A-RATHER-LONG-TASK-NAME" % n)
+            for n in range(200)]
+
+    text = sql_run_history.render(rows)
+
+    assert len(text) < 4096
+    assert "more not shown (message size limit)." in text
+    assert "#0 " in text, "the newest rows are the ones that must survive"
+
+
+def test_an_empty_history_says_so_rather_than_printing_a_bare_header():
+    from db_ops.common import sql_run_history
+
+    assert sql_run_history.render([]) == "No SQL task runs recorded yet."
+    assert sql_run_history.render([], sql_id=28) == "No SQL task runs recorded for sql_id 28 yet."
+
+
+def test_the_limit_is_bounded_so_a_typo_cannot_ask_for_the_whole_table():
+    from db_ops.common import sql_run_history
+
+    asked = []
+
+    class Store:
+        def fetch_recent_sql_runs(self, *, limit, sql_id):
+            asked.append(limit)
+            return []
+
+    sql_run_history.collect(Store(), limit=10_000)
+    sql_run_history.collect(Store(), limit=0)
+
+    assert asked == [sql_run_history.MAX_LIMIT, 1]
+

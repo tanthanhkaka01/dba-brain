@@ -496,10 +496,11 @@ def _import_data_command(argv: list[str]) -> int:
     replaced ``db_instances.json`` there would destroy the only copy of it.
     """
     from db_ops.lib import config_bundle
-    from db_ops.lib.paths import TOOL_ROOT
+    from db_ops.lib.paths import TOOL_ROOT, is_installed_package_root
 
     source: str | None = None
     root = Path(TOOL_ROOT)
+    root_was_stated = False
     plan_only = False
     force = False
     include_secrets = True
@@ -511,7 +512,9 @@ def _import_data_command(argv: list[str]) -> int:
             print(IMPORT_DATA_USAGE)
             return 0
         if token == "--root":
-            root = Path(rest.pop(0)) if rest else root
+            if rest:
+                root = Path(rest.pop(0))
+                root_was_stated = True
         elif token in {"--plan", "--plan-only", "--dry-run"}:
             plan_only = True
         elif token == "--force":
@@ -556,6 +559,22 @@ def _import_data_command(argv: list[str]) -> int:
         return 2
 
     root = root.expanduser()
+    # The fallback tool root is the package's own location, which for a pip install is
+    # site-packages. Unpacking an estate in there produces a config that nothing will look for,
+    # under a message that reads like success. Refuse, and name both ways out.
+    if not root_was_stated and is_installed_package_root(root):
+        print(
+            f"import-data refused: the tool root resolved to {root.resolve()}, which is"
+            f" where pip installed the package - not an estate. That happens when the"
+            f" directory you are standing in carries no configuration for the tool to"
+            f" recognise.\n\n"
+            f"Either state the root:\n"
+            f"    db-ops import-data {source} --root .\n"
+            f"or create one here first, which is what makes this directory recognisable:\n"
+            f"    db-ops init",
+            file=sys.stderr,
+        )
+        return 2
     root.mkdir(parents=True, exist_ok=True)
     planned = config_bundle.plan_import(entries, root)
     if plan_only:
@@ -593,7 +612,45 @@ def _import_data_command(argv: list[str]) -> int:
         print("The secret store is here as ciphertext and the passphrase is not. Set")
         print("DB_OPS_SECRET_KEY to the source machine's passphrase, then verify with:")
         print("  db-ops check-credentials")
+    _report_node_role_of_import(root)
     return 0
+
+
+def _report_node_role_of_import(root: Path) -> None:
+    """Say which ``node_role`` the imported schedule needs, if it is not the one you get by default.
+
+    The daemon decides what to run by matching each command's ``node_role`` against its own. A
+    process that was not told otherwise is ``master``; an estate exported from a worker declares
+    ``worker`` on every command. Import one onto a new machine, start the daemon, and it runs
+    nothing at all - correctly, and for a reason nobody has been given yet. It says so on the first
+    tick, but only in a log line, on a machine whose logs nobody is watching yet.
+
+    So the import says it at the moment the roles arrive, while the operator is still typing.
+    """
+    commands_file = root / "data" / "app_commands.json"
+    try:
+        payload = json.loads(commands_file.read_bytes().decode("utf-8-sig"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return  # nothing to say; the import itself already reported what it wrote
+    entries = payload.get("app_commands") if isinstance(payload, dict) else payload
+    if not isinstance(entries, list):
+        return
+    roles = {
+        str(role).strip().lower()
+        for entry in entries
+        if isinstance(entry, dict) and entry.get("active", True)
+        for role in ([entry.get("node_role")] if isinstance(entry.get("node_role"), str)
+                     else entry.get("node_role") or [])
+        if str(role).strip()
+    }
+    if not roles or "master" in roles or "all" in roles:
+        return
+    role = sorted(roles)[0]
+    print("")
+    print(f"Every scheduled command here is for node_role {sorted(roles)}, and a process that is")
+    print("not told otherwise is 'master' - so the daemon would start and run nothing. Either:")
+    print(f"  export DB_OPS_NODE_ROLE={role}")
+    print("or set node_role to 'all' in data/app_commands.json.")
 
 
 def installed_apps() -> dict[str, str]:

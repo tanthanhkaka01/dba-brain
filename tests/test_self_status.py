@@ -1,0 +1,126 @@
+"""Which build am I talking to, on which machine, and is it out of room?
+
+The first question asked when something looks wrong, and the toolkit could not answer it. Three
+status answers already existed and none of them is this one: ``ops-status`` reads the store for
+whether the apps ran, ``host-facts`` reaches a *monitored* host over its cmd_access,
+``worker-status`` drives the worker from the master. All three describe something else.
+
+It became urgent on 2026-09-03, when two builds of this toolkit ran the same estate within the hour
+— a container built from the private tree and a pip install of the published wheel. They number
+differently (``2.87.01`` against ``0.5.0``), so the version alone does not say which is which, and
+telling them apart took a shell on the worker.
+
+The tests below are mostly about *not lying*: a memory figure that is really the host's while the
+process is capped by a cgroup, a distribution name guessed from the version number, a platform
+string that says "Linux" to both Ubuntu and RHEL. An honest "unavailable" beats all three.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from db_ops.common import self_status
+
+
+def test_a_container_reports_its_cgroup_limit_not_the_hosts_memory(tmp_path, monkeypatch):
+    """64 GiB quoted while the cgroup allows 2 is worse than no number at all: it is the figure
+    somebody uses to rule memory out as the cause."""
+    limit = tmp_path / "memory.max"
+    used = tmp_path / "memory.current"
+    limit.write_text("2147483648", encoding="utf-8")     # 2 GiB
+    used.write_text("1073741824", encoding="utf-8")      # 1 GiB
+    monkeypatch.setattr(self_status, "_CGROUP_V2", (str(limit), str(used)))
+
+    facts = self_status.memory()
+
+    assert facts["source"] == "cgroup"
+    assert facts["total_bytes"] == 2 * 1024 ** 3
+    assert facts["available_bytes"] == 1 * 1024 ** 3
+
+
+def test_an_unlimited_cgroup_falls_through_instead_of_reporting_a_nonsense_ceiling(
+    tmp_path, monkeypatch
+):
+    """A container given no limit reports `max` in v2 and a number near 2**63 in v1. Both mean "the
+    host's memory", and printing 8 EiB as the ceiling is not a report."""
+    limit = tmp_path / "memory.limit_in_bytes"
+    used = tmp_path / "memory.usage_in_bytes"
+    limit.write_text(str(2 ** 63 - 1), encoding="utf-8")
+    used.write_text("1073741824", encoding="utf-8")
+    monkeypatch.setattr(self_status, "_CGROUP_V2", ("/nonexistent", "/nonexistent"))
+    monkeypatch.setattr(self_status, "_CGROUP_V1", (str(limit), str(used)))
+
+    facts = self_status.memory()
+
+    assert facts["source"] != "cgroup"
+
+
+def test_every_memory_figure_says_where_it_came_from():
+    """Whether the number means anything inside a container depends entirely on its source, so the
+    source travels with it rather than being inferred by the reader."""
+    assert "source" in self_status.memory()
+
+
+def test_the_product_is_named_because_the_version_number_cannot_say_it():
+    """`2.87.01` and `0.5.0` are the same toolkit under two distribution names. A reader who is
+    handed only a version has to already know the numbering scheme to decode it."""
+    facts = self_status.distribution()
+
+    assert facts["product"], "the report must name the product, not only a version"
+    assert facts["source"], "and say whether it is installed or run from a tree"
+
+
+def test_a_tree_that_is_not_installed_is_an_answer_rather_than_a_failure(monkeypatch):
+    """A source checkout and a container running from a path have no distribution metadata. That is
+    a fact about the install, and reporting it beats raising."""
+    def missing(_name):
+        raise ModuleNotFoundError("no distribution")
+
+    monkeypatch.setattr("importlib.metadata.distribution", missing)
+
+    facts = self_status.distribution()
+
+    assert facts["name"] is None
+    assert "source tree" in facts["product"]
+
+
+def test_the_render_leads_with_the_product_then_the_version():
+    """In that order on purpose: the version is only readable once the numbering scheme is known."""
+    facts = self_status.collect(tool_root=Path("."), version="2.87.01", public_version="0.5.0",
+                                store="postgresql postgres@192.0.2.10:5433/db_ops")
+    text = self_status.render(facts)
+
+    lines = text.splitlines()
+    assert lines[1].startswith("product   :")
+    assert lines[2].startswith("version   :")
+    assert "2.87.01" in lines[2] and "0.5.0" in lines[2]
+    assert "postgresql postgres@192.0.2.10:5433/db_ops" in text
+
+
+def test_the_report_says_docker_or_the_operating_system_and_which_one():
+    """"Linux" answers Ubuntu and RHEL identically, which does not help anyone deciding whether a
+    package name applies; and "in a container" changes what every other figure means."""
+    facts = self_status.collect(tool_root=Path("."), version="2.87.01")
+    text = self_status.render(facts)
+
+    running = next(line for line in text.splitlines() if line.startswith("running   :"))
+    assert ("in Docker" in running) or ("on the OS directly" in running) or (" in " in running)
+    assert self_status.runtime() in {"docker", "kubernetes", "containerd", "lxc", "host"}
+    assert self_status.operating_system(), "the OS line is never blank"
+
+
+def test_load_average_is_absent_rather_than_faked_where_the_platform_has_none():
+    """`os.getloadavg` does not exist on Windows. A zero would read as an idle machine."""
+    facts = self_status.cpu()
+
+    assert "cores" in facts
+    assert facts["load_avg"] is None or len(facts["load_avg"]) == 3
+
+
+def test_the_report_never_carries_a_store_password():
+    """The store line names user, host and database so somebody can tell two estates apart. The
+    password is in the secret store and has no business in a chat message."""
+    facts = self_status.collect(tool_root=Path("."), version="1.0",
+                                store="postgresql postgres@192.0.2.10:5433/db_ops")
+
+    assert "password" not in self_status.render(facts).lower()

@@ -95,6 +95,7 @@ USAGE = (
     "  pack-files       Pack named files (or a folder) into one archive + sha256 (see --help)\n"
     "  relay-file       Copy one file from one host straight to another, hash-verified\n"
     "  host-facts       Read one host's state: uptime, disks, services, pending reboot (see --help)\n"
+    "  self-status      What THIS installation is: version, host, ip, cpu, memory, disk\n"
     "  host-service     Start/stop/restart services on a host and wait for the end state (see --help)\n"
     "  host-restart     Restart a host and prove it came back (see --help)\n"
     "  sqlserver-precheck    Is this SQL Server instance safe to patch right now (see --help)\n"
@@ -1737,6 +1738,96 @@ def _inventory_summary_command(argv: list[str]) -> int:
     ))
 
 
+SELF_STATUS_USAGE = (
+    "usage: python -m db_ops.common.cli self-status <json>|@<file>|- [--config ...]\n"
+    "\n"
+    "What THIS installation is and how much room it has left: version, host name and ip,\n"
+    "node role, cpu, memory and disk. Reads itself - no SSH, no store - so it still\n"
+    "answers when the store is unreachable.\n"
+    "\n"
+    "The request is a JSON object, given inline, as @path/to/request.json, or on stdin (-):\n"
+    '  {"format": "txt"}      // optional; txt for the chat listing, json (default) for the envelope\n'
+)
+
+
+def _self_status_command(argv: list[str]) -> int:
+    """``self-status`` - the installation describing itself.
+
+    Distinct from the three status answers that already exist, and the distinction is the point:
+    ``ops-status`` reads the store for whether the apps ran, ``host-facts`` reaches a monitored
+    host over its cmd_access, ``worker-status`` drives the worker from the master. This one is
+    the process reporting on itself and the machine under it, which is what nothing answered.
+    """
+    from db_ops.common import self_status
+    from db_ops.lib import response
+
+    source = ""
+    config_path = None
+    rest = list(argv)
+    while rest:
+        token = rest.pop(0)
+        if token in {"-h", "--help"}:
+            print(SELF_STATUS_USAGE)
+            return 0
+        if token == "--config":
+            config_path = rest.pop(0) if rest else None
+        elif not source:
+            source = token
+        else:
+            print(f"Unexpected argument: {token}\n\n{SELF_STATUS_USAGE}", file=sys.stderr)
+            return 2
+
+    request, code = _read_json_request(source or "{}", SELF_STATUS_USAGE)
+    if request is None:
+        return code
+
+    import db_ops
+    from db_ops.lib.paths import TOOL_ROOT
+
+    public_version = None
+    try:
+        from db_ops.lib.distribution import PUBLIC_VERSION as public_version
+    except Exception:  # noqa: BLE001 - a build without the public literal still reports itself.
+        public_version = None
+
+    # The store is named, never connected to: this command has to keep answering when the store
+    # is the thing that is down, which is exactly when someone asks what version is running.
+    store_text = None
+    try:
+        from db_ops.config import load_config, resolve_config_path
+
+        config = load_config(resolve_config_path("common", config_path))
+        store_config = getattr(config, "store", None)
+        backend = getattr(store_config, "backend", None)
+        if backend == "postgresql":
+            postgres = getattr(store_config, "postgresql", None)
+            store_text = (f"postgresql {getattr(postgres, 'username', '?')}@"
+                          f"{getattr(postgres, 'host', '?')}:{getattr(postgres, 'port', '?')}"
+                          f"/{getattr(postgres, 'database', '?')}")
+        elif backend:
+            store_text = f"{backend} {getattr(getattr(store_config, 'sqlite', None), 'path', '')}"
+    except Exception:  # noqa: BLE001 - no config is a fact about the install, not an error here.
+        store_text = None
+
+    facts = self_status.collect(
+        tool_root=Path(TOOL_ROOT), version=db_ops.__version__,
+        public_version=public_version, store=store_text)
+    listing = self_status.render(facts)
+
+    if str(request.get("format") or "json").strip().lower() == "txt":
+        print(listing)
+        return 0
+    # `format: txt` prints the listing and nothing else; the default prints the envelope and
+    # nothing else, carrying the same listing under `data`. stdout is the answer, never both -
+    # tests/test_common_cli_response_shape.py holds every command in this CLI to that.
+    return response.emit(response.ok(
+        "self-status",
+        message=f"{facts['version']} on {(facts['host'] or {}).get('hostname')}",
+        data={"listing": listing, **facts},
+        metrics={"cores": (facts.get("cpu") or {}).get("cores")},
+    ))
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv:
@@ -1785,6 +1876,8 @@ def main(argv: list[str] | None = None) -> int:
         return _lift_example_command(argv[1:])
     if argv[0] == "probe-host":
         return _probe_host_command(argv[1:])
+    if argv[0] == "self-status":
+        return _self_status_command(argv[1:])
     if argv[0] == "restore-database":
         return _restore_database_command(argv[1:])
     if argv[0] in {"restore-full", "restore-diff", "restore-log",

@@ -77,6 +77,12 @@ Run one scan and wait for started commands to finish:
 python -m db_ops.jobs.daemon --config config.json --once
 ```
 
+**`--once` waits for the commands it started, so it does not return on an estate that schedules a
+long-running one.** `APP-WEBHOST` serves and never completes by design, so `--once` on a
+configuration that includes it blocks until something kills it. That makes `--once` a poor
+smoke test for a full estate — it is a good one for a fresh `db-ops init` tool root, where every
+command finishes. To prove a full estate, start the daemon normally and read `job_runs`.
+
 Use a different data directory:
 
 ```powershell
@@ -116,6 +122,7 @@ Together these two paths ensure that a crashed or long-gone subprocess never per
 - A command exits with `error`: inspect `metadata_json`, `error_text`, and the matching `{log_scope}_runtime.log`.
 - A command times out: increase `time_window.timeout` only after checking whether the child app is stuck.
 - A command appears stuck in `running` after a daemon restart: `recover_stale_running_jobs` should resolve this at next startup. If the row is still `running` after restart, check that the daemon started without error.
+- **The daemon starts and runs nothing at all**, logging `app.daemon.nothing_scheduled`: every command is declared for a `node_role` this process does not have. A process that was not told otherwise is `master`, and an estate exported from a worker declares `worker` on all of them. Set `DB_OPS_NODE_ROLE=worker` on the process, or `node_role: "all"` in `data/app_commands.json`. This is the first thing to check on a machine that has just imported an estate — see [`docs/configuration.md` §9](./configuration.md#9-moving-a-whole-estate-to-another-machine).
 
 ## Config Priority
 

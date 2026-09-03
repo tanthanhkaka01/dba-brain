@@ -272,11 +272,19 @@ Two commands do it instead.
 db-ops export-data prod-bundle.json
 
 # on the new machine, after `pip install dbabrain`
-db-ops import-data prod-bundle.json --plan     # read this first; it writes nothing
-db-ops import-data prod-bundle.json
+mkdir estate && cd estate
+db-ops import-data prod-bundle.json --plan --root .   # read this first; it writes nothing
+db-ops import-data prod-bundle.json --root .
 export DB_OPS_SECRET_KEY='<the source machine's passphrase>'
-db-ops check-credentials                        # proves the store decrypts here
+db-ops check-credentials                              # proves the store decrypts here
 ```
+
+**Say `--root` on a first import, or run `db-ops init` first.** A new empty directory carries
+nothing the tool recognises as configuration, so the tool root falls back to the last entry in the
+order — the package's own location, which for a pip install is `site-packages`. An import that
+lands there is now refused by name. It used to succeed: it wrote the estate into `site-packages`
+and printed `imported into ...`, which reads like success and leaves nothing where the next command
+looks.
 
 ### What is in the bundle
 
@@ -313,8 +321,26 @@ It names every host, account and chat id in the estate. Never commit it and neve
 issue. `.gitignore` covers `<name>-bundle.json`, which is why `export-data` suggests that shape and
 warns when you pick a different one.
 
+### After importing: the schedule may be for a different node role
+
+`data/app_commands.json` gives each command a `node_role`, and the daemon runs only the ones that
+match its own. **A process that was not told otherwise is `master`.** An estate exported from a
+worker carries `worker` on every command, so importing it and starting the daemon runs nothing at
+all — correctly, and for a reason nobody has been given.
+
+`import-data` now says so when it sees that mismatch, and names the fix:
+
+```bash
+export DB_OPS_NODE_ROLE=worker      # or set node_role to "all" in data/app_commands.json
+```
+
+The daemon also reports it on its first tick (`app.daemon.nothing_scheduled`), but by then it is a
+log line on a machine whose logs nobody is watching yet.
+
 ### What import refuses to do
 
+- **Write the estate into `site-packages`.** Only when the root was not stated: `--root` is taken as
+  said, on purpose. See the note above.
 - **Write anything at all if any checksum fails.** Every entry carries a sha256 of the bytes it
   becomes, and all of them are verified first. A truncated transfer leaves the target untouched
   rather than half-applied.

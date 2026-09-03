@@ -37,6 +37,7 @@ to find the next.
 from __future__ import annotations
 
 import os
+import sysconfig
 from pathlib import Path
 
 
@@ -165,6 +166,33 @@ def resolve_tool_path(path: str | Path, *, tool_root: Path | None = None) -> Pat
 def looks_like_tool_root(candidate: Path) -> bool:
     """True when *candidate* carries at least one of :data:`ROOT_MARKERS`."""
     return any((candidate / marker).exists() for marker in ROOT_MARKERS)
+
+
+def is_installed_package_root(candidate: Path) -> bool:
+    """True when *candidate* is the directory pip installed this package into.
+
+    Step 3 of the order above - the package's own location - is the right fallback for a dev
+    checkout and for the container, where the package sits beside ``data/``. For a wheel in a
+    virtualenv it resolves to ``site-packages``, which is a real directory that is writable and
+    is not an estate. Reading from it is harmless; it just finds nothing. **Writing to it is
+    not**: on 2026-09-03 an ``import-data`` run in a new, empty directory unpacked a whole tool
+    root into ``site-packages`` and reported ``imported into .../site-packages`` - which reads
+    like success, and left the operator with a config the next command could not find.
+
+    So a command that *writes* a tool root asks this first. Reading still falls through, because
+    a wrong read answers "nothing configured" and a wrong write is a silent broken install.
+    """
+    resolved = Path(candidate).resolve()
+    if "site-packages" in resolved.parts or "dist-packages" in resolved.parts:
+        return True
+    for key in ("purelib", "platlib"):
+        try:
+            library = Path(sysconfig.get_paths()[key]).resolve()
+        except (KeyError, OSError):  # noqa: PERF203 - a layout without this path is not an error
+            continue
+        if resolved == library or library in resolved.parents:
+            return True
+    return False
 
 
 def resolve_tool_root(

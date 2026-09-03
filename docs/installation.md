@@ -79,9 +79,45 @@ that reads like a Python problem and is not one.
 
 **Keep driver 17 alongside 18 if you monitor SQL Server 2008 R2 or older.** Driver 18 defaults to
 requiring an encrypted connection with a verifiable certificate; instances that old offer neither,
-and refuse. The shipped container image installs both for exactly this reason, and additionally
-lowers the OpenSSL minimum protocol so those instances can negotiate at all — a host-level setting
-you will have to make yourself on a machine that is not the container.
+and refuse. The shipped container image installs both for exactly this reason.
+
+#### Old instances also need OpenSSL told to allow TLS 1.0
+
+OpenSSL 3 refuses anything below TLS 1.2 by default, and SQL Server 2008 R2 and 2012 offer nothing
+above TLS 1.0. Every connection to one then fails with:
+
+```
+SSL Provider: [error:0A000102:SSL routines::unsupported protocol]
+```
+
+which names neither the instance's age nor the setting that causes it. The container image lowers
+the minimum protocol when it is built; **a pip install inherits the host's OpenSSL and does not**.
+Nothing in the toolkit can do this for you — it is a property of the process's TLS library, decided
+before any of this code runs.
+
+If you cannot edit `/etc/ssl/openssl.cnf`, point `OPENSSL_CONF` at your own copy:
+
+```bash
+cp /etc/ssl/openssl.cnf ./openssl.cnf
+sed -i '/^\[openssl_init\]/a ssl_conf = ssl_sect' ./openssl.cnf
+cat >> ./openssl.cnf <<'EOF'
+
+[ssl_sect]
+system_default = system_default_sect
+
+[system_default_sect]
+MinProtocol = TLSv1
+CipherString = DEFAULT@SECLEVEL=0
+EOF
+export OPENSSL_CONF="$PWD/openssl.cnf"     # must be set on the daemon process too
+```
+
+**The value is `TLSv1`, not `TLSv1.0`.** OpenSSL 3.0 accepted the second spelling; OpenSSL 3.5
+rejects it with `bad value:cmd=MinProtocol, value=TLSv1.0` — and because that is a config error
+rather than a policy, it then breaks *every* connection, including the modern ones.
+
+This lowers the TLS floor for the whole process. That is the trade for monitoring instances of that
+age at all; scope it to this process's `OPENSSL_CONF` rather than the machine's, as above.
 
 ### Oracle: a client library, but only for old servers
 

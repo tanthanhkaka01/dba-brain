@@ -213,3 +213,68 @@ def test_a_non_tls_error_stops_the_walk_instead_of_trying_every_driver():
         sql_execution.open_sqlserver_odbc(
             pyodbc, server="h,1433", database="master", username="u", password="p", timeout=5
         )
+
+
+# --------------------------------------------------------------------------- #
+# The connect error has to name the cause, because the driver's text does not
+# --------------------------------------------------------------------------- #
+REFUSED_PROTOCOL = (
+    "('08001', '[08001] [Microsoft][ODBC Driver 18 for SQL Server]SSL Provider: "
+    "[error:0A000102:SSL routines::unsupported protocol] (-1) (SQLDriverConnect)')"
+)
+REJECTED_CONFIG = (
+    "('08001', '[08001] [Microsoft][ODBC Driver 18 for SQL Server]SSL Provider: "
+    "[error:0A000180:SSL routines::bad value:cmd=MinProtocol, value=TLSv1.0]"
+    "[error:0A0001A3:SSL routines::error in system default config] (-1) (SQLDriverConnect)')"
+)
+
+
+def test_an_old_instance_refused_by_tls_policy_says_whose_policy_it_is():
+    """On 2026-09-03 five SQL Server instances that had answered every check for months went
+    CRITICAL together, carrying only the driver's own text. Nothing in it says the cause is the
+    OpenSSL policy of the machine running the toolkit - so it reads like the network, the
+    credential or the driver, and none of those is it."""
+    hint = sql_execution.sqlserver_tls_policy_hint(REFUSED_PROTOCOL)
+
+    assert "TLS policy of the machine running the toolkit" in hint
+    assert "MinProtocol = TLSv1" in hint
+    assert "pip install inherits the host's setting" in hint
+
+
+def test_a_malformed_tls_stanza_is_told_apart_from_an_old_instance():
+    """The trap that follows the fix: `TLSv1.0` is not a token OpenSSL accepts. 3.0 tolerated it,
+    3.5 refuses it, and a config error breaks *every* connection rather than only the old ones -
+    so the advice for the previous case would send the reader in the wrong direction."""
+    hint = sql_execution.sqlserver_tls_policy_hint(REJECTED_CONFIG)
+
+    assert "every connection fails" in hint
+    assert "'TLSv1'" in hint and "TLSv1.0" in hint
+    assert "TLS policy of the machine" not in hint, "this is a typo, not a policy decision"
+
+
+def test_an_ordinary_failure_gets_no_tls_lecture():
+    """A hint that appears on unrelated errors is noise, and noise is how a good hint stops being
+    read at all."""
+    assert sql_execution.sqlserver_tls_policy_hint("Login failed for user 'sa'.") == ""
+    assert sql_execution.sqlserver_tls_policy_hint("timeout expired") == ""
+
+
+def test_the_hint_reaches_the_error_the_operator_actually_sees():
+    """The hint is only worth writing if it travels with the exception the report prints."""
+    def connect(conn_str, timeout):  # noqa: ARG001 - every candidate refuses the same way
+        raise RuntimeError(REFUSED_PROTOCOL)
+
+    pyodbc = types.SimpleNamespace(
+        drivers=lambda: ["ODBC Driver 18 for SQL Server", "ODBC Driver 17 for SQL Server"],
+        connect=connect,
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        sql_execution.open_sqlserver_odbc(
+            pyodbc, server="h,1433", database="master", username="u", password="p", timeout=5
+        )
+
+    message = str(raised.value)
+    assert "connect failed after driver fallback" in message, "the attempts are still reported"
+    assert "MinProtocol = TLSv1" in message, "and now the cause is named alongside them"
+
