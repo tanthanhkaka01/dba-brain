@@ -199,6 +199,31 @@ ORDER BY latest_run DESC;
 - SQL file fails midway: multi-file tasks stop at the first failure.
 - Stored procedure alters fail in a folder task: check `file_order=[...]`; a DDL/table-change script with a later filename can run after dependent procedure files and break deployment.
 - Telegram alert is missing: check `logging_on_run`, `alert_on_error`, and pending rows in `telegram_send_messages`.
+- A run is `error` with `metadata_json` = `{"stale_running": true}`: nothing failed in the SQL — the
+  run's *process* died and the row was reaped. See *Stale running rows*.
+
+### Stale running rows
+
+Every scan begins with `mark_stale_running_sql_runs`. A run row still `running` past its target's
+`timeout` is closed as `error` with `metadata_json` = `{"stale_running": true}`, so the run_key is
+free and the task can be scheduled again — `due_sql_tasks` refuses to start a target whose latest
+run is `running`, so without this one dead process would stop the task for good.
+
+Two things this **cannot** do, and both have bitten:
+
+- **It does not stop the SQL.** The runner executes a task inline in the scan process, so when the
+  daemon kills that process at the `APP-SQL_TASKS` command timeout, the session on the database
+  server is left executing. Closing the row says the *run* is over, not the work. A task that
+  guards itself with an application lock will then report SKIPPED every cycle until that orphaned
+  session is killed by hand.
+- **It cannot see how long a task really takes.** Set the target's `timeout` above the longest real
+  cycle, and keep it below the `timeout` on the `APP-SQL_TASKS` entry in `data/app_commands.json`
+  (1800 s) — above that the daemon kills the scan first and the reaper only records the aftermath.
+
+It reports what it closes: a target with `alert_on_error.enabled` gets a Telegram message naming the
+run and warning that the SQL may still be executing. Before 2026-09-03 it did not, and sql_id 28 sat
+in `error` for half an hour with no message anywhere while its orphaned session blocked every
+following cycle.
 
 ## Config Priority
 
@@ -233,6 +258,11 @@ Required config keys: `log_dir`, plus a resolvable runtime store (`store_config_
 - `enabled` — whether to notify at all.
 - `telegram_chat` — the notify level whose group receives the message (`logging`/`warning`/`critical`/`error`/`test`/`private`); resolved against the level map in `data/telegram_groups.json` (`level_chat_map`).
 - `chat_id` — an explicit chat_id override; when non-empty it wins over `telegram_chat`, routing that target to a specific chat.
+
+`alert_on_error` fires on **both** ways a run can fail: the exception path inside `run_sql_target`,
+and `mark_stale_running_sql_runs`, which closes out a run whose process died before it could report
+anything (see *Stale running rows* below). The second one used to write the error row and log it and
+nothing else, so a killed run was silent in Telegram no matter what the target asked for.
 
 The legacy boolean form (`logging_on_run: true`) is still accepted and behaves as `{enabled: true, telegram_chat: "logging"}` (and `alert_on_error: true` → `error`). When the resolved chat_id is empty (unmapped level and no override), no row is written. If the Telegram app is not running, the queued row remains pending until it is processed. The runner does not import or call the Telegram app directly.
 
@@ -344,7 +374,8 @@ Two values it is deliberately **not**:
 
 Nothing the scheduler does starts a manual target: no first run, no retry-on-failure, no
 stale-running recovery. (A stale `running` row left behind by a forced run is still cleaned up —
-that is `mark_stale_running_sql_runs`, which does not consult the schedule.) The entry keeps its
+that is `mark_stale_running_sql_runs`, which does not consult the schedule, and alerts on what it
+closes — see *Stale running rows*.) The entry keeps its
 day/hour bounds in the JSON and `timeout` still applies to a forced run, but the bounds are never
 consulted, so the listing does not print them.
 

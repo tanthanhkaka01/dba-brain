@@ -15,6 +15,42 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-03
+
+### Added
+
+- Three collectors that record cumulative counters and grade nothing:
+  `PERFORMANCE_WORKLOAD_COUNTERS` (900 s, `sys.dm_os_performance_counters` +
+  `sys.dm_resource_governor_resource_pools` + `sys.dm_io_virtual_file_stats`),
+  `PERFORMANCE_WAIT_TOTALS` (900 s, `sys.dm_os_wait_stats`, a fixed watch list) and
+  `PERFORMANCE_QUERY_STATS_TOTALS` (1800 s, `sys.dm_exec_query_stats`). The catalogue goes from
+  90 metrics to 93.
+- A workload section on both report pages, built from `db_ops/reports/workload.py`: latest
+  interval, last hour and last 24 hours on `server-metrics.html`, a per-server chip strip on
+  `database-inventory.html`. Each header states the span that was measured, not the one asked
+  for. It answers "how much did this instance do in the last hour", which no page could answer
+  before — every counting DMV reports a total since the engine started.
+- `db_ops/lib/interval_rates.py` differences two stored samples. A pair whose `counters_since`
+  markers disagree is refused: after a restart the totals begin at zero, and a delta across one
+  is the new absolute value. No pair, no column.
+- `019_sqlserver_io_latency` reports bytes read and written, not only operation counts.
+
+### Fixed
+
+- A SQL task run whose process was killed now alerts. `mark_stale_running_sql_runs` closed the
+  run out as `error` and logged it, and nothing else — `alert_on_error` was only wired into the
+  exception handler a killed process never reaches. The message says the SQL may still be
+  executing on the server, which is what a reaped run leaves behind.
+- `as_epoch` was defined twice, byte for byte, in `capacity_forecast` and `interval_rates`. It is
+  `db_ops.lib.coerce.as_epoch` now.
+- The stdin JSON contract tests handed the CLIs an `io.StringIO`, which has no `.buffer` — the
+  attribute the pinned UTF-8 read needs. CI was red on 3.12 and 3.13; the stand-in is now a text
+  stream over bytes.
+- The encoding-mismatch test wrote a payload cp1252 cannot represent, which raised on Linux and
+  deadlocked on Windows (the stdin writer thread dies without closing the child's stdin). It now
+  encodes the payload itself, and asserts the failure the estate actually hit: an em dash sent as
+  `0x97` and refused by a UTF-8 reader.
+
 ## [0.4.3] - 2026-08-27
 
 ### Added

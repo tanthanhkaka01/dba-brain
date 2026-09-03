@@ -267,6 +267,56 @@ problem on 192.0.2.111 made all 8 of its linked servers unusable at once, and fi
 as "safe to remove" on evidence that did not exist. They are reported as FIX, with the row saying
 so.
 
+## Workload — how much this instance actually did (both pages)
+
+Added 2026-09-03. Until then neither page could answer *"how much did this instance do in the last
+hour"*: PLE and session count are gauges of the moment, and every DMV that counts work
+(`sys.dm_os_performance_counters`, `sys.dm_io_virtual_file_stats`, `sys.dm_exec_query_stats`,
+`sys.dm_os_wait_stats`) reports a total since the engine started. Read once, those answer "since it
+booted" — on the instance measured, nine months.
+
+Three collectors now record those totals raw and grade nothing
+(`PERFORMANCE_WORKLOAD_COUNTERS`, `PERFORMANCE_QUERY_STATS_TOTALS`, `PERFORMANCE_WAIT_TOTALS` —
+see `docs/04_metrics_engine.md`), and `db_ops/reports/workload.py` subtracts two collections.
+Both pages render from that one builder, so they cannot describe the same hour differently.
+
+**On `server-metrics.html`** — a folded section, open by default, under the coverage block:
+
+| Table | What it answers |
+| --- | --- |
+| Measure | CPU (percent of the cores that exist, and the raw ms), requests, logical work, physical I/O with bytes and interval latency, log generated, contention |
+| Wait type | what it waited on over the same intervals, as seconds and as a share of every non-benign wait |
+| Plan cache | what `sys.dm_exec_query_stats` attributes the same work to, and the share of instance CPU that accounts for |
+
+Three columns — **latest interval**, **last hour**, **last 24 hours** — because "busy right now"
+and "busy last night" are different questions and one column invites the reader to confuse them.
+Each header states the span that was **measured**, not the one that was asked for: a 24-hour column
+built from 14 hours of samples says 14h. The small grey line under a value is the rate per second;
+for a millisecond row it is an average concurrency instead (8,277 ms/s of CPU is 8.28 cores busy
+the whole time; 174 ms/s of lock wait is 0.17 sessions blocked at any instant).
+
+**On `database-inventory.html`** — a chip strip inside each server's detail block, the hour where
+there is one and the newest pair where there is not, headed by the span it measured. It is the
+fleet question ("which of these is doing the work") answered without opening a server page, with
+the top wait beside it because *busy* and *busy waiting on WRITELOG* are different findings.
+
+### What the section refuses to say
+
+- **No pair, no column.** Counters that went backwards mean a restart, and a delta across one is
+  the new absolute value — work that never happened. The column is absent; the cumulative average
+  is never offered as a substitute, since replacing it is the entire point.
+- **A window that cannot be half filled is not that window.** Two samples 20 minutes apart do not
+  describe an hour, and reporting them as one understates every figure by two thirds while looking
+  exactly like a full reading.
+- **Under two collections there is nothing at all.** A freshly onboarded instance says so, in
+  those words. It is not a failure and must not read as one.
+- **The plan cache is the one place a single counter may be dropped.**
+  `sys.dm_exec_query_stats` loses a plan's totals the moment that plan is evicted — measured on
+  one production instance, physical reads fell by 209 while logical reads rose by 220 million in the same
+  six minutes. Refusing that pair blanked all six plan-cache figures because one of them lost a
+  plan, so the field that fell is dropped, named on the page, and the rest are shown as what they
+  always are: an undercount of unknown size.
+
 ## Query Store — where a slowdown can still be investigated (on `server-metrics.html`)
 
 One folded section per server, one row per database, built from `QUERY_STORE_COVERAGE`. Its own

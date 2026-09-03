@@ -158,7 +158,7 @@ verdict; none of them reads a file.
 | `metric_score.py` | how a set of metric rows scores for one status — the fleet ordering rule |
 | `health_model.py` | what is true about a target *now*, shared by every page that claims to say so |
 | `notify_route.py` | how an entry's `notify` block narrows a node's route |
-| `interval_rates.py` | reading structured fields back out of a collector's message text |
+| `interval_rates.py` | reading structured fields back out of a collector's message text, and differencing two stored samples of a cumulative counter into a rate |
 | `record_form.py` | how one config record becomes editable fields, and how those fields become the record again |
 | `log_tail.py` | reading a log file from the end, a page at a time, and what one line means |
 | `network_policy.py` | can this host's container networks take a monitored database off the map. See below |

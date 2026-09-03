@@ -300,7 +300,7 @@ That is one database, monitored and delivering. **2.8 adds the other kind of tar
 itself, which needs no database credential at all.
 ### 2.8 The OS metrics: monitoring a host with no database on it
 
-`db-ops init` writes the whole catalogue — 90 metrics, of which **14 read the operating system
+`db-ops init` writes the whole catalogue — 93 metrics, of which **14 read the operating system
 rather than a database**: CPU, memory, disk, uptime, load, service state, the top processes by
 memory. They are worth doing early for a reason that is easy to miss: **they need no database
 credential and no database at all.** A host you cannot log into yet still answers them, and "the

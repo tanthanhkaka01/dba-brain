@@ -92,6 +92,19 @@ def as_text(value: Any) -> str:
     return str(value)
 
 
+def as_epoch(value: Any) -> float | None:
+    """Seconds since the epoch from an ISO timestamp, or ``None`` when it is not one.
+
+    :func:`as_utc_datetime` with ``.timestamp()`` on it, because arithmetic on two collection
+    times is subtraction and not calendar work. Existed twice under the same name until
+    2026-09-03 — ``capacity_forecast._epoch`` and ``interval_rates._epoch``, byte for byte — one
+    on the path that decides when a disk runs out, the other on the path that decides how much
+    work an instance did in the last hour. Both are timestamps out of ``collected_at``.
+    """
+    parsed = as_utc_datetime(value)
+    return parsed.timestamp() if parsed is not None else None
+
+
 def as_utc_datetime(value: Any) -> "datetime | None":
     """An aware UTC datetime from an ISO timestamp, or ``None`` when it is not one.
 

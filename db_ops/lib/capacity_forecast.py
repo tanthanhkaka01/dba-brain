@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import json
 import statistics
-from datetime import datetime, timezone
+from db_ops.lib.coerce import as_epoch, as_float
 from typing import Any
 
 
@@ -78,26 +78,6 @@ def horizons(policy: dict | None = None, *, server_id: str = "", item: str = "")
 def reserve_gb(policy: dict | None = None, *, server_id: str = "", item: str = "") -> float:
     """Free space that does not count as usable — "full" is reaching this, not zero."""
     return float(rule_for(server_id, item, policy).get("reserve_gb", 0) or 0)
-
-
-def _epoch(value: Any) -> float | None:
-    text = str(value or "").strip()
-    if not text:
-        return None
-    try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.timestamp()
-
-
-def _number(value: Any) -> float | None:
-    try:
-        return float(str(value).strip())
-    except (TypeError, ValueError):
-        return None
 
 
 def _theil_sen_per_day(points: list[tuple[float, float]]) -> float:
@@ -153,7 +133,7 @@ def forecast(samples: list[tuple[Any, Any]], *, floor: float = 0.0,
     caller must render it as such rather than as "no growth".
     """
     points = sorted(
-        (t, v) for t, v in ((_epoch(a), _number(b)) for a, b in samples)
+        (t, v) for t, v in ((as_epoch(a), as_float(b)) for a, b in samples)
         if t is not None and v is not None
     )
     if len(points) < MIN_POINTS:

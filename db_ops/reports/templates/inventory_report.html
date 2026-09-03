@@ -641,6 +641,75 @@ const LINKED_BADGE = {FIX:"b-crit", DROP:"b-warn", REVIEW:"b-warn", KEEP:"b-ok"}
       new Set(rows.map(r=>r.server_id)).size} instance(s)</span>`;
 })();
 
+/* ---------- Workload (interval counters) ---------- */
+/* What this instance actually did in the last hour, not since it booted.
+
+   The fleet page had every static fact about a server and no measure of how hard it was working:
+   PLE and session count are gauges of the moment, and the DMVs that would answer "how much" report
+   totals since engine start, which read once are a nine-month average. These chips are two
+   collections of those counters subtracted, built by the same code as the per-server page's
+   Workload section so the two cannot disagree about the same hour.
+
+   Deliberately the "last hour" column only. This is a fleet page: the question here is "which of
+   these instances is doing the work", and the 15-minute and 24-hour readings belong on the server
+   page, one click away. */
+const wlNum = v => v == null ? "—"
+  : v >= 1e9 ? (v/1e9).toFixed(2)+"B"
+  : v >= 1e6 ? (v/1e6).toFixed(2)+"M"
+  : v >= 1e4 ? (v/1e3).toFixed(1)+"k"
+  : Math.round(v).toLocaleString("en-US");
+
+const WL_CHIPS = [
+  ["cpu_pct",             "CPU",            v => v.toFixed(1)+"%"],
+  ["cpu_usage_ms",        "CPU time",       v => v>=3600000 ? (v/3600000).toFixed(2)+" h" : (v/1000).toFixed(0)+" s"],
+  ["batch_requests",      "Batch requests", wlNum],
+  ["transactions",        "Transactions",   wlNum],
+  ["page_lookups",        "Logical reads",  wlNum],
+  ["page_reads",          "Physical reads", wlNum],
+  ["page_writes",         "Physical writes",wlNum],
+  ["io_mb_read",          "Read",           v => v>=1024 ? (v/1024).toFixed(2)+" GB" : v>=10 ? v.toFixed(0)+" MB" : v.toFixed(2)+" MB"],
+  ["io_mb_written",       "Written",        v => v>=1024 ? (v/1024).toFixed(2)+" GB" : v>=10 ? v.toFixed(0)+" MB" : v.toFixed(2)+" MB"],
+  ["io_read_latency_ms",  "Read latency",   v => v.toFixed(2)+" ms"],
+  ["io_write_latency_ms", "Write latency",  v => v.toFixed(2)+" ms"],
+  ["log_mb_flushed",      "Log generated",  v => v>=1024 ? (v/1024).toFixed(2)+" GB" : v>=10 ? v.toFixed(0)+" MB" : v.toFixed(2)+" MB"],
+];
+
+const workloadBlock = s => {
+  const w = s.workload;
+  if (!w || !w.available) return '';
+  /* The hour where there is one, the newest pair where there is not — and the heading is written
+     from the span that was measured, never from the window that was asked for. Labelling six
+     minutes of work as "the last hour" is the understatement this whole mechanism exists to
+     avoid; refusing to render until an hour exists would instead blank the block for the first
+     hour after every deployment and after every gap in collection, which is a worse trade for a
+     page whose job is "which of these instances is doing the work". */
+  const wins = w.windows || [];
+  const win = wins.find(x => x.key === "hour") || wins.find(x => x.key === "now");
+  if (!win) return '';
+  const byKey = {};
+  (w.groups||[]).forEach(g => g.rows.forEach(r => { byKey[r.key] = r; }));
+  const chips = WL_CHIPS.map(([key, label, fmt]) => {
+    const cell = ((byKey[key]||{}).values||{})[win.key];
+    if (!cell || cell.total == null) return '';
+    return `<span class="dbchip" title="${esc(String(cell.total))}">${esc(label)}: ${esc(fmt(cell.total))}</span>`;
+  }).join("");
+  if (!chips) return '';
+  /* The top wait over the same hour, on the same line. "Busy" and "busy waiting on WRITELOG" are
+     different findings and the second one is the actionable half. */
+  const top = (w.waits||[]).map(x => [x, (x.values||{})[win.key]])
+                           .filter(([, v]) => v && v.seconds > 0)[0];
+  const wait = top ? `<span class="dbchip" style="color:var(--warn);border-color:var(--warn-line)">Top wait: ${
+      esc(top[0].item)} ${esc(top[1].seconds.toLocaleString("en-US"))} s${
+      top[1].sharePct==null?"":" ("+top[1].sharePct+"%)"}</span>` : '';
+  const mins = Math.round(win.seconds/60);
+  const span = mins >= 90 ? (mins/60).toFixed(1)+" hours" : mins+" minutes";
+  return `<div class="f" style="margin-top:12px"><div class="k" style="color:var(--muted);font-size:11px;text-transform:uppercase">
+      Workload — last ${esc(span)} <span style="text-transform:none;color:var(--faint)">(measured${
+        w.cpuCount?", "+w.cpuCount+" CPU":""}; counters differenced between two collections, not
+        totals since startup)</span></div>
+    <div class="dblist" style="margin-top:5px">${chips}${wait}</div></div>`;
+};
+
 /* ---------- Server detail ---------- */
 /* A host with no database has no PLE, no sessions, no backup and no HA. Showing those keys
    empty reads as "we failed to collect"; these are the fields that actually exist for it. */
@@ -703,6 +772,7 @@ document.getElementById("details").innerHTML = sorted.map(s=>`
       ${securityBlock(s)}
       ${(!(s.databases||[]).length && s.dbs && s.dbs.length)?`<div class="f" style="margin-top:12px"><div class="k" style="color:var(--muted);font-size:11px;text-transform:uppercase">Databases (${s.dbs.length})</div>
         <div class="dblist">${s.dbs.map(d=>`<span class="dbchip">${esc(d)}</span>`).join("")}</div></div>`:''}
+      ${workloadBlock(s)}
       ${osBlocks(s)}
       ${s.cfg.warns?`<ul class="warns">${
         (s.cfg.backupCompr===0?'<li class="cfg">backup compression default = 0 → enable to shrink backup size/time</li>':'')+

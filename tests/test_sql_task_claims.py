@@ -49,7 +49,8 @@ def sql_command(*, script_type="single", script_files=("001.sql",), sql_id=9, sq
 
 
 def sql_target(*, sql_id=9, target_no=1, database_name="APPDB", repeat_interval=60, timeout=60,
-               output_format="none", output_chat="", output_chat_id="", output_max_rows=0):
+               output_format="none", output_chat="", output_chat_id="", output_max_rows=0,
+               alert_on_error=None):
     return runner.SqlTarget(
         sql_id=sql_id,
         target_no=target_no,
@@ -64,6 +65,7 @@ def sql_target(*, sql_id=9, target_no=1, database_name="APPDB", repeat_interval=
         # Every target add_sql_task writes carries this rule; without it the notify fallback in
         # resolve_output_chat_id has nothing to fall back to.
         logging_on_run=runner.NotifyRule(enabled=True, telegram_chat="logging"),
+        alert_on_error=alert_on_error or runner.NotifyRule(),
         output_format=output_format,
         output_chat=output_chat,
         output_chat_id=output_chat_id,
@@ -236,6 +238,7 @@ def test_stale_running_sql_run_is_marked_error_before_retry():
         commands={9: sql_command()},
         targets=[sql_target(timeout=1)],
         latest_runs=latest,
+        telegram_groups={},
         logger=FakeLogger(),
     )
 
@@ -243,6 +246,65 @@ def test_stale_running_sql_run_is_marked_error_before_retry():
     assert store.updated[0]["status"] == "error"
     assert store.updated[0]["finished_at"]
     assert "stale running exceeded timeout_seconds=1" in store.updated[0]["error_text"]
+
+
+def _stale_running_row(*, sql_run_id=77, age_seconds=120):
+    started_at = (datetime.now(timezone.utc) - timedelta(seconds=age_seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return {
+        "run": {
+            "sql_run_id": sql_run_id,
+            "run_key": "9|1|server|sqlserver|svc|inst|APPDB",
+            "sql_id": 9,
+            "sql_code": "SQLSERVER-009",
+            "target_no": 1,
+            "status": "running",
+            "started_at": started_at,
+            "finished_at": None,
+            "created_at": started_at,
+        }
+    }
+
+
+def test_a_reaped_run_alerts_the_error_chat_like_any_other_failure():
+    """A run whose process was killed never reaches the exception handler in run_sql_target, so
+    for a long time this whole error class was written to the store and to nothing else. sql_id 28
+    sat in `error` for half an hour on 2026-09-03 with no message anywhere, while the SQL it had
+    started went on running on the server and blocked every following cycle."""
+    store = RecordingSqlRunStore()
+    target = sql_target(timeout=1, alert_on_error=runner.NotifyRule(enabled=True, telegram_chat="sql"))
+
+    runner.mark_stale_running_sql_runs(
+        store=store,
+        commands={9: sql_command()},
+        targets=[target],
+        latest_runs=_stale_running_row(),
+        telegram_groups={"sql": "chat-7"},
+        logger=FakeLogger(),
+    )
+
+    assert len(store.messages) == 1
+    assert store.messages[0]["tlgchat_id"] == "chat-7"
+    assert "stale running exceeded timeout_seconds=1" in store.messages[0]["message_text"]
+    # The lesson of 2026-09-03: the row is closed but the server may not be.
+    assert "may still be" in store.messages[0]["message_text"]
+
+
+def test_a_target_that_does_not_want_error_alerts_is_still_not_told():
+    """alert_on_error is the switch for this, exactly as it is for a task that fails normally -
+    reaping a run must not become a back door that ignores the target's own notify block."""
+    store = RecordingSqlRunStore()
+
+    runner.mark_stale_running_sql_runs(
+        store=store,
+        commands={9: sql_command()},
+        targets=[sql_target(timeout=1)],
+        latest_runs=_stale_running_row(),
+        telegram_groups={"sql": "chat-7"},
+        logger=FakeLogger(),
+    )
+
+    assert store.updated[0]["status"] == "error"
+    assert store.messages == []
 
 
 def test_array_script_failure_stops_later_script_and_records_failed_file(tmp_path, monkeypatch):

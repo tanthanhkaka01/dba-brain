@@ -26,6 +26,7 @@ wearing a different hat.
 from __future__ import annotations
 
 import importlib
+import io
 import json
 from pathlib import Path
 from typing import Any
@@ -911,3 +912,22 @@ def _the_operator_s_passphrase_is_not_in_scope(monkeypatch):
     tomorrow gets the isolation without anybody remembering to ask for it.
     """
     monkeypatch.delenv("DB_OPS_SECRET_KEY", raising=False)
+
+
+@pytest.fixture
+def stdin_holding(monkeypatch):
+    """Put text on ``sys.stdin`` the way a pipe does — bytes underneath, ``.buffer`` on top.
+
+    The CLIs read ``sys.stdin.buffer.read().decode("utf-8-sig")``, never ``sys.stdin.read()``, so
+    that a request does not travel through the machine's code page — the bug in
+    `test_common_cli_pipe_encoding`. A test that hands them an `io.StringIO` is therefore handing
+    them something a real stdin never is: text with no bytes behind it. Sixty tests failed with
+    `'_io.StringIO' object has no attribute 'buffer'` on the commit that pinned the decoding, and
+    every one of them was the stand-in being wrong, not the code.
+    """
+    def _hold(payload: str, *, encoding: str = "utf-8") -> None:
+        monkeypatch.setattr(
+            "sys.stdin", io.TextIOWrapper(io.BytesIO(payload.encode(encoding)), encoding=encoding)
+        )
+
+    return _hold

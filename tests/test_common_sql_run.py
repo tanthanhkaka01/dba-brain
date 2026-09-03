@@ -301,7 +301,7 @@ def test_run_sql_cli_prints_json_result(monkeypatch, capsys):
     assert "1 row(s)" in payload["message"]
 
 
-def test_run_sql_cli_reads_request_from_file_and_stdin(monkeypatch, capsys, tmp_path):
+def test_run_sql_cli_reads_request_from_file_and_stdin(monkeypatch, stdin_holding, capsys, tmp_path):
     seen = []
     monkeypatch.setattr(sql_run, "run_sql", lambda payload: seen.append(payload) or
                         {"ok": True, "rows": [], "columns": [], "row_count": 0})
@@ -309,7 +309,7 @@ def test_run_sql_cli_reads_request_from_file_and_stdin(monkeypatch, capsys, tmp_
     request.write_text('{"target": "ACME-x", "sql": "SELECT 1"}', encoding="utf-8")
 
     assert cli.main(["run-sql", f"@{request}"]) == 0
-    monkeypatch.setattr("sys.stdin", type("S", (), {"read": staticmethod(lambda: '{"target": "B", "sql": "SELECT 2"}')})())
+    stdin_holding('{"target": "B", "sql": "SELECT 2"}')
     assert cli.main(["run-sql", "-"]) == 0
     capsys.readouterr()
     # The CLI hands run_sql the already-parsed object rather than re-parsing the same text a

@@ -53,6 +53,7 @@ QUERY_STORE_CODE = "QUERY_STORE_COVERAGE"
 # Same app, and deliberately the same parser: the fleet page's per-database Query Store column
 # and this page's Query Store section must not decode the collector's message two ways.
 from db_ops.reports import inventory_health  # noqa: E402 - after QUERY_STORE_CODE, see above
+from db_ops.reports import workload as workload_block  # noqa: E402 - same reason
 from db_ops.lib.paths import DEFAULT_DATA_DIR
 
 TEMPLATE_HTML = Path(__file__).resolve().parent / "templates" / "server_report.html"
@@ -2547,6 +2548,7 @@ def build_payload(series: list[dict], omitted: list[dict], *, now: int | None = 
                   tablespace_rows: list[dict] | None = None,
                   volume_rows: list[dict] | None = None,
                   oracle_rows: list[dict] | None = None,
+                  workload_rows: list[dict] | None = None,
                   database_code_map: dict | None = None) -> dict:
     """Everything the page renders for one server.
 
@@ -2591,6 +2593,11 @@ def build_payload(series: list[dict], omitted: list[dict], *, now: int | None = 
         "oracleObjects": build_oracle_objects(oracle_rows or []),
         "oracleRedo": build_oracle_redo(oracle_rows or []),
         "oracleTopSql": build_oracle_top_sql(oracle_rows or []),
+        # How much work the instance did, from cumulative counters differenced across two
+        # collections. Built from the raw store rows, not from `series`: an interval needs
+        # two samples of the same counter, and the chart pipeline reduces each metric to
+        # one point per item per collection with the message — the baseline marker — gone.
+        "workload": workload_block.build_workload(workload_rows or []),
         "jobs": build_jobs(job_rows or []),
         "series": charts,
         "omitted": omitted,
@@ -2683,6 +2690,15 @@ def build_server_pages(*, sqlite_path: str | Path, models: list[dict], output_di
     oracle_rows: dict[str, list[dict]] = {}
     for row in store.fetch_health_metrics(codes=ORACLE_SECTION_CODES, days=int(days), as_of=as_of):
         oracle_rows.setdefault(str(row.get("server_id") or ""), []).append(row)
+    # The workload counters, and the only section that wants *every* sample rather than the
+    # newest: a rate is the difference between two of them. Capped at two days regardless of the
+    # report window — the widest reading the page shows is 24 hours, and a seven-day fetch of a
+    # 15-minute metric would load five days of rows nothing renders.
+    workload_rows: dict[str, list[dict]] = {}
+    for row in store.fetch_health_metrics(codes=workload_block.WORKLOAD_CODES,
+                                          days=min(int(days), workload_block.WORKLOAD_DAYS),
+                                          as_of=as_of):
+        workload_rows.setdefault(str(row.get("server_id") or ""), []).append(row)
     # The per-database section. Indexed by the same helper the fleet overlay uses, which reduces
     # each metric to its newest collection per server — a database table must be a snapshot, not
     # a week of samples stacked up (the mistake the fragmentation list made on 2026-08-13).
@@ -2722,6 +2738,9 @@ def build_server_pages(*, sqlite_path: str | Path, models: list[dict], output_di
                                     volume_rows.get(server_id, [])),
                                 oracle_rows=health_model.latest_snapshot(
                                     oracle_rows.get(server_id, [])),
+                                # Not latest_snapshot: this is the one section that needs the
+                                # history, because a rate is two samples subtracted.
+                                workload_rows=workload_rows.get(server_id, []),
                                 database_code_map=database_index.get(server_id, [None, {}])[1])
         file_name = series_file_name(server_id)
         # archive_only is a backfill: it produces the dated copy of a past day and must leave the

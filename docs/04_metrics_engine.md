@@ -336,9 +336,11 @@ Lock waits are deliberately **not** in the pressure list that raises WARNING. `L
 already alerts on blocking with the session, the chain and the SQL text. This metric's job for locks
 is to be the evidence, not a second siren.
 
-`PERFORMANCE_IO_LATENCY` has the same defect and has not had the same treatment. The technique
-transfers — two reads of `sys.dm_io_virtual_file_stats` in one execution — and it is the obvious
-next change.
+`PERFORMANCE_IO_LATENCY` has the same defect and still grades on the since-boot average. It was
+not given the same treatment, because the answer turned out to be the section below instead: an
+in-query sample gives one file's latency over five seconds, and the question actually being asked
+of I/O — *how much did this instance read and write in the last hour* — is a sum over every file
+that no single execution can produce cheaply. `PERFORMANCE_WORKLOAD_COUNTERS` carries that sum.
 
 ### Why the store-backed interval version was withdrawn
 
@@ -352,11 +354,55 @@ module, a config file, a store lookup and a `if metric.metric_code == ...` branc
 collected and it grades itself, in its SQL or its command. That is the contract, and one metric is
 not a reason to bend it.
 
-If interval grading returns, it returns as a capability **any** cumulative metric can declare in
-`metric_definitions.json` — with severity coming from the existing per-target
-`warning_threshold` / `critical_threshold` overrides, not a policy document of its own. The
-arithmetic and its refusals (a counter that went backwards is a restart, not negative work; a pair
-too far apart describes an average, not a moment) are in git history at 2.75.04.
+If interval **grading** returns, it returns as a capability **any** cumulative metric can declare
+in `metric_definitions.json` — with severity coming from the existing per-target
+`warning_threshold` / `critical_threshold` overrides, not a policy document of its own. That has
+not happened and is not what the section below is.
+
+### Interval *reporting*, which is a different thing
+
+Added 2026-09-03, and deliberately on the other side of the line the withdrawal drew. Three
+collectors record cumulative counters and grade **nothing**; the arithmetic lives in
+`db_ops/lib/interval_rates.py` and runs in the **report**, not in the collector. No policy module,
+no store lookup in the collect path, no per-metric branch, and no metric's severity depends on it.
+A collector that records a number and never judges it is the same shape as `PAGE_LIFE_EXPECTANCY`.
+
+| Metric | Source | Cadence | What it carries |
+| --- | --- | --- | --- |
+| `PERFORMANCE_WORKLOAD_COUNTERS` | `sys.dm_os_performance_counters`, `sys.dm_resource_governor_resource_pools`, `sys.dm_io_virtual_file_stats` | 900 s | 27 totals: CPU ms, batch requests, transactions, compilations, page lookups, physical page reads/writes, read-ahead, checkpoint and lazy-write pages, full scans, page splits, work files/tables, lock waits and lock wait ms, deadlocks, log flushes and log bytes, and the instance-wide sum of file reads/writes, bytes and stalls |
+| `PERFORMANCE_QUERY_STATS_TOTALS` | `sys.dm_exec_query_stats` | 1800 s | CPU, elapsed, logical reads/writes, physical reads, executions — plus `cached_plans` and `cache_baseline_minutes`, which are gauges and are marked as such |
+| `PERFORMANCE_WAIT_TOTALS` | `sys.dm_os_wait_stats` | 900 s | cumulative wait ms for a **fixed** watch list, plus `lock_waits` (every `LCK_M_*` together) and `all_waits` (every non-benign wait, the denominator for a share) |
+
+Four things about them are load-bearing:
+
+- **`counters_since` is carried in every message.** After a restart the totals begin at zero, so a
+  delta across one is the new absolute value — a burst of work that never happened. A busy instance
+  can pass its own previous totals within the hour, so nothing about the values themselves says the
+  baseline moved. A pair whose markers disagree is refused.
+- **Only `cntr_type = 272696576` is read** from `sys.dm_os_performance_counters`. That is the
+  cumulative family. `Log Flush Wait Time` and `Processes blocked` sit in the same DMV as
+  instantaneous gauges, and a differenced gauge is a number that looks like a rate and is not one.
+- **The wait item set is fixed, never a top-N.** Two collections that do not share an item cannot
+  be subtracted, so a top-N collector would have nothing to difference for exactly the wait that
+  just became interesting. Every watched type is emitted every run, zero included.
+- **CPU comes from the resource pools, not from the plan cache.** Summing
+  `sys.dm_exec_query_stats.total_worker_time` undercounts by an unknown amount — an evicted plan
+  takes its totals with it, and an uncached ad-hoc batch was never in the sum. Both are reported so
+  the page can divide them: query CPU far below pool CPU means the expensive work is not in the
+  cache, and the plan-cache rows are a fragment of the hour rather than its total.
+
+`PERFORMANCE_QUERY_STATS_TOTALS` is the expensive one and runs at half the others' cadence for a
+measured reason. Aggregating the plan cache scans it: on one measured instance — 86,400 cached plans, 70,109
+with statistics — it exceeded the 60-second timeout on three consecutive runs on 2026-09-03, while
+the same query returned in 0.4 s once warm. Raising the timeout is the wrong fix; holding a
+plan-cache scan open on a production instance for minutes is worse than a missing reading. An
+instance where it keeps timing out is telling you about its own plan cache (`optimize for ad hoc
+workloads`); disable it for that target through `metric_overrides` until that is fixed.
+
+All three are `report_policy.collect_only` (a counter that ticks is not an alert) **and**
+`chart_summary_only` (a since-boot total plots as a straight ramp, on every item). What renders
+them is the Workload section of `server-metrics.html` and the workload chips on
+`database-inventory.html` — see `docs/06_reports_app.md`.
 
 ### Row caps are per metric
 
