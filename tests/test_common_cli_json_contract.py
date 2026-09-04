@@ -45,6 +45,8 @@ ALL_COMMANDS = [
     "fetch-file", "send-file", "pack-files", "relay-file",
     "host-facts", "host-service", "host-restart",
     "shrink-log", "kill-spid", "start-job", "disable-job",
+    # The gate without an operation attached, for a caller whose work is not in `common`.
+    "authorize",
     "sqlserver-precheck", "sqlserver-apply-cu", "sqlserver-verify-build",
     # Uncovered until the drift guard below learned to read `argv[0] in {...}`: these three and the
     # two delete commands were dispatched in that form and checked by nothing.

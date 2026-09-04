@@ -476,13 +476,14 @@
       "reply_text": "",
       "reply_parse_mode": "",
       "reply_with_name": 0,
-      "command_type": 10,
+      "command_type": 50,
       "is_group": 1,
       "is_private": 1,
       "need_file": 0,
       "action_type": "cli_execute",
       "action_config": {
         "working_dir": "tools/db_ops",
+        "emergency_operation": "run-sql-task",
         "command_argv": [
           "{python}",
           "-m",
@@ -494,7 +495,9 @@
           "{sql_id}",
           "--force",
           "--output-chat-id",
-          "{chat_id}"
+          "{chat_id}",
+          "--confirm",
+          "{confirm}"
         ],
         "background": true,
         "detached": true,
@@ -519,7 +522,7 @@
           {
             "name": "task_params",
             "source": "arg",
-            "position": 2,
+            "position": 3,
             "required": false,
             "consume_rest": true,
             "prompt_text": "This task takes: {sql_task_parameters}. Send the value(s) in that order, separated by spaces - names are optional (1068, or session_id=1068). Send - to run with the task's own default values.",
@@ -527,6 +530,16 @@
               "condition": "sql_task_has_parameters",
               "parameter": "sql_id"
             }
+          },
+          {
+            "name": "confirm",
+            "source": "arg",
+            "position": 2,
+            "required": true,
+            "validator": "regex",
+            "pattern": "yes",
+            "validation_error": "A forced run must be confirmed. Type exactly: yes - or send /spbot_run_sql_task <sql_id> with nothing after it and the bot asks one question at a time.",
+            "prompt_text": "Read the task above. It runs NOW and it runs FORCED: its schedule, its repeat interval and its active flag are all ignored, and a task that writes writes for real. Type exactly: yes"
           }
         ],
         "conditional_args": [

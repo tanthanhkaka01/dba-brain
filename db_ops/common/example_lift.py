@@ -8,7 +8,7 @@ the catalogue describes a tenth of the collectors the package carries.
 
 It has been done by hand three times now: `telegram_support_commands.example.json` (5 records to
 21), `metric_definitions.example.json` (4 to 10), and this module exists because the fourth time
-was `metric_definitions` again, at 10 against 90. `CLAUDE.md`'s rule fires exactly here — the moment
+was `metric_definitions` again, at 10 against 90. The rule fires exactly here — the moment
 a task needs a throwaway script it belongs in a `common` command — and the reason is the one that
 keeps proving itself: the hand-written lifts each got something different wrong. One invented four
 variant filenames that did not exist and would have made the catalogue refuse to load; another

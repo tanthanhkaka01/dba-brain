@@ -526,7 +526,7 @@ def set_metric_severity_map(
     ``metric_item`` is given), applied *after* the metric has graded itself.
 
     Existed as a hand-edit of the JSON until 2026-08-11, when downgrading six standing conditions
-    at once needed it seven times and `CLAUDE.md`'s rule applied: a task that needs a throwaway
+    at once needed it seven times and this project's rule applied: a task that needs a throwaway
     script is a missing command. A hand-edit also skips the two checks below, both of which a
     typo silently defeats — an unknown ``metric_code`` and an unknown status are each accepted by
     the file and ignored by the collector.

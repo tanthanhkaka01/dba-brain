@@ -50,7 +50,7 @@ from db_ops.db.config_store import (
 )
 
 #: The catalog: which files are synced, who owns them, how a record is keyed. Lives in ``data/``
-#: with the config it describes, because it *is* config — see CLAUDE.md, "Config is data".
+#: with the config it describes, because it *is* config — the project's rule is "config is data".
 #:
 #: Re-exported rather than restated: ``db_ops.lib.config_bundle`` needs the same name to decide
 #: what crosses to another machine, and a filename with two definitions is a filename that has

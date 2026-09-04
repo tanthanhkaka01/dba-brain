@@ -2,7 +2,7 @@
 
 Written on 2026-08-19 because the same question had been answered three times by three throwaway
 socket loops, each of which took its port list and its interpretation away with it. The standing
-rule in ``CLAUDE.md`` names this exact case: *"probing what a host listens on"* belongs in
+rule names this exact case: *"probing what a host listens on"* belongs in
 ``common`` with a CLI command, because a scratch script answers once and the next person rewrites
 it and gets a different answer.
 

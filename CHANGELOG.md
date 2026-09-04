@@ -15,6 +15,40 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-04
+
+### Added
+
+- `db-ops common authorize`: the confirmation gate on its own, for a caller that performs the work
+  itself. How hard an operation is to confirm still comes from `emergency_operations.json`, and an
+  operation that file does not list costs two answers rather than none.
+- `run-sql-task` is a named operation at level 50: one typed `yes`, with a prompt that names the
+  task, how many targets it will touch and whether the task is inactive.
+
+### Changed
+
+- **A forced SQL task run is refused unless it is confirmed.** `run-sql-id --force` asks at a
+  terminal, accepts `--confirm yes` when a human answered elsewhere (how the chat command passes
+  the reply it collected), and **requires `--assume-yes` when nothing can be asked** — so a script
+  that forces a task from a scheduler must add that flag or it will now stop. The scheduled scan is
+  unaffected and `--dry-run` is never asked.
+- The shipped `/spbot_run_sql_task` moves to clearance 50 and takes a `confirm` argument, typed
+  between the id and the task's own values: `/spbot_run_sql_task <sql_id> yes [values]`. Sending the
+  id alone still asks one question at a time.
+
+### Fixed
+
+- The clearance check for `/spbot_run_sql_task` asserted that every command able to execute SQL
+  carried the same number, so tightening one of them turned the suite red on a correct change. It
+  now asserts the floor and the ordering, which tuning cannot break.
+- Every confirmed Telegram command was refused on a fresh install (v0.4.0-v0.6.0): `init` never
+  wrote `emergency_operations.json` and the package carried none, so each operation was priced at
+  the strictest level - two answers - while the commands collect one. The ladder now ships, `init`
+  writes it, and the gate falls back to the packaged copy when a tool root has none.
+- `export-public` deleted the target's `.git` when its identifier scan refused the tree, taking the
+  history and the remote of the repository it was exporting into. A refusal now empties the copy
+  and keeps the repository; a target that is not a repository is still removed outright.
+
 ## [0.6.0] - 2026-09-04
 
 ### Added

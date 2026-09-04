@@ -66,6 +66,7 @@ USAGE = (
     "  kill-spid       EMERGENCY: kill one session, after showing whose it is (see --help)\n"
     "  start-job       EMERGENCY: start one SQL Server Agent job by name (see --help)\n"
     "  disable-job     EMERGENCY: stop one job running on its schedule; mssql/oracle/pg (see --help)\n"
+    "  authorize       Confirm one named operation for a caller that performs it itself (see --help)\n"
     "  rotate-password  Change database login passwords on the server AND in the store (see --help)\n"
     "  check-secret     Try to authenticate with each secret and say why any cannot be (see --help)\n"
     "  check-identifiers  Which of this estate's real names appear in files that ship (see --help)\n"
@@ -469,6 +470,28 @@ ROTATE_PASSWORD_USAGE = (
     "Statuses: SUCCESS | READY (dry run) | SKIPPED (not attempted) | FAILED (attempted, no change\n"
     "kept). Exit 0 when nothing FAILED, 1 otherwise.\n"
 )
+
+AUTHORIZE_USAGE = (
+    'usage: python -m db_ops.common.cli authorize <json>|@<file>|-\n'
+    '                                   [--config ...]\n'
+    '\n'
+    'The confirmation gate on its own, for an operation this CLI does not perform. Every other\n'
+    'gate here confirms and then acts; a caller whose work lives elsewhere -- an app, which may\n'
+    'not import common -- asks for the authorization and performs the work itself.\n'
+    '\n'
+    '  authorize {"operation": "run-sql-task", "target_id": "24",\n'
+    '             "target_label": "sql_id 24 payroll engine",\n'
+    '             "effects": ["runs on 1 target: ACME-192-0-2-115"],\n'
+    '             "confirm": "yes", "reason": "asked over telegram",\n'
+    '             "authorized_by": {"channel": "telegram"}}\n'
+    '\n'
+    'How much it costs is per operation in data/emergency_operations.json, exactly as for the\n'
+    'commands above: an operation the file does not list costs the most, not the least. The answer\n'
+    'may be typed at the prompt, carried in the request ("confirm": "yes", how a chat command\n'
+    'passes the reply it collected), or waived by "assume_yes": true for genuinely unattended\n'
+    'automation. Exit 0 means authorized; the gate report is the JSON on stdout.\n'
+)
+
 
 EMERGENCY_USAGE = (
     "usage: python -m db_ops.common.cli <shrink-log|kill-spid|start-job|disable-job> <json>|@<file>|-\n"
@@ -1633,10 +1656,11 @@ def _gate_command(argv: list[str], usage: str, runner_name: str) -> int:
     except Exception:  # noqa: BLE001 - fall back to the package default data dir.
         data_dir = None
 
-    from db_ops.common import (host_ops, job_control, sqlserver_emergency,
-                               sqlserver_instance, sqlserver_patch)
+    from db_ops.common import (confirm as confirm_gate, host_ops, job_control,
+                               sqlserver_emergency, sqlserver_instance, sqlserver_patch)
 
     runners = {
+        "authorize": confirm_gate.authorize_request,
         "host-facts": host_ops.host_facts,
         "host-service": host_ops.service_control,
         "host-restart": host_ops.restart_host,
@@ -1926,6 +1950,8 @@ def main(argv: list[str] | None = None) -> int:
         return _gate_command(argv[1:], HOST_SERVICE_USAGE, "host-service")
     if argv[0] == "host-restart":
         return _gate_command(argv[1:], HOST_RESTART_USAGE, "host-restart")
+    if argv[0] == "authorize":
+        return _gate_command(argv[1:], AUTHORIZE_USAGE, "authorize")
     if argv[0] in {"shrink-log", "kill-spid", "start-job", "disable-job"}:
         return _gate_command(argv[1:], EMERGENCY_USAGE, argv[0])
     if argv[0] in {"sqlserver-precheck", "sqlserver-apply-cu", "sqlserver-verify-build"}:

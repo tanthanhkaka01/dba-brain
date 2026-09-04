@@ -78,6 +78,36 @@ python -m db_ops.sql_tasks.runner --config config.json --dry-run run-sql-id --sq
 `--dry-run` is a **top-level** flag: it goes before `run-sql-id`, not after. Placed after the
 subcommand it is an argparse usage error, not a silently ignored option.
 
+### A forced run costs one typed `yes`
+
+`--force` is *intent* — it says the caller means to skip the schedule. It is not *presence*, so
+since 2026-09-04 the forced path asks, through the same gate as `/spbot_kill_spid`
+(`db_ops.common.confirm`, operation `run-sql-task` at level 50 in
+[`data/emergency_operations.json`](../data/emergency_operations.example.json)):
+
+```text
+========================================================================
+  DANGEROUS OPERATION - this changes a live system
+  Operation : run-sql-task
+  Target    : sql_id 9 recalculate today
+  Effect    : runs on 2 target(s): ACME-192-0-2-115, ACME-192-0-2-116
+              the time window, the repeat interval and the active flag are skipped
+========================================================================
+  Type "yes" to proceed (anything else aborts):
+```
+
+Three ways to answer, and the gate records which one was used:
+
+| | |
+| --- | --- |
+| at a terminal | leave `--confirm` out; the prompt is asked and read from the terminal |
+| answered elsewhere | `--confirm yes` — how `/spbot_run_sql_task` passes the reply it collected |
+| genuinely unattended | `--assume-yes`, an explicit waiver, recorded as *no human was prompted* |
+
+A **rehearsal is never asked** (`--dry-run`), and neither is the scheduled scan: a schedule was
+authorized when the operator wrote it, and a daemon at 03:00 has nobody to ask. Nothing else
+proceeds without an answer — a run whose confirmation is missing exits 1 having executed nothing.
+
 ### From Telegram
 
 `/spbot_run_sql_task <sql_id>` runs the same thing on the worker — `sql_id` is the number
@@ -89,8 +119,14 @@ It always passes `--force`, which this CLI *requires* for a targeted run. That i
 be aware of: a forced run skips the time window, the repeat interval **and the active flag**, so
 a task `/spbot_list_sql_tasks` hides as inactive still runs when its id is named. Deliberate —
 an operator who disabled a schedule may still want one manual run — but it is why the command
-sits at clearance 10 with `/spbot_restore` and `/spbot_add_sql` rather than with the listings: a
-SQL task may be an UPDATE against production.
+ships at clearance 50, with `/spbot_kill_spid` rather than with the listings: a SQL task may be an
+UPDATE against production. The number is a floor, not a fixture, and nothing in the runner depends
+on the value — clearance answers *who may ask*. **How hard it is to ask is a separate question with
+a separate answer**: the bot collects one `yes` and passes it as `--confirm`, so the confirmation
+above is what an operator sees on a phone too. It is typed between the id and the task's own
+values — `/spbot_run_sql_task 24 yes 2026-09-01` — or answered one prompt at a time by sending
+`/spbot_run_sql_task 24` alone. `docs/07_telegram_app.md` says why that order is the only one that
+works.
 
 ## Parameters
 

@@ -778,6 +778,35 @@ recoverable: *a cumulative update cannot be uninstalled; rollback means restorin
 
 New dangerous operation? Call `require_confirmation` — do not write a second prompt.
 
+### `authorize` — the gate for work this CLI does not perform
+
+Every other gate belongs to the operation it guards: `kill-spid` confirms and then kills. A forced
+SQL task run is the first case where the *operation* lives in an app — `sql_tasks` runs it — and
+only the authorization belongs here. An app may not import `common` (ORD 13), and the alternative
+to a command of its own is a second prompt written app-side, which is the thing this module exists
+to prevent.
+
+```bash
+python -m db_ops.common.cli authorize @data/request.json
+```
+
+```json
+{"operation": "run-sql-task", "target_id": "24",
+ "target_label": "sql_id 24 payroll engine",
+ "effects": ["runs on 1 target: ACME-192-0-2-115", "the active flag is skipped"],
+ "confirm": "yes", "reason": "asked over telegram",
+ "authorized_by": {"channel": "telegram"}}
+```
+
+`operation` is the row in `emergency_operations.json` that prices it — an operation the file does
+not list costs **two** answers, not none. `effects` is what the caller knows and this layer does
+not: which targets, which task, whether it is inactive. Exit 0 means authorized, and the gate
+report is the JSON on stdout; the caller then performs the work itself.
+
+One detail the caller does not see: the prompt is written to the controlling terminal rather than
+to stderr, because `db_ops.lib.common_cli` captures both streams. A question written into a
+captured pipe is invisible until after the answer was due, which is indistinguishable from a hang.
+
 ---
 
 ## Operating on a host (`host_ops`)
@@ -1144,7 +1173,7 @@ python -m db_ops.common.cli probe-host '{"target": "ACME-192-0-2-236"}'
 ```
 
 Written because three throwaway socket loops had answered the same question three ways — the case
-`CLAUDE.md` names when it says a task needing a scratch script belongs in a `common` CLI command.
+The project's rule names it: a task needing a scratch script belongs in a `common` CLI command.
 The verdict is the point, not the port list: `manageable` / `interactive_only` / `service_only` /
 `unreachable`, and with a known OS the detail says whether a missing WinRM is even fixable. Each
 port reports `open` / `refused` / `timeout` separately, because on a live host a refusal means the
@@ -1457,7 +1486,7 @@ catalogue nothing had ever loaded.
 
 It had been done by hand three times, and each hand-lift got something different wrong: one
 invented those filenames, another carried a server id inside a Telegram prompt string that nobody
-would think to read. `CLAUDE.md`'s rule fires precisely here — the moment a task needs a throwaway
+would think to read. The rule fires precisely here — the moment a task needs a throwaway
 script it belongs in `common` with a CLI — and the reason is visible in the outcome: the fourth
 lift moved 90 records and checked 183 file references in one command, and refused twice before it
 was allowed to write.

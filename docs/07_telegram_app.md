@@ -374,9 +374,10 @@ Permission rules:
 - Admin commands require admin-level user permission.
 - Newly discovered groups/users default to no command permission.
 
-## Emergency Commands (clearance 50 and 100)
+## Commands that are confirmed (clearance 50 and 100)
 
-Five commands exist so an incident can be handled from a phone rather than from a workstation:
+Five of these exist so an incident can be handled from a phone rather than from a workstation;
+the sixth is not an incident command and is confirmed for its own reason, below:
 
 | Command | Operation | Clearance | Confirmation |
 | --- | --- | --- | --- |
@@ -384,11 +385,37 @@ Five commands exist so an incident can be handled from a phone rather than from 
 | `/spbot_kill_spid` | `kill-spid` | 50 | one `yes` |
 | `/spbot_start_job` | `start-job` | 50 | one `yes` |
 | `/spbot_disable_job` | `disable-job` | 50 | one `yes` |
+| `/spbot_run_sql_task` | `run-sql-task` | 50 | one `yes` |
 | `/spbot_restart_server` | `host-restart` | 100 | `yes`, then the **server id typed out** |
 
+`/spbot_run_sql_task` is not an incident command, and it is on this list anyway: a forced run
+skips the schedule *and the active flag*, so it writes to production outside every window that was
+agreed. It is the case that shows why the two questions are separate — it was raised to clearance
+50 on 2026-09-04 and still cost nothing to run, because clearance answers who may ask and nothing
+else.
+
+Where its `yes` sits is worth reading before adding a confirmation to any other command. The
+command already had a `consume_rest` parameter (`task_params`, the values the task itself
+declares), and a `consume_rest` value is `" ".join(args[position - 1:])` — everything from its slot
+to the end of the message. So a confirmation **behind** it is also *inside* it: the word `yes`
+would be appended to the parameters the task runs with. In front of it, both readings are
+unambiguous:
+
+```text
+/spbot_run_sql_task 24 yes 2026-09-01 2026-09-02     one line: <sql_id> yes <the task's own values>
+/spbot_run_sql_task 24                               or one question at a time: values, then yes
+```
+
+An answer that is not `yes` is refused before anything starts, so the old habit —
+`/spbot_run_sql_task 24 2026-09-01` — stops rather than running with a date where the confirmation
+belongs. This is the same collision that made an earlier attempt at a confirmation here get
+removed; the note on `sql_id` 24 in `sql_commands.json` records it.
+
 They are ordinary `cli_execute` commands: the parameter chaining above collects the arguments *and*
-the confirmation answers, one prompt at a time, then passes them to a `common` CLI command as a
-JSON object. Nothing about the safety model is specific to Telegram.
+the confirmation answers, one prompt at a time, then passes them to the CLI that performs the
+operation — as a JSON object for the five `common` commands, as `--confirm yes` for the SQL task
+runner. Nothing about the safety model is specific to Telegram: every one of them reads its answer
+through `db_ops.common.confirm`, so a shell caller pays exactly the same price.
 
 **The confirmation is enforced in the CLI, not here.** `data/telegram_support_commands.json`
 decides who may ask (`command_type`) and what the prompts say;

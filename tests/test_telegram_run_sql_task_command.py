@@ -60,13 +60,23 @@ def test_the_sql_id_parameter_rejects_anything_but_a_number(command):
         assert not matches(hostile), f"{hostile!r} must be rejected"
 
 
+#: The write/execute tier the 2026-07-31 audit put every command that can change data on. Read as a
+#: floor, never as the value: an install is free to place a forced production run higher.
+WRITE_TIER = 10
+
+
 def test_clearance_matches_what_the_command_can_do():
     """A task may be an UPDATE against production, run outside its window.
 
-    Asserted as a *relation*, not a number: the level was 3 until the 2026-07-31 audit moved
-    every write/execute command to 10, and pinning the literal made this test fail for a change
-    that strengthened exactly what it guards. What must stay true is the ordering — this command
-    sits with the other ways to execute SQL, and strictly above anything that only reads.
+    Asserted as a *floor and an ordering*, never as the value. The level was 3 until the
+    2026-07-31 audit moved every write/execute command to 10, and pinning that literal made this
+    test fail for a change that strengthened exactly what it guards. Requiring the three to be
+    *equal* had the same defect one step up: this estate raised `/spbot_run_sql_task` to 50 — the
+    tier of `/spbot_kill_spid` and `/spbot_shrink_log`, because a forced run ignores the window
+    and the active flag — and the suite failed for a tightening. Clearance is a local policy
+    decision (`test_telegram_commands_are_shippable` says the same about the shipped catalogue),
+    so what this test owns is the direction: never below the write tier, and never within reach of
+    a chat cleared only to read.
     """
     levels = {c.command_text: c.command_type for c in load_support_commands(COMMANDS_PATH)}
 
@@ -74,11 +84,94 @@ def test_clearance_matches_what_the_command_can_do():
     read_only = ("spbot_list_sql_tasks", "spbot_list_server_id", "spbot_report_metric_history",
                  "spbot_report_inventory", "spbot_status")
 
-    assert len({levels[name] for name in executes_sql}) == 1, (
-        f"commands that execute SQL must share one clearance: "
-        f"{ {name: levels[name] for name in executes_sql} }")
-    assert levels["spbot_run_sql_task"] > max(levels[name] for name in read_only), (
-        "executing a task must outrank every read-only command")
+    below = {name: levels[name] for name in executes_sql if levels[name] < WRITE_TIER}
+    assert not below, (
+        f"a command that executes SQL sits below the write tier ({WRITE_TIER}): {below}")
+
+    reading = max(levels[name] for name in read_only)
+    outranked = {name: levels[name] for name in executes_sql if levels[name] <= reading}
+    assert not outranked, (
+        f"executing SQL must outrank every read-only command (highest read-only clearance is "
+        f"{reading}): {outranked}")
+
+
+def test_the_forced_run_is_confirmed_and_the_answer_reaches_the_cli(command):
+    """Clearance says who may ask; it has never said how hard it is to ask.
+
+    Raising this command to 50 put it beside `/spbot_kill_spid` in *who* may run it while it still
+    cost nothing to run — a forced run of an UPDATE task needed no answer at all. The confirmation
+    is the CLI's (`db_ops.common.confirm`, keyed on `emergency_operation`), so the argv has to
+    carry the answer: a prompt the bot asks and then drops is theatre.
+    """
+    config = command.action_config
+    argv = config["command_argv"]
+
+    assert config["emergency_operation"] == "run-sql-task"
+    assert argv[argv.index("--confirm") + 1] == "{confirm}"
+
+    confirm = next(item for item in config["parameters"] if item["name"] == "confirm")
+    assert confirm["required"] is True and confirm["pattern"] == "yes"
+    assert "yes" in confirm["prompt_text"].lower()
+
+
+def test_the_confirmation_is_answered_before_the_task_s_own_parameters(command):
+    """Which side of `task_params` the answer sits on is the whole difficulty.
+
+    A confirmation was tried here once and removed (the sql_id 24 note in `sql_commands.json` says
+    why): a value typed after the id fills the task's OWN declared parameters, so
+    `/spbot_run_sql_task 24 yes` bound `yes` to that task's first parameter and the operator
+    confirmed nothing. Putting it *behind* `task_params` is worse, not better — a `consume_rest`
+    value is `" ".join(args[position - 1:])`, so anything stored after it is also *inside* it, and
+    the word `yes` would be appended to the parameters the task actually runs with.
+
+    In front of it, both readings are unambiguous: `confirm` owns exactly one slot, `task_params`
+    owns everything after it.
+    """
+    parameters = {item["name"]: item for item in command.action_config["parameters"]}
+    rest = next(item for item in parameters.values() if item.get("consume_rest"))
+
+    assert int(parameters["confirm"]["position"]) < int(rest["position"])
+
+
+@pytest.mark.parametrize("args, confirm, task_params", [
+    # Typed in one line: the answer is one word, and the rest is the task's own.
+    (["24", "yes", "2026-09-01", "2026-09-02"], "yes", "2026-09-01 2026-09-02"),
+    # Answered one prompt at a time: the parameters are asked first, so the empty slot in the
+    # middle is the confirmation, filled last.
+    (["24", "yes", "2026-09-01"], "yes", "2026-09-01"),
+    # A task that declares no parameters at all.
+    (["9", "yes"], "yes", ""),
+])
+def test_the_answer_never_lands_inside_the_task_s_parameters(args, confirm, task_params, tmp_path):
+    """The failure the removed confirmation actually caused, pinned against the real binder.
+
+    `cli_action_values` is what turns the collected answers into the argv, so this is the layer
+    where a confirmation that steals a parameter — or a parameter that reads as a confirmation —
+    shows up. Anything else is an opinion about a JSON file.
+    """
+    from db_ops.telegram.command_processor import cli_action_values
+
+    found = [c for c in load_support_commands(COMMANDS_PATH) if c.command_text == "spbot_run_sql_task"]
+    values = cli_action_values(command=found[0], args=list(args), config_path=str(tmp_path / "config.json"))
+
+    assert values["confirm"] == confirm
+    assert values.get("task_params", "") == task_params
+
+
+def test_a_run_that_skips_the_confirmation_is_refused_before_it_starts(tmp_path):
+    """`/spbot_run_sql_task 24 2026-09-01` is the old habit; it must not run the task.
+
+    The value in the confirmation's slot is a date, not `yes`, so the regex refuses it — and the
+    error names the way out rather than repeating the rule.
+    """
+    from db_ops.telegram.command_processor import TelegramCommandError, cli_action_values
+
+    found = [c for c in load_support_commands(COMMANDS_PATH) if c.command_text == "spbot_run_sql_task"]
+    with pytest.raises(TelegramCommandError) as refused:
+        cli_action_values(command=found[0], args=["24", "2026-09-01"],
+                          config_path=str(tmp_path / "config.json"))
+
+    assert "yes" in str(refused.value) and "sql_id" in str(refused.value)
 
 
 def test_the_operator_is_told_a_forced_run_ignores_the_active_flag(command):

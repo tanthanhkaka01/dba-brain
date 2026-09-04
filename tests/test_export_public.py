@@ -332,3 +332,35 @@ def test_the_guard_can_be_overridden_deliberately(tree: Path, tmp_path: Path) ->
     plan = export_public.export(tree, checkout / "public", allow_inside_git=True)
 
     assert plan.file_count > 0
+
+
+def test_a_refused_tree_is_emptied_but_the_repository_survives(tmp_path: Path) -> None:
+    """The scan doing its job must not destroy the repository it was protecting.
+
+    `discard` removes the copy a scan refused, and it did that with one `rmtree` of the whole
+    target — which, pointed at the public repository the export normally writes into, takes the
+    history, the remote and any unpushed work. The same hazard `_empty_but_keep_metadata` was
+    written to close, kept alive in the one path nobody exercises on a good day.
+
+    Reproduced on 2026-09-04 while cutting 0.7.0: a real database name reached a usage string, the
+    scan correctly refused, and the delete walked into `.git` — surviving only because Windows will
+    not unlink a read-only object file.
+    """
+    checkout = _repo(tmp_path / "checkout", remote="https://example.com/someone/repo.git")
+    (checkout / "leaked.py").write_text("x = 1", encoding="utf-8")
+
+    export_public.discard(checkout)
+
+    assert (checkout / ".git").is_dir(), "the repository must outlive a refused export"
+    assert not (checkout / "leaked.py").exists(), "the refused copy must not be left on disk"
+
+
+def test_a_refused_tree_that_is_not_a_repository_is_removed_outright(tmp_path: Path) -> None:
+    """Nothing to keep, so keep nothing — a leaking tree left on disk is one `cp` from worse."""
+    target = tmp_path / "out"
+    target.mkdir()
+    (target / "leaked.py").write_text("x = 1", encoding="utf-8")
+
+    export_public.discard(target)
+
+    assert not target.exists()
