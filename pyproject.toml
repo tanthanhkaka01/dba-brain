@@ -23,7 +23,7 @@ license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Trieu Tan Thanh" }]
 keywords = ["dba", "database", "sqlserver", "oracle", "postgresql", "mysql", "monitoring", "operations"]
-version = "0.6.0"
+version = "0.7.0"
 
 # Measured 2026-08-21, not guessed (D-05):
 #
@@ -156,7 +156,8 @@ namespaces = false
 "db_ops.control" = ["catalogue/*.json"]
 "db_ops.sla" = ["catalogue/*.json"]
 "db_ops.common" = ["backup_scripts/**/*.sh", "backup_scripts/**/*.ps1",
-                   "restore_scripts/**/*.sh", "restore_scripts/**/*.ps1"]
+                   "restore_scripts/**/*.sh", "restore_scripts/**/*.ps1",
+                   "catalogue/*.json"]
 # Back with the packages in `v0.2.0`. The removal note is worth keeping as the reason this list is
 # checked rather than trusted: **package-data for a package that is not in `packages.find` is
 # silently ignored**, so an entry here proves nothing on its own — a stale one reads as "this

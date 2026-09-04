@@ -12,7 +12,7 @@ answer was in the first one all along: **Dynamics AX writes the caller into
     <ax_user_id> <ax_session_id> <client_type> - <mode>      e.g. "ACMECEN01.PU 4654 CLIENT - read-only 0"
 
 so `ACMECEN01.PU` -> `USERINFO` -> "ORDER PROCESSING PU&NON". This module makes that one call.
-``CLAUDE.md``'s rule applies literally here: the hand-traced version took its parsing, its joins and
+The rule applies literally here: the hand-traced version took its parsing, its joins and
 its dead ends with it, and the next person would have rediscovered them.
 
 **What it cannot tell you, and why.** The end-user workstation is not recoverable from the database

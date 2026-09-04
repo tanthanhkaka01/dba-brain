@@ -42,11 +42,13 @@ from db_ops.lib.paths import TOOL_ROOT  # noqa: F401 - one definition, see that 
 __all__ = [
     "CONFIRM_WORD",
     "authorize_operation",
+    "authorize_request",
     "DEFAULT_OPERATIONS_PATH",
     "banner",
     "is_interactive",
     "load_operation",
     "open_terminal",
+    "open_terminal_write",
     "read_answer",
     "require_confirmation",
 ]
@@ -58,6 +60,14 @@ _RULE = "=" * 72
 
 DEFAULT_OPERATIONS_PATH = TOOL_ROOT / "data" / "emergency_operations.json"
 
+#: The ladder this package ships, used when the tool root has no file of its own — the same
+#: fallback `data_files.json` has. Without it an install that has not run `db-ops init` yet prices
+#: every operation at the strictest level while every command collects one answer, so each one is
+#: refused for a reason that reads like a defect in the command. The strictest default still
+#: applies to an operation neither file lists: this changes where the pricing is read from, never
+#: what an unpriced operation costs.
+PACKAGED_OPERATIONS_PATH = Path(__file__).parent / "catalogue" / "emergency_operations.json"
+
 
 def load_operation(
     operation: str, *, path: str | Path = DEFAULT_OPERATIONS_PATH
@@ -68,10 +78,22 @@ def load_operation(
     confirmations and a typed target. A command added to the CLI but forgotten in the config must
     become harder to run, never easier — the failure mode of the opposite default is a destructive
     command that quietly needs no confirmation at all.
+
+    Read from the tool root first and from :data:`PACKAGED_OPERATIONS_PATH` second, so an install
+    that has not been given its own ladder is priced by the product's rather than by the strictest
+    default. That distinction is not cosmetic: before it, a fresh install demanded two answers for
+    `kill-spid` while `/spbot_kill_spid` collected one, and every confirmed command was refused.
     """
     strictest = {"level": 100, "confirmations": 2, "challenge": "target_id", "effects": []}
+    # Absent and unreadable are not the same fault. No file means this install was never given a
+    # ladder of its own, and the product's is the right answer. A file that will not parse means
+    # there IS one and it is broken — falling back would price the operation from a table its
+    # operator is not looking at, so that stays strictest.
+    source = Path(path)
+    if not source.exists():
+        source = PACKAGED_OPERATIONS_PATH
     try:
-        data = json.loads(Path(path).read_bytes().decode("utf-8-sig"))
+        data = json.loads(source.read_bytes().decode("utf-8-sig"))
     except (OSError, ValueError):
         return strictest
     entry = (data.get("operations") or {}).get(operation)
@@ -102,6 +124,23 @@ def open_terminal() -> TextIO | None:
     for device in ("/dev/tty", "CON"):
         try:
             return open(device, "r", encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+    return None
+
+
+def open_terminal_write() -> TextIO | None:
+    """The controlling terminal, opened for **writing** — or ``None`` when there is none.
+
+    The mirror of :func:`open_terminal`, and it exists for the caller that reaches a gate through
+    ``db_ops.lib.common_cli``: that transport captures the subprocess's stdout *and* stderr, so a
+    question printed to stderr goes into a buffer nobody reads until after the answer was due —
+    which is indistinguishable from a hang. The terminal is not the pipe, so the question still
+    has somewhere to go.
+    """
+    for device in ("/dev/tty", "CON"):
+        try:
+            return open(device, "w", encoding="utf-8", errors="replace")
         except OSError:
             continue
     return None
@@ -318,6 +357,7 @@ def authorize_operation(
     target_id: str,
     target_label: str,
     extra_effects: Sequence[str] = (),
+    stream: TextIO | None = None,
 ) -> bool:
     """One gate for a named operation, with the cost read from ``emergency_operations.json``.
 
@@ -338,4 +378,48 @@ def authorize_operation(
         effects=[*rules["effects"], *extra_effects],
         confirmations=int(rules["confirmations"]),
         challenge=target_id,
+        stream=stream,
     )
+
+
+def authorize_request(
+    request: dict[str, Any], *, data_dir: str | Path | None = None,
+    echo: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
+    """``common.cli authorize`` — the gate on its own, for work ``common`` does not perform.
+
+    Every other gate here belongs to the operation it guards: ``kill-spid`` confirms and then
+    kills. A forced SQL task run is the first case where the *operation* lives in an app —
+    ``sql_tasks`` runs it — and only the authorization belongs here. An app may not import
+    ``common`` (ORD 13, ``tests/test_app_common_imports.py``), and the alternative to a face of its
+    own is a second yes/no prompt written app-side, which is exactly the thing this module exists
+    to prevent: a safety control spelled differently per command is one an operator cannot learn
+    once.
+
+    The caller reaches this through ``db_ops.lib.common_cli``, which captures both streams, so the
+    prompt goes to the controlling terminal (:func:`open_terminal_write`) rather than to stderr.
+    ``data_dir`` is accepted for the CLI family's shared signature and deliberately unused: how
+    hard an operation is to confirm is read from the installation's own
+    ``data/emergency_operations.json``, the same file every other gate reads.
+    """
+    operation = str(request.get("operation") or "").strip()
+    if not operation:
+        raise ValueError(
+            'authorize needs "operation" — the name of the row in data/emergency_operations.json. '
+            "An operation the file does not list is confirmed at the strictest level, not waved "
+            "through, so a typo costs two answers rather than none.")
+    target_id = str(request.get("target_id") or "").strip()
+    label = str(request.get("target_label") or "").strip() or target_id or operation
+    effects = [str(item) for item in (request.get("effects") or ()) if str(item).strip()]
+
+    report = GateReport(operation, target=label, echo=echo)
+    terminal = open_terminal_write()
+    try:
+        authorize_operation(
+            report, request, operation=operation, target_id=target_id, target_label=label,
+            extra_effects=effects, stream=terminal,
+        )
+    finally:
+        if terminal is not None:
+            terminal.close()
+    return report.to_dict()

@@ -457,6 +457,14 @@ PACKAGED_DEFAULTS: dict[str, str] = {
     # none, so this entry is about giving the operator a file to *edit* rather than about making
     # the tool work. It ships because a manifest nobody can see is one nobody maintains.
     "data/data_files.json": "control/catalogue/data_files.json",
+    # What each dangerous operation costs to authorize. Without it every confirmed command is
+    # priced at the STRICTEST level - two answers, the second the target's id typed out - while
+    # every one of them collects exactly one `yes`, so `/spbot_kill_spid`, `/spbot_shrink_log`,
+    # `/spbot_start_job`, `/spbot_disable_job` and `/spbot_run_sql_task` were all refused on a
+    # fresh install and worked on this estate, which has the file. Found on 2026-09-04 by the
+    # public tree's suite: the confirmation tests pass where the file exists and fail where it
+    # does not, which is the difference between the two trees.
+    "data/emergency_operations.json": "common/catalogue/emergency_operations.json",
 }
 
 PACKAGED_CATALOGUE = Path(__file__).parent / "metrics" / "catalogue" / "metric_definitions.json"
@@ -508,7 +516,7 @@ def _files(app_name: str) -> list[tuple[str, dict]]:
             (name, content)
             for name in ("data/reports_config.json", "data/telegram_support_commands.json",
                          "data/app_commands.json", "data/config_catalog.json",
-                         "data/data_files.json",
+                         "data/data_files.json", "data/emergency_operations.json",
                          "data/webhost_config.json", "data/sla_policies.json",
                          "data/ops_status_request.json")
             if (content := packaged_default(name)) is not None

@@ -1,18 +1,11 @@
 {
   "schema_version": 1,
-  "notes": [
-    "Sample emergency_operations.json - how hard each dangerous operation is to authorise. Copy to emergency_operations.json and edit.",
-    "This is deliberately NOT the chat clearance file. telegram_support_commands.json says WHO may ask for an operation; this says HOW HARD it is to confirm once asked. The two carry the same number for the same operation and a test pins that they agree, but they answer different questions - and the shared operations layer reads no chat settings at all, which is what lets the same confirmation apply to a shell caller, a scheduled run and a chat message.",
-    "'confirmations' is how many separate answers the caller must give. 'challenge': 'target_id' makes the second answer the target's own identifier, typed out. That cannot be given from muscle memory - it has to be read off the prompt - and a payload written for one host is then rejected by another.",
-    "'effects' is written for the person at the prompt at 3am. It is the sentence they read before typing yes, so it says what actually happens, not what the command is called.",
-    "An operation not listed here has no entry and therefore no confirmation. Add the entry in the same change that adds the operation."
-  ],
-
+  "notes": "How hard each dangerous operation is to authorize. Read by the shared confirmation gate; it is deliberately NOT the chat clearance file. telegram_support_commands.json says WHO may ask for an operation, this says HOW HARD it is to confirm once asked, and the shared layer reads no chat settings at all - which is what lets the same confirmation apply to a shell caller, a scheduled run and a chat message. An operation missing from this file is confirmed at the STRICTEST level, not the weakest: two answers, the second one the target's own id typed out.",
   "levels": {
     "100": {
       "confirmations": 2,
       "challenge": "target_id",
-      "note": "Takes a machine or a service down. Two answers: 'yes', then the target's own id typed out."
+      "note": "Takes a machine or a service down. Two answers: 'yes', then the target's own id typed out. The second answer cannot be given from muscle memory - it has to be read off the prompt - and a payload written for one host is rejected by another."
     },
     "50": {
       "confirmations": 1,
@@ -23,14 +16,13 @@
       "note": "Read-only or self-contained. No confirmation."
     }
   },
-
   "operations": {
     "host-restart": {
       "level": 100,
       "effects": [
         "every service on the host stops",
         "sessions are lost",
-        "a clustered instance may fail over"
+        "an FCI may fail over"
       ]
     },
     "host-service (stop)": {
@@ -43,7 +35,7 @@
       "level": 100,
       "effects": [
         "the service stops and starts; sessions are lost",
-        "a clustered instance may fail over"
+        "an FCI may fail over"
       ]
     },
     "host-service (start)": {
@@ -56,14 +48,14 @@
       "level": 100,
       "effects": [
         "the instance is stopped and patched",
-        "a cumulative update cannot be uninstalled"
+        "a CU cannot be uninstalled"
       ]
     },
     "shrink-log": {
       "level": 50,
       "effects": [
-        "the transaction log file is rewritten",
-        "log allocation structures are re-created",
+        "DBCC SHRINKFILE rewrites the log file",
+        "log VLFs are re-created",
         "concurrent writers may stall while it runs"
       ]
     },

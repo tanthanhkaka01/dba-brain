@@ -304,6 +304,20 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Run without checking active flags, time windows, or intervals.",
     )
     run_sql_id.add_argument(
+        "--confirm",
+        default="",
+        metavar="yes",
+        help='The answer to the forced-run confirmation, when a human answered it somewhere '
+             'other than this terminal. `/spbot_run_sql_task` asks the question over Telegram '
+             'and passes the reply here. At a terminal, leave it out and the prompt is asked.',
+    )
+    run_sql_id.add_argument(
+        "--assume-yes",
+        action="store_true",
+        help="Unattended automation: proceed without asking anybody. Recorded as such, so a run "
+             "nobody watched never reads afterwards like a run somebody approved.",
+    )
+    run_sql_id.add_argument(
         "--output-chat-id",
         default=None,
         help="Deliver this run's result (the output block) to this Telegram chat instead of the "
@@ -423,6 +437,92 @@ def collect_sql_tasks(
     }
 
 
+#: This forced run's name in `data/emergency_operations.json`. A forced run is not an emergency,
+#: but "how hard is this to authorize" has exactly one file in this project and one ladder in it.
+FORCED_RUN_OPERATION = "run-sql-task"
+
+
+def authorize_forced_run(
+    *,
+    sql_id: int,
+    data_dir: Path,
+    answer: str = "",
+    assume_yes: bool = False,
+    channel: str = "",
+    echo: Any = None,
+) -> bool:
+    """One typed ``yes`` before a forced run — asked wherever the run was started from.
+
+    ``--force`` is *intent*: it says the caller means to skip the time window, the repeat interval
+    and the active flag. What it never said is *presence* — that somebody is looking at this task
+    right now. Until 2026-09-04 the only guard was the Telegram clearance, and clearance answers
+    who may ask, never how hard it is to ask: raising `/spbot_run_sql_task` to `command_type` 50
+    put it beside `/spbot_kill_spid` in who may run it while it still cost nothing to run, which
+    is the mismatch this closes. The gate is on the forced path only — a scheduled scan authorized
+    itself when the operator wrote the schedule.
+
+    The answer is read exactly the way `kill-spid` reads it, because a safety control that spells
+    itself differently per command is one an operator cannot learn once: from the request when a
+    human answered elsewhere (Telegram asks the prompt and passes ``--confirm yes``), from the
+    terminal when there is one, refused when neither, and waived only by an explicit
+    ``--assume-yes``.
+
+    The banner names the task and the targets it will touch, because "run task 24?" tells an
+    operator nothing they can check.
+    """
+    label = f"sql_id {sql_id}"
+    effects: list[str] = ["the time window, the repeat interval and the active flag are skipped"]
+    try:
+        listing = collect_sql_tasks(data_dir, sql_id=int(sql_id), include_inactive=True)
+        tasks = list(listing.get("sql_tasks") or [])
+    except (OSError, ValueError, RuntimeError):
+        # A config the run is about to fail on anyway. Still ask — a gate that opens itself when
+        # it cannot read the target is a gate that opens on the day the file is wrong.
+        tasks = []
+    if tasks:
+        task = tasks[0]
+        name = str(task.get("sql_name") or task.get("sql_code") or "").strip()
+        label = f"sql_id {sql_id} {name}".strip()
+        targets = list(task.get("targets") or [])
+        where = ", ".join(str(item.get("server_id") or "?") for item in targets)
+        effects.insert(0, f"runs on {len(targets)} target(s): {where or 'none configured'}")
+        if not task.get("active", True):
+            effects.append("this task is INACTIVE — nothing but a forced run reaches it")
+
+    request: dict[str, Any] = {
+        "operation": FORCED_RUN_OPERATION,
+        "target_id": str(sql_id),
+        "target_label": label,
+        "effects": effects,
+        # `--force` is the declared intent, so the flag itself sets it. The word `yes` is the
+        # separate thing: the answer. Intent alone still asks, at a terminal and over Telegram.
+        "confirm": str(answer).strip() or True,
+        "reason": "forced run of a configured SQL task",
+    }
+    if assume_yes:
+        request["assume_yes"] = True
+    if channel:
+        request["authorized_by"] = {"channel": channel}
+
+    # Asked over the CLI, not imported: `common` is the API layer and an app calls it (ORD 13,
+    # tests/test_app_common_imports.py). No deadline — there may be a human reading the prompt.
+    try:
+        authorized, report, error = common_cli.run_allowing_failure("authorize", request)
+    except common_cli.CommonCliError as exc:
+        # The gate could not be asked at all. That is a refusal: a confirmation that fails open
+        # is not a confirmation.
+        if echo is not None:
+            echo(f"[FAIL] confirm: {exc}")
+        return False
+    if not authorized and echo is not None:
+        for gate in report.get("gates") or ():
+            if str(gate.get("status")) != "OK":
+                echo(f"[{gate.get('status')}] {gate.get('name')}: {gate.get('detail')}")
+        if not (report.get("gates") or ()) and error:
+            echo(f"[FAIL] confirm: {error}")
+    return bool(authorized)
+
+
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     # `list-tasks` reads configuration and nothing else: no runtime store, no secret key, no
@@ -453,6 +553,19 @@ def main(argv: list[str]) -> int:
         if args.command == "run-sql-id":
             if not args.force:
                 raise RuntimeError("run-sql-id requires --force.")
+            # A rehearsal is not a run: asking to confirm something that will not happen is how
+            # people learn to answer without reading (db_ops.common.confirm says the same).
+            if not args.dry_run and not authorize_forced_run(
+                sql_id=int(args.sql_id),
+                data_dir=data_dir,
+                answer=_opt_str(args.confirm),
+                assume_yes=bool(args.assume_yes),
+                channel="telegram" if _opt_str(args.output_chat_id) else "",
+                echo=lambda line: print(line, file=sys.stderr, flush=True),
+            ):
+                log_event(logger, level="logging", message=f"sql_tasks.runner.refused|scope=sql_tasks|mode=force|sql_id={args.sql_id}|reason=not_confirmed")
+                print(f"Forced run of sql_id {args.sql_id} was not authorized. Nothing ran.", file=sys.stderr)
+                return 1
             log_event(logger, level="logging", message=f"sql_tasks.runner.start|scope=sql_tasks|mode=force|sql_id={args.sql_id}|data_dir={data_dir}")
             result = run_sql_id_tasks(
                 parameter_values=parse_parameter_arguments(args.param, args.params),

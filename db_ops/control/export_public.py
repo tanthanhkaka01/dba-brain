@@ -500,7 +500,7 @@ def _empty_but_keep_metadata(target: Path) -> None:
 
 
 def discard(target: Path) -> None:
-    """Remove a tree that failed its scan.
+    """Remove a tree that failed its scan — **without destroying the repository it may be**.
 
     Writing a leaking tree and then printing "do not publish" leaves the leak on disk, one `cp`
     away from somewhere worse — the same shape as a deploy bundle whose survivors get shipped. A
@@ -508,9 +508,24 @@ def discard(target: Path) -> None:
 
     Found the moment `data/*.md` was added to the export: it brought in the operator's BotFather
     command list, 28 real identifiers, and the command exited 1 with all 594 files still there.
+
+    It kept the `.git` hazard that :func:`_empty_but_keep_metadata` was written to close, in the
+    one path nobody exercises on a good day: an `rmtree` of the whole target takes the history, the
+    remote and any unpushed work of the public repository this normally exports into. Reproduced on
+    2026-09-04 while cutting 0.7.0 — the refusal was correct (a real database name had reached a
+    usage string) and the delete then walked into `.git`, surviving only because Windows refuses to
+    unlink a read-only object file. On a filesystem that permits it, a scan doing its job destroys
+    the repository it was protecting.
+
+    So a refusal empties the copy and leaves the metadata, exactly as `--force` does; a target that
+    is not a repository is still removed outright, because there is nothing there to keep.
     """
-    if target.exists():
-        shutil.rmtree(target)
+    if not target.exists():
+        return
+    if (target / ".git").exists():
+        _empty_but_keep_metadata(target)
+        return
+    shutil.rmtree(target)
 
 
 def scan_exported_tree(target: Path) -> dict:

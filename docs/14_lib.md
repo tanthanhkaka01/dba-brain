@@ -598,7 +598,7 @@ request came in through — otherwise each of them would grow two code paths.
 ## Where this layer does not meet its own bar yet
 
 Recorded here rather than left to be rediscovered. Neither is a rule violation — the guard passes —
-but both are gaps against the house style in `CLAUDE.md`.
+but both are gaps against the house style.
 
 * **Four modules have no module docstring:** `event_policy.py`, `policy_engine.py`,
   `target_flags.py`, `time_window.py`. Two of them (`policy_engine` at 376 lines, `time_window` at
