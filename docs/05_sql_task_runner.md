@@ -263,6 +263,15 @@ Every scan begins with `mark_stale_running_sql_runs`. A run row still `running` 
 free and the task can be scheduled again — `due_sql_tasks` refuses to start a target whose latest
 run is `running`, so without this one dead process would stop the task for good.
 
+It reads **every** `running` row (`store.fetch_running_sql_runs`), not the newest one per
+run_key. Until 2026-09-04 it read `fetch_latest_done_or_running_sql_runs_by_run_key`, which is the
+*schedule's* view of a task rather than the list of runs that never ended, and the difference is
+not academic: a worker restart killed sql_id 28 twice that day, each time while the killed row was
+still inside its 950 s timeout, and each time the next cycle started a fresh run. From that moment
+the killed row was never latest again, so it never came back through here — no error row, no
+alert, and two runs that had died sat in `running` for the rest of the day. What the operator saw
+was runs that had *stopped failing*, which is the worse of the two.
+
 Two things this **cannot** do, and both have bitten:
 
 - **It does not stop the SQL.** The runner executes a task inline in the scan process, so when the
@@ -278,6 +287,13 @@ It reports what it closes: a target with `alert_on_error.enabled` gets a Telegra
 run and warning that the SQL may still be executing. Before 2026-09-03 it did not, and sql_id 28 sat
 in `error` for half an hour with no message anywhere while its orphaned session blocked every
 following cycle.
+
+The message carries **two** times, because a reap is reported on the next scan and can be hours
+after the fact: the run's own `started at ...`, and a `time:` line for the moment the message was
+written. Both are rendered by `lib.text_format.format_message_time`, in UTC unless
+`DB_OPS_MESSAGE_UTC_OFFSET_HOURS` says otherwise (`7` for UTC+07:00, `5.5` for UTC+05:30), and both
+always name their offset — a bare local time cannot be compared with `sql_runs.started_at`. The
+same `time:` line is on every SQL task message, not only the error ones.
 
 ## Config Priority
 

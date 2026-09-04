@@ -721,6 +721,9 @@ def test_a_due_task_actually_reaches_the_executor_on_a_scheduled_scan(tmp_path, 
         def fetch_latest_sql_runs_by_run_key(self):
             return {}
 
+        def fetch_running_sql_runs(self):
+            return []
+
     executed = []
     monkeypatch.setattr(runner, "mark_stale_running_sql_runs", lambda **kwargs: None)
     monkeypatch.setattr(runner.data_sources, "load_secret_text", lambda _dir: {})

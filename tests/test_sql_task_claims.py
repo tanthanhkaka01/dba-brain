@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from db_ops.lib.text_format import format_message_time
 from db_ops.lib.time_window import MANUAL_ONLY, TimeWindow
 from db_ops.db import DbOpsStore
 from db_ops.sql_tasks import runner
@@ -216,42 +217,11 @@ def test_heartbeat_prevents_lock_steal(tmp_path):
     assert stolen is None
 
 
-def test_stale_running_sql_run_is_marked_error_before_retry():
-    store = RecordingSqlRunStore()
-    started_at = (datetime.now(timezone.utc) - timedelta(seconds=120)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    latest = {
-        "run": {
-            "sql_run_id": 77,
-            "run_key": "9|1|server|sqlserver|svc|inst|APPDB",
-            "sql_id": 9,
-            "sql_code": "SQLSERVER-009",
-            "target_no": 1,
-            "status": "running",
-            "started_at": started_at,
-            "finished_at": None,
-            "created_at": started_at,
-        }
-    }
-
-    runner.mark_stale_running_sql_runs(
-        store=store,
-        commands={9: sql_command()},
-        targets=[sql_target(timeout=1)],
-        latest_runs=latest,
-        telegram_groups={},
-        logger=FakeLogger(),
-    )
-
-    assert store.updated[0]["sql_run_id"] == 77
-    assert store.updated[0]["status"] == "error"
-    assert store.updated[0]["finished_at"]
-    assert "stale running exceeded timeout_seconds=1" in store.updated[0]["error_text"]
-
-
 def _stale_running_row(*, sql_run_id=77, age_seconds=120):
+    """One abandoned run, as the reaper reads them: a list of rows, not a map keyed by run_key."""
     started_at = (datetime.now(timezone.utc) - timedelta(seconds=age_seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    return {
-        "run": {
+    return [
+        {
             "sql_run_id": sql_run_id,
             "run_key": "9|1|server|sqlserver|svc|inst|APPDB",
             "sql_id": 9,
@@ -262,7 +232,46 @@ def _stale_running_row(*, sql_run_id=77, age_seconds=120):
             "finished_at": None,
             "created_at": started_at,
         }
-    }
+    ]
+
+
+def test_stale_running_sql_run_is_marked_error_before_retry():
+    store = RecordingSqlRunStore()
+
+    runner.mark_stale_running_sql_runs(
+        store=store,
+        commands={9: sql_command()},
+        targets=[sql_target(timeout=1)],
+        running_runs=_stale_running_row(),
+        telegram_groups={},
+        logger=FakeLogger(),
+    )
+
+    assert store.updated[0]["sql_run_id"] == 77
+    assert store.updated[0]["status"] == "error"
+    assert store.updated[0]["finished_at"]
+    assert "stale running exceeded timeout_seconds=1" in store.updated[0]["error_text"]
+
+
+def test_a_run_that_a_later_run_replaced_is_still_reaped(tmp_path):
+    """The 2026-09-04 silence: two runs of sql_id 28 were killed by a worker restart, and each
+    time the next cycle started a fresh run while the killed row was still inside its timeout.
+    From that moment the killed row was no longer the latest of its run_key, and the reaper -
+    which read `fetch_latest_done_or_running_sql_runs_by_run_key` - could not see it again. It
+    stayed `running` all day: no error row, no alert, and nothing in the error chat between
+    07:00 and 20:00 local while two runs had in fact died."""
+    store = DbOpsStore(tmp_path / "db_ops.sqlite")
+    store.initialize()
+    run_key = "9|1|server|sqlserver|svc|inst|APPDB"
+    abandoned = insert_running_sql(store, started_at="2026-01-01T00:00:00Z")
+    # The run that took its place and finished normally - which is what hid the row above.
+    replacement = insert_running_sql(store, started_at="2026-01-01T00:05:00Z")
+    store.update_sql_run(sql_run_id=replacement, status="done", level="logging",
+                         message="finished", finished_at="2026-01-01T00:06:00Z")
+
+    latest = store.fetch_latest_done_or_running_sql_runs_by_run_key()
+    assert latest[run_key]["sql_run_id"] == replacement, "the newer run is the schedule's view"
+    assert [row["sql_run_id"] for row in store.fetch_running_sql_runs()] == [abandoned]
 
 
 def test_a_reaped_run_alerts_the_error_chat_like_any_other_failure():
@@ -277,7 +286,7 @@ def test_a_reaped_run_alerts_the_error_chat_like_any_other_failure():
         store=store,
         commands={9: sql_command()},
         targets=[target],
-        latest_runs=_stale_running_row(),
+        running_runs=_stale_running_row(),
         telegram_groups={"sql": "chat-7"},
         logger=FakeLogger(),
     )
@@ -289,6 +298,29 @@ def test_a_reaped_run_alerts_the_error_chat_like_any_other_failure():
     assert "may still be" in store.messages[0]["message_text"]
 
 
+def test_the_alert_says_when_the_run_died_and_on_which_clock():
+    """A reap can be reported hours after the run it is about - the row is only revisited on the
+    next scan - so an alert carrying no time reads as "this is happening now". Two times, both
+    labelled with their offset: when the run started, and when this message was written."""
+    store = RecordingSqlRunStore()
+    target = sql_target(timeout=1, alert_on_error=runner.NotifyRule(enabled=True, telegram_chat="sql"))
+
+    runner.mark_stale_running_sql_runs(
+        store=store,
+        commands={9: sql_command()},
+        targets=[target],
+        running_runs=_stale_running_row(age_seconds=3600),
+        telegram_groups={"sql": "chat-7"},
+        logger=FakeLogger(),
+    )
+
+    text = store.messages[0]["message_text"]
+    started = datetime.now(timezone.utc) - timedelta(seconds=3600)
+    assert f"It started at {format_message_time(started)}" in text
+    assert "was still 'running' 60 minutes later" in text
+    assert any(line.startswith("time: ") and "UTC+00:00" in line for line in text.splitlines())
+
+
 def test_a_target_that_does_not_want_error_alerts_is_still_not_told():
     """alert_on_error is the switch for this, exactly as it is for a task that fails normally -
     reaping a run must not become a back door that ignores the target's own notify block."""
@@ -298,7 +330,7 @@ def test_a_target_that_does_not_want_error_alerts_is_still_not_told():
         store=store,
         commands={9: sql_command()},
         targets=[sql_target(timeout=1)],
-        latest_runs=_stale_running_row(),
+        running_runs=_stale_running_row(),
         telegram_groups={"sql": "chat-7"},
         logger=FakeLogger(),
     )

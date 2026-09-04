@@ -477,7 +477,7 @@ What the shape guarantees:
 
 The App Command Daemon reads latest `job_runs` grouped by `job_code` to decide if each `app_command_id` is due.
 
-The SQL Task Runner reads latest `sql_runs` by `run_key` and writes one row per attempted task/target run.
+The SQL Task Runner reads latest `sql_runs` by `run_key` and writes one row per attempted task/target run. It also reads **every** row still `status='running'` (`fetch_running_sql_runs`, served by `ix_sql_runs_status_created_at`) before each scan: a run abandoned by a killed process stops being the latest of its `run_key` as soon as the next cycle starts, and the reaper that turns it into an `error` and alerts on it would never see it again.
 
 The Metrics Engine writes `metric_runs`, writes many `metric_results`, then rebuilds `target_health` for the run.
 
