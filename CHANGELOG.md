@@ -41,6 +41,10 @@ do about it. Not the internal refactor that made it possible.
 - The clearance check for `/spbot_run_sql_task` asserted that every command able to execute SQL
   carried the same number, so tightening one of them turned the suite red on a correct change. It
   now asserts the floor and the ordering, which tuning cannot break.
+- An abandoned SQL task run stayed `running` for good once a later run replaced it: the sweep read
+  the latest row per task rather than every run that never ended, so a death inside the target's
+  timeout window became invisible. It now judges every `running` row on its own age. The alert
+  carries both the run's start and the time the message was written, UTC with the offset shown.
 - Every confirmed Telegram command was refused on a fresh install (v0.4.0-v0.6.0): `init` never
   wrote `emergency_operations.json` and the package carried none, so each operation was priced at
   the strictest level - two answers - while the commands collect one. The ladder now ships, `init`

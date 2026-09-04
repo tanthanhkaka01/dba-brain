@@ -1,5 +1,5 @@
 from __future__ import annotations
-from db_ops.lib.text_format import format_log_value  # noqa: F401 - one definition, see that module
+from db_ops.lib.text_format import format_log_value, format_message_time  # noqa: F401 - one definition, see that module
 from db_ops.common.data_sources import _server_id_from_instance  # noqa: F401 - one definition, see that module
 
 import argparse
@@ -616,12 +616,11 @@ def run_scheduler_scan(
 ) -> SqlScanResult:
     commands = load_sql_commands(data_dir / "sql_commands.json", logger=logger)
     targets = load_sql_targets(data_dir / "sql_targets.json", logger=logger)
-    latest_done_or_running_runs = store.fetch_latest_done_or_running_sql_runs_by_run_key()
     secrets = data_sources.load_secret_text(data_dir)
     inventory = data_sources.load_inventory(data_dir)
     credentials = data_sources.load_all_credentials(data_dir)
     mark_stale_running_sql_runs(store=store, commands=commands, targets=targets,
-                                latest_runs=latest_done_or_running_runs,
+                                running_runs=store.fetch_running_sql_runs(),
                                 telegram_groups=telegram_groups, logger=logger)
     latest_done_or_running_runs = store.fetch_latest_done_or_running_sql_runs_by_run_key()
     # The most recent run per key REGARDLESS of status — so a task that keeps FAILING is backed
@@ -734,7 +733,7 @@ def mark_stale_running_sql_runs(
     store: DbOpsStore,
     commands: dict[int, SqlCommand],
     targets: list[SqlTarget],
-    latest_runs: dict[str, Any],
+    running_runs: Any,
     telegram_groups: dict[str, str],
     logger: Any,
 ) -> None:
@@ -747,10 +746,18 @@ def mark_stale_running_sql_runs(
     an hour with no message anywhere — while the SQL it had started went on running on the server,
     holding the task's application lock, so every following cycle reported SKIPPED. A silent error
     class is worse than a noisy one: nobody reads a table they have no reason to open.
+
+    **Every running row, not the newest one per task.** This read `fetch_latest_*_by_run_key`
+    until 2026-09-04, which is the schedule's view of a task, not the list of runs that never
+    ended. A worker restart killed sql_id 28 mid-run twice that day; each time the next cycle
+    started a fresh run while the killed row was still inside its 950 s timeout, and from that
+    moment the killed row was never "latest" again — so it never came back through here, never
+    became an error, and never sent the alert its target asks for. The operator saw runs stop
+    failing, not runs failing silently, which is the worse of the two.
     """
     now = datetime.now(timezone.utc)
     targets_by_key = {(target.sql_id, target.target_no): target for target in targets}
-    for row in latest_runs.values():
+    for row in running_runs:
         if str(row["status"]).lower() != "running":
             continue
         command = commands.get(int(row["sql_id"]))
@@ -763,7 +770,14 @@ def mark_stale_running_sql_runs(
         timeout_seconds = target.timeout_seconds if target is not None else DEFAULT_SQL_TIMEOUT_SECONDS
         if started + timedelta(seconds=timeout_seconds) > now:
             continue
-        message = f"SQL task {row['sql_code']} stale running exceeded timeout_seconds={timeout_seconds}."
+        # The two clock readings are the first thing anyone asks for: an alert that says only
+        # "stale" leaves the reader to go and find out *when* the run they are being told about
+        # died, and a reap can happen hours after the fact — a worker restarted at 06:13 was
+        # reported at 13:05 with nothing in the text to tell the two apart.
+        stale_minutes = int((now - started).total_seconds() // 60)
+        message = (f"SQL task {row['sql_code']} stale running exceeded "
+                   f"timeout_seconds={timeout_seconds}. It started at {format_message_time(started)} "
+                   f"and was still 'running' {stale_minutes} minutes later.")
         store.update_sql_run(
             sql_run_id=int(row["sql_run_id"]),
             status="error",
@@ -1513,6 +1527,12 @@ def enqueue_sql_task_message(
         f"instance_name: {target.instance_name}",
         f"target_no: {target.target_no}",
         f"sql_run_id: {sql_run_id}",
+        # When this happened, on the reader's clock. A Telegram message carries the time it was
+        # *delivered*, which is not the time of the event: the queue can hold a row while the
+        # sender backs off, and a reaped run is reported however long after it died. The line is
+        # UTC unless DB_OPS_MESSAGE_UTC_OFFSET_HOURS says otherwise, and it always names the
+        # offset, so it can be compared with sql_runs.started_at without arithmetic.
+        f"time: {format_message_time()}",
         f"message: {message}",
     ]
     # What the run does with its rows is the target's `output` setting. Any file format ships

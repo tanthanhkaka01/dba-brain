@@ -140,7 +140,7 @@ differently in two places.
 | `coerce.py` | `as_bool` / `as_int` / `as_optional_int` / `as_float` / `as_text` / `as_utc_datetime` |
 | `rows.py` | `row_value` / `row_text` — one column out of a store row that may not have it |
 | `json_io.py` | reading a `data/*.json` the one way the whole tool reads them |
-| `text_format.py` | one-line text helpers more than one component must agree on |
+| `text_format.py` | one-line text helpers more than one component must agree on — the stored timestamp (`format_utc`), the `\|`-safe log value, and the operator-facing clock (`format_message_time`, UTC unless `DB_OPS_MESSAGE_UTC_OFFSET_HOURS` says otherwise, and always printing its offset) |
 
 ### Judging — the rules, as pure functions
 

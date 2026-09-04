@@ -1650,6 +1650,48 @@ class DbOpsStore:
             ).fetchall()
         return {str(row["run_key"]): row for row in rows}
 
+    def fetch_running_sql_runs(self) -> list:
+        """**Every** row still marked ``running``, oldest first — not one per run_key.
+
+        The `fetch_latest_*` pair answer "where does each task stand", and the stale-run reaper
+        used to read the first of them. That made a run invisible the moment a newer run of the
+        same task existed: on 2026-09-04 sql_id 28 was killed twice by a worker restart, a fresh
+        run started minutes later while the killed row was still short of its timeout, and the
+        two abandoned rows were never latest again — so they sat in ``running`` for the rest of
+        the day, past their timeout, with no error row and no alert. An abandoned run is a
+        failure whether or not anything ran after it, so the reaper has to see all of them.
+        """
+        self.initialize()
+        with self.connect() as conn:
+            return list(conn.execute(
+                """
+                SELECT
+                    sql_run_id,
+                    run_key,
+                    sql_id,
+                    sql_code,
+                    target_no,
+                    server_id,
+                    db_type,
+                    service_name,
+                    instance_name,
+                    database_name,
+                    credential_name,
+                    status,
+                    level,
+                    message,
+                    started_at,
+                    finished_at,
+                    duration_ms,
+                    row_count,
+                    error_text,
+                    metadata_json
+                FROM sql_runs
+                WHERE status = 'running'
+                ORDER BY sql_run_id;
+                """
+            ).fetchall())
+
     def fetch_latest_sql_run_for_sql_id(self, *, sql_id: int, status: str = "done") -> sqlite3.Row | None:
         self.initialize()
         with self.connect() as conn:
