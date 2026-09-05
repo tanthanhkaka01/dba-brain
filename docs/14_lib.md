@@ -212,6 +212,7 @@ exactly the class-does-not-survive-a-subprocess point above.
 | `listing.py` | what a `/spbot_list_*` reply shows |
 | `report_archive.py` | naming and daily archiving of published reports — path in, path out |
 | `telegram_text.py` | fit a body into Telegram's limit **by splitting, never by cutting** |
+| `telegram_command_text.py` | read a `/spbot...` message into a command and arguments, and write one back as the line that runs it |
 | `telegram_severity.py` | the severity emoji, applied once at the send layer |
 | `powershell.py` | quoting, encoding, and the `Invoke-Command` wrapper |
 | `sql_text.py` | SQL text and result limits — the parts of running a query that are not the running |

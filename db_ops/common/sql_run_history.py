@@ -21,19 +21,16 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-#: Telegram cuts a message at 4096 characters, and a listing truncated by the transport loses its
-#: newest rows with nothing to say it happened. This stops earlier and says so itself.
-LISTING_CHARACTER_BUDGET = 3500
-
-#: How many runs a caller gets when it does not say. Ten is a screenful on a phone and, at the
-#: five-minute tasks this estate runs, roughly the last hour.
-DEFAULT_LIMIT = 10
+# The size budget and the default depth are the same rule every /spbot_list_* reply follows, and
+# saying them twice is how two listings end up disagreeing about what fits in one message.
+from db_ops.lib.listing import DEFAULT_LISTING_LIMIT, LISTING_CHARACTER_BUDGET
 
 #: A ceiling, so a typo in a request cannot ask the store for the whole table.
 MAX_LIMIT = 200
 
 
-def collect(store: Any, *, limit: int = DEFAULT_LIMIT, sql_id: int | None = None) -> list:
+def collect(store: Any, *, limit: int = DEFAULT_LISTING_LIMIT,
+            sql_id: int | None = None) -> list:
     """The most recent runs, newest first, through the store's own reader."""
     bounded = max(1, min(int(limit), MAX_LIMIT))
     return store.fetch_recent_sql_runs(limit=bounded, sql_id=sql_id)

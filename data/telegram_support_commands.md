@@ -8,6 +8,7 @@ spbot_list_all_command - List every command you can run here, built from the bot
 spbot_list_restore_id - List restore IDs with source and target IP
 spbot_list_backup_id - List backup IDs with engine, level and schedule
 spbot_list_sql_runs - List the 10 most recent SQL task runs and how each one ended
+spbot_list_my_commands - List your own 10 most recent commands, each as one line you can run again
 spbot_self_status - What this installation is: product, version, host, ip, cpu, memory, disk
 spbot_backup - Run one backup by backup_id, optionally forcing full/diff/log
 spbot_report_hourly_metrics - Force hourly metrics report by target IP
@@ -47,6 +48,7 @@ spbot_trace_session - Who is holding an open transaction on a database: session,
 | `/spbot_status` | Get bot status |
 | `/spbot_self_status` | What the installation answering you actually is: product (published **DBA Brain** or a private **db_ops** build), version, whether it runs in Docker or straight on the OS, which OS, host name and ip, node role, store, cpu, memory and disk. Reads itself - no SSH and no store - so it still answers when the store is the thing that is down. No parameters. |
 | `/spbot_list_sql_runs` | The 10 most recent SQL task runs, newest first, with the status of each and the reason for any that failed. `/spbot_list_sql_tasks` says what is *configured*; this says what actually **ran**. No parameters. |
+| `/spbot_list_my_commands` | Your own last 10 **distinct** commands, newest first, each written back as the one line that runs it again — including the ones you answered a prompt at a time, whose arguments are separate messages in the chat and cannot be copied out of it. Repeats are counted, not listed twice. Private chat only: the history spans every chat, so a group would hear a private command read out. No parameters. |
 | `/spbot_list_restore_id` | List the restore IDs that can be run: **both** kinds — the SMB restores and the script-driven ones (Oracle/PostgreSQL/SQL Server drills) — with each one's source and target. Only active entries are listed; a footnote counts the inactive ones. No parameters. |
 | `/spbot_list_backup_id` | List the backup IDs that can be run: engine, target server, level (`full`/`diff`/`log`, or `auto (Sun=full, else diff)` when the script derives it) and schedule. `[encrypted]` marks a set written with a passphrase. Only active entries; a footnote counts the rest. No parameters. |
 | `/spbot_backup` | Run one backup now by `backup_id`, always with `--force` (ignores the schedule, but never a run already in flight). Optional second argument sets the level: `full` \| `diff` \| `log`, or `-` to let the script decide as it would on a scheduled run. One word for every engine — it is translated to that engine's own name (Oracle 0/1, PostgreSQL full/incr, SQL Server full/diff/log). Use `/spbot_list_backup_id` to find the id. |
@@ -243,6 +245,43 @@ how many it dropped, rather than letting the transport cut the newest rows off s
 
 Reads `sql_runs` through `db-ops db sql-run-history`, which takes `{"limit": N, "sql_id": N}` if you
 want a different depth or one task's history. No parameters on the Telegram side.
+
+### `/spbot_list_my_commands`
+
+Replies with your own last 10 distinct commands, newest first, each as one line to copy:
+
+```
+Your last 4 command(s), newest first:
+1. /spbot_run_sql_task 18 0 30
+    2026-09-04 06:16:22  x3
+2. /spbot_run_sql_task 28 aksdhf
+    2026-09-04 06:15:04  last one failed
+3. /spbot_list_sql_tasks
+    2026-09-04 06:12:47  x9
+4. /spbot_shrink_log ACME-192-0-2-250 SALESDB 2000
+    2026-09-03 22:40:11
+(1 unanswered prompt(s) skipped: the bot asked a question and never got an answer, so there is
+no whole command to repeat.)
+```
+
+**The line is rebuilt, not quoted from the chat.** A command answered one prompt at a time is not
+one message: the message that started it says `/spbot_run_sql_task` and nothing else, and the `18`
+and the `0 30` are separate messages further down, indistinguishable from ordinary conversation.
+Scrolling for them is the trip this command exists to save, so the answers are joined back in
+argument order — the same order the bot reads them in — and the result is a line that runs.
+
+Distinct by that line: someone chasing a problem runs one command nine times, and nine copies of it
+is not a history. The repeats are counted (`x9`) rather than dropped without saying so.
+
+Only commands that **ran** are listed. A prompt the bot asked and never got an answer to is half a
+command, and offering it invites someone to run it and find out which half is missing — those are
+skipped and counted in the footnote. A command that ran and *failed* is listed, marked, and keeps
+the argument that was refused: after a failure it is the line most likely to be typed again.
+
+Whose history it is comes from the message, never from an argument — there is no way to ask for
+somebody else's. Reads `telegram_command_messages` and `telegram_conversation_states` through
+`db-ops db telegram-command-history`, which takes `{"user_id": "...", "limit": N}`. No parameters
+on the Telegram side.
 
 ### `/spbot_list_metrics`
 

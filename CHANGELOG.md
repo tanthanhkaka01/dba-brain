@@ -15,6 +15,28 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-05
+
+### Added
+
+- **`/spbot_list_my_commands` — your own last 10 commands, each as one line you can run again.**
+  Repeating a command meant scrolling the chat for arguments that came from a listing (`sql_id`,
+  `server_id`, a date range), and for a command answered one prompt at a time there was nothing to
+  scroll to: the message that started it says `/spbot_run_sql_task` and nothing else, while the
+  `18` and the `0 30` are separate messages that look like conversation. The line is rebuilt from
+  the answers in argument order, so `/spbot_run_sql_task 18 0 30` comes back whole. Distinct by
+  that line with repeats counted, private chat only (the history spans every chat), and prompts
+  that were never answered are skipped and counted rather than offered as half a command.
+  Also available as `db-ops db telegram-command-history '{"user_id": "...", "limit": 10}'`.
+- **`db-ops db backfill-from-sqlite --source <store> [--plan-only]`** — carry the history a
+  stand-in node wrote to a local SQLite store back into the shared one. When the worker is
+  stopped and the estate runs from a laptop or a fresh install, the work is real but the record
+  of it lands where nobody queries it. Ids are not carried: every key is an identity column, so
+  parents are written first and each child is rewritten through the old-to-new mapping before it
+  lands — carrying `metric_results.run_id` verbatim would be *accepted* and point at somebody
+  else's run. The window is the destination's own newest row per table, so a repeat run carries
+  nothing and an interrupted one is finished by running it again.
+
 ## [0.7.2] - 2026-09-05
 
 ### Fixed

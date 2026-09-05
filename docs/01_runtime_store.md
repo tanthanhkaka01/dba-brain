@@ -490,6 +490,8 @@ The Reports App reads latest `metric_results`, writes `reports`, updates `report
 
 The Telegram App reads pending queue rows where `telegram_send_messages.send_status = 0`, writes send outcomes with `send_status`, `send_date`, and `message_id`, saves updates into `telegram_messages`, and copies command messages into `telegram_command_messages`.
 
+`/spbot_list_my_commands` reads one person's own history back out of these two tables at once (`fetch_recent_telegram_command_messages`): `telegram_command_messages` for the commands, left-joined to the **last** `telegram_conversation_states` row carrying the same `source_telegram_command_message_id`, because a command answered one prompt at a time keeps its arguments there and not in the message. Ordered by `telegram_command_message_id`, not by `message_date`: the date is nullable and the two engines disagree about where NULLs sort in a DESC order.
+
 The Backup Restore App writes `backup_restore_history` for restore starts/finishes and also records workflow-level events in `job_runs`.
 
 ## Useful Manual Troubleshooting Queries
@@ -596,6 +598,46 @@ Count first with the same predicate, run inside a transaction, and confirm local
 requirements before committing. On a SQLite store the equivalent cutoff is
 `strftime('%Y-%m-%dT%H:%M:%SZ','now','-30 days')` — do not paste that at PostgreSQL, and do not
 paste the PostgreSQL form at SQLite.
+
+## Carrying a Stand-in Node's History Back (`backfill-from-sqlite`)
+
+When the worker is stopped and the estate is run from somewhere else — a laptop, a fresh install —
+that node's store is a local SQLite file. The work is real; the *record* of it lands in a file
+nobody queries, and the shared store shows a hole exactly as wide as the outage. Every question
+asked of history afterwards is then answered from a series with a gap in it.
+
+```bash
+python -m db_ops.db.cli backfill-from-sqlite --source <stand-in>/runtime/db_ops.sqlite --plan-only
+python -m db_ops.db.cli backfill-from-sqlite --source <stand-in>/runtime/db_ops.sqlite
+```
+
+**Read the plan first.** It names, per table, how many rows the source holds and the destination's
+own newest row — the watermark the window starts from. A row crosses only if it is strictly newer,
+which is what makes the apply safe to repeat: a second run against an unchanged source carries
+nothing, and an interrupted one is finished by running it again.
+
+**No row carries its key.** Every primary key here is an identity column, and a store that started
+numbering at 1 has ids that are already taken in a store with millions of rows. Rows go in without
+their key and the new key is read back — which makes the links the whole problem:
+
+| Link | Without remapping |
+| --- | --- |
+| `sla_results.sla_run_id` | a real foreign key: the insert is **refused** |
+| `metric_results.run_id`, `reports.telegram_send_message_id` | plain integers: accepted and **silently wrong**, pointing at whatever row here holds that number |
+
+The second is worse, because nothing reports it. So parents are carried first, their old-to-new
+mapping is kept, and every child is rewritten through it — which is also why the table order in
+`db_ops/db/backfill.py` is not cosmetic.
+
+A link whose parent predates the window has no mapping, and what that costs depends on the column:
+nullable (`reports.telegram_send_message_id`) means the row crosses without the link and the count
+says so; NOT NULL (`metric_results.run_id`) means the row is **left behind** and counted, because
+attaching a measurement to the wrong collection is the failure the whole command is arranged to
+prevent. Both numbers are printed at the end.
+
+`target_health` is deliberately not carried: it is current state, rebuilt by the next metrics run,
+and carrying it would describe the estate as the stand-in last saw it. A table that neither store
+has — `sla_runs` on a store whose SLA app never ran — is skipped rather than raising.
 
 ## Schema Export Command
 

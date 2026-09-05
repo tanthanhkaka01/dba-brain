@@ -1858,6 +1858,54 @@ class DbOpsStore:
         with self.connect() as conn:
             return list(conn.execute(sql, tuple(params)).fetchall())
 
+    def fetch_recent_telegram_command_messages(self, *, user_id: str, limit: int = 200) -> list:
+        """One person's most recent dispatched commands, newest first, each with the last state
+        of its prompt conversation.
+
+        A command answered one question at a time is not one row: the message carries only what
+        was typed before the first prompt (``/spbot_run_sql_task``), and the answers live in
+        ``telegram_conversation_states``. The chain carries ``source_telegram_command_message_id``
+        forward from prompt to prompt, so its *last* state holds every answer — that is the join,
+        and without it the history would show the command stripped of everything the person said.
+
+        Ordered by id rather than ``message_date``: the date is nullable, and the two engines
+        disagree about where NULLs sort in a DESC order, so the id is the only ordering that
+        means the same thing on both.
+        """
+        self.initialize()
+        with self.connect() as conn:
+            return list(conn.execute(
+                """
+                SELECT
+                    command_message.telegram_command_message_id,
+                    command_message.chat_id,
+                    command_message.chat_type,
+                    command_message.user_id,
+                    command_message.message_date,
+                    command_message.text,
+                    command_message.command_prefix,
+                    command_message.command_payload,
+                    command_message.created_at,
+                    conversation.status AS conversation_status,
+                    conversation.command_text AS conversation_command_text,
+                    conversation.state_json AS conversation_state_json,
+                    conversation.updated_at AS conversation_updated_at
+                FROM telegram_command_messages command_message
+                LEFT JOIN telegram_conversation_states conversation
+                    ON conversation.state_id = (
+                        SELECT MAX(last_state.state_id)
+                        FROM telegram_conversation_states last_state
+                        WHERE last_state.source_telegram_command_message_id
+                              = command_message.telegram_command_message_id
+                    )
+                WHERE command_message.command_status = 1
+                  AND command_message.user_id = ?
+                ORDER BY command_message.telegram_command_message_id DESC
+                LIMIT ?;
+                """,
+                (str(user_id), int(limit)),
+            ).fetchall())
+
 
 def utc_now_text() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

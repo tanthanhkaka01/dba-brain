@@ -123,6 +123,16 @@ def build_parser() -> argparse.ArgumentParser:
     snap.add_argument("--output", required=True, help="Snapshot file to create.")
     snap.set_defaults(handler=_handle_snapshot)
 
+    fill = subparsers.add_parser(
+        "backfill-from-sqlite",
+        help="Carry the history a stand-in node recorded in a local SQLite store into this store.")
+    fill.add_argument("--source", required=True,
+                      help="The stand-in's SQLite store. Read-only; never written.")
+    fill.add_argument("--plan-only", action="store_true",
+                      help="Say what would cross, per table, and write nothing.")
+    _add_secret_args(fill)
+    fill.set_defaults(handler=_handle_backfill)
+
     exp = subparsers.add_parser(
         "export-sqlite-schema", help="Write the SQLite structure JSON snapshot.")
     exp.add_argument("--output-dir", default="runtime")
@@ -341,6 +351,67 @@ def _handle_snapshot(args) -> int:
     target = migration.snapshot_sqlite(source, args.output)
     size_mb = target.stat().st_size / 1048576
     print(f"snapshot written: {target} ({size_mb:.1f} MB) from {source}")
+    return 0
+
+
+def _handle_backfill(args: argparse.Namespace) -> int:
+    """``backfill-from-sqlite`` — the gap a stand-in node left in the shared store.
+
+    Plan first, always. The plan names the watermark each table starts from, so the reader can see
+    that the window is the outage and not the whole of the stand-in's history — and a second run
+    against an unchanged source plans zero rows, which is what makes the apply safe to repeat.
+    """
+    from db_ops.db import DbOpsStore
+    from db_ops.db import backfill
+
+    # The declared backend, like every other command here - the destination is whatever
+    # data/store_config.json names, never a backend this command chose.
+    config, _target = _active_target(args)
+    store = DbOpsStore.from_config(config, key=_resolved_key(args),
+                                   password=getattr(args, "password", None))
+    try:
+        plans = backfill.plan(sqlite_path=args.source, store=store)
+    except backfill.BackfillError as exc:
+        print(f"backfill refused: {exc}", file=sys.stderr)
+        return 1
+
+    total = sum(item.carried for item in plans)
+    print(f"source: {args.source}")
+    print(f"{'table':<26} {'in source':>10} {'would carry':>12}  from (destination watermark)")
+    for item in plans:
+        print(f"{item.table:<26} {item.source_rows:>10} {item.carried:>12}  "
+              f"{item.watermark or '(empty table - everything)'}")
+    print(f"{'':<26} {'':>10} {total:>12}  rows in total")
+    if args.plan_only:
+        return 0
+    if not total:
+        print("nothing to carry: this store already holds everything the source does.")
+        return 0
+
+    def progress(table: str, rows: int, unlinked: int) -> None:
+        note = f", {unlinked} link(s) dropped" if unlinked else ""
+        print(f"  {table:<26} {rows:>10} carried{note}", flush=True)
+
+    print("")
+    try:
+        outcome = backfill.apply(sqlite_path=args.source, store=store, progress=progress)
+    except backfill.BackfillError as exc:
+        print(f"backfill stopped: {exc}", file=sys.stderr)
+        return 1
+    print("")
+    print(f"carried {outcome['total']} row(s).")
+    if outcome.get("left_behind"):
+        print("Rows left behind - their parent predates the window and the column will not take "
+              "NULL, so carrying them would attach a measurement to the wrong collection:")
+        for table, count in sorted(outcome["left_behind"].items()):
+            print(f"  {table}: {count}")
+    if outcome["unlinked"]:
+        # Said out loud, because a dropped link is a real if small loss: the row is there and what
+        # it belonged to is not recoverable from it.
+        print("Links dropped because the parent predates the window and is already here under an "
+              "id this run never saw:")
+        for table, count in sorted(outcome["unlinked"].items()):
+            print(f"  {table}: {count}")
     return 0
 
 
@@ -628,7 +699,7 @@ def _sql_run_history_command(argv: list[str]) -> int:
     from db_ops.config import load_config, resolve_config_path
     from db_ops.db import DbOpsStore
 
-    limit = request.get("limit", sql_run_history.DEFAULT_LIMIT)
+    limit = request.get("limit", sql_run_history.DEFAULT_LISTING_LIMIT)
     sql_id = request.get("sql_id")
     try:
         store = DbOpsStore.from_config(load_config(resolve_config_path("sql_tasks", config_path)))
@@ -650,6 +721,85 @@ def _sql_run_history_command(argv: list[str]) -> int:
         message=f"{len(rows)} SQL task run(s).",
         data={"listing": listing, "runs": [dict(row) for row in rows]},
         metrics={"runs": len(rows)},
+    ))
+    return 0
+
+
+TELEGRAM_COMMAND_HISTORY_USAGE = (
+    "usage: python -m db_ops.db.cli telegram-command-history <json>|@<file>|- [--config ...]\n"
+    "\n"
+    "One person's own most recent bot commands, each written back as the single line they would\n"
+    "type to run it again - including the ones answered one prompt at a time, whose arguments\n"
+    "are separate messages in the chat and cannot be copied out of it.\n"
+    "\n"
+    "The request is a JSON object, given inline, as @path/to/request.json, or on stdin (-):\n"
+    '  {"user_id": "123456789",   // required; whose history to read\n'
+    '   "limit": 10,              // optional; default 10 distinct commands, capped at 50\n'
+    '   "exclude": ["spbot_list_my_commands"]}  // optional; command names to leave out\n'
+)
+
+
+def _telegram_command_history_command(argv: list[str]) -> int:
+    """``telegram-command-history`` - read a person's own commands back to them.
+
+    Here for the reason ``sql-run-history`` is here: it opens the runtime store, and `common`
+    writes to no database. The Telegram app reaches it as a subprocess like any other CLI - it
+    does not import this, and this does not know what a bot is.
+    """
+    from db_ops.common import telegram_command_history
+
+    source = ""
+    config_path = None
+    rest = list(argv)
+    while rest:
+        token = rest.pop(0)
+        if token in {"-h", "--help"}:
+            print(TELEGRAM_COMMAND_HISTORY_USAGE)
+            return 0
+        if token == "--config":
+            config_path = rest.pop(0) if rest else None
+        elif not source:
+            source = token
+        else:
+            print(f"Unexpected argument: {token}\n\n{TELEGRAM_COMMAND_HISTORY_USAGE}",
+                  file=sys.stderr)
+            return 2
+
+    request, code = _read_json_request(source or "{}", TELEGRAM_COMMAND_HISTORY_USAGE)
+    if request is None:
+        return code
+
+    from db_ops.config import load_config, resolve_config_path
+    from db_ops.db import DbOpsStore
+
+    user_id = str(request.get("user_id") or "").strip()
+    exclude = request.get("exclude") or []
+    if not isinstance(exclude, list):
+        return response.emit(response.fail(
+            "telegram-command-history", "exclude must be a list of command names."))
+    try:
+        store = DbOpsStore.from_config(load_config(resolve_config_path("telegram", config_path)))
+        result = telegram_command_history.collect(
+            store,
+            user_id=user_id,
+            limit=int(request.get("limit", telegram_command_history.DEFAULT_LISTING_LIMIT)),
+            exclude=[str(name) for name in exclude],
+        )
+    except (TypeError, ValueError) as exc:
+        return response.emit(response.fail(
+            "telegram-command-history", f"limit must be a whole number: {exc}"))
+    except Exception as exc:  # noqa: BLE001 - report as a response like every other command.
+        return response.emit(response.fail("telegram-command-history", str(exc)))
+
+    listing = telegram_command_history.render(result)
+    # Text on stdout because a Telegram command relays {stdout} verbatim; the JSON envelope still
+    # carries it so a program does not have to parse the message.
+    print(listing)
+    response.emit(response.ok(
+        "telegram-command-history",
+        message=f"{len(result['entries'])} distinct command(s) for user {user_id or '(none)'}.",
+        data={"listing": listing, **result},
+        metrics={"commands": len(result["entries"]), "scanned": result["scanned"]},
     ))
     return 0
 
@@ -1213,6 +1363,7 @@ _JSON_COMMANDS = {
     "ops-status": lambda rest: _ops_status_command(rest),
     "restore-drill-status": lambda rest: _restore_drill_command(rest),
     "sql-run-history": lambda rest: _sql_run_history_command(rest),
+    "telegram-command-history": lambda rest: _telegram_command_history_command(rest),
     "sync-config": lambda rest: _sync_config_command(rest),
     "config-items": lambda rest: _config_items_command(rest),
     "export-config": lambda rest: _export_config_command(rest),
