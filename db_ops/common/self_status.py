@@ -26,6 +26,7 @@ import os
 import platform
 import shutil
 import socket
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -161,6 +162,62 @@ def host_addresses() -> dict[str, Any]:
     return {"hostname": name, "ip": outward or resolved, "resolved_ip": resolved}
 
 
+def _uptime_seconds_from_proc() -> float | None:
+    """Seconds since boot from ``/proc/uptime`` — Linux, including inside a container."""
+    try:
+        with open("/proc/uptime", encoding="utf-8") as handle:
+            return float(handle.read().split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _uptime_seconds_from_windows() -> float | None:
+    """Seconds since boot from ``GetTickCount64`` — milliseconds, monotonic, and no privilege.
+
+    Deliberately not WMI's ``LastBootUpTime``: that spawns a process, needs the WMI service, and
+    returns a local-time string with an offset field that has to be parsed. This is one call and
+    the answer is already an interval, so nothing about it depends on the machine's timezone.
+    """
+    try:
+        import ctypes
+
+        ticks = ctypes.windll.kernel32.GetTickCount64()  # type: ignore[attr-defined]
+    except (AttributeError, OSError):
+        return None
+    return float(ticks) / 1000.0
+
+
+def uptime(*, now: datetime | None = None) -> dict[str, Any]:
+    """How long the machine has been up, and the instant it came up, in UTC.
+
+    **This is the host's uptime, not the daemon's**, which is why the rendered line says so. The
+    two answer different questions and this module can only answer one of them honestly: it reads
+    *itself*, and the process reading is the short-lived one the bot spawned to ask, not the
+    scheduler. Whether the scheduler has been running is `ops-status`, which reads the store.
+
+    Inside a container `/proc/uptime` is the **host's** clock, not the container's age. The source
+    is reported for the same reason every memory figure reports one — a number whose meaning
+    changes with where it was read has to say where it was read.
+
+    UTC throughout: an interval has no timezone, and the instant it started is only comparable
+    across an estate if it is written in one.
+    """
+    seconds = _uptime_seconds_from_proc()
+    source = "/proc/uptime"
+    if seconds is None:
+        seconds = _uptime_seconds_from_windows()
+        source = "GetTickCount64"
+    if seconds is None or seconds < 0:
+        return {"seconds": None, "hours": None, "since": None, "source": "unavailable"}
+    moment = now or datetime.now(timezone.utc)
+    return {
+        "seconds": round(seconds, 3),
+        "hours": round(seconds / 3600.0, 2),
+        "since": (moment - timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "source": source,
+    }
+
+
 def disk(path: Path) -> dict[str, Any]:
     try:
         usage = shutil.disk_usage(str(path))
@@ -262,6 +319,7 @@ def collect(*, tool_root: Path, version: str, public_version: str | None = None,
         "cpu": cpu(),
         "memory": memory(),
         "disk": disk(tool_root),
+        "uptime": uptime(),
         "pid": os.getpid(),
     }
 
@@ -328,4 +386,12 @@ def render(facts: dict[str, Any]) -> str:
             f"{_gib(disk_facts.get('total_bytes'))} "
             f"({_percent(disk_facts.get('used_bytes'), disk_facts.get('total_bytes'))} used)"
         )
+
+    up = facts.get("uptime") or {}
+    if up.get("hours") is not None:
+        # "host up since" rather than "up since": this is the machine's clock, and on a node whose
+        # daemon was restarted an hour ago the two numbers are nothing like each other.
+        lines.append(f"uptime    : {up['hours']:.2f} h  (host up since {up.get('since')})")
+    else:
+        lines.append(f"uptime    : {up.get('source') or 'unavailable'}")
     return "\n".join(lines)
