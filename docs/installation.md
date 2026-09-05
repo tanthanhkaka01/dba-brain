@@ -59,7 +59,15 @@ why every driver is an extra.
 | `[all]` | all of the above | |
 | `[dev]` | `pytest` | Running the test suite. |
 
-Combine them: `pip install 'dbabrain[postgres,mssql,ssh]'`.
+Combine them: `pip install 'dbabrain[postgres,mssql,ssh,winrm]'`.
+
+**Name every transport your estate uses, not just its databases.** Leaving `[winrm]` out
+does not disable WinRM — it falls back to driving `Invoke-Command` through a local
+PowerShell, which cannot authenticate to some hosts (a WORKGROUP target answers
+`0x8009030e ... A specified logon session does not exist`, wording that points at the host
+rather than at the install). On 2026-09-05 that cost one estate two days of backups on a
+Windows instance, while its OS metrics recorded `Command exited with code 1` every cycle
+and nobody read that as a broken transport. `[all]` avoids the question entirely.
 
 ## The two prerequisites that bite
 

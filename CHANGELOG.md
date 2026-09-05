@@ -15,6 +15,44 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-09-05
+
+### Fixed
+
+- `job_runs` never pruned. The archive sweep moves aged rows into `job_runs_history` and then
+  deletes them, but `app_command_requests.job_run_id` is a foreign key with no `ON DELETE`, so a
+  single finished "run now" request pointing into the batch failed the whole delete. The daemon
+  swallows a failed sweep on purpose — housekeeping must not stop the scheduler — so the busiest
+  table in the store stopped pruning and reported it only in one log line per sweep interval. The
+  referencing requests now move into `app_command_requests_history` in the same transaction, before
+  the runs they name. Nothing is lost: the record of who asked for a run outlives the run, which is
+  what it is for.
+- ...and it still never pruned, because the archive table did not exist yet. `RunRequestStore`
+  creates `app_command_requests_history`, but only when the console runs, and the daemon's sweep
+  does not run the console — so every store that had used the console on an earlier build had the
+  requests table, the foreign key, and no archive, and the fix above read that as "nothing to
+  move". Measured on both live stores. The sweep now creates the table when it finds one missing,
+  once before the first batch rather than inside one. **Both backends behaved identically here** —
+  SQLite refuses the delete with `FOREIGN KEY constraint failed` exactly as PostgreSQL refuses it
+  with `23503`.
+- A WinRM failure no longer reads as the host's fault when the cause is a missing dependency.
+  Without the `[winrm]` extra there is no `pypsrp`, and `remote_exec` falls back to driving
+  `Invoke-Command` through a local PowerShell — which cannot authenticate to some Windows hosts
+  and hands back Windows' own wording (`0x8009030e ... A specified logon session does not exist`,
+  *"add the server name to the TrustedHosts list"*). Nothing said the call had run on the weaker
+  of two backends. It cost one estate two days of backups on an instance whose WinRM was working
+  the whole time. The fallback now appends one line naming the extra to install, and only when it
+  fails to authenticate. `docs/installation.md` now says to name every transport the estate uses,
+  not just its databases.
+- The daily-report guard raised on PostgreSQL. `report_exists_on_local_date` compared with
+  SQLite's `datetime(created_at, '+7 hours')`, which PostgreSQL has no equivalent for and the
+  dialect translator does not rewrite, so `db-ops reports create-backup-health-report` without
+  `--force` failed with `42883 function datetime(text, unknown) does not exist` on a PostgreSQL
+  store while working on SQLite. The local day is now computed in Python and bound as a plain UTC
+  range — the same answer on both engines, and one an index on `created_at` can serve. A
+  `local_date` that is not a date is now refused rather than answered `False`, because "no report
+  today" is the answer that lets a duplicate out.
+
 ## [0.7.0] - 2026-09-04
 
 ### Added

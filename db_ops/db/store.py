@@ -25,6 +25,50 @@ _JOB_RUN_ARCHIVE_COLUMNS = (
     "duration_ms, error_text, host_name, metadata_json"
 )
 
+#: The same, for the console's "run this now" requests. They carry a real foreign key to
+#: ``job_runs (log_id)``, so they have to move in the same transaction as the run they name — see
+#: :meth:`DbOpsStore.archive_old_job_runs`.
+_APP_COMMAND_REQUEST_ARCHIVE_COLUMNS = (
+    "request_id, app_command_id, status, requested_by, request_source, requested_at, "
+    "claimed_at, started_at, finished_at, job_run_id, note"
+)
+
+
+def _archive_requests_for_runs(conn: Any, ids: list[int], placeholders: str,
+                               archived_at: str) -> int:
+    """Move the ``app_command_requests`` rows that point at *ids* into history. Returns how many.
+
+    Called from inside :meth:`DbOpsStore.archive_old_job_runs`'s transaction, before the runs are
+    deleted, because the foreign key is what makes the order matter.
+
+    A store whose console has never been used has neither table — ``RunRequestStore`` creates
+    them, not ``DbOpsStore`` — so their absence is normal and means there is nothing to move. It
+    is checked rather than caught: an exception here would be indistinguishable from a real
+    failure, and this runs inside the sweep whose failures are deliberately swallowed.
+    """
+    if not backend_mod.table_exists(conn, "app_command_requests"):
+        return 0
+    if not backend_mod.table_exists(conn, "app_command_requests_history"):
+        return 0
+    moved = conn.execute(
+        f"SELECT COUNT(*) AS n FROM app_command_requests WHERE job_run_id IN ({placeholders})",
+        tuple(ids),
+    ).fetchone()
+    count = int(moved["n"]) if moved is not None else 0
+    if not count:
+        return 0
+    conn.execute(
+        f"INSERT INTO app_command_requests_history "
+        f"({_APP_COMMAND_REQUEST_ARCHIVE_COLUMNS}, archived_at) "
+        f"SELECT {_APP_COMMAND_REQUEST_ARCHIVE_COLUMNS}, ? FROM app_command_requests "
+        f"WHERE job_run_id IN ({placeholders})",
+        (archived_at, *ids),
+    )
+    conn.execute(
+        f"DELETE FROM app_command_requests WHERE job_run_id IN ({placeholders})", tuple(ids)
+    )
+    return count
+
 
 class DbOpsStore:
     """The db_ops runtime store.
@@ -863,11 +907,23 @@ class DbOpsStore:
         for as long as it took to move eight hundred thousand rows. Capped, the backlog drains
         over successive passes, and steady state (~13k rows/day age out here) clears inside the
         first batch every time.
+
+        **The console's requests move with the runs they name**, in the same transaction and
+        before them. ``app_command_requests.job_run_id`` is a foreign key with no ``ON DELETE``,
+        so one finished request pointing into the batch made the delete fail — and the daemon
+        swallows a failed sweep by design, so the busiest table in the store stopped pruning and
+        said so only in one log line per interval. Found on 2026-09-04 on a live daemon:
+        ``23503 … Key (log_id)=(1601189) is still referenced from table "app_command_requests"``.
         """
         self.initialize()
         days = max(int(retention_days), 0)
         if days <= 0:
             return 0
+        # Before the first batch, never inside one. Creating the table here costs one catalogue
+        # read per sweep; creating it inside the copy/delete transaction would COMMIT that batch's
+        # INSERT halfway through - `executescript` commits on both backends - and copy+delete
+        # being one transaction is what stops a row being archived twice.
+        self._ensure_request_history_table()
         # The cutoff is computed here and bound as a parameter. Inlining SQLite's three-argument
         # strftime('%Y-...','now','-N days') is what took down every metrics and SLA run seconds
         # after the store was switched to PostgreSQL, where that function does not exist; the
@@ -897,10 +953,35 @@ class DbOpsStore:
                     f"WHERE log_id IN ({placeholders})",
                     (archived_at, *ids),
                 )
+                _archive_requests_for_runs(conn, ids, placeholders, archived_at)
                 conn.execute(f"DELETE FROM job_runs WHERE log_id IN ({placeholders})", tuple(ids))
             moved += len(ids)
             if len(ids) < int(batch_size):
                 return moved
+
+    def _ensure_request_history_table(self) -> None:
+        """Create ``app_command_requests_history`` when a store has requests but no archive.
+
+        ``RunRequestStore`` owns both tables, but it only builds them when the console runs, and
+        the daemon's sweep does not run the console. So every store upgraded from a build that
+        predates the archive has the requests table, the foreign key, and **no** archive — which
+        is precisely the state in which :func:`_archive_requests_for_runs` reported "nothing to
+        move" and the delete went on failing. Measured 2026-09-04 on both live stores:
+        ``app_command_requests`` present, ``app_command_requests_history`` absent, on the
+        production PostgreSQL one and on a brand-new SQLite one alike.
+
+        Only when the requests table exists: a store whose console was never used has neither
+        table and needs neither. Nothing here is backend-specific — ``executescript`` translates
+        the DDL per statement on PostgreSQL.
+        """
+        from db_ops.db.run_requests import APP_COMMAND_REQUESTS_HISTORY_SQL
+
+        with self.connect() as conn:
+            if not backend_mod.table_exists(conn, "app_command_requests"):
+                return
+            if backend_mod.table_exists(conn, "app_command_requests_history"):
+                return
+            conn.executescript(APP_COMMAND_REQUESTS_HISTORY_SQL)
 
     def insert_report(
         self,
@@ -1043,19 +1124,43 @@ class DbOpsStore:
 
         Only ``created``/``pushed`` count: a row that failed to generate is not a report that
         happened, and treating it as one silences the retry.
+
+        **The window is computed here and bound as two plain strings.** This used to ask SQLite
+        for ``substr(datetime(created_at, '+7 hours'), 1, 10)``. ``datetime(text, text)`` is not a
+        PostgreSQL function, the translator does not rewrite it, and the compatibility layer
+        supplies only the two JSON functions - so the same call answered ``False`` on SQLite and
+        raised ``42883 function datetime(text, unknown) does not exist`` on PostgreSQL, measured on
+        the two live stores on 2026-09-04. It stayed hidden because the scheduled path passes
+        ``force=True`` and short-circuits this before the query is built; a manual
+        ``db-ops reports create-backup-health-report`` on a PostgreSQL store is what reaches it.
+
+        A half-open range over the stored text is the same answer on both engines - the format
+        sorts lexicographically, which is why it is the store's format - and unlike a wrapped
+        column it can use an index on ``created_at``.
+
+        A ``local_date`` that is not a date raises rather than answering ``False``: "no report
+        today" is the answer that lets a duplicate out.
         """
         self.initialize()
+        try:
+            midnight = datetime.strptime(str(local_date), "%Y-%m-%d")
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"local_date must be YYYY-MM-DD, got {local_date!r}") from exc
+        offset = timedelta(hours=int(utc_offset_hours))
+        window_start = (midnight - offset).strftime("%Y-%m-%dT%H:%M:%SZ")
+        window_end = (midnight + timedelta(days=1) - offset).strftime("%Y-%m-%dT%H:%M:%SZ")
         with self.connect() as conn:
             row = conn.execute(
                 """
                 SELECT 1
                 FROM reports
                 WHERE report_code = ?
-                  AND substr(datetime(created_at, ?), 1, 10) = ?
+                  AND created_at >= ?
+                  AND created_at < ?
                   AND status IN ('created', 'pushed')
                 LIMIT 1;
                 """,
-                (report_code, f"+{int(utc_offset_hours)} hours", local_date),
+                (report_code, window_start, window_end),
             ).fetchone()
         return row is not None
 

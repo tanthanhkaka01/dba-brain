@@ -518,6 +518,66 @@ def test_no_store_sql_uses_an_untranslatable_strftime_form():
     )
 
 
+def test_no_store_sql_calls_a_sqlite_date_function_on_a_column():
+    """The same lesson as the test above, one function family further on.
+
+    `report_exists_on_local_date` compared with `datetime(created_at, '+7 hours')`. SQLite has
+    `datetime`/`date`/`time`/`julianday`; PostgreSQL has none of them with those signatures, the
+    translator rewrites only the two-argument `strftime` UTC-now form, and the compatibility layer
+    supplies only `json_valid` and `json_extract`. Measured on 2026-09-04 on the two live stores:
+    the same call answered False on SQLite and raised
+    `42883 function datetime(text, unknown) does not exist` on PostgreSQL.
+
+    It survived for months because the only scheduled caller passes `force=True` and never reaches
+    it, and because the suite is offline - no test executes store SQL against a real PostgreSQL.
+    That is exactly the gap a text guard can close: a window belongs in Python, bound as a
+    parameter, and then it reads the same on both engines.
+    """
+    import ast
+    import pathlib
+    import re
+
+    root = pathlib.Path(__file__).resolve().parents[1] / "db_ops"
+    store_modules = [
+        root / "db" / "store.py",
+        root / "db" / "metric_store.py",
+        root / "db" / "sla_store.py",
+        root / "db" / "backup_restore_history.py",
+        root / "metrics" / "storage.py",
+        root / "sla" / "storage.py",
+        root / "backup_restore" / "history.py",
+    ]
+    # The AST, and every string literal EXCEPT the docstrings. A line scan cannot tell the SQL
+    # from the prose about it: the sentence in `report_exists_on_local_date` explaining this very
+    # defect names `datetime(created_at, ...)`, and a guard that trips on its own explanation gets
+    # deleted rather than obeyed. Docstrings are the only prose held in strings here; a comment is
+    # not a string node at all.
+    on_a_column = re.compile(r"\b(datetime|date|julianday|time)\s*\(\s*[A-Za-z_][A-Za-z0-9_.\"]*\s*,")
+    offenders = []
+    for path in store_modules:
+        if not path.exists():
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        prose = set()
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                doc = ast.get_docstring(node, clean=False)
+                if doc is not None:
+                    prose.add(doc)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+                continue
+            if node.value in prose:
+                continue
+            found = on_a_column.search(node.value)
+            if found:
+                offenders.append(f"{path.relative_to(root)}:{node.lineno}: {found.group(0)}")
+    assert not offenders, (
+        "SQLite's date functions do not exist on PostgreSQL and are not translated; compute the "
+        f"window in Python and bind it: {offenders}"
+    )
+
+
 # --------------------------------------------------------------------------- #
 # pg8000's paramstyle is a process-wide global
 # --------------------------------------------------------------------------- #

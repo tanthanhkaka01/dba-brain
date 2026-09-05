@@ -781,7 +781,7 @@
             "validator": "regex",
             "pattern": "[A-Za-z][A-Za-z0-9_-]{1,63}",
             "validation_error": "backup_id: letters, digits, underscore and dash (see spbot_list_backup_id)",
-            "prompt_text": "Which backup_id? e.g. OCLOUD_ORA_DB / OCLOUD_PG_DB / OCLOUD_MSSQL_FULL"
+            "prompt_text": "Which backup_id? /spbot_list_backup_id prints them; they read like <SITE>_ORA_DB, <SITE>_PG_DB, <SITE>_MSSQL_FULL"
           },
           {
             "name": "backup_type",
