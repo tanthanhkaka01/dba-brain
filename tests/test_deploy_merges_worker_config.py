@@ -87,7 +87,7 @@ def test_a_task_only_the_worker_has_survives_the_deploy(tmp_path, monkeypatch):
         tmp_path, monkeypatch,
         master={"sql_targets.json": {"sql_targets": [_task(16, name="punch")]}},
         worker={"sql_targets.json": {"sql_targets": [
-            _task(16, name="punch"), _task(17, name="innotex", interval=-1)]}},
+            _task(16, name="punch"), _task(17, name="stocktake", interval=-1)]}},
     )
 
     merged = json.loads((tmp_path / "sql_targets.json").read_text(encoding="utf-8"))["sql_targets"]

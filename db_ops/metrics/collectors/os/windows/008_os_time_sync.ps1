@@ -20,7 +20,7 @@ try {
     $status = if ($exit -eq 0) { 'OK' } else { 'WARN' }
     # Take the FIRST match and force it to a string before trimming.
     #
-    # On Server-TAP this metric failed every two hours with "Method invocation failed because
+    # On one Windows host this metric failed every two hours with "Method invocation failed because
     # [System.Object[]] does not contain a method named 'Trim'". The old expression trimmed
     # whatever Where-Object returned, and that is an array as soon as more than one line matches
     # — and `$output` here is a *mixed* Object[] because `2>&1` merges stderr in as ErrorRecord

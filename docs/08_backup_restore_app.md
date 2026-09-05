@@ -297,7 +297,7 @@ path relative, and what remains lands under the import directory.
 Until 2026-08-13 the strip only worked for a **one-segment** sub-path: `_parse_unc_share`
 returns it POSIX-separated (`a/b/c`) while `smbclient` prints backslashes, and a single segment
 has no separator to disagree about. Every share in use had one, so the bug was invisible until
-`\192.0.2.248\D$\DBA\SqlBK\SERVER-TAP$SQLEXPRESS` — a maintenance-plan tree with no
+`\192.0.2.248\D$\DBA\SqlBK\EXAMPLE-SQL$SQLEXPRESS` — a maintenance-plan tree with no
 share of its own, reached through the `D$` admin share. Nothing raised: the files copied
 successfully, three directories too deep, and the restore reported no backups.
 

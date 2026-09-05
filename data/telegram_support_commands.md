@@ -68,7 +68,7 @@ spbot_trace_session - Who is holding an open transaction on a database: session,
 | `/spbot_metric_toggle` | Enable/disable metric collection for one `server_id` in `db_instances.json` (atomic write; the bot runs the `common.cli metric-toggle` command itself, so there is one engine and one caller path). Scope: `all` (the target's `metrics.enabled`), `collector:<sql\|cmd\|docker\|k8s>` (one collector class via `disabled_collector_types`), or one metric_code (`metric_overrides.<CODE>.enabled`; enabling also removes the code from the legacy `report_policy.disabled_metric_codes`). Clearance 10, private chat only — switching collection off produces no alert of its own. Afterwards, pull the change back to the master with `control worker-pull-data-config --all-json --overwrite`. |
 
 
-> **2026-08-27 — the two Innotex barcode update commands are gone.** Each wrote one server, one
+> **2026-08-27 — the two barcode update commands are gone.** Each wrote one server, one
 > database and one credential into its own configuration, which is a SQL task's job and is why
 > this command set could not ship with dba-brain. They are SQL tasks 25 and 26 now: run them with
 > `/spbot_run_sql_task 25 <InternalBarcode>` and `/spbot_run_sql_task 26 <PackageBarcode>`. The

@@ -48,7 +48,7 @@ def test_the_hint_says_which_host_it_is_about():
 
 def test_a_command_that_worked_is_left_alone():
     """The fallback is not broken; it is only weaker. A working call gets no lecture."""
-    result = _result(exit_code=0, stdout="Server-TAP")
+    result = _result(exit_code=0, stdout="EXAMPLE-SQL")
 
     assert _name_the_missing_backend(result, host="192.0.2.10") is result
 

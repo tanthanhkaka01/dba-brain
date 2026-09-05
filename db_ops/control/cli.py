@@ -440,7 +440,40 @@ def _export_public_command(args) -> int:
         print(f"{target} was removed: a refused tree must not be left on disk.", file=sys.stderr)
         return 1
     print("clean - no configured identifier appears in the exported tree.")
+    _print_review_tier(outcome)
     return 0
+
+
+def _print_review_tier(outcome: dict) -> None:
+    """Say what the scan matched but did not refuse over.
+
+    `review` is the tier for a configured name that is also an ordinary word - this estate has
+    databases whose names are English nouns - and it is excluded from `hits` on purpose, because a
+    gate that refuses over the word "inventory" in `inventory_report.py` is a gate people route
+    around. It was excluded from the *printout* too, which is different and was wrong: on
+    2026-09-05 a customer database name shipped in the published package while this line said
+    "clean", and the scan had matched it all along.
+
+    So it prints, and it does not refuse: a number and the files, for a person to read once.
+    """
+    unknown = outcome.get("unrecognised_addresses") or {}
+    if unknown:
+        print(f"  plus {len(unknown)} address(es) no configuration names - the category the "
+              "inventory-derived half cannot find, so nothing else will report them:")
+        for literal, files in list(unknown.items())[:10]:
+            print(f"    {literal}  ({len(files)} file(s), e.g. {files[0]})")
+        if len(unknown) > 10:
+            print(f"    ... and {len(unknown) - 10} more")
+    review = int(outcome.get("review") or 0)
+    if not review:
+        return
+    files = outcome.get("review_only_files") or []
+    print(f"  plus {review} review-tier match(es) in {len(files)} file(s) - configured names that "
+          "are also ordinary words. Not a refusal; read them once:")
+    for name in files[:10]:
+        print(f"    {name}")
+    if len(files) > 10:
+        print(f"    ... and {len(files) - 10} more")
 
 
 def main(argv=None) -> int:
