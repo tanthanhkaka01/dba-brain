@@ -8,9 +8,18 @@ Responsibilities:
 * ``serve``             — run a threaded HTTP server and refresh the ``latest`` symlink in a
   background thread.
 
-Symlinks are used deliberately (the chosen "latest" mechanism). On Linux (the worker target)
-they always work; on Windows they may require privilege — failures are logged, not fatal, so
-the server still serves the timestamped files directly.
+Symlinks are the preferred mechanism and neither one is required. On Linux they always work; on
+Windows both need `SeCreateSymbolicLinkPrivilege`, which an ordinary account does not hold, and
+until 2026-09-05 the failure was logged and shrugged off — the note here said the server "still
+serves the timestamped files directly", which was wrong twice over:
+
+* the **mount** symlink is what put the report directory under ``/<mount>/``. Without it the
+  server served an empty ``webroot`` and *every* report URL was 404, timestamped or not;
+* the **latest link** is the fixed URL the reports, the SLA page and `/spbot_self_status` all
+  hand out, so it 404'd on every Windows node.
+
+Both now degrade to something that works: the mount is resolved in-process by stripping the URL
+prefix, and the latest link falls back to copying the newest report over it.
 """
 
 from __future__ import annotations
@@ -110,7 +119,8 @@ def snapshot_at_or_before(root: Path, pattern: str, target_stamp: str,
 
 
 def make_handler(*, directory: str, mount: str, latest: str, latest_glob: str, root: Path,
-                 logger: Any | None = None, console: Any = None) -> type:
+                 logger: Any | None = None, console: Any = None,
+                 strip_mount: bool = False) -> type:
     """Build a request handler that serves a dated snapshot for any ``?date=`` request.
 
     A ``?date=`` (or ``?at=``) query is answered with the newest snapshot at or before that
@@ -141,6 +151,23 @@ def make_handler(*, directory: str, mount: str, latest: str, latest_glob: str, r
     class _ReportHandler(SimpleHTTPRequestHandler):
         def __init__(self, *a: Any, **kw: Any) -> None:
             super().__init__(*a, directory=directory, **kw)
+
+        def translate_path(self, path: str) -> str:  # noqa: ANN001 - matches stdlib signature
+            """Map ``/<mount>/x`` onto ``x`` when the report directory is served directly.
+
+            With the mount symlink in place the prefix is a real directory and the stdlib maps it.
+            Without it — Windows without the privilege — the server is pointed at the report
+            directory itself and the prefix is removed here instead, so the same URL answers on
+            both. `send_head` rewrites `self.path` to `/<mount>/<snapshot>` for a `?date=` request,
+            which passes through this the same way.
+            """
+            if strip_mount:
+                prefix = f"/{mount}"
+                if path == prefix:
+                    path = "/"
+                elif path.startswith(f"{prefix}/") or path.startswith(f"{prefix}?"):
+                    path = path[len(prefix):] or "/"
+            return super().translate_path(path)
 
         # -- console ------------------------------------------------------ #
         def _console_path(self) -> str:
@@ -231,32 +258,72 @@ def make_handler(*, directory: str, mount: str, latest: str, latest_glob: str, r
 
 
 def refresh_latest(root: Path, link_name: str, pattern: str, *, logger: Any | None = None) -> Path | None:
-    """Point ``root/link_name`` at the newest file matching ``pattern`` (relative symlink).
+    """Point ``root/link_name`` at the newest file matching ``pattern``.
 
-    Idempotent: rewrites the symlink only when the target changed. Returns the resolved
-    target file, or ``None`` when there is nothing to link / the link could not be created.
+    A relative symlink when the platform allows one, and **a copy when it does not**. The fixed
+    URL is what the reports, the SLA page and `/spbot_self_status` all hand out; on Windows the
+    symlink needs a privilege an ordinary account lacks, and returning ``None`` there left that
+    URL 404 on every node. A copy costs one duplicated file per build and the link works.
+
+    Idempotent either way: the symlink is rewritten only when its target changed, and the copy
+    only when the newest report is not already the one sitting there.
     """
     newest = _newest_match(root, pattern)
     if newest is None:
         return None
     link = root / link_name
+    if _already_current(link, newest):
+        return newest
     try:
+        # Only now, with a replacement due: the old code unlinked first and then tried the
+        # symlink, so on a platform that refuses one the attempt *destroyed* whatever was there.
+        # A hand-placed copy of the newest report survived exactly until the next request for it.
         if link.is_symlink() or link.exists():
-            # Already correct? (compare relative target) -> nothing to do.
-            try:
-                if link.is_symlink() and Path(link.readlink()).name == newest.name:
-                    return newest
-            except OSError:
-                pass
             link.unlink()
         link.symlink_to(newest.name)  # relative target keeps it valid across host/container mounts
         return newest
     except OSError as exc:  # noqa: BLE001 - Windows w/o privilege, read-only fs, etc.
+        return _copy_as_latest(link, newest, symlink_error=exc, logger=logger)
+
+
+def _already_current(link: Path, newest: Path) -> bool:
+    """Is ``link`` already the newest report — as a symlink onto it, or as a copy of it?
+
+    Both forms have to be recognised here rather than inside the branch that writes them. This
+    function runs on **every request** for the latest URL, and answering "no" for a copy that is
+    already correct means re-copying a 1.5 MB report per page view.
+    """
+    try:
+        if link.is_symlink():
+            return Path(link.readlink()).name == newest.name
+        if link.is_file():
+            current, source = link.stat(), newest.stat()
+            return current.st_size == source.st_size and current.st_mtime == source.st_mtime
+    except OSError:
+        return False
+    return False
+
+
+def _copy_as_latest(link: Path, newest: Path, *, symlink_error: OSError,
+                    logger: Any | None = None) -> Path | None:
+    """Copy ``newest`` over ``link`` — the fallback when a symlink cannot be created.
+
+    ``copy2`` carries the source's mtime across, which is what lets :func:`_already_current`
+    recognise the copy next time by comparing timestamps rather than reading 1.5 MB back.
+    """
+    import shutil
+
+    try:
+        shutil.copy2(newest, link)
+        return newest
+    except OSError as copy_error:  # noqa: BLE001 - report both, the first is the reason for this
         if logger is not None:
             from db_ops.logging_ops import log_event
 
             log_event(logger, level="warning",
-                      message=f"webhost: could not update latest symlink {link} -> {newest.name}: {exc}")
+                      message=(f"webhost: could not publish {link} as the latest report "
+                               f"({newest.name}): symlink failed with {symlink_error}, "
+                               f"and the copy fallback failed with {copy_error}"))
         return None
 
 
@@ -322,6 +389,18 @@ def serve(
     webroot_path = Path(webroot).resolve()
 
     build_webroot(root_path, mount, webroot_path, logger=logger)
+    # Did the mount symlink actually appear? When it did not, serve the report directory itself
+    # and take the prefix off in the handler. Without this the server sat on an empty webroot and
+    # answered 404 for every report on the node - which is what it did on Windows.
+    mount_entry = webroot_path / mount
+    strip_mount = not (mount_entry.is_symlink() or mount_entry.exists())
+    served_directory = root_path if strip_mount else webroot_path
+    if strip_mount and logger is not None:
+        from db_ops.logging_ops import log_event
+
+        log_event(logger, level="logging",
+                  message=(f"webhost: no mount symlink at {mount_entry}; serving {root_path} "
+                           f"directly and resolving the /{mount}/ prefix in process"))
     refresh_latest(root_path, latest, latest_glob, logger=logger)
 
     refresher = threading.Thread(
@@ -334,7 +413,8 @@ def serve(
     refresher.start()
 
     handler = make_handler(
-        directory=str(webroot_path),
+        directory=str(served_directory),
+        strip_mount=strip_mount,
         mount=mount,
         latest=latest,
         latest_glob=latest_glob,

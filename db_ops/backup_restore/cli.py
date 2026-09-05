@@ -1025,7 +1025,7 @@ def run_restore_workflow(
                 step_config = dataclasses.replace(
                     config, copy_recent_hours=delete_hours if delete_hours is not None else entry_hours
                 )
-                result = run_delete_backup(step_config, logger=logger)
+                result = run_delete_backup(step_config, logger=logger, dry_run=dry_run)
                 delete_outputs.append(
                     {
                         "source_id": step_config.source_id,

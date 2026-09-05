@@ -186,3 +186,98 @@ def test_a_baseline_store_command_is_still_unconverted(command: str, capsys) -> 
 def test_the_baseline_names_only_commands_that_exist() -> None:
     unknown = sorted(NOT_YET_ENVELOPE - set(STORE_COMMANDS))
     assert not unknown, f"NOT_YET_ENVELOPE names commands this dispatcher does not have: {unknown}"
+
+
+# --------------------------------------------------------------------------------------------- #
+# The output half: stdout is the answer, never both
+# --------------------------------------------------------------------------------------------- #
+def test_no_handler_prints_a_listing_and_an_envelope_on_the_same_run() -> None:
+    """A human line in front of a JSON document leaves stdout parsing as neither.
+
+    `db_ops.common.cli` has held this rule since 2026-08-16 — `format: "txt"` prints the listing
+    and returns, the default prints the envelope and nothing else — and
+    `tests/test_common_cli_response_shape.py` enforces it *there*. `db.cli` was never covered, and
+    both of its history commands did exactly what that file calls the worse case: printed the
+    listing, then emitted the envelope carrying the same listing again. `/spbot_list_my_commands`
+    relays `{stdout}` into a chat, so the reply was the listing followed by its own JSON — over
+    Telegram's 4096 limit, split into two messages, the second of them pure noise.
+
+    The refusal-path tests above could not see it: they exercise the shared request parser, and
+    the defect is on the answer path. So this reads the source instead, and states the rule as a
+    shape a reader can check by eye — a ``print`` of a computed value ends its branch. A ``print``
+    of an all-caps constant is the ``--help`` path and is not part of an answer.
+    """
+    import ast
+    import pathlib
+
+    source = pathlib.Path(cli.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=cli.__file__)
+
+    offenders: list[str] = []
+    for function in [node for node in ast.walk(tree)
+                     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                     and _emits_an_envelope(node)]:
+        # Every statement list in the function - a body, an else, a finally - is its own branch.
+        # `ast.Lambda.body` is a single expression rather than a list, which is why the type is
+        # checked instead of only the attribute name.
+        for node in ast.walk(function):
+            for field in ("body", "orelse", "finalbody"):
+                statements = getattr(node, field, None)
+                if not isinstance(statements, list):
+                    continue
+                for index, statement in enumerate(statements):
+                    if not _is_print_of_a_value(statement):
+                        continue
+                    rest = statements[index + 1:]
+                    # It must end the branch *without answering again*. `return response.emit(...)`
+                    # is a return, and it is the defect: the listing and the envelope both reach
+                    # stdout. The first version of this guard accepted it and therefore measured
+                    # nothing - it passed with the original code pasted back in.
+                    ends_quietly = (
+                        len(rest) == 1
+                        and isinstance(rest[0], ast.Return)
+                        and not _emits_an_envelope(rest[0])
+                    )
+                    if not ends_quietly:
+                        printed = ast.unparse(statement.value.args[0])
+                        offenders.append(
+                            f"{function.name}: print({printed}) is followed by another answer")
+
+    assert not offenders, (
+        "these print a computed value and then answer again, so both land on the same "
+        f"stdout: {offenders}. Put the human listing behind `format: \"txt\"` and return, and let "
+        "the default answer with the envelope alone - the caller reads one document either way."
+    )
+
+
+def _emits_an_envelope(function: object) -> bool:
+    """Whether this handler answers with `response.emit`.
+
+    The rule is only about mixing the two. `store-info`, `create-store-database` and
+    `backfill-from-sqlite` print a human report and nothing else — several lines of it, none
+    followed by a return — and that is a single readable document, not the defect.
+    """
+    import ast
+
+    for node in ast.walk(function):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "emit"):
+            return True
+    return False
+
+
+def _is_print_of_a_value(statement: object) -> bool:
+    """``print(listing)`` — a print of something computed, not of a USAGE constant."""
+    import ast
+
+    if not isinstance(statement, ast.Expr) or not isinstance(statement.value, ast.Call):
+        return False
+    call = statement.value
+    if not (isinstance(call.func, ast.Name) and call.func.id == "print"):
+        return False
+    if len(call.args) != 1 or call.keywords:
+        return False  # print(..., file=sys.stderr) is an error report, not the answer
+    argument = call.args[0]
+    if isinstance(argument, ast.Name) and argument.id.isupper():
+        return False  # print(SOMETHING_USAGE) - the --help path
+    return not isinstance(argument, ast.JoinedStr)  # f-string help text, same thing

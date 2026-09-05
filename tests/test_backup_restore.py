@@ -1717,7 +1717,7 @@ def test_restore_workflow_orchestrates_existing_steps_in_order(tmp_path, monkeyp
         calls.append(("restore-latest", kwargs["config"].source_id))
         return {"status": "SUCCESS"}
 
-    def fake_delete(step_config, logger=None):
+    def fake_delete(step_config, logger=None, dry_run=False):
         calls.append(("delete-backup", step_config.copy_recent_hours))
         return DeleteBackupResult(
             returncode=0,
@@ -2485,6 +2485,101 @@ def test_run_delete_backup_deletes_only_old_files_from_target(tmp_path):
     assert old_source.exists()
 
 
+def test_run_delete_backup_deletes_nothing_on_a_dry_run(tmp_path):
+    """`restore-workflow --dry-run` reported a plan and removed 26 files while doing it.
+
+    The workflow passed `dry_run` to the copy step and to the restore step and not to this one —
+    `run_delete_backup(step_config, logger=logger)` — and the function had no such parameter to
+    pass, so all three delete engines removed files unconditionally. Found on 2026-09-05 by dry
+    running a real drill before the real run: the files it took were already past retention and
+    would have gone on the next real run, which is why nothing was lost and why nobody had noticed.
+
+    The same file, the same age, the only difference being the flag.
+    """
+    import os
+
+    config = make_config(tmp_path)
+    old_target = config.vm_import_unc / "APPDB_Prod" / "FULL" / "old.bak"
+    recent_target = config.vm_import_unc / "APPDB_Prod" / "FULL" / "recent.bak"
+    old_target.parent.mkdir(parents=True)
+    old_target.write_text("old", encoding="utf-8")
+    # Two, because the newest file for a database is held back as still needed: with one file
+    # there is nothing obsolete and the real run would delete nothing either, which would let a
+    # broken dry run pass for the wrong reason.
+    recent_target.write_text("recent", encoding="utf-8")
+
+    now = 1_800_000_000
+    os.utime(old_target, (now - 90_000, now - 90_000))
+    os.utime(recent_target, (now - 60, now - 60))
+
+    import db_ops.backup_restore.delete_backup as delete_backup
+
+    original_time = delete_backup.time.time
+    delete_backup.time.time = lambda: now
+    try:
+        planned = run_delete_backup(config, dry_run=True)
+        assert old_target.exists(), "a dry run deleted the file it was only supposed to name"
+        assert planned.deleted == 0, f"a dry run reported {planned.deleted} deletion(s)"
+
+        applied = run_delete_backup(config)
+    finally:
+        delete_backup.time.time = original_time
+
+    assert applied.deleted == 1, "and the real run still deletes it"
+    assert not old_target.exists()
+    assert recent_target.exists()
+
+
+def test_restore_workflow_hands_dry_run_to_every_step(tmp_path, monkeypatch):
+    """The restore was told this was a dry run; the delete was not, and deleted.
+
+    `run_delete_backup(step_config, logger=logger)` — no `dry_run`, and the function had no such
+    parameter to receive one, so all three delete engines removed files. The step is guarded now,
+    but a guard nothing reaches is the defect all over again, so what is pinned here is the *call*.
+
+    **`run_copy_backup` still has no `dry_run` either**, so a dry run of this workflow really does
+    pull the files across. That is additive rather than destructive and it is four engines' worth
+    of change, so it is recorded as open rather than half-fixed — and it is why this asserts the
+    delete link only. When copy grows the parameter, add it here.
+    """
+    from db_ops.backup_restore import cli as cli_module
+
+    seen: dict[str, object] = {}
+
+    def fake_copy(step_config, logger=None, force=False):
+        # copied=1: the workflow refuses a run that selected no files, which is exactly what the
+        # drill in this estate hit for two days once its backup stopped producing any.
+        return CopyBackupResult(returncode=0, source_backup_dir=tmp_path, local_import_dir=tmp_path,
+                                files_considered=1, copied=1, skipped=0, file_results=())
+
+    def fake_restore(config, db_ops_config, dry_run, logger, point_in_time_utc):
+        seen["restore"] = dry_run
+        return {"status": "SUCCESS", "overall_status": "SUCCESS", "databases_considered": 0,
+                "per_database_restore_status": {}}
+
+    def fake_delete(step_config, logger=None, dry_run=False):
+        seen["delete"] = dry_run
+        return DeleteBackupResult(returncode=0, target_backup_dir=tmp_path,
+                                  delete_older_than_hours=48, files_considered=0, deleted=0,
+                                  file_results=())
+
+    monkeypatch.setattr(cli_module, "run_copy_backup", fake_copy)
+    monkeypatch.setattr(cli_module, "run_restore_all_latest", fake_restore)
+    monkeypatch.setattr(cli_module, "run_delete_backup", fake_delete)
+    monkeypatch.setattr(cli_module, "run_target_preflight", lambda config, logger=None: None)
+
+    cfg, _ = _make_two_target_configs(tmp_path)
+    app_config = DbOpsConfig(log_dir=tmp_path / "logs", runtime_dir=tmp_path / "runtime",
+                             sqlite_path=tmp_path / "runtime" / "db_ops.sqlite")
+
+    cli_module.run_restore_workflow(
+        restore_configs=[cfg], app_config=app_config, dry_run=True, logger=None,
+    )
+
+    assert seen == {"restore": True, "delete": True}, (
+        f"a step was not told this is a dry run: {seen}")
+
+
 def test_run_delete_backup_rejects_target_overlapping_source(tmp_path):
     config = make_config(tmp_path)
     unsafe = BackupRestoreConfig(
@@ -3028,7 +3123,7 @@ def test_restore_workflow_pitr_passes_point_in_time_to_restore(tmp_path, monkeyp
         captured["point_in_time_utc"] = point_in_time_utc
         return {"status": "SUCCESS", "overall_status": "SUCCESS", "databases_considered": 0, "per_database_restore_status": {}}
 
-    def fake_delete(step_config, logger=None):
+    def fake_delete(step_config, logger=None, dry_run=False):
         return DeleteBackupResult(returncode=0, target_backup_dir=tmp_path, delete_older_than_hours=48, files_considered=0, deleted=0, file_results=())
 
     monkeypatch.setattr("db_ops.backup_restore.cli.run_copy_backup", fake_copy)
@@ -3105,7 +3200,7 @@ def test_restore_workflow_emits_phase_progress_logs(tmp_path, monkeypatch):
     monkeypatch.setattr(
         cli_module,
         "run_delete_backup",
-        lambda config, logger=None: DeleteBackupResult(
+        lambda config, logger=None, dry_run=False: DeleteBackupResult(
             returncode=0,
             target_backup_dir=config.vm_import_unc,
             delete_older_than_hours=config.copy_recent_hours,
@@ -3453,7 +3548,7 @@ def _fake_workflow_ops(monkeypatch, called_targets):
         called_targets.append(("restore", config.target_id))
         return {"status": "SUCCESS", "per_database_restore_status": {}}
 
-    def fake_delete(step_config, logger=None):
+    def fake_delete(step_config, logger=None, dry_run=False):
         called_targets.append(("delete", step_config.target_id))
         return DeleteBackupResult(returncode=0, target_backup_dir=step_config.vm_import_unc, delete_older_than_hours=48, files_considered=0, deleted=0, file_results=())
 
@@ -3545,7 +3640,7 @@ def test_restore_workflow_windows_then_linux_keeps_per_restore_executor(tmp_path
     )
     monkeypatch.setattr(
         "db_ops.backup_restore.cli.run_delete_backup",
-        lambda config, logger=None: DeleteBackupResult(
+        lambda config, logger=None, dry_run=False: DeleteBackupResult(
             returncode=0,
             target_backup_dir=config.vm_import_unc,
             delete_older_than_hours=config.copy_recent_hours,
