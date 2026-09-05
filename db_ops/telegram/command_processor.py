@@ -20,6 +20,14 @@ from db_ops.lib import common_cli
 # Reading a command message and writing one back is pure text, and `common` rebuilds a
 # command line from it for /spbot_list_my_commands. Re-exported so this module stays the
 # name every caller already imports - the same shim as db_ops/telegram/severity.py.
+# Whether a PID is a running process is not a Telegram rule - `self-status` asks it too, and
+# `common` may not import an app. Re-exported under the private names this module already
+# uses, so the call sites below did not move with it.
+from db_ops.lib.process_liveness import (  # noqa: F401 - re-exported, see above
+    is_pid_alive as _is_pid_alive,
+    is_windows_pid_alive as _is_windows_pid_alive,
+    is_zombie as _is_zombie,
+)
 from db_ops.lib.telegram_command_text import (  # noqa: F401 - re-exported, see above
     command_key_from_message,
     first_command_token,
@@ -2672,68 +2680,6 @@ def _read_exit_code_file(path: str) -> int | None:
         return int(text)
     except ValueError:
         return None
-
-
-def _is_zombie(pid: int) -> bool:
-    """A finished process whose parent has not reaped it.
-
-    A detached CLI is started with start_new_session, so when the Telegram workflow that spawned
-    it exits, the child is re-parented to PID 1 — inside the container that is the db_ops daemon,
-    which does not reap orphans. The process then sits in state Z: it has *exited*, but it still
-    has a PID, and ``os.kill(pid, 0)`` succeeds on it.
-
-    Treating that as "still running" is what made a failed `create-db-docker` reply nothing for
-    half an hour and then report a timeout instead of the real error.
-    """
-    try:
-        with open(f"/proc/{pid}/stat", "r", encoding="utf-8") as handle:
-            fields = handle.read().rsplit(")", 1)[-1].split()
-    except (OSError, IndexError):
-        return False
-    return bool(fields) and fields[0] == "Z"
-
-
-def _is_windows_pid_alive(pid: int) -> bool:
-    """Is this PID a *running* process on Windows?
-
-    A failed ``OpenProcess`` means the process is gone, and for **liveness** that is the right
-    reading — it was only wrong as an *exit code*, which is what the function this replaces
-    returned ``1`` for. Liveness and outcome are two questions and were answered by one call.
-    """
-    import ctypes
-
-    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-    STILL_ACTIVE = 259
-    kernel32 = ctypes.windll.kernel32
-    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
-    if not handle:
-        return False
-    try:
-        code = ctypes.c_ulong()
-        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
-            # The handle opened but the state cannot be read. Treated as alive so the poller
-            # waits rather than declaring an outcome it does not have.
-            return True
-        return code.value == STILL_ACTIVE
-    finally:
-        kernel32.CloseHandle(handle)
-
-
-def _is_pid_alive(pid: int) -> bool:
-    if sys.platform == "win32":
-        return _is_windows_pid_alive(pid)
-    else:
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            return True
-        except OSError:
-            return False
-        # The signal reached it, but a zombie is not running: it is an exit status nobody
-        # collected. Reading /proc tells the difference; os.kill cannot.
-        return not _is_zombie(pid)
 
 
 # `docker compose` writes its progress to stderr — "Network x Creating", "Volume y Created",

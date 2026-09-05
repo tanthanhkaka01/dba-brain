@@ -89,9 +89,15 @@ def test_a_zombie_is_not_alive(monkeypatch, tmp_path):
     proc.mkdir()
     # Field 3 of /proc/<pid>/stat is the state, after the (possibly parenthesised) comm.
     (proc / "stat").write_text("4242 (python3) Z 1 4242 0 0 -1 4194560 0 0\n", encoding="utf-8")
-    monkeypatch.setattr(cp.sys, "platform", "linux")  # the container the worker runs in
-    monkeypatch.setattr(cp, "open", lambda path, *a, **kw: (proc / "stat").open(*a, **kw), raising=False)
-    monkeypatch.setattr(cp.os, "kill", lambda pid, sig: None)
+    # Patched on `process_liveness`, which is where the rule lives now; `command_processor`
+    # re-exports it, so `cp._is_pid_alive` is still the name under test and still the one
+    # production calls. Patching `cp` stopped reaching the code the day it moved.
+    from db_ops.lib import process_liveness as liveness
+
+    monkeypatch.setattr(liveness.sys, "platform", "linux")  # the container the worker runs in
+    monkeypatch.setattr(liveness, "open", lambda path, *a, **kw: (proc / "stat").open(*a, **kw),
+                        raising=False)
+    monkeypatch.setattr(liveness.os, "kill", lambda pid, sig: None)
 
     assert cp._is_zombie(4242) is True
     assert cp._is_pid_alive(4242) is False

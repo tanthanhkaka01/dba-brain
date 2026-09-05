@@ -15,6 +15,25 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-09-05
+
+### Added
+
+- **`db_ops up` in `self-status`** — how long the daemon of this tool root has been running, beside
+  the machine's uptime `0.9.0` added. The question people ask `self-status` is about the
+  installation, and that was the one it could not answer: it runs as a separate short-lived process
+  and opens no store on purpose. The daemon now leaves a small state file in `runtime/`, and the
+  reader believes it only while its pid is alive — a hard kill leaves the file behind, and trusting
+  the timestamp alone would report a daemon as up since a stop days ago. Reports `running`,
+  `not running` (stopped cleanly, or never run here), and `not running … pid is gone` (died without
+  unwinding) as distinct answers. The line reads `not running` until the daemon is restarted on this
+  version, because an older daemon never wrote the file.
+
+### Fixed
+
+- **`daemon --once` left its state file behind**, so the next reader would have called a deliberate
+  single pass a daemon that died without unwinding.
+
 ## [0.9.0] - 2026-09-05
 
 ### Added

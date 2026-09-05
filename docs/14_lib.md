@@ -213,6 +213,8 @@ exactly the class-does-not-survive-a-subprocess point above.
 | `report_archive.py` | naming and daily archiving of published reports — path in, path out |
 | `telegram_text.py` | fit a body into Telegram's limit **by splitting, never by cutting** |
 | `telegram_command_text.py` | read a `/spbot...` message into a command and arguments, and write one back as the line that runs it |
+| `process_liveness.py` | is this PID a *running* process — the zombie trap on POSIX and the `OpenProcess` one on Windows, in one place |
+| `daemon_state.py` | the daemon's own start, left in `runtime/` so something that is not the daemon can say how long DBA Brain has been up — believed only while its pid is alive |
 | `telegram_severity.py` | the severity emoji, applied once at the send layer |
 | `powershell.py` | quoting, encoding, and the `Invoke-Command` wrapper |
 | `sql_text.py` | SQL text and result limits — the parts of running a query that are not the running |
