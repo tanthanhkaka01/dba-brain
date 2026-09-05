@@ -13,8 +13,9 @@ host protects nothing, which is exactly how 2026-08-26 happened. What db_ops *ca
 Keeps Docker's own address allocation off the ranges this estate routes real databases on.
 
 Docker's default address pool is `172.17.0.0/16 … 172.31.0.0/16`, handed out a `/16` at a time,
-and `docker0` itself takes `172.17.0.0/16`. The inventory has production hosts inside that space —
-`172.17.100.x`, `172.17.187.x`, `172.18.99.x`. When a Docker network claims one of those ranges,
+and `docker0` itself takes `172.17.0.0/16`. An estate whose inventory has production hosts inside
+that space — which is common, because it is private address space like any other — gives Docker and
+the databases the same ranges to fight over. When a Docker network claims one of them,
 the **host route table** starts sending that traffic into a local bridge, and the database simply
 vanishes from the worker while staying perfectly reachable from everywhere else.
 

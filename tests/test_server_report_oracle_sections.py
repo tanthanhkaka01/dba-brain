@@ -220,8 +220,8 @@ def test_a_sql_server_log_file_space_row_produces_no_redo_section():
     code, already rendered by the databases table. The section is selected by item, never by
     being told which engine it is looking at."""
     section = build_oracle_redo([
-        _row("LOG_FILE_SPACE", "PowerPick", "3.94",
-             "database=PowerPick, log_used_pct=3.94, log_size_mb=5485.87, used_log_mb=216.06, "
+        _row("LOG_FILE_SPACE", "Ledger", "3.94",
+             "database=Ledger, log_used_pct=3.94, log_size_mb=5485.87, used_log_mb=216.06, "
              "free_log_mb=5269.81"),
     ])
 

@@ -41,12 +41,12 @@ def test_a_single_segment_subpath_still_resolves_the_way_it_always_did():
 
 
 def test_a_multi_segment_subpath_is_stripped_too():
-    """`\\\\192.0.2.248\\D$\\DBA\\SqlBK\\SERVER-TAP$SQLEXPRESS` — reaching a maintenance-plan
+    """`\\\\192.0.2.248\\D$\\DBA\\SqlBK\\EXAMPLE-SQL$SQLEXPRESS` — reaching a maintenance-plan
     tree that has no share of its own. Before the fix this returned the whole
-    `DBA\\SqlBK\\SERVER-TAP$SQLEXPRESS\\...` path, so every file staged three directories too
+    `DBA\\SqlBK\\EXAMPLE-SQL$SQLEXPRESS\\...` path, so every file staged three directories too
     deep and the restore found nothing."""
-    assert _relative("\\DBA\\SqlBK\\SERVER-TAP$SQLEXPRESS\\Globex_Prod\\LOG",
-                     "DBA/SqlBK/SERVER-TAP$SQLEXPRESS") == \
+    assert _relative("\\DBA\\SqlBK\\EXAMPLE-SQL$SQLEXPRESS\\Globex_Prod\\LOG",
+                     "DBA/SqlBK/EXAMPLE-SQL$SQLEXPRESS") == \
         "Globex_Prod\\LOG\\f_LOG_20260813_021500.trn"
 
 
@@ -66,7 +66,7 @@ def test_a_share_root_with_no_subpath_is_unchanged():
 
 def test_the_parser_still_splits_the_unc_into_host_share_and_subpath():
     host, share, subpath = copy_backup._parse_unc_share(
-        Path("\\\\192.0.2.248\\D$\\DBA\\SqlBK\\SERVER-TAP$SQLEXPRESS"))
+        Path("\\\\192.0.2.248\\D$\\DBA\\SqlBK\\EXAMPLE-SQL$SQLEXPRESS"))
 
     assert (host, share) == ("192.0.2.248", "D$")
-    assert subpath == "DBA/SqlBK/SERVER-TAP$SQLEXPRESS"
+    assert subpath == "DBA/SqlBK/EXAMPLE-SQL$SQLEXPRESS"

@@ -1,7 +1,7 @@
 """A container network that claims a routed range takes a database off one host and nowhere else.
 
 This is the failure these tests defend against, and it has happened three times to the same SQL
-Server: 2026-08-05 (the db_ops compose network took 172.18.0.0/16), 2026-08-14 (a lab project took
+Server: 2026-08-05 (the db_ops compose network took 172.20.0.0/16), 2026-08-14 (a lab project took
 it), and 2026-08-26 (``docker0`` took it on a newly built worker VM). Each time the instance was
 healthy and reachable from every other machine; each time the worker reported an ordinary connect
 timeout, because that is exactly what a dropped SYN looks like from a database driver.
@@ -67,52 +67,52 @@ def _evaluate(networks, addresses, *, routed=(), container=()):
 # --------------------------------------------------------------------------- #
 
 def test_a_bridge_holding_a_monitored_address_is_reported_as_a_hijack():
-    """The 2026-08-26 outage, reduced: docker0 on 172.18.0.0/16 with Scanpack at 172.18.99.10."""
+    """The 2026-08-26 outage, reduced: docker0 on 172.20.0.0/16 with one database at 172.20.99.10."""
     findings = _evaluate(
-        [("bridge", "172.18.0.0/16")],
-        [{"ip": "172.18.99.10", "server_id": "DB-172-18-99-10"}],
-        routed=["172.18.99.0/24"],
+        [("bridge", "172.20.0.0/16")],
+        [{"ip": "172.20.99.10", "server_id": "DB-172-20-99-10"}],
+        routed=["172.20.99.0/24"],
         container=["172.30.0.0/16"],
     )
 
     assert [item.kind for item in findings] == [HIJACK]
     assert findings[0].network_name == "bridge"
-    assert findings[0].captured[0].address == "172.18.99.10"
+    assert findings[0].captured[0].address == "172.20.99.10"
 
 
 def test_the_hijack_line_names_the_network_the_address_and_the_instance():
     """The whole point is that one line replaces an afternoon of driver debugging."""
     findings = _evaluate(
-        [("bridge", "172.18.0.0/16")],
-        [{"ip": "172.18.99.10", "server_id": "DB-172-18-99-10"}],
-        routed=["172.18.99.0/24"],
+        [("bridge", "172.20.0.0/16")],
+        [{"ip": "172.20.99.10", "server_id": "DB-172-20-99-10"}],
+        routed=["172.20.99.0/24"],
     )
 
     summary = findings[0].summary()
     assert "bridge" in summary
-    assert "172.18.0.0/16" in summary
-    assert "172.18.99.10" in summary
-    assert "DB-172-18-99-10" in summary
+    assert "172.20.0.0/16" in summary
+    assert "172.20.99.10" in summary
+    assert "DB-172-20-99-10" in summary
 
 
 def test_a_hijack_is_critical_and_everything_else_is_a_warning():
-    hijack = _evaluate([("bridge", "172.18.0.0/16")], [{"ip": "172.18.99.10", "server_id": "s"}],
-                       routed=["172.18.99.0/24"])
-    overlap = _evaluate([("bridge", "172.18.0.0/16")], [], routed=["172.18.99.0/24"])
+    hijack = _evaluate([("bridge", "172.20.0.0/16")], [{"ip": "172.20.99.10", "server_id": "s"}],
+                       routed=["172.20.99.0/24"])
+    overlap = _evaluate([("bridge", "172.20.0.0/16")], [], routed=["172.20.99.0/24"])
 
     assert hijack[0].severity == "CRITICAL"
     assert overlap[0].severity == "WARNING"
 
 
 def test_every_captured_address_in_one_subnet_is_named_not_just_the_first():
-    """172.18.0.0/16 swallowed both 99.10 and 99.20; a report naming one of them hides the other."""
+    """172.20.0.0/16 swallowed both 99.10 and 99.20; a report naming one of them hides the other."""
     findings = _evaluate(
-        [("bridge", "172.18.0.0/16")],
-        [{"ip": "172.18.99.10", "server_id": "first-db"}, {"ip": "172.18.99.20", "server_id": "second-db"}],
-        routed=["172.18.99.0/24"],
+        [("bridge", "172.20.0.0/16")],
+        [{"ip": "172.20.99.10", "server_id": "first-db"}, {"ip": "172.20.99.20", "server_id": "second-db"}],
+        routed=["172.20.99.0/24"],
     )
 
-    assert {item.address for item in findings[0].captured} == {"172.18.99.10", "172.18.99.20"}
+    assert {item.address for item in findings[0].captured} == {"172.20.99.10", "172.20.99.20"}
 
 
 # --------------------------------------------------------------------------- #
@@ -121,11 +121,11 @@ def test_every_captured_address_in_one_subnet_is_named_not_just_the_first():
 
 def test_a_routed_range_with_nothing_in_it_yet_is_an_overlap_not_a_hijack():
     """Nothing is down, but the next instance added to that range would vanish on arrival."""
-    findings = _evaluate([("lab", "172.18.0.0/16")], [{"ip": "10.0.0.5", "server_id": "elsewhere"}],
-                         routed=["172.18.99.0/24"])
+    findings = _evaluate([("lab", "172.20.0.0/16")], [{"ip": "10.0.0.5", "server_id": "elsewhere"}],
+                         routed=["172.20.99.0/24"])
 
     assert [item.kind for item in findings] == [OVERLAP]
-    assert findings[0].routed_cidr == "172.18.99.0/24"
+    assert findings[0].routed_cidr == "172.20.99.0/24"
 
 
 def test_a_network_outside_every_declared_container_range_is_unconfined():
@@ -140,8 +140,8 @@ def test_a_network_outside_every_declared_container_range_is_unconfined():
 
 
 def test_a_network_inside_a_declared_container_range_is_not_reported():
-    findings = _evaluate([("db_ops_default", "172.30.240.0/24")], [{"ip": "172.17.100.10", "server_id": "s"}],
-                         routed=["172.17.0.0/16"], container=["172.30.0.0/16"])
+    findings = _evaluate([("db_ops_default", "172.30.240.0/24")], [{"ip": "172.21.100.10", "server_id": "s"}],
+                         routed=["172.21.0.0/16"], container=["172.30.0.0/16"])
 
     assert findings == ()
 
@@ -159,17 +159,17 @@ def test_a_network_straddling_the_container_range_boundary_is_still_unconfined()
 
 def test_a_network_that_is_both_unconfined_and_hijacking_is_reported_as_the_hijack():
     """One line per network, and it has to be the line the operator must act on."""
-    findings = _evaluate([("bridge", "172.18.0.0/16")], [{"ip": "172.18.99.10", "server_id": "s"}],
-                         routed=["172.18.99.0/24"], container=["172.30.0.0/16"])
+    findings = _evaluate([("bridge", "172.20.0.0/16")], [{"ip": "172.20.99.10", "server_id": "s"}],
+                         routed=["172.20.99.0/24"], container=["172.30.0.0/16"])
 
     assert [item.kind for item in findings] == [HIJACK]
 
 
 def test_findings_are_ordered_worst_first():
     findings = _evaluate(
-        [("unconfined", "172.19.0.0/16"), ("overlapping", "172.17.0.0/16"), ("hijacking", "172.18.0.0/16")],
-        [{"ip": "172.18.99.10", "server_id": "s"}],
-        routed=["172.17.0.0/16", "172.18.99.0/24"],
+        [("unconfined", "172.19.0.0/16"), ("overlapping", "172.21.0.0/16"), ("hijacking", "172.20.0.0/16")],
+        [{"ip": "172.20.99.10", "server_id": "s"}],
+        routed=["172.21.0.0/16", "172.20.99.0/24"],
         container=["172.30.0.0/16"],
     )
 
@@ -189,26 +189,26 @@ def test_networks_that_allocate_nothing_are_ignored():
 
 def test_a_network_declaring_several_subnets_is_checked_on_each_one():
     """Only the second subnet hijacks, so stopping at the first would miss it entirely."""
-    findings = _evaluate([("dual", "172.30.9.0/24"), ("dual", "172.18.0.0/16")],
-                         [{"ip": "172.18.99.10", "server_id": "s"}],
-                         routed=["172.18.99.0/24"], container=["172.30.0.0/16"])
+    findings = _evaluate([("dual", "172.30.9.0/24"), ("dual", "172.20.0.0/16")],
+                         [{"ip": "172.20.99.10", "server_id": "s"}],
+                         routed=["172.20.99.0/24"], container=["172.30.0.0/16"])
 
     assert [item.kind for item in findings] == [HIJACK]
-    assert findings[0].subnet == "172.18.0.0/16"
+    assert findings[0].subnet == "172.20.0.0/16"
 
 
 def test_an_inventory_row_whose_ip_is_a_hostname_is_skipped_not_fatal():
     """Resolving a name is the caller's business; a pure rule must not reach the network."""
     parsed = network_policy.parse_monitored_addresses(
-        [{"ip": "db-prod-01", "server_id": "s"}, {"ip": "172.18.99.10", "server_id": "t"}])
+        [{"ip": "db-prod-01", "server_id": "s"}, {"ip": "172.20.99.10", "server_id": "t"}])
 
-    assert [item.address for item in parsed] == ["172.18.99.10"]
+    assert [item.address for item in parsed] == ["172.20.99.10"]
 
 
 def test_a_repeated_address_is_counted_once():
     """Several instances share a host; the report should name the address once, not per instance."""
     parsed = network_policy.parse_monitored_addresses(
-        [{"ip": "172.17.187.10", "server_id": "a"}, {"ip": "172.17.187.10", "server_id": "b"}])
+        [{"ip": "172.21.187.10", "server_id": "a"}, {"ip": "172.21.187.10", "server_id": "b"}])
 
     assert len(parsed) == 1
 
@@ -216,10 +216,10 @@ def test_a_repeated_address_is_counted_once():
 def test_a_malformed_cidr_drops_that_entry_and_keeps_the_rest():
     """A typo in a declaration must not take down the report that would have named it."""
     reservations = network_policy.load_reservations({
-        "routed_ranges": [{"cidr": "172.18.99.0/99"}, {"cidr": "172.17.0.0/16"}],
+        "routed_ranges": [{"cidr": "172.20.99.0/99"}, {"cidr": "172.21.0.0/16"}],
     })
 
-    assert [item.cidr for item in reservations.routed_ranges] == ["172.17.0.0/16"]
+    assert [item.cidr for item in reservations.routed_ranges] == ["172.21.0.0/16"]
 
 
 def test_a_range_written_as_a_host_address_reads_as_the_network_it_names():
@@ -235,8 +235,8 @@ def test_a_missing_or_unusable_document_yields_no_ranges_rather_than_raising(raw
 
 
 def test_an_ipv6_container_network_does_not_match_an_ipv4_range():
-    findings = _evaluate([("v6", "fd00::/64")], [{"ip": "172.18.99.10", "server_id": "s"}],
-                         routed=["172.18.99.0/24"], container=["172.30.0.0/16"])
+    findings = _evaluate([("v6", "fd00::/64")], [{"ip": "172.20.99.10", "server_id": "s"}],
+                         routed=["172.20.99.0/24"], container=["172.30.0.0/16"])
 
     assert [item.kind for item in findings] == [UNCONFINED]
 
@@ -326,7 +326,7 @@ def test_every_monitored_address_in_the_inventory_sits_in_a_declared_routed_rang
 
 def _data_dir(tmp_path: Path, *, inventory) -> Path:
     (tmp_path / "network_reservations.json").write_text(json.dumps({
-        "routed_ranges": [{"cidr": "172.18.99.0/24", "owner": "estate LAN", "note": ""}],
+        "routed_ranges": [{"cidr": "172.20.99.0/24", "owner": "estate LAN", "note": ""}],
         "container_ranges": [{"cidr": "172.30.0.0/16", "owner": "db_ops", "note": ""}],
     }), encoding="utf-8")
     (tmp_path / "db_instances.json").write_text(json.dumps({"db_instances": inventory}), encoding="utf-8")
@@ -336,23 +336,23 @@ def _data_dir(tmp_path: Path, *, inventory) -> Path:
 def test_worker_status_names_the_hijacking_network_from_a_captured_listing(tmp_path):
     """The exact `docker network ls` output from the worker on 2026-08-26."""
     listing = (
-        "bridge\t172.18.0.0/16 \n"
+        "bridge\t172.20.0.0/16 \n"
         "db_ops_default\t172.30.240.0/24 \n"
         "host\t\n"
         "none\t\n"
     )
-    data_dir = _data_dir(tmp_path, inventory=[{"ip": "172.18.99.10", "server_id": "DB-172-18-99-10"}])
+    data_dir = _data_dir(tmp_path, inventory=[{"ip": "172.20.99.10", "server_id": "DB-172-20-99-10"}])
 
     lines = worker_status.report_network_reservations(listing, data_dir=data_dir)
 
-    assert any("HIJACK" in line and "172.18.99.10" in line for line in lines)
+    assert any("HIJACK" in line and "172.20.99.10" in line for line in lines)
     assert any("host_config" in line for line in lines), "the report must say where the fix lives"
 
 
 def test_worker_status_reports_a_clean_host_in_one_line(tmp_path):
     """After the fix: docker0 on 172.30.0.0/24 and nothing to say."""
     listing = "bridge\t172.30.0.0/24 \ndb_ops_default\t172.30.240.0/24 \nhost\t\n"
-    data_dir = _data_dir(tmp_path, inventory=[{"ip": "172.18.99.10", "server_id": "DB-172-18-99-10"}])
+    data_dir = _data_dir(tmp_path, inventory=[{"ip": "172.20.99.10", "server_id": "DB-172-20-99-10"}])
 
     lines = worker_status.report_network_reservations(listing, data_dir=data_dir)
 
@@ -361,7 +361,7 @@ def test_worker_status_reports_a_clean_host_in_one_line(tmp_path):
 
 def test_worker_status_says_so_when_the_declaration_is_missing(tmp_path):
     """"Not configured" is a state, not a failure — and it must not read as "all clear"."""
-    lines = worker_status.report_network_reservations("bridge\t172.18.0.0/16 \n", data_dir=tmp_path)
+    lines = worker_status.report_network_reservations("bridge\t172.20.0.0/16 \n", data_dir=tmp_path)
 
     assert lines == ["(data/network_reservations.json declares no ranges — nothing to check against)"]
 
@@ -377,6 +377,6 @@ def test_worker_status_survives_an_unreadable_inventory(tmp_path):
 
 
 def test_worker_status_reports_nothing_to_check_when_docker_returned_nothing(tmp_path):
-    data_dir = _data_dir(tmp_path, inventory=[{"ip": "172.18.99.10", "server_id": "s"}])
+    data_dir = _data_dir(tmp_path, inventory=[{"ip": "172.20.99.10", "server_id": "s"}])
 
     assert worker_status.report_network_reservations("", data_dir=data_dir) == ["(no container networks reported)"]

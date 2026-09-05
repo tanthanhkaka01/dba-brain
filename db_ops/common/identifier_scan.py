@@ -185,18 +185,58 @@ def _spellings(term: str) -> set[str]:
     return {form for form in forms if form}
 
 
+#: What joins two identifiers inside one configured value. `server_name` is `HOST\INSTANCE`,
+#: a share is `HOST$SHARE`, and a path separator does the same job — so each of these values names
+#: **two** things and, harvested whole, teaches the scan neither of them on its own.
+COMPOSITE_SEPARATORS = r"\/$,"
+
+
 def _harvest(value: Any, into: dict[str, str], kind: str) -> None:
-    """Add a configured value, and anything nested under it, as identifiers of *kind*."""
+    r"""Add a configured value, and anything nested under it, as identifiers of *kind*.
+
+    **A composite value is also harvested in parts.** `server_name` is stored as
+    `HOST\INSTANCE`, and until 2026-09-05 that pair was the only spelling the scan knew: prose
+    writes the machine on its own, so a comment naming the host shipped in the published package
+    while the gate reported the tree clean. It is the same failure the two-octet address shorthand
+    already had a rule for — "prose does not repeat a whole address" — never generalised from
+    addresses to names. The parts go in beside the whole, not instead of it.
+    """
     if isinstance(value, str):
         text = value.strip()
         if len(text) >= MIN_TERM_LENGTH and text.lower() not in GENERIC_TERMS:
             into.setdefault(text, kind)
+        for part in _split_composite(text):
+            if len(part) >= MIN_TERM_LENGTH and part.lower() not in GENERIC_TERMS:
+                into.setdefault(part, kind)
     elif isinstance(value, (list, tuple)):
         for item in value:
             _harvest(item, into, kind)
     elif isinstance(value, dict):
         for item in value.values():
             _harvest(item, into, kind)
+
+
+def _split_composite(text: str) -> list[str]:
+    """The identifiers inside one composite value, or nothing when it is not composite.
+
+    An address is left alone: `192.0.2.10` is dotted, and splitting it would harvest `192` as a
+    term. Only the separators that join *names* count, and a part is kept only if it holds a
+    letter, so a port or an id never becomes a search term of its own.
+    """
+    if not any(sep in text for sep in COMPOSITE_SEPARATORS):
+        return []
+    if ADDRESS_SHAPED.match(text):
+        return []
+    parts = []
+    buffer = ""
+    for char in text:
+        if char in COMPOSITE_SEPARATORS:
+            parts.append(buffer)
+            buffer = ""
+        else:
+            buffer += char
+    parts.append(buffer)
+    return [part.strip() for part in parts if part.strip() and any(c.isalpha() for c in part)]
 
 
 def collect_identifiers(data_dir: str | Path | None = None) -> dict[str, str]:
@@ -257,11 +297,15 @@ def collect_identifiers(data_dir: str | Path | None = None) -> dict[str, str]:
     return terms
 
 
-#: How much a hit is worth acting on. The tiers exist because the inventory legitimately contains
-#: ordinary English words - this estate really has databases called `Export`, `Inventory`,
-#: `Damage` and `Maintenance` - and a scan that reports every occurrence of "inventory" in
-#: `inventory_report.py` buries the four real addresses under fifteen hundred false ones. That is
-#: not a hypothetical: the first run of this module did exactly that.
+#: How much a hit is worth acting on. The tiers exist because an inventory legitimately contains
+#: ordinary English words - a database named after the thing it holds is normal, and several here
+#: are - and a scan that reports every occurrence of such a word in the module named after the
+#: same thing buries the real addresses under fifteen hundred false ones. That is not a
+#: hypothetical: the first run of this module did exactly that.
+#:
+#: `review` is excluded from `hits` for that reason, and **printed anyway**: on 2026-09-05 a
+#: database name shipped in a published package while the gate said "clean", because a tier that
+#: is not refused over was also not shown.
 CERTAIN, LIKELY, REVIEW = "certain", "likely", "review"
 
 #: An address, in any of the three spellings this project writes.
@@ -389,11 +433,22 @@ def _patterns(searchable: dict[str, tuple[str, str, str]]) -> list[tuple[re.Patt
     # full-address hit is counted twice. Excluding a neighbouring `.` keeps it to the prose form.
     shorthand = sorted((k for k in rest if _SHORTHAND_KEY.fullmatch(k)), key=len, reverse=True)
     strict = sorted((k for k in rest if not _SHORTHAND_KEY.fullmatch(k)), key=len, reverse=True)
+    # Case matters only for the tier that is never refused over. A machine or a service is the
+    # same one however it is capitalised, and on 2026-09-05 a shipped doc naming a service in
+    # title case matched nothing because the inventory spells that service in upper case. The
+    # ordinary-word tier
+    # stays case-sensitive: matching `export` as well as `Export` is what produced 1,550 hits and
+    # a report nobody read, and those are not refused anyway.
+    named = sorted((k for k in strict if searchable[k][2] != REVIEW), key=len, reverse=True)
+    wordy = sorted((k for k in strict if searchable[k][2] == REVIEW), key=len, reverse=True)
     built: list[tuple[re.Pattern[str], bool]] = []
     if loose:
         built.append((re.compile("|".join(re.escape(k) for k in loose), re.IGNORECASE), True))
-    if strict:
-        built.append((re.compile(r"(?<![\w-])(?:" + "|".join(re.escape(k) for k in strict)
+    if named:
+        built.append((re.compile(r"(?<![\w-])(?:" + "|".join(re.escape(k) for k in named)
+                                 + r")(?![\w-])", re.IGNORECASE), False))
+    if wordy:
+        built.append((re.compile(r"(?<![\w-])(?:" + "|".join(re.escape(k) for k in wordy)
                                  + r")(?![\w-])"), False))
     if shorthand:
         # The boundary has to reject two things and accept a third, and the obvious `(?<![\w.-])`
@@ -421,7 +476,12 @@ def _files(paths: Iterable[str], extensions: Iterable[str], root: Path) -> list[
         for child in sorted(target.rglob("*")):
             if not child.is_file():
                 continue
-            if any(part in SKIP_DIRS for part in child.parts):
+            # Relative to the root, never the absolute path. `build`, `dist`, `deploy` and
+            # `runtime` are directories *inside the tree being scanned*; matching them anywhere in
+            # an absolute path means a tree that merely lives under a directory of that name is
+            # skipped entirely - and a scan that reads no files reports no hits, which is the one
+            # answer this module must never give by accident.
+            if any(part in SKIP_DIRS for part in child.relative_to(root).parts):
                 continue
             if child.suffix.lower() in wanted:
                 found.append(child)
@@ -461,12 +521,24 @@ def scan(request: dict[str, Any] | None = None, *, data_dir: str | Path | None =
 
     searchable = _search_terms(terms)
     patterns = _patterns(searchable)
+    files_to_read = _files(paths, extensions, root)
+    if not files_to_read:
+        # The same rule as "no terms", for the same reason. Zero files searched produces zero hits,
+        # which is indistinguishable from a clean tree - and on 2026-09-05 that is precisely what a
+        # scan rooted under a skipped directory name reported.
+        raise IdentifierScanError(
+            f"nothing to read under {root} for paths {list(paths)} with extensions "
+            f"{sorted(extensions)}. A scan that opens no file reports every tree as clean, so "
+            "this refuses instead. Check the root, the paths, and SKIP_DIRS."
+        )
 
+    #: `searchable` keyed by lower case, for the case-insensitive half of the patterns.
+    folded = {key.lower(): value for key, value in searchable.items()}
     findings: dict[str, dict[str, Any]] = {}
     unrecognised: dict[str, set[str]] = {}
     allowed_count = 0
     scanned = 0
-    for path in _files(paths, extensions, root):
+    for path in files_to_read:
         try:
             text = path.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
@@ -492,7 +564,12 @@ def scan(request: dict[str, Any] | None = None, *, data_dir: str | Path | None =
                         allowed_count += 1
                         continue
                     key = match.group(0).lower() if fold_case else match.group(0)
-                    found = searchable.get(key)
+                    # The pattern for names matches case-insensitively, so the text found is not
+                    # necessarily the spelling the inventory holds - a service written in title
+                    # case where the inventory has upper. Looking that up literally missed, and a
+                    # miss here `continue`s: the hit was matched and then dropped, which is how a
+                    # shipped doc naming a service stayed invisible after the match was fixed.
+                    found = searchable.get(key) or folded.get(match.group(0).lower())
                     if found is None:
                         continue
                     term, kind, level = found

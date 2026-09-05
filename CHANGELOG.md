@@ -15,6 +15,28 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-09-05
+
+### Fixed
+
+- **The identifier scan reported a tree as clean while a real machine name was in it.** Between
+  knowing a term and reporting it there were four filters, and each dropped something real:
+  a composite value (`server_name` is `HOST\INSTANCE`) was searched for only as the pair, so prose
+  naming the machine on its own matched nothing; the `review` tier was excluded from the printed
+  report as well as from the refusal; `unrecognised_addresses` was collected and never printed;
+  and `SKIP_DIRS` was matched against the whole absolute path, so scanning a tree that merely lives
+  under a directory called `build`, `dist` or `deploy` opened no file and reported no hits.
+  All four are closed. A scan that opens **zero files now refuses**, the same rule the module
+  already applied to having zero terms and for the reason it states: silence must not read as
+  clean. Teaching it to split composite values added five hostnames it had never known, and its
+  first run after the fix refused the tree and named a file a hand search had missed.
+- Values scrubbed from the shipped surface: a machine name in a collector comment, in three tests
+  and in one component doc; two database names used as sample rows; and an estate's routed subnets
+  used as network fixtures — moved off those ranges while staying inside Docker's default pool,
+  because that containment is what those tests assert. The scanner's own comment no longer names
+  real databases to explain why its tiers exist.
+
+
 ## [0.7.1] - 2026-09-05
 
 ### Fixed

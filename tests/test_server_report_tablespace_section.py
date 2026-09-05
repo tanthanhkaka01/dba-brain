@@ -91,8 +91,8 @@ def test_a_sql_server_data_file_row_is_not_filed_under_a_tablespace():
     size on PostgreSQL. Neither names a tablespace, and grouping them under one would put Oracle
     storage on a server that has none."""
     section = build_tablespaces([
-        _datafile("PowerPick:PowerPick",
-                  "database=PowerPick, file=PowerPick, used_pct=92.67, size_mb=11616.25, "
+        _datafile("Ledger:Ledger",
+                  "database=Ledger, file=Ledger, used_pct=92.67, size_mb=11616.25, "
                   "free_mb=851.25, growth_mb=10%, is_percent_growth=1, max_size_mb=UNLIMITED"),
         _datafile("db_ops", "database=db_ops, size=8537 MB"),
     ])
