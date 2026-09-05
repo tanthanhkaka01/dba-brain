@@ -1526,7 +1526,7 @@
           "-m",
           "db_ops.db.cli",
           "sql-run-history",
-          "{\"limit\": 10}",
+          "{\"limit\": 10, \"format\": \"txt\"}",
           "--config",
           "{config_path}"
         ],
@@ -1588,7 +1588,7 @@
           "-m",
           "db_ops.db.cli",
           "telegram-command-history",
-          "{\"user_id\": \"{user_id}\", \"limit\": 10, \"exclude\": [\"{command_text}\"]}",
+          "{\"user_id\": \"{user_id}\", \"limit\": 10, \"exclude\": [\"{command_text}\"], \"format\": \"txt\"}",
           "--config",
           "{config_path}"
         ],

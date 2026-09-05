@@ -15,6 +15,27 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-09-05
+
+### Fixed
+
+- **The web console served nothing on Windows.** Two symlinks decide whether reports are
+  reachable — the `/report_dba/` mount and the fixed `database-inventory.html` link — and both need
+  a privilege an ordinary Windows account does not hold. Both failed, were logged as warnings, and
+  **every** report URL answered 404, the timestamped ones included. Neither symlink is required
+  now: the mount prefix is resolved in the request handler and the latest link falls back to a
+  copy. Linux and Docker still use symlinks and are unchanged. Measured on four deployment shapes.
+- **The latest-link refresh deleted the file it publishes.** It unlinked the existing entry before
+  attempting the symlink, so on a platform that refuses one, each request for the link removed what
+  was there and left nothing. "Already current" is decided before anything is removed now.
+- **`restore-workflow --dry-run` deleted backup files.** The flag reached the restore step and not
+  the delete step, which had no parameter to receive it, so all three delete engines removed files
+  during a dry run. Found by dry running a real restore drill: 26 files, all past retention.
+  `run_copy_backup` still has no `dry_run`, so a dry run does still copy — stated, not fixed.
+- **`/spbot_list_my_commands` and `/spbot_list_sql_runs` replied twice** — the listing, then a JSON
+  envelope repeating it — which put the reply over Telegram's 4096 limit and split it in two. Both
+  take `"format": "txt"` now, as every `common/cli` command already did.
+
 ## [0.8.0] - 2026-09-05
 
 ### Added

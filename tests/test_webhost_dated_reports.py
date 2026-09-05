@@ -304,3 +304,193 @@ def test_the_fleet_linked_server_table_tags_each_row_with_its_instance(tmp_path)
 
     assert [r["server_id"] for r in rows] == ["ACME-1", "ACME-2"]   # FIX before DROP
     assert [r["verdict"] for r in rows] == ["FIX", "DROP"]
+
+
+# --------------------------------------------------------------------------------------------- #
+# When the platform refuses a symlink
+# --------------------------------------------------------------------------------------------- #
+# The fixture above makes the mount a real directory and says the symlink is "not something the
+# request handler behaves differently under". That was the assumption this section corrects: in
+# production the link can fail to be created at all, and then the handler is the only thing left
+# that can resolve the prefix. On 2026-09-05 a Windows node logged
+# `[WinError 1314] A required privilege is not held by the client` for both symlinks and answered
+# 404 for every report URL on the box — including the timestamped ones the module docstring
+# claimed would still be served.
+
+
+def _deny_symlinks(monkeypatch):
+    """Make `Path.symlink_to` raise exactly what Windows raises without the privilege."""
+    def deny(self, target, target_is_directory=False):  # noqa: ANN001, ARG001
+        raise OSError(1314, "A required privilege is not held by the client")
+
+    monkeypatch.setattr(Path, "symlink_to", deny)
+
+
+@pytest.fixture
+def serving_without_a_mount_symlink(tmp_path):
+    """The deployment `build_webroot` produces when it cannot make the link: the report directory
+    served directly, with the `/report_dba/` prefix resolved in process."""
+    root = tmp_path / "reports"
+    root.mkdir(parents=True)
+
+    handler = make_handler(directory=str(root), mount="report_dba", latest=LATEST,
+                           latest_glob=LATEST_GLOB, root=root, strip_mount=True)
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    port = httpd.server_address[1]
+
+    def fetch(path):
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/report_dba/{path}") as r:
+            return r.read().decode("utf-8"), r.status
+
+    try:
+        yield fetch, root
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_every_report_url_answers_when_the_mount_symlink_could_not_be_made(
+    serving_without_a_mount_symlink,
+):
+    """A timestamped report and a stable-named one, over HTTP, with no symlink anywhere."""
+    fetch, root = serving_without_a_mount_symlink
+    (root / "20260905_131824_database-inventory-report.html").write_text("STAMPED", encoding="utf-8")
+    (root / "server-metrics.html").write_text("STABLE", encoding="utf-8")
+
+    stamped, status = fetch("20260905_131824_database-inventory-report.html")
+    stable, _ = fetch("server-metrics.html")
+
+    assert (stamped, status) == ("STAMPED", 200)
+    assert stable == "STABLE"
+
+
+def test_the_fixed_latest_url_answers_when_the_symlink_could_not_be_made(
+    serving_without_a_mount_symlink, monkeypatch,
+):
+    """`database-inventory.html` is the URL the reports, the SLA page and /spbot_self_status all
+    hand out. The handler refreshes it on each request for it, and with symlinks refused that
+    refresh has to leave a real file behind or the fixed URL stays 404."""
+    fetch, root = serving_without_a_mount_symlink
+    (root / "20260905_131824_database-inventory-report.html").write_text("NEWEST", encoding="utf-8")
+    _deny_symlinks(monkeypatch)
+
+    body, status = fetch(LATEST)
+
+    assert (body, status) == ("NEWEST", 200)
+    assert (root / LATEST).is_file()
+
+
+def test_the_latest_copy_is_not_rewritten_when_it_is_already_current(tmp_path, monkeypatch):
+    """It is refreshed on every request for the link. Copying a 1.5 MB report per page view
+    would turn reading the report into disk churn.
+
+    The copies are **counted**, not timed. The first version of this test compared the link's
+    mtime across two refreshes and passed while the file was in fact being rewritten every time -
+    `shutil.copy2` carries the source's mtime across, so the number it was watching could not
+    move. A guard that cannot fail is the defect it was written for, wearing a tick.
+    """
+    import shutil
+
+    newest = tmp_path / "20260905_131824_database-inventory-report.html"
+    newest.write_text("<html>the newest report</html>", encoding="utf-8")
+    _deny_symlinks(monkeypatch)
+
+    copies = []
+    real_copy = shutil.copy2
+    monkeypatch.setattr(shutil, "copy2",
+                        lambda src, dst, **kw: copies.append(dst) or real_copy(src, dst, **kw))
+
+    refresh_latest(tmp_path, LATEST, LATEST_GLOB)
+    refresh_latest(tmp_path, LATEST, LATEST_GLOB)
+    refresh_latest(tmp_path, LATEST, LATEST_GLOB)
+
+    assert len(copies) == 1, f"the report was copied {len(copies)} times for three refreshes"
+    assert (tmp_path / LATEST).read_text(encoding="utf-8") == "<html>the newest report</html>"
+
+
+def test_the_latest_copy_survives_a_refresh_that_cannot_symlink(tmp_path, monkeypatch):
+    """The failure path used to destroy what was already there.
+
+    `refresh_latest` unlinked the existing entry and *then* attempted the symlink, so where the
+    symlink is refused the file was removed and nothing replaced it. Placing a correct copy at
+    that path by hand did not help either: it survived until the next request for the link.
+    """
+    newest = tmp_path / "20260905_131824_database-inventory-report.html"
+    newest.write_text("<html>the newest report</html>", encoding="utf-8")
+    _deny_symlinks(monkeypatch)
+    refresh_latest(tmp_path, LATEST, LATEST_GLOB)
+
+    for _ in range(3):
+        refresh_latest(tmp_path, LATEST, LATEST_GLOB)
+        assert (tmp_path / LATEST).is_file(), "a refresh removed the latest report and left nothing"
+
+
+def test_a_newer_report_replaces_the_latest_copy(tmp_path, monkeypatch):
+    import os
+
+    older = tmp_path / "20260905_121852_database-inventory-report.html"
+    older.write_text("<html>older</html>", encoding="utf-8")
+    _deny_symlinks(monkeypatch)
+    refresh_latest(tmp_path, LATEST, LATEST_GLOB)
+
+    newer = tmp_path / "20260905_131824_database-inventory-report.html"
+    newer.write_text("<html>newer, and longer</html>", encoding="utf-8")
+    stamp = os.stat(older).st_mtime + 600
+    os.utime(newer, (stamp, stamp))
+
+    refresh_latest(tmp_path, LATEST, LATEST_GLOB)
+
+    assert (tmp_path / LATEST).read_text(encoding="utf-8") == "<html>newer, and longer</html>"
+
+
+def _symlinks_work(tmp_path) -> bool:
+    """Can this account create a symlink here at all?"""
+    probe = tmp_path / "_probe_link"
+    try:
+        probe.symlink_to("target")
+        probe.unlink()
+        return True
+    except OSError:
+        return False
+
+
+def test_a_symlink_is_still_preferred_where_the_platform_allows_one(tmp_path):
+    """The other half of the matrix, and the half the suite did not hold.
+
+    Everything above either builds the mount as a real directory or forces `symlink_to` to fail,
+    so nothing pinned the behaviour on Linux - which is where this runs in production, in a
+    container. A copy works there too, but it duplicates a 1.5 MB report per build for no reason,
+    and silently falling back on a platform that can do better is the kind of regression a test
+    that only exercises the fallback would never see.
+    """
+    if not _symlinks_work(tmp_path):
+        pytest.skip("this account cannot create symlinks here (Windows without the privilege)")
+
+    newest = tmp_path / "20260905_131824_database-inventory-report.html"
+    newest.write_text("<html>the newest report</html>", encoding="utf-8")
+
+    result = refresh_latest(tmp_path, LATEST, LATEST_GLOB)
+
+    link = tmp_path / LATEST
+    assert result == newest
+    assert link.is_symlink(), "a symlink was possible and a copy was made instead"
+    assert Path(link.readlink()).name == newest.name
+    assert link.read_text(encoding="utf-8") == "<html>the newest report</html>"
+
+
+def test_the_mount_is_a_symlink_where_the_platform_allows_one(tmp_path):
+    """`build_webroot` is what puts the reports under `/<mount>/` when it can."""
+    if not _symlinks_work(tmp_path):
+        pytest.skip("this account cannot create symlinks here (Windows without the privilege)")
+
+    from db_ops.webhost.server import build_webroot
+
+    root = tmp_path / "reports"
+    root.mkdir()
+    webroot = tmp_path / "webroot"
+
+    build_webroot(root, "report_dba", webroot)
+
+    entry = webroot / "report_dba"
+    assert entry.is_symlink() and entry.resolve() == root.resolve()

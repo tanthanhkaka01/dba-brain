@@ -206,6 +206,7 @@ foreach ($file in @($files | Sort-Object LastWriteTimeUtc, FullName)) {
 
 def delete_old_target_backup_files_with_powershell(
     config: BackupRestoreConfig,
+    dry_run: bool = False,
     *,
     now: float | None = None,
 ) -> tuple[DeleteBackupFileResult, ...]:
@@ -303,6 +304,7 @@ def delete_old_target_backup_files_via_ssh(
     *,
     now: float | None = None,
     logger: logging.Logger | None = None,
+    dry_run: bool = False,
 ) -> tuple[DeleteBackupFileResult, ...]:
     cutoff = _cutoff_timestamp(config.copy_recent_hours, now=now)
     linux_import = str(config.vm_import_unc).replace("\\", "/")
@@ -380,6 +382,13 @@ def delete_old_target_backup_files_via_ssh(
             )
 
         for fpath, size, _backup_ts in files_to_delete:
+            if dry_run:
+                results.append(DeleteBackupFileResult(
+                    target_file=Path(fpath), status="DRY_RUN", bytes=size,
+                    reason="would be deleted"))
+                _log_progress(logger, f"{_rid}delete-backup source_id={config.source_id} "
+                                      f"cleanup_would_delete file={fpath} size_bytes={size}")
+                continue
             _, _, stderr = ssh.exec_command(f"rm -f -- {shlex.quote(fpath)}")
             err = stderr.read().decode("utf-8", errors="replace").strip()
             if err:
@@ -406,7 +415,19 @@ def should_use_powershell_unc_delete(config: BackupRestoreConfig) -> bool:
     return os.name == "nt" and str(config.vm_import_unc).startswith("\\\\")
 
 
-def run_delete_backup(config: BackupRestoreConfig | None = None, *, logger: logging.Logger | None = None) -> DeleteBackupResult:
+def run_delete_backup(
+    config: BackupRestoreConfig | None = None,
+    *,
+    logger: logging.Logger | None = None,
+    dry_run: bool = False,
+) -> DeleteBackupResult:
+    """Retention cleanup on the restore target.
+
+    ``dry_run`` reaches every engine, and it has to: `restore-workflow --dry-run` passed the flag
+    to the copy and the restore and not to this, so a dry run of a real drill deleted 26 files
+    on 2026-09-05 while reporting itself as a plan. They were past retention and would have gone
+    on the next real run, which is luck rather than design - a dry run may not change anything.
+    """
     restore_config = config or load_restore_config()
     _validate_safe_target_delete_root(restore_config)
     validate_restore_target_is_not_source(restore_config)
@@ -434,9 +455,11 @@ def run_delete_backup(config: BackupRestoreConfig | None = None, *, logger: logg
 
     _log_progress(logger, f"{_rid}delete-backup source_id={restore_config.source_id} scanning engine={delete_engine}")
     if delete_engine == "ssh":
-        file_results = delete_old_target_backup_files_via_ssh(restore_config, logger=logger)
+        file_results = delete_old_target_backup_files_via_ssh(
+            restore_config, logger=logger, dry_run=dry_run)
     elif delete_engine == "powershell":
-        file_results = delete_old_target_backup_files_with_powershell(restore_config)
+        file_results = delete_old_target_backup_files_with_powershell(
+            restore_config, dry_run=dry_run)
     else:
         aged_files = list_old_target_backup_files(restore_config)
         selected_files, held_back = _split_by_obsolete(aged_files, root=restore_config.vm_import_unc)
@@ -447,7 +470,12 @@ def run_delete_backup(config: BackupRestoreConfig | None = None, *, logger: logg
             for path in held_back
         ]
         for index, target_file in enumerate(selected_files, start=1):
-            result = delete_target_backup_file(target_file, target_root=restore_config.vm_import_unc)
+            result = (
+                DeleteBackupFileResult(target_file=target_file, status="DRY_RUN", bytes=0,
+                                       reason="would be deleted")
+                if dry_run else
+                delete_target_backup_file(target_file, target_root=restore_config.vm_import_unc)
+            )
             file_results_list.append(result)
             _log_progress(
                 logger,

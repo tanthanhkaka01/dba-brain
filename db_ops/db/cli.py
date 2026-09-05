@@ -662,7 +662,8 @@ SQL_RUN_HISTORY_USAGE = (
     "\n"
     "The request is a JSON object, given inline, as @path/to/request.json, or on stdin (-):\n"
     '  {"limit": 10,          // optional; default 10, capped at 200\n'
-    '   "sql_id": 28}         // optional; default = every task\n'
+    '   "sql_id": 28,         // optional; default = every task\n'
+    '   "format": "txt"}      // optional; txt for the chat listing, json (default) for the envelope\n'
 )
 
 
@@ -713,16 +714,17 @@ def _sql_run_history_command(argv: list[str]) -> int:
 
     listing = sql_run_history.render(
         rows, sql_id=int(sql_id) if sql_id is not None else None)
-    # The listing goes to stdout as text because a Telegram command relays {stdout} verbatim;
-    # the JSON envelope still carries it so a program does not have to parse the message.
-    print(listing)
-    response.emit(response.ok(
+    if str(request.get("format") or "json").strip().lower() == "txt":
+        print(listing)
+        return 0
+    # `format: txt` prints the listing and nothing else; the default prints the envelope and
+    # nothing else, carrying the same listing under `data`. stdout is the answer, never both.
+    return response.emit(response.ok(
         "sql-run-history",
         message=f"{len(rows)} SQL task run(s).",
         data={"listing": listing, "runs": [dict(row) for row in rows]},
         metrics={"runs": len(rows)},
     ))
-    return 0
 
 
 TELEGRAM_COMMAND_HISTORY_USAGE = (
@@ -735,7 +737,8 @@ TELEGRAM_COMMAND_HISTORY_USAGE = (
     "The request is a JSON object, given inline, as @path/to/request.json, or on stdin (-):\n"
     '  {"user_id": "123456789",   // required; whose history to read\n'
     '   "limit": 10,              // optional; default 10 distinct commands, capped at 50\n'
-    '   "exclude": ["spbot_list_my_commands"]}  // optional; command names to leave out\n'
+    '   "exclude": ["spbot_list_my_commands"],  // optional; command names to leave out\n'
+    '   "format": "txt"}      // optional; txt for the chat listing, json (default) for the envelope\n'
 )
 
 
@@ -792,16 +795,17 @@ def _telegram_command_history_command(argv: list[str]) -> int:
         return response.emit(response.fail("telegram-command-history", str(exc)))
 
     listing = telegram_command_history.render(result)
-    # Text on stdout because a Telegram command relays {stdout} verbatim; the JSON envelope still
-    # carries it so a program does not have to parse the message.
-    print(listing)
-    response.emit(response.ok(
+    if str(request.get("format") or "json").strip().lower() == "txt":
+        print(listing)
+        return 0
+    # `format: txt` prints the listing and nothing else; the default prints the envelope and
+    # nothing else, carrying the same listing under `data`. stdout is the answer, never both.
+    return response.emit(response.ok(
         "telegram-command-history",
         message=f"{len(result['entries'])} distinct command(s) for user {user_id or '(none)'}.",
         data={"listing": listing, **result},
         metrics={"commands": len(result["entries"]), "scanned": result["scanned"]},
     ))
-    return 0
 
 
 OPS_STATUS_USAGE = (
