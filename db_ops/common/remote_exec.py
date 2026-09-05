@@ -47,7 +47,7 @@ import socket
 import subprocess
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from typing import Any, Sequence
 
@@ -853,6 +853,43 @@ class SshSession(RemoteSession):
         self.sftp().get(_posix(remote_path), str(local_path))
 
 
+#: What a Windows host says when `Invoke-Command` cannot authenticate at all. The local-PowerShell
+#: fallback hands these back verbatim as a CLIXML blob, which reads as a problem with the host.
+_WINRM_AUTH_MARKERS = ("0x8009030e", "specified logon session does not exist",
+                       "Access is denied", "cannot process the request")
+
+
+def _name_the_missing_backend(result: RemoteResult, *, host: str) -> RemoteResult:
+    """Say that this ran without ``pypsrp`` when the fallback could not authenticate.
+
+    The fallback is not equivalent to the pypsrp backend, and until 2026-09-05 nothing said so.
+    An install without the ``[winrm]`` extra drives `Invoke-Command` through a local PowerShell,
+    and against a WORKGROUP host that fails with `0x8009030e ... A specified logon session does
+    not exist` — wording that sends the reader to the host, its credentials and its TrustedHosts
+    list, none of which is wrong. Measured that day on one estate: the same command, the same
+    credential and the same host answered `exit 0` the moment `pypsrp` was installed, while
+    the backup of that instance had been failing for two days and its OS metrics had been
+    recording `WARNING: Command exited with code 1` every cycle without anyone reading them as a
+    broken transport.
+
+    Only on failure, and only for the markers above: a fallback that works is not worth a word.
+    """
+    if result.exit_code == 0:
+        return result
+    haystack = f"{result.stderr or ''}\n{result.stdout or ''}".lower()
+    if not any(marker.lower() in haystack for marker in _WINRM_AUTH_MARKERS):
+        return result
+    # Through `packaging`, never spelled out: the distribution has two names and a hint naming the
+    # wrong one sends the reader to a package that is not there. A guard test enforces this.
+    from db_ops.lib.packaging import install_hint
+
+    hint = (f"\n[db_ops] WinRM to {host} ran through the local-PowerShell fallback because "
+            "`pypsrp` is not installed, and that backend could not authenticate. Install the "
+            f"WinRM extra (`{install_hint('winrm')}`) and try again before treating this as a "
+            "problem with the host.")
+    return replace(result, stderr=(result.stderr or "") + hint)
+
+
 class WinrmSession(RemoteSession):
     """PowerShell remoting to a Windows host.
 
@@ -898,6 +935,7 @@ class WinrmSession(RemoteSession):
             from pypsrp.client import Client  # type: ignore[import-not-found]
         except ImportError:
             result = self._run_via_local_powershell(text, timeout)
+            result = _name_the_missing_backend(result, host=self.access.host)
         else:
             result = self._run_via_pypsrp(Client, text, timeout)
         return result.check() if check else result

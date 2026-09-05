@@ -29,6 +29,16 @@ A request is never deleted: it ends as ``done``, ``cancelled`` or ``expired`` an
 record of who asked for what. ``expired`` is the daemon-was-down case — a request nobody could
 have acted on must not fire hours later when the daemon comes back and surprise whoever is on
 shift.
+
+**It moves with the run it points at.** ``job_run_id`` is a real foreign key with no
+``ON DELETE``, so a request outlived the ``job_runs`` row it referenced and blocked the archive
+sweep from ever removing it: one finished request was enough to fail the whole batch, and the
+daemon swallows that failure by design (housekeeping must not stop the scheduler), so the busiest
+table in the store silently stopped pruning. Found on 2026-09-04 by reading a live daemon's log —
+``23503 … Key (log_id)=(1601189) is still referenced``. So ``archive_old_job_runs`` now moves the
+referencing requests into ``app_command_requests_history`` in the same transaction, which keeps
+both records and lets the delete succeed. Nothing is lost; it is the same trade ``job_runs``
+itself makes.
 """
 
 from __future__ import annotations
@@ -45,7 +55,7 @@ from db_ops.db.backend import StoreTarget
 from db_ops.db.web_auth_store import utc_now, utc_text  # noqa: F401 - one definition
 
 #: Bumped when this table or its additive migrations change.
-RUN_REQUEST_SCHEMA_VERSION = 1
+RUN_REQUEST_SCHEMA_VERSION = 2
 
 STATUS_PENDING = "pending"
 STATUS_CLAIMED = "claimed"
@@ -324,6 +334,39 @@ class RunRequestStore:
             )
 
 
+#: The history table on its own, because something other than this module has to be able to
+#: create it. ``DbOpsStore.archive_old_job_runs`` does, when it finds an ``app_command_requests``
+#: table without one — which is **every store upgraded from a build that predates it**, on
+#: either backend. Measured 2026-09-04 on the production PostgreSQL store and on a brand-new
+#: SQLite one: the requests table existed, the history table did not, so the sweep's "nothing
+#: to move" guard read as normal and the foreign key went on failing the delete exactly as it
+#: did before the fix. Defined once and appended to :data:`SCHEMA_SQL`, so the two cannot
+#: disagree about the table a store ends up with.
+APP_COMMAND_REQUESTS_HISTORY_SQL = """
+-- Where a request goes when the run it points at ages out of `job_runs`. No foreign key and no
+-- constraints: an archive that can refuse a row is an archive that can block the sweep, which is
+-- the failure this table exists to end.
+CREATE TABLE IF NOT EXISTS app_command_requests_history
+(
+    request_id INTEGER,
+    app_command_id TEXT,
+    status TEXT,
+    requested_by TEXT,
+    request_source TEXT,
+    requested_at TEXT,
+    claimed_at TEXT NULL,
+    started_at TEXT NULL,
+    finished_at TEXT NULL,
+    job_run_id INTEGER NULL,
+    note TEXT,
+    archived_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS ix_app_command_requests_history_command
+    ON app_command_requests_history (app_command_id, requested_at DESC);
+"""
+
+
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS app_command_requests
 (
@@ -353,3 +396,6 @@ CREATE INDEX IF NOT EXISTS ix_app_command_requests_status
 CREATE INDEX IF NOT EXISTS ix_app_command_requests_command
     ON app_command_requests (app_command_id, request_id);
 """
+
+SCHEMA_SQL += APP_COMMAND_REQUESTS_HISTORY_SQL
+

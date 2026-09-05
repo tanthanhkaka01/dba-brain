@@ -149,3 +149,139 @@ def test_a_failing_sweep_never_takes_the_scheduler_down():
             raise RuntimeError("store unreachable")
 
     assert daemon_mod.sweep_job_runs_history(store=BrokenStore(), now=1000.0) == 0
+
+
+# ---------------------------------------------------------------------------
+# The console's requests point INTO job_runs, and that stopped the sweep
+# ---------------------------------------------------------------------------
+def _request_pointing_at(store, tmp_path, log_id):
+    """A finished "run this now" request whose job_run_id names an existing run."""
+    from db_ops.db.run_requests import RunRequestStore
+
+    requests = RunRequestStore(tmp_path / "db_ops.sqlite")
+    requests.initialize()
+    request_id = int(requests.request_run(app_command_id="APP-0", requested_by="tester")["request_id"])
+    requests.claim("APP-0")
+    requests.mark_started(request_id, job_run_id=log_id)
+    requests.mark_done(request_id)
+    return requests
+
+
+def test_a_request_pointing_at_an_aged_run_does_not_block_the_sweep(tmp_path):
+    """The defect, as it happened: one finished request failed the whole batch, silently.
+
+    `app_command_requests.job_run_id` is a foreign key with no `ON DELETE`, so PostgreSQL refused
+    the delete with `23503 ... Key (log_id)=(...) is still referenced`. The daemon swallows a
+    failed sweep on purpose - housekeeping must never stop the scheduler - so the busiest table in
+    the store stopped pruning and said so only in one log line per sweep interval. Found on
+    2026-09-04 by reading a live daemon's log, not by a test.
+    """
+    store = _store_with_runs(tmp_path, [40])
+    with store.connect() as conn:
+        log_id = int(conn.execute("SELECT log_id FROM job_runs").fetchone()["log_id"])
+    _request_pointing_at(store, tmp_path, log_id)
+
+    moved = store.archive_old_job_runs(retention_days=15)
+
+    assert moved == 1
+    assert _count(store, "job_runs") == 0
+    assert _count(store, "app_command_requests") == 0
+
+
+def test_the_request_is_moved_rather_than_dropped(tmp_path):
+    """"Who asked for this run" outlives the run - that is the whole point of the record."""
+    store = _store_with_runs(tmp_path, [40])
+    with store.connect() as conn:
+        log_id = int(conn.execute("SELECT log_id FROM job_runs").fetchone()["log_id"])
+    _request_pointing_at(store, tmp_path, log_id)
+
+    store.archive_old_job_runs(retention_days=15)
+
+    with store.connect() as conn:
+        row = conn.execute("SELECT * FROM app_command_requests_history").fetchone()
+    assert row["app_command_id"] == "APP-0"
+    assert row["requested_by"] == "tester"
+    assert int(row["job_run_id"]) == log_id
+    assert row["status"] == "done"
+    assert row["archived_at"]
+
+
+def test_a_request_for_a_run_that_stays_is_left_alone(tmp_path):
+    """Only the requests naming an archived run move. A live one is still somebody's open record."""
+    store = _store_with_runs(tmp_path, [40, 1])
+    with store.connect() as conn:
+        recent = int(conn.execute(
+            "SELECT log_id FROM job_runs ORDER BY log_id DESC").fetchone()["log_id"])
+    _request_pointing_at(store, tmp_path, recent)
+
+    store.archive_old_job_runs(retention_days=15)
+
+    assert _count(store, "app_command_requests") == 1
+    assert _count(store, "app_command_requests_history") == 0
+
+
+def test_a_store_whose_console_was_never_used_still_sweeps(tmp_path):
+    """`app_command_requests` is created by RunRequestStore, not by this one.
+
+    Its absence is the normal state of a fresh install, and it must read as "nothing to move"
+    rather than as a failure - this runs inside the sweep whose failures are swallowed, so an
+    exception here would look exactly like the defect it replaced.
+    """
+    store = _store_with_runs(tmp_path, [40])
+
+    assert store.archive_old_job_runs(retention_days=15) == 1
+    assert _count(store, "job_runs_history") == 1
+
+
+
+def test_a_store_upgraded_before_the_archive_existed_still_sweeps(tmp_path):
+    """The state every existing store is actually in, and the one the first fix did not cover.
+
+    `RunRequestStore` owns both tables, but it builds them only when the console runs — and the
+    daemon's sweep does not run the console. So a store that used the console on an older build
+    has `app_command_requests`, has the foreign key, and has **no** archive table. Measured on
+    2026-09-04 on both live stores: requests present, `app_command_requests_history` absent, on
+    the production PostgreSQL store and on a brand-new SQLite one alike. The guard then read
+    "nothing to move" — normal, and indistinguishable from having nothing to move — and the
+    delete went on failing on the foreign key exactly as it had before the fix.
+    """
+    store = _store_with_runs(tmp_path, [40])
+    with store.connect() as conn:
+        log_id = int(conn.execute("SELECT log_id FROM job_runs").fetchone()["log_id"])
+    _request_pointing_at(store, tmp_path, log_id)
+    # An upgraded store, exactly: the requests table and its foreign key, no archive beside it.
+    with store.connect() as conn:
+        conn.execute("DROP TABLE app_command_requests_history")
+
+    moved = store.archive_old_job_runs(retention_days=15)
+
+    assert moved == 1, "the sweep must not be blocked by a table it can create"
+    assert _count(store, "job_runs") == 0
+    assert _count(store, "app_command_requests") == 0
+    assert _count(store, "app_command_requests_history") == 1
+
+
+def test_the_archive_table_is_created_once_before_the_batches_not_inside_each(tmp_path):
+    """`executescript` commits on both backends, so creating the table inside the copy/delete
+    transaction would commit that batch's INSERT halfway through — and copy+delete being one
+    transaction is the whole reason a row cannot be archived twice.
+
+    Placement is what is pinned, because placement is what can silently regress: three aged rows
+    swept one batch at a time must still ask for the table exactly once.
+    """
+    store = _store_with_runs(tmp_path, [40, 41, 42])
+    calls = []
+    original = store._ensure_request_history_table
+
+    def counted():
+        calls.append(1)
+        return original()
+
+    store._ensure_request_history_table = counted
+
+    moved = store.archive_old_job_runs(retention_days=15, batch_size=1)
+
+    assert moved == 3, "three batches, one row each"
+    assert len(calls) == 1, "asked for once, before the first batch - not inside every batch"
+    assert _count(store, "job_runs_history") == 3
+    assert _count(store, "job_runs") == 0

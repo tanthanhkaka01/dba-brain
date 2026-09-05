@@ -263,6 +263,9 @@ The path form is deliberate: ~20 call sites in `db_ops/` and the whole test suit
 | `schema_meta` | Runtime Store | Schema version tracking. |
 | `job_runs` | Runtime Store / App Command Daemon | App command starts, finishes, failures, timeouts, and manual CLI job events. |
 | `job_runs_history` | Runtime Store | Rows aged out of `job_runs` (15-day retention). Moved, not deleted — same trade as `metric_results_archive`. |
+
+`job_runs` cannot be pruned on its own: `app_command_requests.job_run_id` is a real foreign key with no `ON DELETE`, so one finished request pointing into the batch failed the whole delete — and the daemon swallows a failed sweep by design, so the busiest table in the store stopped pruning and said so in one log line per interval. The archive moves the referencing requests first, in the same transaction. Found on 2026-09-04 on a live daemon: `23503 … Key (log_id)=(1601189) is still referenced from table "app_command_requests"`.
+
 | `sql_runs` | SQL Task Runner | SQL task execution history and interval checks. |
 | `metric_runs` | Metrics Engine | One row per metrics collection run. |
 | `metric_results` | Metrics Engine | Raw metric results; Reports and SLA read this table. |
@@ -287,6 +290,7 @@ The path form is deliberate: ~20 call sites in `db_ops/` and the whole test suit
 | `web_sessions` | Web Host | Signed-in sessions, three months by default. Holds a token *fingerprint*, never the token. |
 | `web_login_attempts` | Web Host | Every login attempt, successful or not, with the reason, IP and user agent. |
 | `app_command_requests` | Web Host / App Command Daemon | "Run now" requests. The console writes them; the daemon starts the command and links the run back. |
+| `app_command_requests_history` | Web Host / App Command Daemon | Requests whose run has aged out of `job_runs`. Moved with it, in the same transaction — the foreign key is what makes the order matter. **Created by the sweep when it is missing**: `RunRequestStore` builds it only when the console runs, so every store upgraded from an earlier build had the requests table and no archive, and the sweep went on failing. Created once before the first batch, never inside one — `executescript` commits, and copy+delete being one transaction is what stops a row being archived twice. |
 
 ## Core Tables
 
@@ -303,6 +307,7 @@ Key columns, read from the live PostgreSQL store's `information_schema.columns`.
 | `reports` | `report_id`, `report_code`, `report_name`, `report_type`, `report_level`, `status`, `report_text`, `source_type`, `source_id`, `created_at`, `pushed_at`, `telegram_send_message_id`, `metadata_json`. |
 | `telegram_send_messages` | `send_tlgmsg_id`, `row_ins_date`, `tlgchat_id`, `message_text`, `send_status`, `send_date`, `message_id`, `reply_message_id`, `source_type`, `source_id`, `message_type`, `metadata_json`. |
 | `job_runs_history` | Every `job_runs` column, plus `archived_at`. |
+| `app_command_requests_history` | Every `app_command_requests` column, plus `archived_at`. No foreign key and no constraints: an archive that can refuse a row is one that can block the sweep. |
 | `backup_restore_history` | `restore_id`, `database_name`, `backup_file`, `restore_start`, `restore_end`, `duration_seconds`, `status`, `error_message`, `created_at`. |
 | `sla_runs` | `sla_run_id`, `started_at`, `finished_at`, `status`, `policy_count`, `result_count`, `passed_count`, `at_risk_count`, `failed_count`, `no_data_count`, `window_end`, `message`. |
 | `sla_results` | `sla_result_id`, `sla_run_id`, `policy_id`, `name`, `target_id`, `scope`, `category`, `status`, `objective_percent`, `actual_percent`, `error_budget_percent`, `budget_consumed_percent`, `budget_remaining_percent`, `total_count`, `good_count`, `bad_count`, `no_data`, `window_hours`, `window_start`, `window_end`, `failures_by_status_json`, `collected_at`. |

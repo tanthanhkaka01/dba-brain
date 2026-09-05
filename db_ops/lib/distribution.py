@@ -173,7 +173,7 @@ PRIVATE_PATHS: dict[str, str] = {
     "tests_estate": "exists to assert against real servers by name. That is its whole purpose, so "
                     "it can never be scrubbed and must never ship",
     "secrets": "the plaintext source of the secret store; only secrets/*.example.json crosses",
-    "CLAUDE.md": "local working notes; they carry credentials deliberately and never cross",
+    "CLAUDE.md": "the maintainer's local working notes for this repository; never part of the product",
     "docker-compose.runtime.yml": "the worker's compose: bind mounts and a pinned bridge subnet "
                                   "that describe this operator's host, not the product",
     ".vscode": "editor settings, of no use to anyone else",
@@ -292,4 +292,4 @@ PRIVATE_TESTS: dict[str, str] = {
 #: version is immutable** — it cannot be re-uploaded after deletion, so the mistake is permanent.
 #: The public tree starts where a first release starts.
 PUBLIC_DISTRIBUTION_NAME = "dbabrain"
-PUBLIC_VERSION = "0.7.0"
+PUBLIC_VERSION = "0.7.1"
