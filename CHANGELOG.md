@@ -15,6 +15,19 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-05
+
+### Added
+
+- **`uptime` in `db-ops common self-status` / `/spbot_self_status`** — how long the machine has been
+  up, in hours to two places, with the instant it came up in UTC:
+  `uptime    : 165.01 h  (host up since 2026-08-29T10:30:17Z)`. The report said which build, which
+  machine and how much room was left, and not how long any of it had been standing. Read from
+  `/proc/uptime`, falling back to `GetTickCount64` on Windows; a platform that can answer neither
+  says `unavailable` rather than `0`. The line says **host** up since on purpose: this is the
+  machine's clock, not the daemon's — `self-status` is a different process from the scheduler, and
+  `ops-status` is what answers whether the apps have been running.
+
 ## [0.8.1] - 2026-09-05
 
 ### Fixed

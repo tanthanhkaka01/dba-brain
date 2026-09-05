@@ -124,3 +124,89 @@ def test_the_report_never_carries_a_store_password():
                                 store="postgresql postgres@192.0.2.10:5433/db_ops")
 
     assert "password" not in self_status.render(facts).lower()
+
+
+# --------------------------------------------------------------------------------------------- #
+# How long it has been up
+# --------------------------------------------------------------------------------------------- #
+def test_uptime_is_reported_in_hours_and_utc(monkeypatch):
+    """Two figures, and the second is what makes the first comparable.
+
+    Hours answer "has this been up long enough to trust what it says"; the instant answers "up
+    since when", which is the one that lines up against an incident, a deploy or another node.
+    Written in UTC for the same reason every other timestamp in this toolkit is: an estate spans
+    machines and a local-time answer cannot be compared with anything.
+    """
+    from datetime import datetime, timezone
+
+    from db_ops.common import self_status
+
+    monkeypatch.setattr(self_status, "_uptime_seconds_from_proc", lambda: 15_412.5)
+    now = datetime(2026, 9, 5, 12, 0, 0, tzinfo=timezone.utc)
+
+    facts = self_status.uptime(now=now)
+
+    assert facts["hours"] == 4.28, "4h 16m 52.5s is 4.28 h to two places"
+    assert facts["since"] == "2026-09-05T07:43:07Z"
+    assert facts["source"] == "/proc/uptime"
+
+
+def test_the_rendered_line_says_it_is_the_host_and_not_the_daemon(monkeypatch):
+    """On a node whose daemon was restarted an hour ago the two are nothing like each other, and
+    a bare "uptime" would be read as the one the reader came for."""
+    from db_ops.common import self_status
+
+    monkeypatch.setattr(self_status, "_uptime_seconds_from_proc", lambda: 3600.0)
+
+    text = self_status.render({"uptime": self_status.uptime()})
+
+    assert "uptime    : 1.00 h  (host up since " in text
+
+
+def test_two_decimal_places_even_when_the_number_is_round(monkeypatch):
+    """`xxxx.xx h` is the shape asked for; `1.0 h` and `1 h` are the same number differently
+    formatted, and a column of them does not line up."""
+    from db_ops.common import self_status
+
+    monkeypatch.setattr(self_status, "_uptime_seconds_from_proc", lambda: 7200.0)
+
+    assert "uptime    : 2.00 h" in self_status.render({"uptime": self_status.uptime()})
+
+
+def test_a_platform_that_cannot_answer_says_so_rather_than_guessing(monkeypatch):
+    """The rule this whole module follows: unavailable is a fact, zero is a lie."""
+    from db_ops.common import self_status
+
+    monkeypatch.setattr(self_status, "_uptime_seconds_from_proc", lambda: None)
+    monkeypatch.setattr(self_status, "_uptime_seconds_from_windows", lambda: None)
+
+    facts = self_status.uptime()
+
+    assert facts == {"seconds": None, "hours": None, "since": None, "source": "unavailable"}
+    assert "uptime    : unavailable" in self_status.render({"uptime": facts})
+
+
+def test_windows_is_read_only_when_proc_has_nothing_to_say(monkeypatch):
+    """Both readers exist and the order matters: /proc/uptime is the one that works in a
+    container, and GetTickCount64 does not exist to be tried there."""
+    from db_ops.common import self_status
+
+    called = []
+    monkeypatch.setattr(self_status, "_uptime_seconds_from_proc", lambda: 60.0)
+    monkeypatch.setattr(self_status, "_uptime_seconds_from_windows",
+                        lambda: called.append("windows") or 999.0)
+
+    facts = self_status.uptime()
+
+    assert called == [], "the Windows reader ran on a machine that had already answered"
+    assert facts["source"] == "/proc/uptime"
+
+
+def test_uptime_travels_in_collect_so_a_program_gets_it_too(tmp_path):
+    """`format: txt` is the chat line; the envelope carries the same facts for anything else."""
+    from db_ops.common import self_status
+
+    facts = self_status.collect(tool_root=tmp_path, version="0.8.2")
+
+    assert "uptime" in facts
+    assert set(facts["uptime"]) == {"seconds", "hours", "since", "source"}
