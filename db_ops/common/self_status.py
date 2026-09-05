@@ -301,8 +301,23 @@ def operating_system() -> str:
     return f"{platform.system()} {platform.release()}"
 
 
+def db_ops_uptime(runtime_dir: str | Path | None) -> dict[str, Any]:
+    """How long **DBA Brain** has been running on this node, from the daemon's own state file.
+
+    Distinct from :func:`uptime`, which is the machine's, and the two are routinely far apart: a
+    node whose daemon restarted an hour ago sits on a host that has been up for a week. Both are
+    reported because the reader wants a different one depending on why they asked.
+    """
+    from db_ops.lib import daemon_state
+
+    if runtime_dir is None:
+        return {"status": "unknown", "hours": None, "since": None, "pid": None}
+    return daemon_state.uptime(runtime_dir)
+
+
 def collect(*, tool_root: Path, version: str, public_version: str | None = None,
-            store: str | None = None, node_role: str | None = None) -> dict[str, Any]:
+            store: str | None = None, node_role: str | None = None,
+            runtime_dir: str | Path | None = None) -> dict[str, Any]:
     """Everything the report needs, as data. Callers that want JSON stop here."""
     return {
         "version": version,
@@ -320,6 +335,7 @@ def collect(*, tool_root: Path, version: str, public_version: str | None = None,
         "memory": memory(),
         "disk": disk(tool_root),
         "uptime": uptime(),
+        "db_ops_uptime": db_ops_uptime(runtime_dir),
         "pid": os.getpid(),
     }
 
@@ -394,4 +410,18 @@ def render(facts: dict[str, Any]) -> str:
         lines.append(f"uptime    : {up['hours']:.2f} h  (host up since {up.get('since')})")
     else:
         lines.append(f"uptime    : {up.get('source') or 'unavailable'}")
+
+    ours = facts.get("db_ops_uptime") or {}
+    state = ours.get("status")
+    if state == "running":
+        lines.append(f"db_ops up : {ours['hours']:.2f} h  (since {ours.get('since')})")
+    elif state == "stale":
+        # Worth saying, not hiding: the file is only left behind when the daemon died without
+        # unwinding, which is the difference between "stopped" and "was killed".
+        lines.append(f"db_ops up : not running  (last start {ours.get('since')}, "
+                     f"pid {ours.get('pid')} is gone)")
+    elif state == "stopped":
+        lines.append("db_ops up : not running  (no daemon has started in this tool root)")
+    else:
+        lines.append("db_ops up : unknown")
     return "\n".join(lines)

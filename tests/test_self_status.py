@@ -210,3 +210,34 @@ def test_uptime_travels_in_collect_so_a_program_gets_it_too(tmp_path):
 
     assert "uptime" in facts
     assert set(facts["uptime"]) == {"seconds", "hours", "since", "source"}
+
+
+def test_self_status_answers_from_a_directory_with_no_config(tmp_path, monkeypatch, capsys):
+    """The property this command exists for, and the one the uptime work broke.
+
+    `self-status` must answer when the store is unreachable and when there is no config at all —
+    that is exactly when somebody asks what version is running. Reading the runtime directory off
+    a `config` that is only bound inside the try block raised UnboundLocalError there instead.
+
+    It passed in the private tree for the worst reason: that tree has a `config.json` at its root,
+    so the failing path was never taken. Only the public suite saw it. This runs from a directory
+    that has none.
+    """
+    import db_ops.config as db_ops_config
+    from db_ops.common import cli as common_cli
+
+    # The config *load* has to fail, which is the condition being described. Pointing the command
+    # at a missing path is not enough - `resolve_config_path` falls back to the tool root's
+    # config.json, which exists in this tree and is why the first version of this test passed
+    # against the broken code as happily as against the fixed one.
+    def refuse(*_a, **_kw):
+        raise FileNotFoundError("no config on this machine")
+
+    monkeypatch.setattr(db_ops_config, "load_config", refuse)
+
+    code = common_cli.main(["self-status", '{"format": "txt"}'])
+
+    out = capsys.readouterr().out
+    assert code == 0, out
+    assert "DBA Brain / db_ops - current state" in out
+    assert "db_ops up :" in out, "the line must still be there, saying what it can"

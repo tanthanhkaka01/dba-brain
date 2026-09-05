@@ -1817,10 +1817,16 @@ def _self_status_command(argv: list[str]) -> int:
     # The store is named, never connected to: this command has to keep answering when the store
     # is the thing that is down, which is exactly when someone asks what version is running.
     store_text = None
+    # Bound before the try, not inside it: when there is no config this command still has to
+    # answer - that is the whole point of it - and reading `config` in the call below then raised
+    # UnboundLocalError instead. The private tree has a config.json at its root, so only the
+    # public suite saw it.
+    runtime_dir = None
     try:
         from db_ops.config import load_config, resolve_config_path
 
         config = load_config(resolve_config_path("common", config_path))
+        runtime_dir = getattr(config, "runtime_dir", None)
         store_config = getattr(config, "store", None)
         backend = getattr(store_config, "backend", None)
         if backend == "postgresql":
@@ -1835,7 +1841,8 @@ def _self_status_command(argv: list[str]) -> int:
 
     facts = self_status.collect(
         tool_root=Path(TOOL_ROOT), version=db_ops.__version__,
-        public_version=public_version, store=store_text)
+        public_version=public_version, store=store_text,
+        runtime_dir=runtime_dir)
     listing = self_status.render(facts)
 
     if str(request.get("format") or "json").strip().lower() == "txt":

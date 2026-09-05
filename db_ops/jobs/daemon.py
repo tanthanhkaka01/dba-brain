@@ -21,7 +21,9 @@ from db_ops.lib.json_io import load_json_file
 from db_ops.lib.secret_text import SECRET_KEY_ENV_VAR, resolve_cli_key
 from db_ops.config import DEFAULT_CONFIG_PATH, DbOpsConfig, load_config, resolve_config_path
 from db_ops.lib.time_window import TimeWindow, is_time_window_open, job_due, parse_time_window_config
+from db_ops import __version__ as db_ops_version
 from db_ops.db import DbOpsStore
+from db_ops.lib import daemon_state
 from db_ops.db.store import utc_now_text
 from db_ops.jobs.models import JobRun
 from db_ops.logging_ops import LOG_SCOPE_ENV_VAR, build_log_paths, log_event, log_function_error, setup_app_logger, validate_log_scope
@@ -210,6 +212,14 @@ def main(argv: list[str]) -> int:
         data_dir = Path(args.data_dir).resolve()
         delay_seconds = max(1, int(args.delay_seconds))
         log_app_event(logger, "app.daemon.start", status="running", data_dir=str(data_dir), delay_seconds=delay_seconds)
+        # So something that is not this process can say how long DBA Brain has been up here.
+        # `self-status` is asked that and cannot see it: it runs as a separate short-lived process
+        # and deliberately opens no store. One small file in runtime/ answers it for free.
+        daemon_state.record_start(
+            config.runtime_dir,
+            version=db_ops_version,
+            node_role=os.environ.get("DB_OPS_NODE_ROLE") or "master",
+        )
         _startup_commands = load_app_commands(data_dir / "app_commands.json", logger=logger)
         recover_stale_running_jobs(store=store, app_commands=_startup_commands, config=config, logger=logger)
 
@@ -241,15 +251,21 @@ def main(argv: list[str]) -> int:
                 while running_commands:
                     collect_running_commands(store=store, logger=logger, running_commands=running_commands)
                     time.sleep(0.1)
+                # A single pass is a deliberate stop like any other, so it leaves no state file
+                # behind. Without this the next reader finds one whose pid is gone and reports a
+                # daemon that died, which is the opposite of what happened.
+                daemon_state.clear(config.runtime_dir)
                 return 0
             time.sleep(delay_seconds)
     except _DaemonStopped as stop:
+        daemon_state.clear(config.runtime_dir)
         close_running_on_shutdown(store=store, logger=logger,
                                   running_commands=running_commands, reason=stop.reason)
         if logger:
             log_app_event(logger, "app.daemon.stop", status="stopped", reason=stop.reason)
         return 0
     except KeyboardInterrupt:
+        daemon_state.clear(config.runtime_dir)
         close_running_on_shutdown(store=store, logger=logger,
                                   running_commands=running_commands, reason="keyboard_interrupt")
         if logger:
