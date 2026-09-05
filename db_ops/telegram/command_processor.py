@@ -17,6 +17,18 @@ from db_ops.lib.listing import active_only, choice_lines, hidden_note
 from db_ops.lib.secret_text import SECRET_KEY_ENV_VAR
 from db_ops.config import DEFAULT_CONFIG_PATH, load_config
 from db_ops.lib import common_cli
+# Reading a command message and writing one back is pure text, and `common` rebuilds a
+# command line from it for /spbot_list_my_commands. Re-exported so this module stays the
+# name every caller already imports - the same shim as db_ops/telegram/severity.py.
+from db_ops.lib.telegram_command_text import (  # noqa: F401 - re-exported, see above
+    command_key_from_message,
+    first_command_token,
+    normalize_command_text,
+    parse_command_message,
+    render_command_line,
+    split_command_tokens,
+    strip_bot_username,
+)
 from db_ops.db.queue_message import queue_message, store_block_from
 from db_ops.lib.time_window import MANUAL_ONLY
 from db_ops.db.job_runs import telegram_log_metadata
@@ -1911,6 +1923,7 @@ def execute_configured_cli_command(
         values = cli_action_values(
             command=command, args=args, config_path=config_path,
             chat_id=str(row["chat_id"]) if row["chat_id"] is not None else None,
+            user_id=str(row["user_id"]) if row["user_id"] is not None else None,
         )
     except Exception as exc:
         error_summary = safe_error_summary(exc)
@@ -2843,7 +2856,7 @@ def _default_worker_host(config_path: str | Path | None = None) -> str:
 
 def cli_action_values(
     *, command: SupportCommand, args: list[str], config_path: str | Path,
-    chat_id: str | None = None,
+    chat_id: str | None = None, user_id: str | None = None,
 ) -> dict[str, Any]:
     config = dict(command.action_config or {})
     values: dict[str, Any] = dict(config.get("defaults") or {})
@@ -2863,6 +2876,12 @@ def cli_action_values(
     # target's configured notify chat and the person who ran it never sees it.
     if chat_id:
         values["chat_id"] = str(chat_id)
+    # Who asked. A command whose answer is *about the caller* - "what did I run" - cannot take
+    # the person as an argument: it would let anyone read anyone's history by typing a number.
+    # Always set, even when unknown: an absent key leaves `{user_id}` standing in the argv, and a
+    # CLI handed that literal would search for a person by that name and report an empty history
+    # rather than saying it does not know who is asking.
+    values["user_id"] = str(user_id or "")
     parameters = [dict(item) for item in (config.get("parameters") or config.get("args") or [])]
     args, flag_values = _extract_flag_words(parameters=parameters, args=list(args))
     values.update(flag_values)
@@ -3191,53 +3210,8 @@ def telegram_username(row: Any) -> str:
     return str(user.get("username") or "")
 
 
-def command_key_from_message(command_prefix: str, command_payload: str) -> str:
-    prefix = normalize_command_text(command_prefix)
-    payload = normalize_command_text(strip_bot_username(first_command_token(command_payload)))
-    if payload:
-        return f"{prefix}_{payload}"
-    return prefix
-
-
-def parse_command_message(text: str) -> dict[str, Any]:
-    tokens = split_command_tokens(text)
-    if not tokens:
-        return {"command_key": "", "args": []}
-    command_token = strip_bot_username(tokens[0])
-    return {
-        "command_key": normalize_command_text(command_token),
-        "args": tokens[1:],
-    }
-
-
-def split_command_tokens(text: str) -> list[str]:
-    try:
-        return shlex.split(text.strip())
-    except ValueError:
-        return text.strip().split()
-
-
-def normalize_command_text(value: str) -> str:
-    text = value.strip().lower()
-    text = text.lstrip("/")
-    text = re.sub(r"[^a-z0-9_]+", "_", text)
-    text = re.sub(r"_+", "_", text)
-    return text.strip("_")
-
-
 def is_unknown_support_command(command_key: str) -> bool:
     return normalize_command_text(command_key).startswith("spbot_")
-
-
-def first_command_token(value: str) -> str:
-    return value.strip().split(maxsplit=1)[0] if value.strip() else ""
-
-
-def strip_bot_username(value: str) -> str:
-    text = value.strip()
-    if "@" in text:
-        return text.split("@", 1)[0]
-    return text
 
 
 _PLACEHOLDER_PATTERN = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")

@@ -245,6 +245,38 @@ Example JSON entry:
 }
 ```
 
+### The caller's own identity — `{chat_id}` and `{user_id}`
+
+Besides the parameters a person types, `command_argv` can name two values nobody supplies: the
+chat that asked and the person who asked. `{chat_id}` exists so a command whose result is a
+*deliverable* — an xlsx from a SQL task — can send the file back where it was requested instead of
+to the target's configured notify chat. `{user_id}` exists for the opposite kind of command, one
+whose answer is *about the caller*: `/spbot_list_my_commands` reads that person's own history, and
+taking the person as an argument would let anyone read anyone's by typing a number.
+
+Both are set from the message being processed, never from `defaults` and never from an argument.
+`{user_id}` is always set, empty when the message carries no sender (a channel post): an absent
+key would leave the literal `{user_id}` standing in the argv, and a CLI handed that would search
+for a person by that name and report an empty history rather than saying it does not know who is
+asking.
+
+### `/spbot_list_my_commands`
+
+One person's own last 10 distinct commands, each written back as the single line that runs it
+again. Runs `db-ops db telegram-command-history` like any other `cli_execute` command, and the
+work — the join, the rebuild, the rendering — is `db_ops.common.telegram_command_history`, which
+does not know what a bot is.
+
+The reason it is not simply "the last ten messages" is the [prompt
+chain](#multi-step-conversation-parameter-chaining) below: a command answered one question at a
+time leaves a message saying `/spbot_run_sql_task` and nothing else, with `18` and `0 30` as
+separate messages further down that look like ordinary conversation. The arguments live in
+`telegram_conversation_states`, positionally, and joining them back in that order produces
+`/spbot_run_sql_task 18 0 30` — one line to copy.
+
+**Private chat only** (`is_group: 0`). The history spans every chat this person has used the bot
+in, so answering it in a group would read a private command out loud there.
+
 `"working_dir": "tools/db_ops"` is the **logical alias for the tool root**, not a folder in
 this repository — it resolves to the repository root locally and to `/app/tools/db_ops` in the
 worker container, so the same config works on both. See

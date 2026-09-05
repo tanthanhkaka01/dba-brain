@@ -18,6 +18,15 @@ from typing import Any, Callable, Iterable, TypeVar
 
 T = TypeVar("T")
 
+#: How long a listing may get before it stops itself. Telegram cuts a body at 4096 characters, and
+#: a listing the transport truncates loses its NEWEST entries with nothing to say it happened -
+#: the wrong end, and silent. Stopping here leaves room to say how many were dropped.
+LISTING_CHARACTER_BUDGET = 3500
+
+#: How many entries a history-shaped listing shows when the caller does not say. Ten is a
+#: screenful on a phone, which is where these are read.
+DEFAULT_LISTING_LIMIT = 10
+
 
 def is_active(item: Any) -> bool:
     """Whether an entry is switched on, reading either an attribute or a mapping key.
