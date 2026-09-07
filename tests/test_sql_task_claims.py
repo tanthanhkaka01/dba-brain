@@ -318,7 +318,10 @@ def test_the_alert_says_when_the_run_died_and_on_which_clock():
     started = datetime.now(timezone.utc) - timedelta(seconds=3600)
     assert f"It started at {format_message_time(started)}" in text
     assert "was still 'running' 60 minutes later" in text
-    assert any(line.startswith("time: ") and "UTC+00:00" in line for line in text.splitlines())
+    # The offset, not the word "UTC": one format for every clock db_ops shows, so this line
+    # and the report header about the same failure are comparable at a glance.
+    assert any(line.startswith("time: ") and line.rstrip().endswith("+00")
+               for line in text.splitlines())
 
 
 def test_a_target_that_does_not_want_error_alerts_is_still_not_told():
@@ -622,7 +625,10 @@ def test_a_run_line_leads_with_the_status_because_that_is_what_is_scanned_for():
     text = sql_run_history.render([_history_row()])
 
     assert "#77 [DONE] sql_id=9 SQLSERVER-009" in text
-    assert "2026-09-03 11:57:43 took 258s rows=69 on server" in text
+    # The offset is part of the line now. It used to be stripped off the stored `...Z`, which
+    # left a wall-clock time on no named clock at all — the worst of the three options for
+    # someone reading it on a phone beside an alert stamped somewhere else.
+    assert "2026-09-03 11:57:43 +00 took 258s rows=69 on server" in text
 
 
 def test_a_failed_run_carries_its_reason_so_the_store_need_not_be_opened():

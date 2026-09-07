@@ -23,7 +23,7 @@ license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Trieu Tan Thanh" }]
 keywords = ["dba", "database", "sqlserver", "oracle", "postgresql", "mysql", "monitoring", "operations"]
-version = "0.9.1"
+version = "0.10.0"
 
 # Measured 2026-08-21, not guessed (D-05):
 #
@@ -64,11 +64,17 @@ classifiers = [
 #                  connects anywhere works without it.
 #   PyYAML       — legacy inventory files passed explicitly. Small, and dropping it would break
 #                  existing operators for no gain.
+#   tzdata       — the IANA zone database. config.json's `timezone` field is mandatory and accepts
+#                  a name such as Asia/Ho_Chi_Minh; Python's zoneinfo ships no zone data on
+#                  Windows, so without this the same config works in the Linux image and raises
+#                  ZoneInfoNotFoundError on the Windows master. Core rather than an extra: a
+#                  timezone stopped being optional the moment the field became required.
 # Every database driver is an extra: a DBA who runs only PostgreSQL must not be made to install
 # an ODBC driver and an Oracle client to start.
 dependencies = [
     "cryptography>=42.0.0",
     "PyYAML>=6.0.2",
+    "tzdata>=2024.1",
 ]
 
 [project.optional-dependencies]

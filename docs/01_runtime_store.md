@@ -26,11 +26,35 @@ writing to rather than inferring from a path:
 python -m db_ops.db.cli --config config.json store-info
 ```
 
+### `runtime_nodes` — which clock each node is on
+
+One row per node, keyed by `node_id`, upserted by
+`python -m db_ops.db.cli --config config.json timezone --record` and by the daemon at start-up.
+(`common.cli timezone` reports the same answer but writes nothing — `common` may not import `db`.)
+
+| Column | Holds |
+| --- | --- |
+| `timezone` | the **setting**, as declared: `Asia/Ho_Chi_Minh` or `+07:00` |
+| `utc_offset_minutes` | the **snapshot** it resolved to, true as of `updated_at` |
+| `tz_abbreviation`, `node_role`, `hostname`, `app_version` | context for reading the row |
+| `first_seen_at` | survives every later report — when a node joined is history |
+
+Both the setting and the offset, because under daylight saving the second changes twice a year and
+only the first can be written back into a config file. Neither derives from the other in SQL.
+
+It exists because a master and a worker share one store and each reads its own `config.json`.
+Nothing else in the store could answer "is the estate on one clock?", and a `time_window` firing at
+the wrong hour on one node is indistinguishable from a schedule that was never due.
+
+Every timestamp in this table — including the one recording the display zone — is UTC, like every
+other column in the store. See `docs/14_lib.md` §Timezone for why that line must not move.
+
+
 ### Who may touch the store
 
 | Layer | Rule |
 | --- | --- |
-| `db_ops/db/store.py` — `DbOpsStore` | owns `schema_meta`, `job_runs`, `sql_runs`, `reports*`, `telegram_*` |
+| `db_ops/db/store.py` — `DbOpsStore` | owns `schema_meta`, `runtime_nodes`, `job_runs`, `sql_runs`, `reports*`, `telegram_*` |
 | `db_ops/db/metric_store.py` — `MetricStore` | owns `metric_runs`, `metric_results`, `metric_results_archive`, `target_health` |
 | `db_ops/db/sla_store.py` — `SlaStore` | owns `sla_runs`, `sla_results` |
 | `db_ops/db/backup_restore_history.py` — `BackupRestoreHistory` | owns `backup_restore_history` |
@@ -67,6 +91,88 @@ data/store_config.json
 | `postgresql.connection_string` | Full URL with a `{password}` placeholder. Authoritative when set; otherwise built from the fields above. |
 
 No password is ever written to this file. `password_ref` names a key in `data/encrypted_secret_text.json`, decrypted at runtime with `DB_OPS_SECRET_KEY` and substituted into `{password}` by `StoreConfig.resolved_connection_string()`. The `connection_string` property is the password-free form and is what gets logged.
+
+### Who creates what
+
+The two backends are not provisioned the same way, and the difference is the first thing a new
+install trips over.
+
+| | SQLite | PostgreSQL |
+| --- | --- | --- |
+| The container (file / database + schema) | **db_ops creates it** — the file and its parent folder, on first use | **must already exist** — db_ops creates neither |
+| The 29 tables, indexes and seed rows | db_ops creates them on first use | db_ops creates them on first use |
+| A login | none — whoever can read the file | **`username` + `password_ref`, both already in place** |
+
+So on SQLite a path is the whole configuration. On PostgreSQL you point db_ops at a database and a
+schema that already exist, and it builds only the tables inside them. `StoreTarget.prepare()` is
+where the asymmetry lives: it makes a directory for SQLite and deliberately does nothing for
+PostgreSQL, because a `mkdir` there would leave a stray `runtime/` folder on every node.
+
+An absent database is a clear failure at connect, not a silent creation — measured against
+PostgreSQL 18.6 on 2026-09-07:
+
+```
+ERROR: Could not connect to PostgreSQL store postgres@host:5433/dbabrain_probe:
+  'C': '3D000', 'M': 'database "dbabrain_probe" does not exist'
+```
+
+**A login has to be in place before any of this.** SQLite has none: the file is reached by
+path, and whoever can read it is authorised. PostgreSQL needs three separate things, and none is
+created for you:
+
+| What | Where it lives | Missing it looks like |
+| --- | --- | --- |
+| `username` | `data/store_config.json` → `postgresql.username` | `28P01 password authentication failed for user "..."` |
+| The password | `data/encrypted_secret_text.json`, under the name `postgresql.password_ref` gives | `Store password ref '...' was not found in the secret text under ...` |
+| The passphrase that decrypts it | `DB_OPS_SECRET_KEY`, or `--key` / `--key-base64` at run time | the same "not found" — a wrong key yields an empty store, not an error |
+
+**A missing role and a wrong password look identical** — measured on PostgreSQL 18.6, an unknown
+user gives `28P01 password authentication failed`, not "role does not exist". That is deliberate on
+the server's side and it will not tell you which of the two it was, so check both.
+
+The password is never written into `store_config.json`. Put it in `secrets/secret_text.json` as a
+flat `{"REF": "the password"}` entry, encrypt it, and delete the plaintext:
+
+```bash
+db-ops encrypt-secret --key-base64 <passphrase, base64>
+python -m db_ops.common.cli check-secret '{"ref": "DB_OPS_STORE_PASSWORD"}'
+```
+
+The role also needs rights on the objects it was pointed at — `CONNECT` on the database, and
+**`USAGE` + `CREATE`** on the schema, because `init` issues DDL there. `USAGE` alone is not enough,
+and the failure comes *after* a successful connect, which reads like a bug in the toolkit rather
+than a missing grant. Measured with a role granted `CONNECT` + `USAGE` but not `CREATE`:
+
+```
+ERROR: 'C': '42501', 'M': 'permission denied for schema brain_ops'
+```
+
+`create-store-database` is the optional helper for when the login is allowed to create them. It is
+idempotent, has `--dry-run`, and refuses a hot standby. Where a DBA provisions the database and the
+schema instead, skip it and run `init` alone:
+
+```bash
+# only when db_ops may create them itself; otherwise have the DBA do it
+python -m db_ops.db.cli --config config.json create-store-database
+
+# always: build the tables in whatever database + schema store_config.json names
+python -m db_ops.db.cli --config config.json init
+python -m db_ops.db.cli --config config.json check --counts
+```
+
+**The schema name is free.** `db_ops` is only what this repository's `store_config.json` happens to
+say. Any identifier works and the tables land there rather than in `public` — including the two
+JSON compatibility functions, which is why they are created inside the store's own schema — and a
+blank `schema` means `public`. Measured with `"schema": "brain_ops"` on a fresh database:
+
+```
+brain_ops    29 table(s)
+current_schema = brain_ops
+```
+
+One trap: if `postgresql.connection_string` is set explicitly it is authoritative and the sibling
+fields are ignored, so its `options=-csearch_path%3D<schema>` has to name the schema you mean.
+Leaving it blank and letting the fields build the string cannot disagree with itself.
 
 ### How one codebase speaks both dialects
 

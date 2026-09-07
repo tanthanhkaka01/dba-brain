@@ -45,9 +45,10 @@ dist/
 *.pfx
 *.p12
 
-# Claude Code working notes. CLAUDE.md carries the secret-text passphrase, and the encrypted
-# secret file IS committed — so publishing the passphrase would expose every secret in it.
-# Keep it local; .claude/settings.json (shared) stays committable.
+# Local working notes. Never published: this file has to name them to withhold them, and that is
+# the only reason they appear here. Do not describe what is in them — the encrypted secret file IS
+# committed, so a comment saying where its key is kept is the disclosure the exclusion prevents.
+# .claude/settings.json (shared) stays committable.
 CLAUDE.md
 CLAUDE.local.md
 .claude/settings.local.json

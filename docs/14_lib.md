@@ -140,7 +140,39 @@ differently in two places.
 | `coerce.py` | `as_bool` / `as_int` / `as_optional_int` / `as_float` / `as_text` / `as_utc_datetime` |
 | `rows.py` | `row_value` / `row_text` — one column out of a store row that may not have it |
 | `json_io.py` | reading a `data/*.json` the one way the whole tool reads them |
-| `text_format.py` | one-line text helpers more than one component must agree on — the stored timestamp (`format_utc`), the `\|`-safe log value, and the operator-facing clock (`format_message_time`, UTC unless `DB_OPS_MESSAGE_UTC_OFFSET_HOURS` says otherwise, and always printing its offset) |
+| `text_format.py` | one-line text helpers more than one component must agree on — the stored timestamp (`format_utc`) and the `\|`-safe log value. `format_message_time` still lives here as the name producers import, but it is now one call into `timezone.py` rather than a second implementation |
+| `timezone.py` | **the one clock db_ops shows.** Parses `config.json`'s `timezone` (an IANA name or a fixed offset), resolves it, and renders every operator-facing time as `2026-09-07 07:32:56 +07`. Also `display_now()` — what a `time_window`'s `from_hour`/`to_hour` are compared against — `display_today()`, `file_stamp()`, `label_from_file_stamp()` and `format_display_text()`. Bound once by `db_ops.config.parse_config`; see §Timezone below |
+
+
+### Timezone — one clock, bound once
+
+`timezone.py` is the answer to a question that used to have three: the machine's `TZ` (27
+`datetime.now()` call sites), a hardcoded `+07` in the reports app, and an env var nobody set. A
+published tool cannot take its operator's timezone from whichever image or compose file happens to
+be running, and a wall-clock time printed without an offset is a second, unlabelled clock that
+nothing can be compared against.
+
+Two halves, split along the `lib`/`common` line:
+
+| | Where | Kind |
+| --- | --- | --- |
+| The rule | `db_ops/lib/timezone.py` | pure — parse, resolve, render. Imports nothing from `db_ops` |
+| The operation | `python -m db_ops.common.cli timezone` | reads this node's config and says what it resolved. Writes nothing, so it answers when the store is down |
+| The record | `python -m db_ops.db.cli timezone --record` | upserts this node's row in `runtime_nodes`. In `db.cli` because `common` may not import `db` |
+
+**Bound once, in `db_ops.config.parse_config`.** Producers deep in the reports and telegram apps
+call `format_display()` without being handed a timezone they have no other reason to know about —
+the plumbing alternative always misses one, and the one it misses prints a second clock. No app
+parses the field. `DB_OPS_TIMEZONE` overrides it per node, exactly like `DB_OPS_NODE_ROLE`.
+
+**Storage is not affected and must never be.** `format_utc` stays `%Y-%m-%dT%H:%M:%SZ` on both
+backends. Every range query in the tool compares that text lexically, so a timestamp written in
+`+07` would sort between two UTC rows and land in the wrong window seven hours wide. The invariant
+is held by `tests/test_runtime_nodes_timezone.py`.
+
+`tzdata` is a core dependency because an IANA name needs a zone database and Windows ships none —
+without it the same `config.json` would work in the image and raise on the master. Fixed offsets
+need no zone database, and no daylight saving follows them.
 
 ### Judging — the rules, as pure functions
 

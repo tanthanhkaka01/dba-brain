@@ -38,6 +38,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from db_ops.lib.timezone import file_stamp, format_display
+
 __all__ = [
     "DEFAULT_EVIDENCE_ROOT",
     "FAIL",
@@ -73,7 +75,7 @@ def new_run_id(now: datetime | None = None) -> str:
     make the reader do the arithmetic every time. Store rows keep using UTC (see
     ``docs/13_common.md``, *Timezone convention*) — this is a file name, not a stored fact.
     """
-    return (now or datetime.now()).strftime("%Y%m%d_%H%M%S")
+    return file_stamp(now)
 
 
 @dataclass
@@ -127,7 +129,7 @@ class GateReport:
         self.operation = str(operation)
         self.target = str(target or "")
         self.run_id = run_id or new_run_id()
-        self.started_at = started_at or datetime.now().astimezone().isoformat(timespec="seconds")
+        self.started_at = started_at or format_display()
         self.gates: list[Gate] = []
         self.facts: dict[str, Any] = {}
         self._echo = echo

@@ -55,6 +55,7 @@ QUERY_STORE_CODE = "QUERY_STORE_COVERAGE"
 from db_ops.reports import inventory_health  # noqa: E402 - after QUERY_STORE_CODE, see above
 from db_ops.reports import workload as workload_block  # noqa: E402 - same reason
 from db_ops.lib.paths import DEFAULT_DATA_DIR
+from db_ops.lib.timezone import format_offset, offset_minutes
 
 TEMPLATE_HTML = Path(__file__).resolve().parent / "templates" / "server_report.html"
 
@@ -2615,6 +2616,11 @@ def render_page(*, servers: list[dict], company: str, snapshot_date: str, stamp:
         "__SNAPSHOT_DATE__": snapshot_date,
         "__WINDOW_DAYS__": str(int(days)),
         "__STAMP__": stamp,
+        # The page renders every time itself, in JS, so it needs the clock as a value rather than
+        # a rendered string. Baked in at build time and not read from the browser: a report is a
+        # file that gets shared, and it must say the same hour to everyone who opens it.
+        "__UTC_OFFSET_MINUTES__": str(offset_minutes()),
+        "__UTC_OFFSET_LABEL__": format_offset(offset_minutes()),
         "__INVENTORY_HREF__": inventory_href,
         "__SERVERS__": json.dumps(servers, ensure_ascii=False, separators=(",", ":")),
     }

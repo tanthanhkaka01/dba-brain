@@ -41,6 +41,7 @@ from db_ops.control._support import (
     ssh_capture,
     ssh_connect,
 )
+from db_ops.lib.timezone import file_stamp
 
 # Canonical inventory now lives inside the tool (db_ops/data/) so db_ops is self-contained.
 # Reports are written inside the db_ops tool only (never outside it).
@@ -63,7 +64,7 @@ def run_inventory_health(*, host: str, user: str, password: str | None, port: in
                          inventory: str | Path = DEFAULT_INVENTORY,
                          snapshot_dir: str | Path = DEFAULT_SNAPSHOT_DIR,
                          dry_run: bool = False) -> dict:
-    stamp = date or datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    stamp = date or file_stamp()
     file_name = f"{stamp}_database-inventory.json"
     snapshot_dir = Path(snapshot_dir)
     snapshot_dir.mkdir(parents=True, exist_ok=True)
@@ -109,7 +110,7 @@ def run_inventory_workflow(*, host: str, user: str, password: str | None, port: 
     """inventory-health then inventory-summary in one shot. The health step builds + merges
     the overlay; the summary step renders the markdown from the freshly merged canonical JSON.
     A shared ``date`` stamp keeps both files' ``YYYYMMDD_HHMMSS`` prefix identical."""
-    stamp = date or datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    stamp = date or file_stamp()
     print("=== inventory-health ===", flush=True)
     health = run_inventory_health(host=host, user=user, password=password, port=port,
                                   container=container, days=days, date=stamp,

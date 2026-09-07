@@ -28,6 +28,8 @@ import shutil
 import socket
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+from db_ops.lib.timezone import format_display_text
 from typing import Any
 
 #: cgroup v2, then v1. A container that was given no limit reports "max" in v2 and a number near
@@ -407,18 +409,20 @@ def render(facts: dict[str, Any]) -> str:
     if up.get("hours") is not None:
         # "host up since" rather than "up since": this is the machine's clock, and on a node whose
         # daemon was restarted an hour ago the two numbers are nothing like each other.
-        lines.append(f"uptime    : {up['hours']:.2f} h  (host up since {up.get('since')})")
+        lines.append(f"uptime    : {up['hours']:.2f} h  "
+                     f"(host up since {format_display_text(up.get('since'))})")
     else:
         lines.append(f"uptime    : {up.get('source') or 'unavailable'}")
 
     ours = facts.get("db_ops_uptime") or {}
     state = ours.get("status")
     if state == "running":
-        lines.append(f"db_ops up : {ours['hours']:.2f} h  (since {ours.get('since')})")
+        lines.append(f"db_ops up : {ours['hours']:.2f} h  "
+                     f"(since {format_display_text(ours.get('since'))})")
     elif state == "stale":
         # Worth saying, not hiding: the file is only left behind when the daemon died without
         # unwinding, which is the difference between "stopped" and "was killed".
-        lines.append(f"db_ops up : not running  (last start {ours.get('since')}, "
+        lines.append(f"db_ops up : not running  (last start {format_display_text(ours.get('since'))}, "
                      f"pid {ours.get('pid')} is gone)")
     elif state == "stopped":
         lines.append("db_ops up : not running  (no daemon has started in this tool root)")

@@ -570,7 +570,7 @@ into this module's error type.
 | `db_connect.py` | **Single source of truth** for *opening a connection to one database*, on every engine db_ops supports (sqlserver / postgresql / mysql / oracle) — what `remote_exec` is for reaching a VM. Owns driver import (lazy, per engine), default port and database per engine, and the in-server statement timeout each engine spells differently (`statement_timeout` / `call_timeout` / `read_timeout` / `command_timeout`). This code used to live inside the metrics app, so `sql_run` could not reuse it and supported SQL Server only — which is why `/spbot_sql_to_xlsx` refused a PostgreSQL target. Running the SQL is separate and already shared (`sql_execution.execute_cursor_batches`). | `connect_engine`, `normalize_db_type`, `default_database`, `parameter_style`; `DbConnectError`; `SUPPORTED_DB_TYPES` |
 | `ssh.py` | **Single source of truth** for the SSH *connection*: opening a paramiko client (key or password, no silent agent/interactive fallback unless asked). Connect failures are classified where the paramiko exception type is still available, so callers never pattern-match a message to tell "wrong password" from "host unreachable". Auth **resolution** left on 2026-08-15 — `resolve_ssh_key` (a bare name resolves inside **`data/ssh_keys/`**) and `resolve_ssh_password` (value > env var > encrypted-secret ref) are `data_sources.ssh_auth`, and the four exception names are `lib.ssh_errors`, because four app modules were importing this transport for a key path or one word. All of it is re-exported here. | `open_ssh_client`; re-exported: `resolve_ssh_password`, `resolve_ssh_key`, `ssh_keys_dir`, `SSH_KEYS_DIRNAME`, `SshError` + `SshAuthError` / `SshConnectError` / `SshTimeoutError` |
 | `remote_exec.py` | **Single source of truth** for *reaching a VM and running a command on it*, over `ssh` (paramiko), `winrm` (pypsrp, or a local `Invoke-Command` wrapper) or `local` (subprocess). **Input is a JSON object** — the same `cmd_access` shape stored in `db_instances.json`, optionally plus a `remote_credentials` entry — so config travels into the API untranslated; output is a `RemoteResult` that is JSON-shaped too. Also owns the `Invoke-Command` *builder* for callers that compose a remote script and run it through their own runner. See [the section below](#reaching-a-vm-remote_exec). | `open_session`, `run_command`, `run_script`, `RemoteAccess.from_json`, `RemoteResult`, `shell_prelude`, `build_invoke_command_script` / `build_invoke_command_argv`, `resolve_secret_value`; `RemoteExecError` and its subclasses `RemoteAuthError` / `RemoteConnectError` / `RemoteTimeoutError` |
-| `time_window.py` | **Single source of truth** for the scheduling convention shared by the daemon, sql_tasks, metrics, and reports: allowed time windows, `repeat_interval`, retry/recover, and the `RUN_ONCE` (0) / `MANUAL_ONLY` (-1) semantics — run-once still runs the first time, manual never runs unless forced. `from_* > to_*` is a **wrapping range** on every dimension (month/day/hour/minute): `from_hour=22, to_hour=6` = 22:00 through 06:00 the next morning; `from_day=25, to_day=5` = 25th through the 5th of the next month. No app may parse, evaluate, or explain a time window with its own comparisons — always these functions. | `parse_time_window_config`, `is_time_window_open`, `time_window_closed_reason` (human-readable skip reason), `repeat_due`, `job_due`; constants `RUN_ONCE = 0`, `MANUAL_ONLY = -1`, `ERROR_STATUSES` |
+| `time_window.py` | **Single source of truth** for the scheduling convention shared by the daemon, sql_tasks, metrics, and reports: allowed time windows, `repeat_interval`, retry/recover, and the `RUN_ONCE` (0) / `MANUAL_ONLY` (-1) semantics. Bounds are hours in the configured `timezone` — callers pass `db_ops.lib.timezone.display_now()`, never the host clock — run-once still runs the first time, manual never runs unless forced. `from_* > to_*` is a **wrapping range** on every dimension (month/day/hour/minute): `from_hour=22, to_hour=6` = 22:00 through 06:00 the next morning; `from_day=25, to_day=5` = 25th through the 5th of the next month. No app may parse, evaluate, or explain a time window with its own comparisons — always these functions. | `parse_time_window_config`, `is_time_window_open`, `time_window_closed_reason` (human-readable skip reason), `repeat_due`, `job_due`; constants `RUN_ONCE = 0`, `MANUAL_ONLY = -1`, `ERROR_STATUSES` |
 | `listing.py` | **Single source of truth** for what a `/spbot_list_*` reply shows: the entries an operator can act on. A disabled entry is dropped (it cannot be run, and offering it invites someone to type an id that will be refused), and the listing then says **how many** it dropped — hiding without accounting is indistinguishable from losing. Five commands implement this rule (backups, restores, server targets, sql_tasks, metrics); before this module they spelled "off" four different ways and two of them showed disabled entries as if they were runnable. | `active_only(items, key=...) -> (kept, hidden)`, `hidden_note(hidden, noun=...)`, `is_active(item)` |
 | `policy_engine.py` | Report/severity policy: normalize a metric row's status, apply per-metric and per-instance severity overrides, and render policy events. Drives how reports and alerts classify a row. | `apply_report_policy`, `render_policy_event`, `normalize_status`, `row_status`; `STATUS_ORDER` (SUPPRESS<OK/LOGGING<NO_DATA<WARNING/ERROR<CRITICAL) |
 | `event_policy.py` | Normalize error messages into stable **error types** and **signatures**, and derive a report `event_code` from `(collector_type, category, error_type, metric_code)` for dedup/notification. | `normalize_error_type`, `normalize_error_signature`, `report_event_code`; pattern sets `CONNECT_FAILED_PATTERNS`, `AUTH_FAILED_PATTERNS`, `PERMISSION_DENIED_PATTERNS` |
@@ -1217,6 +1217,45 @@ connection it opens, so no caller has to know the type code. A driver without
 
 ---
 
+## Which clock this node is on (`timezone`)
+
+`self-status` says what this installation *is*; `timezone` says what hour it thinks it is, and puts
+that on the record.
+
+```bash
+python -m db_ops.common.cli timezone '{"format":"txt"}'
+```
+
+```
+node          : pc-master (master) on DB-THANH
+timezone      : Asia/Ho_Chi_Minh  [config.json]
+utc offset    : +07 (420 min)  +07
+now (display) : 2026-09-07 08:55:31 +07
+now (stored)  : 2026-09-07T01:55:31Z
+```
+
+**It reads nothing and writes nothing.** Like `self-status`, it still answers when the store is
+down — "which clock am I on" is exactly the question asked when something is misconfigured, and it
+answers with no config at all.
+
+**Putting the answer on the record is `db.cli`, not this**, because `common` may not import `db`:
+
+```bash
+python -m db_ops.db.cli --config config.json timezone --record --list
+```
+
+That upserts one row in `runtime_nodes` and lists the cluster. It is the only way to see whether a
+master and a worker **sharing one store** agree about the hour — each reads its own `config.json`,
+and before that table nothing in the store could say. A `time_window` firing at the wrong hour on
+one node looks exactly like a schedule that was never due. The daemon writes the same row at
+start-up, and swallows any failure doing so: turning "could not note the timezone" into "the daemon
+did not start" would be worse than the gap in the record.
+
+The *rule* underneath both — parse a declaration, resolve it, render an instant — is pure and lives
+in `db_ops/lib/timezone.py`, imported by every app.
+
+---
+
 ## Describing this installation (`self_status`)
 
 `self-status` is the process reporting on itself and the machine under it. It is deliberately the
@@ -1770,21 +1809,50 @@ unless a blocking gate failed.
 
 ## Timezone convention
 
-Two different clocks are in play; do not mix them up:
+Two different clocks are in play; do not mix them up.
 
-- **`time_window` bounds (`from_*`/`to_*`) are evaluated in the node's local time**
-  (`datetime.now().astimezone()`), not UTC. Both nodes are configured to **+07**: the
-  master PC runs Windows timezone `SE Asia Standard Time`, and the worker container sets
-  `TZ: Asia/Ho_Chi_Minh` in `docker-compose.yml` / `docker-compose.runtime.yml`. So
-  `from_hour: 1` means 01:00 +07 on either node. If a node's OS/container timezone were
-  ever changed, every window would shift with it.
-- **Store timestamps are written in UTC (+00) on either backend**. Every `created_at` / run-time column in
-  the runtime store is written as `YYYY-MM-DDTHH:MM:SSZ` — Python code goes through
-  `utc_now_text()` (`datetime.now(timezone.utc)`) in `db_ops/db/store.py`, and the
-  schema defaults use `strftime('%Y-%m-%dT%H:%M:%SZ','now')`, which is also UTC. Add +07
-  when reading `sql_runs` / `job_runs` rows manually.
+**The display clock is `timezone` in `config.json`** — an IANA name (`Asia/Ho_Chi_Minh`) or a fixed
+offset (`+07:00`), mandatory, defaulting to `UTC`. `DB_OPS_TIMEZONE` overrides it per node. It is
+resolved once by `db_ops.config.parse_config` and read through `db_ops/lib/timezone.py`; no app
+parses it. `python -m db_ops.common.cli timezone '{"format":"txt"}'` says what a node resolved.
+
+- **`time_window` bounds (`from_*`/`to_*`) are hours in the configured timezone**
+  (`db_ops.lib.timezone.display_now()`), on every node, whatever clock the host keeps. So
+  `from_hour: 1` means 01:00 in that zone on the master and in the container alike.
+
+  This was the node's *local* time until 2026-09-07 — `datetime.now().astimezone()`, which is
+  whatever the OS or the image is set to. It only held together because `docker-compose.yml`
+  pinned `TZ: Asia/Ho_Chi_Minh` into the worker; that line was the timezone configuration, it
+  shipped in a public image, and anyone who ran the published image without it got every overnight
+  window seven hours out. The line is gone and the field replaces it.
+
+- **Store timestamps are written in UTC (+00) on either backend, and this setting does not touch
+  them.** Every `created_at` / run-time column is `YYYY-MM-DDTHH:MM:SSZ` — Python goes through
+  `utc_now_text()` (`datetime.now(timezone.utc)`) in `db_ops/db/store.py`, and the schema defaults
+  use `strftime('%Y-%m-%dT%H:%M:%SZ','now')`, which is also UTC.
+
+  That is what makes one configurable display clock safe. Every range query in the tool
+  (`report_exists_on_local_date`, the metric retention cutoff, the queue's stale-claim window)
+  compares that text **lexically**; a row written in `+07` would sort between two UTC rows and land
+  in the wrong window, seven hours wide. `tests/test_runtime_nodes_timezone.py` holds the line.
+
+- **Everything a person reads carries its offset**, in one format, from
+  `db_ops.lib.timezone.format_display()`:
+
+  ```
+  Snapshot 2026-09-07 07:32:56 +07
+  Snapshot 2026-09-07 00:32:56 +00
+  ```
+
+  Report headers, Telegram alerts, CLI listings, log lines, and the `YYYYMMDD_HHMMSS` prefix on a
+  generated file. The stamp and the header inside the file now agree, which they did not while the
+  stamp came off the host clock and the row describing it was UTC.
+
 - `repeat_interval` / due comparisons are done in UTC (stored row vs `datetime.now(timezone.utc)`),
-  which is offset-safe; only the window open-check uses local time.
+  which is offset-safe; only the window open-check and the rendering use the display clock.
+
+- **Which zone is each node actually on?** `runtime_nodes` (see [`docs/01_runtime_store.md`](./01_runtime_store.md)).
+  Master and worker share one store and each reads its own `config.json`, so the question is real.
 
 ## Shared config objects (the JSON contracts)
 
@@ -1823,7 +1891,7 @@ and belongs in neither.
   "from_year": null, "to_year": null,      // null on any bound = unbounded
   "from_month": null, "to_month": null,
   "from_day": 1,  "to_day": 31,
-  "from_hour": 1, "to_hour": 5,
+  "from_hour": 1, "to_hour": 5,          // hours in config.json's `timezone` - see below
   "from_minute": null, "to_minute": null,
   "repeat_interval": 72000,                // seconds between runs; 0 = RUN_ONCE, -1 = MANUAL
   "retry_interval": 3600,                  // seconds to wait after a failure
@@ -1834,8 +1902,23 @@ and belongs in neither.
 - **`from_* > to_*` is a wrapping range on every dimension.** `from_hour: 22, to_hour: 6`
   means 22:00 through 06:00 the next morning; `from_day: 25, to_day: 5` means the 25th
   through the 5th of the next month.
-- **Bounds are evaluated in the node's local time** (both nodes are +07); store timestamps
-  are UTC on either backend. See the timezone section above.
+- **Every bound is evaluated in the timezone DBA Brain is running under** — `timezone` in
+  `config.json`, resolved once by `db_ops.config.parse_config` and read through
+  `db_ops.lib.timezone.display_now()`. `from_hour: 1` means 01:00 **in that zone**, on every
+  node, whatever clock the host or the container keeps. There is no per-entry timezone and no
+  per-app one: one declaration decides every window in every file, so two schedules can never
+  mean two different 01:00s.
+
+  Until 2026-09-07 this was the *node's local time* (`datetime.now().astimezone()`), which
+  only held together because `docker-compose.yml` pinned `TZ: Asia/Ho_Chi_Minh` into the
+  worker. Anyone running the published image without that line was on UTC, so a window written
+  for the small hours ran during their working day. **Changing `timezone` moves every window
+  that names an hour** — that is the point of it, and it is why it is worth setting before the
+  first scheduled run rather than after.
+
+  Store timestamps stay UTC on either backend and are unaffected. `repeat_interval` and the
+  retry/stale comparisons are elapsed-time arithmetic done in UTC, so they are offset-safe;
+  only the `from_*`/`to_*` open-check reads a wall clock. See the timezone section above.
 - **`repeat_interval: 0` is RUN_ONCE**, not "run constantly": a successful run never
   repeats, a failed one retries after `retry_interval`. Note run-once **does** run — it is due
   while it has never run — so `0` cannot express "only on demand".

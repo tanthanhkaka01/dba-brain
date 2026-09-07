@@ -43,6 +43,7 @@ import json
 from pathlib import Path
 
 from db_ops.reports.inventory_health import build_inventory_health, merged_drives, merged_sql_resources
+from db_ops.lib.timezone import file_stamp
 
 # tools/db_ops/db_ops/reports/inventory_summary.py -> parents[2] == tool root (tools/db_ops).
 # Canonical inventory lives inside the tool (db_ops/data/) so db_ops is self-contained.
@@ -61,7 +62,7 @@ def build_inventory_workflow(*, sqlite_path, config=None, days=2, date=None,
     ``beauty`` (opt-in, default off) additionally renders the styled HTML + Markdown
     inventory report (``inventory_report``) from the merged inventory. The plain
     ``*-summary.md`` is unchanged and always produced."""
-    stamp = date or datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    stamp = date or file_stamp()
     out_dir = Path(output_dir) if output_dir else (
         (config.runtime_dir / "reports") if config else Path("."))
     # The canonical inventory lives under the mounted runtime/reports so it exists in the

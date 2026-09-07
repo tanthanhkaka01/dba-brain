@@ -30,6 +30,7 @@ import sys
 from pathlib import Path
 
 from db_ops.lib import response, secret_text
+from db_ops.lib.timezone import display_now
 # One request parser for the whole tool. The JSON-object contract is `common`'s to define; this
 # module is a caller of it, not a second implementation — two would drift on `@file` and stdin.
 from db_ops.common import data_sources
@@ -108,6 +109,16 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Do not add foreign keys.")
     mig.add_argument("--show-ddl", action="store_true", help="Print the DDL that was executed.")
     mig.set_defaults(handler=_handle_migrate)
+
+    tzc = subparsers.add_parser(
+        "timezone",
+        help="Which clock each node runs on: record this one, and list the cluster.")
+    _add_secret_args(tzc)
+    tzc.add_argument("--record", action="store_true",
+                     help="Upsert this node's row in runtime_nodes.")
+    tzc.add_argument("--list", dest="list_nodes", action="store_true",
+                     help="Read back every node that has reported.")
+    tzc.set_defaults(handler=_handle_timezone)
 
     ver = subparsers.add_parser(
         "verify-migration", help="Compare row counts per table between SQLite and PostgreSQL.")
@@ -960,7 +971,7 @@ def _ops_status_command(argv: list[str]) -> int:
             if mode == "auto":
                 due, summary_skipped = ops.summary_is_due(
                     last_sent=ops.last_summary_sent_at(store=store, chat_id=chat_id),
-                    now_local=datetime.now(timezone.utc).astimezone(),
+                    now_local=display_now(),
                     from_hour=int(request.get("summary_from_hour", 8)),
                     to_hour=int(request.get("summary_to_hour", 20)),
                     interval_seconds=int(request.get("summary_interval_seconds") or 3600),
@@ -1406,6 +1417,66 @@ def _split_json_command(argv: list[str]) -> tuple[str, list[str]] | None:
             return token, argv[:index] + argv[index + 1:]
         return None
     return None
+
+
+def _handle_timezone(args: argparse.Namespace) -> int:
+    """Put which clock this node is on into the store, and read the cluster back.
+
+    The reporting half is ``python -m db_ops.common.cli timezone``, which touches nothing and
+    still answers when the store is down. This is the half that writes, so it lives here with
+    every other store operation — ``common`` may not import ``db``.
+
+    Why the table exists: master and worker share one store and each reads its own ``config.json``.
+    Nothing else could answer "is the estate on one clock?", and a ``time_window`` firing at the
+    wrong hour on one node is indistinguishable from a schedule that was never due.
+
+    With neither flag it still prints the listing — asking is the common case, and a command that
+    did nothing without a flag would just be the other command with a worse name.
+    """
+    import socket
+
+    import db_ops
+    from db_ops.common.cli import timezone_listing, timezone_node_id
+    from db_ops.db import DbOpsStore
+    from db_ops.lib import timezone as timezone_lib
+
+    config = load_config(resolve_config_path("db", args.config))
+    facts = timezone_lib.describe()
+    node_id = timezone_node_id(config)
+    hostname = socket.gethostname()
+    data = {
+        **facts,
+        "node_id": node_id,
+        "node_role": config.node_role,
+        "hostname": hostname,
+        "source": "env" if timezone_lib.declaration_from_env() else "config.json",
+        "app_version": db_ops.__version__,
+        "recorded": False,
+    }
+
+    store = DbOpsStore.from_config(config, key=_resolved_key(args),
+                                   password=getattr(args, "password", None))
+    if args.record:
+        store.record_runtime_node(
+            node_id=node_id, node_role=config.node_role, hostname=hostname,
+            timezone_name=str(facts["timezone"]),
+            utc_offset_minutes=int(facts["utc_offset_minutes"]),
+            tz_abbreviation=str(facts["tz_abbreviation"]),
+            app_version=db_ops.__version__,
+        )
+        data["recorded"] = True
+    # Listed whenever asked, and always after a record, so the operator sees the row they just
+    # wrote beside the other node's — which is the comparison the whole table is for.
+    if args.list_nodes or args.record:
+        data["nodes"] = store.list_runtime_nodes()
+
+    return response.emit(response.ok(
+        "timezone",
+        message=f"{data['timezone']} ({data['utc_offset']}) on {node_id}",
+        data={"listing": timezone_listing(data), **data},
+        metrics={"utc_offset_minutes": int(facts["utc_offset_minutes"]),
+                 "node_count": len(data.get("nodes") or [])},
+    ))
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -85,6 +85,7 @@ declaration files it reads. It holds no threshold, target or schedule.
 | Key | Decides |
 | --- | --- |
 | `app_name` | The name this installation reports itself as. |
+| `timezone` | **Required.** The clock this node *shows* — see §3.1. Default `UTC`. |
 | `log_dir`, `runtime_dir` | Where logs and generated output go. Relative to this file. |
 | `console_level`, `file_level` | The two logging thresholds. |
 | `store_config_file` | Pointer to the runtime store declaration. Default `data/store_config.json`. |
@@ -92,6 +93,51 @@ declaration files it reads. It holds no threshold, target or schedule.
 | `master`, `worker` | Read only by the control app, which builds an image on one machine and deploys it to another. A single-machine install can delete both. |
 
 Start from [`config.example.json`](../config.example.json).
+
+### 3.1 `timezone` — the clock this node shows
+
+An IANA name (`Asia/Ho_Chi_Minh`, `America/New_York`, `Europe/Berlin` — these follow daylight
+saving) or a fixed offset (`UTC`, `+07:00`, `-03:30`). It decides two things:
+
+* **What every rendered time says.** A report header, a Telegram alert, a CLI listing, a log line,
+  and the `YYYYMMDD_HHMMSS` prefix on a generated file. Rendered times carry their offset, always:
+
+  ```
+  Snapshot 2026-09-07 07:32:56 +07
+  Snapshot 2026-09-07 00:32:56 +00
+  ```
+
+* **What a `time_window`'s `from_hour`/`to_hour` mean.** `from_hour: 1, to_hour: 5` is 01:00–05:00
+  in *this* zone, on every node, whatever clock the host keeps.
+
+**It does not change what is stored.** Every timestamp column holds UTC as
+`%Y-%m-%dT%H:%M:%SZ`, on both backends, and every range query in the tool compares that text
+lexically. That is what makes one configurable display clock safe.
+
+**Absent means UTC**, with a warning naming the file — an install that predates the field still
+starts. A value that is present and unparseable raises when the config is read, rather than
+producing an estate of reports on a clock nobody questions for a month.
+
+**`DB_OPS_TIMEZONE` overrides it**, the same way `DB_OPS_NODE_ROLE` overrides the node role: the
+worker runs a copy of the master's `config.json`, so a per-node answer must not require editing it.
+`DB_OPS_MESSAGE_UTC_OFFSET_HOURS` — the offset-only env var this replaces — is still read when
+neither is set, and is deprecated.
+
+Ask any node what it resolved, and put the answer on the record:
+
+```bash
+python -m db_ops.common.cli timezone '{"format":"txt"}'          # reads nothing; answers anyway
+python -m db_ops.db.cli --config config.json timezone --record --list
+```
+
+The second upserts this node's row in the store's `runtime_nodes` table and reads every node back.
+That is the only way to see whether a master and a worker sharing one store agree about the hour —
+each reads its own `config.json`, and nothing else in the store can say. It lives in `db.cli` and
+not beside the first because `common` may not import `db`.
+
+An IANA name needs a zone database. `tzdata` is a core dependency for exactly this reason: Linux
+has `/usr/share/zoneinfo` and Windows has nothing, so without it the same config file would work
+in the image and fail on a Windows master. A fixed offset needs no zone database at all.
 
 ---
 

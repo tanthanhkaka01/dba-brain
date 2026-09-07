@@ -224,6 +224,7 @@
 const SERVERS = __SERVERS__;   /* [{slug, name, ip, platform, status, score, file}] — index only */
 const VERSION = "__STAMP__";   /* cache-buster: a rebuilt page must not serve yesterday's series */
 const WINDOW_DAYS = "__WINDOW_DAYS__";
+const SNAPSHOT_DATE = "__SNAPSHOT_DATE__";  /* kept on every per-server view, not just the landing one */
 
 /* ?date= is answered by the web host, which swaps in that day's archived copy of whatever file
    was asked for. This page is only an index, so the date has to travel with it: the series it
@@ -248,7 +249,15 @@ const isPercentUnit = u => {
       || compact.startsWith("pct_") || compact.endsWith("_pct");
 };
 const unitText = u => isPercentUnit(u) ? "%" : String(u||"");
-const day = t => new Date(t*1000).toLocaleDateString(undefined,{month:"numeric",day:"numeric"});
+/* The report's clock, injected by the builder from config.json's `timezone`. The page used
+   to render one axis in the VIEWER's browser zone and one label in UTC, so the same file read
+   differently in Hanoi and in Chicago and neither matched the header. */
+const DISPLAY_OFFSET_MINUTES = __UTC_OFFSET_MINUTES__;
+const DISPLAY_OFFSET_LABEL = "__UTC_OFFSET_LABEL__";
+/* Shift the instant, then read it as UTC: that is the configured zone's wall clock, and it
+   is the same wall clock wherever the page is opened. */
+const inDisplayZone = t => new Date((t + DISPLAY_OFFSET_MINUTES*60)*1000);
+const day = t => { const d = inDisplayZone(t); return `${d.getUTCMonth()+1}/${d.getUTCDate()}`; };
 /* `when` is declared once, further down, as a function — a second `const when` here made the
    whole script a SyntaxError ("Identifier 'when' has already been declared") and the page
    rendered nothing but "Loading…". Timestamp formatting lives in that one place. */
@@ -369,12 +378,18 @@ function verdict(h, server){
   </div>`;
 }
 
-/* Store timestamps are UTC (docs/14). Saying so on every stamp is the difference between a
-   reader trusting the number and a reader guessing whose clock it is. */
+/* Store timestamps are UTC (docs/14); this shows them on the configured clock and names it.
+   Saying which clock on every stamp is the difference between a reader trusting the number and a
+   reader guessing whose it is - and the number moved between viewers before it said so. */
 function when(value){
   if (value == null || value === "") return "";
-  if (typeof value === "number") return new Date(value*1000).toISOString().slice(0,16).replace("T"," ")+" UTC";
-  return esc(String(value).replace("T"," ").replace("Z",""))+" UTC";
+  if (typeof value === "number")
+    return inDisplayZone(value).toISOString().slice(0,16).replace("T"," ")+" "+DISPLAY_OFFSET_LABEL;
+  /* A stored string: "2026-09-07T00:32:56Z" is UTC, so parse it and shift like the numbers. */
+  const parsed = Date.parse(String(value).endsWith("Z") ? value : String(value)+"Z");
+  if (!isNaN(parsed))
+    return esc(inDisplayZone(parsed/1000).toISOString().slice(0,19).replace("T"," "))+" "+DISPLAY_OFFSET_LABEL;
+  return esc(String(value).replace("T"," ").replace("Z",""))+" "+DISPLAY_OFFSET_LABEL;
 }
 
 /* The tile names the row it is reading. Without it a CPU tile could show a memory percentage
@@ -1103,7 +1118,7 @@ function databasesBlock(d){
   const checkdbCell = r => {
     if (!r.checkdb || r.checkdb === "never")
       return `<span class="sev crit">never</span>`;
-    return `<span class="mono">${esc(String(r.checkdb).replace("T", " "))}</span>`;
+    return `<span class="mono">${when(r.checkdb)}</span>`;
   };
   const ageCell = (hours, warnAt, critAt) => {
     if (hours == null) return `<span class="muted">—</span>`;
@@ -1595,9 +1610,14 @@ async function select(slug){
   } else {
     ix.style.display = "none";
   }
+  /* The snapshot stamp is part of this line's initial text and was being written over the
+     moment a server was picked, so every per-server view lost the one thing that says how old
+     the page is - while the inventory page beside it kept showing it. It is re-appended here
+     rather than moved: the host facts are what the reader came for and stay first. */
   document.getElementById("hostMeta").textContent =
     [server.role && server.role !== server.name ? server.role : "",
-     server.ip, server.platform, `last ${WINDOW_DAYS} days`].filter(Boolean).join(" · ");
+     server.ip, server.platform, `last ${WINDOW_DAYS} days`,
+     SNAPSHOT_DATE ? `snapshot ${SNAPSHOT_DATE}` : ""].filter(Boolean).join(" · ");
   document.getElementById("body").innerHTML = '<div class="empty">Loading…</div>';
 
   let d;

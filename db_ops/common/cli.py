@@ -97,6 +97,7 @@ USAGE = (
     "  relay-file       Copy one file from one host straight to another, hash-verified\n"
     "  host-facts       Read one host's state: uptime, disks, services, pending reboot (see --help)\n"
     "  self-status      What THIS installation is: version, host, ip, cpu, memory, disk\n"
+    "  timezone         Which clock this node shows, and record it in the store (see --help)\n"
     "  host-service     Start/stop/restart services on a host and wait for the end state (see --help)\n"
     "  host-restart     Restart a host and prove it came back (see --help)\n"
     "  sqlserver-precheck    Is this SQL Server instance safe to patch right now (see --help)\n"
@@ -1859,6 +1860,153 @@ def _self_status_command(argv: list[str]) -> int:
     ))
 
 
+TIMEZONE_USAGE = (
+    "usage: python -m db_ops.common.cli timezone <json>|@<file>|- [--config ...]\n"
+    "\n"
+    "Which clock this node SHOWS - the config.json 'timezone' field, resolved. Every rendered\n"
+    "time in db_ops carries this offset, and a time_window's from_hour/to_hour mean hours in\n"
+    "this zone. Stored timestamps stay UTC either way; this does not move them.\n"
+    "\n"
+    "This command reads nothing and writes nothing - it answers when the store is down, which is\n"
+    "one of the times somebody wants to know what clock they are on. To put the answer ON the\n"
+    "record, so a master and a worker sharing one store can be compared, use:\n"
+    "  python -m db_ops.db.cli timezone --record\n"
+    "\n"
+    "The request is a JSON object, given inline, as @path/to/request.json, or on stdin (-):\n"
+    '  {"format": "txt"}      // optional; txt for the chat listing, json (default) for the envelope\n'
+)
+
+
+def _timezone_command(argv: list[str]) -> int:
+    """``timezone`` - the node saying which clock it is on, and putting that on the record.
+
+    The rule (parse a declaration, resolve it, render an instant) is pure and lives in
+    :mod:`db_ops.lib.timezone`, imported by every app. This is the *operation* half: reading this
+    node's own config and saying what it resolved to.
+
+    **Recording it is `db.cli timezone --record`, not this.** `common` may not import `db` - the
+    shared tier is a stack, not a pair - and a store write belongs with every other store
+    operation. Splitting it there also leaves this command able to answer when the store is
+    unreachable, like ``self-status``: "which clock am I on" is exactly the question asked when
+    something is misconfigured.
+    """
+    import socket
+
+    import db_ops
+    from db_ops.lib import response
+    from db_ops.lib import timezone as timezone_lib
+
+    source = ""
+    config_path = None
+    rest = list(argv)
+    while rest:
+        token = rest.pop(0)
+        if token in {"-h", "--help"}:
+            print(TIMEZONE_USAGE)
+            return 0
+        if token == "--config":
+            config_path = rest.pop(0) if rest else None
+        elif not source:
+            source = token
+        else:
+            print(f"Unexpected argument: {token}\n\n{TIMEZONE_USAGE}", file=sys.stderr)
+            return 2
+
+    request, code = _read_json_request(source or "{}", TIMEZONE_USAGE)
+    if request is None:
+        return code
+
+    config = None
+    config_error = ""
+    try:
+        from db_ops.config import load_config, resolve_config_path
+
+        # Loading the config is what BINDS the display zone - see db_ops.config.parse_config. It
+        # has to happen before describe(), or this command would report UTC while recording the
+        # node's real zone.
+        config = load_config(resolve_config_path("common", config_path))
+    except Exception as exc:  # noqa: BLE001 - no config is a fact about the install, not an error.
+        config_error = str(exc)
+
+    facts = timezone_lib.describe()
+    node_id = timezone_node_id(config)
+    node_role = str(getattr(config, "node_role", "master") or "master") if config else "master"
+    hostname = socket.gethostname()
+    data = {
+        **facts,
+        "node_id": node_id,
+        "node_role": node_role,
+        "hostname": hostname,
+        "source": ("env" if timezone_lib.declaration_from_env()
+                   else ("config.json" if config else "default")),
+        "app_version": db_ops.__version__,
+    }
+    if config_error:
+        data["config_error"] = config_error
+
+    listing = timezone_listing(data)
+    if str(request.get("format") or "json").strip().lower() == "txt":
+        print(listing)
+        return 0
+    return response.emit(response.ok(
+        "timezone",
+        message=f"{data['timezone']} ({data['utc_offset']}) on {node_id}",
+        data={"listing": listing, **data},
+        metrics={"utc_offset_minutes": int(facts["utc_offset_minutes"])},
+    ))
+
+
+def timezone_node_id(config) -> str:
+    """This node's id: the cluster entry matching its role, else the hostname.
+
+    Public because ``db.cli timezone --record`` keys ``runtime_nodes`` by it and the two must agree
+    — a node reported under one id here and another there would be two rows for one machine.
+
+    Hostname is the fallback rather than a fixed literal because ``runtime_nodes`` is keyed by it.
+    Two nodes sharing a store and a default id would be one row overwriting itself, and the
+    disagreement the table exists to show would be exactly what it hid.
+    """
+    import socket
+
+    if config is not None:
+        role = str(getattr(config, "node_role", "") or "")
+        for node in (getattr(config, "worker" if role == "worker" else "master", ()) or ()):
+            node_id = str(getattr(node, "node_id", "") or "").strip()
+            if node_id:
+                return node_id
+    return socket.gethostname()
+
+
+def timezone_listing(data: dict) -> str:
+    """The chat/terminal listing, shared with ``db.cli timezone`` so both print the same block."""
+    lines = [
+        f"node          : {data['node_id']} ({data['node_role']}) on {data['hostname']}",
+        f"timezone      : {data['timezone']}  [{data['source']}]",
+        f"utc offset    : {data['utc_offset']} ({data['utc_offset_minutes']} min)"
+        + (f"  {data['tz_abbreviation']}" if data.get("tz_abbreviation") else ""),
+        f"now (display) : {data['now_display']}",
+        f"now (stored)  : {data['now_utc']}",
+        "",
+        "Stored timestamps are UTC and unaffected by this setting. It decides what is SHOWN, and",
+        "what a time_window's from_hour/to_hour mean.",
+    ]
+    if data.get("config_error"):
+        lines.append(f"config        : not read - {data['config_error']}")
+    if data.get("record_error"):
+        lines.append(f"store         : not recorded - {data['record_error']}")
+    elif data.get("recorded"):
+        lines.append("store         : recorded in runtime_nodes")
+    nodes = data.get("nodes") or []
+    if nodes:
+        lines.append("")
+        lines.append("nodes that have reported:")
+        for node in nodes:
+            lines.append(
+                f"  {node['node_id']:<24} {node['timezone']:<20} "
+                f"{node['utc_offset_minutes']:>5} min   seen {node['updated_at']}")
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv:
@@ -1909,6 +2057,8 @@ def main(argv: list[str] | None = None) -> int:
         return _probe_host_command(argv[1:])
     if argv[0] == "self-status":
         return _self_status_command(argv[1:])
+    if argv[0] == "timezone":
+        return _timezone_command(argv[1:])
     if argv[0] == "restore-database":
         return _restore_database_command(argv[1:])
     if argv[0] in {"restore-full", "restore-diff", "restore-log",

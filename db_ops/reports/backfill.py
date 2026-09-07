@@ -29,6 +29,7 @@ import json
 from pathlib import Path
 from typing import Any
 from db_ops.common.data_sources import inventory_exclude_ip_prefixes
+from db_ops.lib.timezone import display_zone, format_stored
 
 
 def _end_of_day(date_text: str) -> str:
@@ -36,9 +37,15 @@ def _end_of_day(date_text: str) -> str:
 
     End of day, not start: a date-only ``?date=`` already means "the last snapshot of that day"
     everywhere else in the system, and the archive it looks for holds the last build of the day.
+
+    Whose day is the **configured timezone's** (``config.json`` -> ``timezone``), converted to UTC
+    for the comparison. It used to be the UTC day: at +07 that swept in the first seven hours of
+    the following morning and dropped the previous evening, so a backfilled report covered a
+    window the operator would not recognise as the date they asked for.
     """
     day = datetime.datetime.strptime(str(date_text).strip(), "%Y-%m-%d").date()
-    return f"{day:%Y-%m-%d}T23:59:59Z"
+    local_end = datetime.datetime.combine(day, datetime.time(23, 59, 59), tzinfo=display_zone())
+    return format_stored(local_end)
 
 
 def backfill_dated_reports(*, sqlite_path, dates: list[str], config=None, days: int = 7,

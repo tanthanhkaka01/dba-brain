@@ -6,7 +6,8 @@
     "'time_window' is the shared scheduling object. 'repeat_interval' -1 means MANUAL ONLY: the task is never scheduled and runs when somebody asks for it. That is the right setting for anything that writes.",
     "'output' decides how the result comes back - 'plain' text or 'xlsx' - and which chat receives it. It is a property of the target rather than of the script, because the same query is a spreadsheet for one audience and a text answer for another.",
     "'notify' is the shared notification object: 'logging_on_run' announces that it ran, 'alert_on_error' announces that it failed, and each names a chat by its routing level. Setting 'chat_id' directly overrides the level lookup and is for the rare case that needs one specific chat.",
-    "Confine a heavy task with from_hour/to_hour. A report that scans a large table at 09:00 competes with the people the database exists for."
+    "Confine a heavy task with from_hour/to_hour. A report that scans a large table at 09:00 competes with the people the database exists for.",
+    "Every 'time_window' hour and day bound is read in the timezone DBA Brain runs in - the 'timezone' field in config.json - on every node, whatever clock the host or container keeps. So 'from_hour': 1 is 01:00 there, not 01:00 UTC and not 01:00 on the machine. There is no per-entry timezone: one declaration decides every window in every file. Changing it moves every schedule that names an hour, so set it before the first scheduled run."
   ],
   "sql_targets": [
     {

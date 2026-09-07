@@ -20,6 +20,7 @@ from typing import Any
 
 from db_ops.lib.coerce import as_utc_datetime
 from db_ops.lib.time_window import TimeWindow, is_time_window_open, job_due
+from db_ops.lib.timezone import display_now
 from db_ops.db.job_runs import JobRun
 from db_ops.db.store import DbOpsStore, utc_now_text
 
@@ -50,7 +51,9 @@ def is_due(
 ) -> bool:
     """Whether one unit of work should run now."""
     now = now or datetime.now(timezone.utc)
-    local_now = local_now or datetime.now().astimezone()
+    # A restore drill declared for 01:00-05:00 means the operator's small hours, on every
+    # node. It used to mean the host's, which in the worker container is UTC.
+    local_now = local_now or display_now()
     if not is_time_window_open(time_window, local_now):
         return False
     latest = latest_runs.get(job_code)

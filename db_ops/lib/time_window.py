@@ -1,3 +1,30 @@
+"""When a unit of work is allowed to run, and whether it is due.
+
+The one scheduling convention four apps share — the app-command daemon, sql_tasks, metrics and
+reports — so that ``from_hour: 1`` means the same thing in ``app_commands.json`` as it does in
+``sql_targets.json``. No app may parse, evaluate or explain a time window with comparisons of its
+own; they would drift on wrapping ranges and on any field added later.
+
+**Which clock the bounds are on is the caller's to supply, and there is exactly one right answer:**
+``db_ops.lib.timezone.display_now()`` — the timezone DBA Brain is configured to run in
+(``config.json`` -> ``timezone``). Every ``from_*``/``to_*`` here is a wall-clock comparison, so a
+caller that passes ``datetime.now()`` or ``datetime.now(timezone.utc)`` silently reinterprets every
+schedule in the estate.
+
+That is not hypothetical. Until 2026-09-07 every caller passed ``datetime.now().astimezone()`` —
+the host's clock — which held together only because ``docker-compose.yml`` pinned
+``TZ: Asia/Ho_Chi_Minh`` into the worker container. On the published image, without that line, the
+container is UTC and a window written for the small hours ran during the operator's working day.
+
+This module stays pure and takes ``current`` as an argument rather than reading the configured zone
+itself: :mod:`db_ops.lib` imports nothing from ``db_ops``, and a scheduling rule that reads global
+state is one a test cannot pin to a moment.
+
+Elapsed-time arithmetic (``repeat_interval``, retry, stale-running recovery) is a different thing
+and is done in UTC by every caller — subtracting two instants is offset-safe, and the stored
+timestamps it compares against are UTC. Only the window open-check reads a wall clock.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -136,6 +163,10 @@ def time_window_closed_reason(time_window: TimeWindow | None, current: datetime)
     This is the only sanctioned way to evaluate or explain a time window — apps
     must not re-implement the from_*/to_* comparisons (they would drift on
     wrapping ranges and new fields).
+
+    ``current`` must be :func:`db_ops.lib.timezone.display_now` — the configured
+    display timezone. Its ``.hour`` and ``.day`` are read directly, so whatever
+    zone it carries *is* the meaning of every bound; see this module's docstring.
     """
     if time_window is None:
         return ""

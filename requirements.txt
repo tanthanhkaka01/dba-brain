@@ -38,3 +38,9 @@ pypsrp
 # Encryption for data/encrypted_secret_text.json (PBKDF2-HMAC-SHA256 + Fernet).
 # The runtime passphrase is supplied via the daemon --key flag / DB_OPS_SECRET_KEY env var.
 cryptography>=42.0.0
+
+# IANA zone database. config.json's mandatory `timezone` field accepts a name such as
+# Asia/Ho_Chi_Minh, and Python's zoneinfo has no zone data of its own on Windows - the master runs
+# on Windows, so without this every IANA name raises ZoneInfoNotFoundError there while working in
+# the Linux image. Pure data, no transitive dependencies. A fixed offset ("+07:00") needs none of it.
+tzdata>=2024.1

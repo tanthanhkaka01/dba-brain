@@ -4,6 +4,11 @@
     "Sample store_config.json - where the toolkit keeps its OWN data. Copy to store_config.json and edit. This is the toolkit's bookkeeping (job runs, metric results, reports, the delivery queue, restore history), not one of the databases you monitor.",
     "'backend' picks which section below is live: 'sqlite' or 'postgresql'. The other section stays in the file as a fully specified, prepared target, so switching is a one-word edit rather than a rediscovery of host, port and credentials.",
     "Start on SQLite. It needs nothing installed and is the right answer for a single machine trying the toolkit out. Move to PostgreSQL when more than one node writes to the store, or when you want the history to outlive the machine.",
+    "Who creates what. On 'sqlite' the toolkit creates the file and its parent folder itself on first use - the path below is the whole configuration. On 'postgresql' it creates NEITHER the database NOR the schema: give it ones that ALREADY EXIST and it builds only its own tables inside them, on first use. A database that is not there fails at connect with '3D000 database \"...\" does not exist' rather than being created behind your back.",
+    "So on PostgreSQL, either ask your DBA for an empty database and a schema, or - when this login is allowed to create them - run 'python -m db_ops.db.cli create-store-database', which is idempotent and has a --dry-run. Then 'python -m db_ops.db.cli init' builds the tables, and 'check --counts' proves it.",
+    "'schema' is free. Any identifier works and the tables land there, not in public; leave it blank and public is used. 'db_ops' is only a default, not a requirement.",
+    "PostgreSQL also needs a LOGIN that already exists - SQLite needs none, because a file is reached by path. Three things, none of them created for you: 'username' below; that role's password, already encrypted into data/encrypted_secret_text.json under the name 'password_ref' gives (put it in secrets/secret_text.json and run 'db-ops encrypt-secret'); and the passphrase that decrypts it, supplied at run time via DB_OPS_SECRET_KEY or --key-base64. A 'password_ref' that is configured but missing raises rather than connecting as nobody.",
+    "That role needs CONNECT on the database and USAGE + CREATE on the schema, because 'init' issues DDL there. A read-only role connects happily and then fails on the first CREATE TABLE, which reads like a bug rather than a missing grant.",
     "'connection_string' wins when it is non-empty; the fields beside it build one when it is blank. The built form is the password-free string that is safe to log - the password is substituted only at the moment of connecting.",
     "Never put a password here. 'password_ref' names a key in data/encrypted_secret_text.json and fills the {password} placeholder at run time. A ref that is configured but missing from the store raises rather than connecting as nobody.",
     "Relative paths resolve against the tool root - the folder holding config.json.",
@@ -13,11 +18,13 @@
   "backend": "sqlite",
 
   "sqlite": {
+    "note": "Created for you - the file and its parent folder, on first use. Nothing to provision.",
     "path": "runtime/db_ops.sqlite",
     "connection_string": "sqlite:///runtime/db_ops.sqlite"
   },
 
   "postgresql": {
+    "note": "'database', 'schema' AND the 'username' login must already exist - the toolkit creates only its own tables inside them. 'password_ref' must already be in data/encrypted_secret_text.json. See the notes above.",
     "host": "127.0.0.1",
     "port": 5432,
     "database": "db_ops",

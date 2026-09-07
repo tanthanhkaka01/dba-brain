@@ -95,7 +95,10 @@ def test_both_uptimes_are_shown_because_they_answer_different_questions(tmp_path
         "db_ops_uptime": self_status.db_ops_uptime(tmp_path),
     })
 
-    assert "uptime    : 165.40 h  (host up since 2026-08-29T10:30:17Z)" in text
+    # The stored value goes in as UTC and comes out on the display clock, saying which — a
+    # listing is read by a person, and "10:30:17Z" next to a local "db_ops up" line was two
+    # clocks in three lines.
+    assert "uptime    : 165.40 h  (host up since 2026-08-29 10:30:17 +00)" in text
     assert "db_ops up : 0.00 h  (since " in text
 
 

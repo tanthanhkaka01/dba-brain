@@ -41,6 +41,7 @@ from db_ops.lib.secret_text import add_key_argument, set_key_env
 # reader — all of them `lib`, importable by anything.
 from db_ops.lib.json_io import load_json_file
 from db_ops.lib.time_window import MANUAL_ONLY, TimeWindow, is_time_window_open as common_time_window_open, job_due, parse_time_window_config, repeat_due
+from db_ops.lib.timezone import display_now, file_stamp
 from db_ops.db import DbOpsStore
 from db_ops.db.store import utc_now_text
 from db_ops.logging_ops import log_event, log_function_error, setup_app_logger
@@ -815,7 +816,10 @@ def due_sql_tasks(
     latest_any_runs: dict[str, Any] | None = None,
 ) -> list[tuple[SqlCommand, SqlTarget]]:
     now = datetime.now(timezone.utc)
-    local_now = datetime.now().astimezone()
+    # Two clocks on purpose, and only one of them is configurable: `now` is the instant
+    # intervals are measured on (UTC, like every stored timestamp), `local_now` is the
+    # wall clock a from_hour/to_hour window is read against.
+    local_now = display_now()
     latest_any_runs = latest_any_runs or {}
     due: list[tuple[SqlCommand, SqlTarget]] = []
     for target in targets:
@@ -1365,7 +1369,7 @@ def write_sql_task_output(
     if rset is None:
         return None
     fmt = (output_format or target.output_format or "xlsx").strip().lower()
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    stamp = file_stamp()
     name = f"sql_{command.sql_id:03d}_{workflow_name_from_code(command.sql_code)}_{stamp}.{fmt}"
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / name

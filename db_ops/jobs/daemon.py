@@ -21,6 +21,7 @@ from db_ops.lib.json_io import load_json_file
 from db_ops.lib.secret_text import SECRET_KEY_ENV_VAR, resolve_cli_key
 from db_ops.config import DEFAULT_CONFIG_PATH, DbOpsConfig, load_config, resolve_config_path
 from db_ops.lib.time_window import TimeWindow, is_time_window_open, job_due, parse_time_window_config
+from db_ops.lib.timezone import display_now
 from db_ops import __version__ as db_ops_version
 from db_ops.db import DbOpsStore
 from db_ops.lib import daemon_state
@@ -220,6 +221,7 @@ def main(argv: list[str]) -> int:
             version=db_ops_version,
             node_role=os.environ.get("DB_OPS_NODE_ROLE") or "master",
         )
+        record_node_timezone(store=store, config=config, logger=logger)
         _startup_commands = load_app_commands(data_dir / "app_commands.json", logger=logger)
         recover_stale_running_jobs(store=store, app_commands=_startup_commands, config=config, logger=logger)
 
@@ -276,6 +278,40 @@ def main(argv: list[str]) -> int:
             log_function_error(logger, function_name="app.daemon", error_text=str(exc))
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
+
+
+def record_node_timezone(*, store: Any, config: Any, logger: Any = None) -> None:
+    """Note in the store which clock this node came up on.
+
+    Master and worker share one store and each reads its own ``config.json``, so nothing in the
+    store could say whether the two agreed about the hour — and a ``time_window`` firing at the
+    wrong time on one of them looks exactly like a schedule that was never due. One row, upserted
+    at start-up, is the whole answer.
+
+    Every failure here is swallowed. It is bookkeeping: a store that is down is already being
+    reported by everything else, and raising would turn "could not note the timezone" into "the
+    daemon did not start".
+    """
+    try:
+        import socket
+
+        from db_ops.lib import timezone as timezone_lib
+
+        facts = timezone_lib.describe()
+        nodes = getattr(config, "worker" if config.node_role == "worker" else "master", ()) or ()
+        node_id = next((str(n.node_id) for n in nodes if str(n.node_id).strip()), socket.gethostname())
+        store.record_runtime_node(
+            node_id=node_id, node_role=config.node_role, hostname=socket.gethostname(),
+            timezone_name=str(facts["timezone"]),
+            utc_offset_minutes=int(facts["utc_offset_minutes"]),
+            tz_abbreviation=str(facts["tz_abbreviation"]),
+            app_version=db_ops_version,
+        )
+        log_app_event(logger, "app.daemon.timezone", status="running",
+                      node_id=node_id, timezone=facts["timezone"], utc_offset=facts["utc_offset"])
+    except Exception as exc:  # noqa: BLE001 - see the docstring.
+        if logger:
+            log_function_error(logger, function_name="app.daemon.timezone", error_text=str(exc))
 
 
 def _command_runs_on_node(command: AppCommand, node_role: str) -> bool:
@@ -746,7 +782,11 @@ def app_command_is_due(app_command: AppCommand, latest_run: Any | None, now: dat
 
 
 def app_command_in_schedule_window(app_command: AppCommand, now_local: datetime | None = None) -> bool:
-    current = now_local or datetime.now().astimezone()
+    # The configured display zone, not the host's. `datetime.now().astimezone()` made a
+    # schedule mean whatever clock the machine was set to, so the same app_commands.json
+    # fired at 01:00 Vietnam on the master and 01:00 UTC in the container - and the only
+    # thing holding the two together was a TZ line in docker-compose.yml.
+    current = now_local or display_now()
     return is_time_window_open(app_command.time_window, current)
 
 
@@ -1334,7 +1374,7 @@ def write_command_runtime_event(
         "timeout_seconds": app_command.timeout_seconds,
         **fields,
     }
-    timestamp = f"{datetime.now():%Y-%m-%d %H:%M:%S}"
+    timestamp = f"{display_now():%Y-%m-%d %H:%M:%S}"
     hostname = socket.gethostname()
     parts = [event_name]
     for key, value in event_fields.items():

@@ -5,6 +5,7 @@ import socket
 
 from db_ops.levels import CRITICAL, ERROR, LOGGING, WARNING
 from db_ops.logging_ops.formatter import LOG_HEADER
+from db_ops.lib.timezone import display_today
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -22,7 +23,7 @@ class HostNameFilter(logging.Filter):
 class DailyArchiveFileHandler(logging.FileHandler):
     def __init__(self, filename: Path, *, encoding: str = "utf-8") -> None:
         self.path = Path(filename)
-        self.current_date = datetime.now().date()
+        self.current_date = display_today()
 
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -33,7 +34,7 @@ class DailyArchiveFileHandler(logging.FileHandler):
         super().__init__(self.path, encoding=encoding, delay=True)
 
     def emit(self, record: logging.LogRecord) -> None:
-        today = datetime.now().date()
+        today = display_today()
 
         if today != self.current_date:
             self.current_date = today
@@ -53,7 +54,7 @@ def archive_yesterday_if_missing(path: Path, *, today=None) -> Path | None:
     if not path.exists() or path.stat().st_size == 0:
         return None
 
-    reference_date = today or datetime.now().date()
+    reference_date = today or display_today()
     yesterday = reference_date - timedelta(days=1)
     archive_path = path.with_name(
         f"{path.stem}_{yesterday.strftime('%Y%m%d')}{path.suffix}"

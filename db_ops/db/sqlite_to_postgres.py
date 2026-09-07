@@ -852,7 +852,8 @@ def _migrate_table_delta(
 
     Three cases, chosen per table rather than globally:
 
-    * **No identity primary key** (``schema_meta``, ``report_types``, ``report_send_state``) - there
+    * **No identity primary key** (``schema_meta``, ``report_types``, ``report_send_state``,
+      ``runtime_nodes``) - there
       is no monotonic column to diff on, and they hold a handful of rows. Reloaded whole.
     * **Small enough to reload** - exact, and fast. This is the important case: nearly every store
       table is UPDATEd after insert, and an id-based delta would append the new rows while silently

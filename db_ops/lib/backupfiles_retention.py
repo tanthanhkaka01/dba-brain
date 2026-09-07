@@ -34,6 +34,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 # Re-exported: the vocabulary itself lives in db_ops/lib/backup_kinds.py, once.
+from db_ops.lib import timezone as timezone_lib
 from db_ops.lib.backup_kinds import FULL  # noqa: F401
 
 
@@ -66,7 +67,10 @@ def plan_retention(files: list[dict[str, Any]], *, retention_days: int = DEFAULT
     rule = str(mode or AGE).strip().lower()
     if rule not in MODES:
         raise RetentionError(f"mode must be one of {', '.join(MODES)}; got {mode!r}.")
-    moment = now or datetime.now(timezone.utc)
+    # The operator's wall clock, not UTC: the file stamps this is compared against are what
+    # the database server printed, and they carry no zone. Both sides have to be on one
+    # clock, or the cutoff is wrong by the offset - seven hours of extra retention at +07.
+    moment = now or timezone_lib.display_now()
     cutoff = _stamp(moment - timedelta(days=days))
 
     rows = _by_age(files, cutoff=cutoff, days=days) if rule == AGE \

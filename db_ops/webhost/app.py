@@ -47,6 +47,7 @@ from typing import Any
 from urllib.parse import parse_qs, quote
 
 from db_ops.lib import web_auth
+from db_ops.lib.timezone import format_display
 from db_ops.webhost import pages
 
 #: Where the console lives, under the same server that publishes the reports. A prefix rather than
@@ -804,7 +805,7 @@ class WebApp:
             can_edit=self._can(session, self.settings.min_level_edit),
             can_run=self._can(session, self.settings.min_level_run) and self.requests is not None,
             notice=_dashboard_notice(request.first),
-            generated_at=self._now().strftime("%Y-%m-%d %H:%M:%S UTC"),
+            generated_at=format_display(self._now()),
         ))
 
     def _get_app(self, rest: list[str], request: Request, session: dict[str, Any]) -> Response:
