@@ -15,6 +15,27 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-09-07
+
+### Fixed
+
+- **`Run:` in every metrics report carried no offset** — `Run: 2026-09-07 14:44:14` reached Telegram
+  as a wall clock on no named clock at all, which is exactly the defect 0.10.0 was written to
+  remove. It borrowed the *column* renderer, which may omit the offset because a table header states
+  it once. Found by reading the messages an upgraded node actually sent; no test asserted on it.
+- The **maintenance-window refusal** named an hour and not a clock. When a tool blocks a host
+  restart on the grounds of what time it is, that is the one thing it must not be vague about.
+- The **restore-drill failure reason** rendered UTC while everything beside it rendered the
+  operator's clock — correct, but costing the reader a conversion mid-CRITICAL.
+- **`sre move-db-docker`** used the host clock for the moved image's tag and the manifest's
+  `created_at`. Not scheduled and not silently wrong, but disagreeing with every other timestamp.
+
+### Added
+
+- A guard for the class, not the instance: `strftime("%Y-%m-%d %H:%M…")` with no offset now fails
+  the suite. Two files are allowed, each named with its reason — the column renderer, and the
+  retention cutoff, which is a comparison key rather than a rendered time.
+
 ## [0.10.0] - 2026-09-07
 
 ### Changed

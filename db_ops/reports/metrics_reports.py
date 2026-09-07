@@ -1847,9 +1847,18 @@ def _target_health_status(rows: list[object]) -> str:
 
 
 def _run_time_text(run_meta: dict[str, Any] | None) -> str:
+    """The `Run:` line at the top of a report — **with its offset**.
+
+    A standalone sentence a person reads on a phone, so it names its own clock. It used to go
+    through :func:`_local_time_text`, which is the *column* form: that one may omit the offset
+    because the table header states it once, and borrowing it here produced `Run: 2026-09-07
+    14:44:14` — a wall clock on no named clock at all, which is the exact thing this release
+    exists to remove.
+    """
     if not run_meta:
         return ""
-    return _local_time_text(str(run_meta.get("finished_at") or run_meta.get("started_at") or ""))
+    value = str(run_meta.get("finished_at") or run_meta.get("started_at") or "")
+    return format_display_text(value) or "unknown"
 
 
 def _duration_text(run_meta: dict[str, Any] | None, *, report_window_seconds: int | None = None) -> str:
@@ -1865,6 +1874,13 @@ def _duration_text(run_meta: dict[str, Any] | None, *, report_window_seconds: in
 
 
 def _local_time_text(value: str) -> str:
+    """A timestamp for a **table cell**, on the display clock, without the offset.
+
+    The one place a rendered time may omit its zone, and only because the column header states it
+    once for the whole table (`Time (+07)`); repeating it on every one of a hundred rows is noise.
+    Anything that stands on its own — the `Run:` line, an alert, a listing — uses
+    :func:`db_ops.lib.timezone.format_display_text` instead and carries the offset.
+    """
     parsed = _parse_utc(value)
     if not parsed:
         return value.replace("T", " ").replace("Z", "")[:19] if value else "unknown"

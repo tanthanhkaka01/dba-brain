@@ -64,7 +64,7 @@ from typing import Any, Callable, Iterable, Sequence
 from db_ops.common import confirm, data_sources, hostcmd, remote_exec
 from db_ops.common import data_sources as target_resolve
 from db_ops.lib import time_window
-from db_ops.lib.timezone import display_now
+from db_ops.lib.timezone import display_now, format_display
 from db_ops.lib.target_profile import (
     RUNTIME_DOCKER, RUNTIME_K8S, SOURCE_CONFIG, SOURCE_REQUEST, TargetProfile,
     parse_os_version, select_powershell_dialect,
@@ -934,13 +934,14 @@ def check_maintenance_window(
         detail = (
             f"inside the approved window {start} - {end}"
             if inside
-            else f"now {current:%Y-%m-%d %H:%M} is outside the approved window {start} - {end}"
+            else f"now {format_display(current)} is outside the approved window {start} - {end}"
         )
     else:
         parsed = time_window.parse_time_window_config({"time_window": window}, context="maintenance window")
         reason = time_window.time_window_closed_reason(parsed.time_window, current)
         inside = not reason
-        detail = "inside the approved window" if inside else f"now {current:%Y-%m-%d %H:%M} is {reason}"
+        detail = ("inside the approved window" if inside
+                  else f"now {format_display(current)} is {reason}")
     report.add(
         "schedule.maintenance_window",
         OK if inside else FAIL,

@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 from db_ops.lib.coerce import as_utc_datetime
 from db_ops.lib.paths import TOOL_ROOT  # noqa: F401 - one definition, see that module
+from db_ops.lib.timezone import format_display
 
 DEFAULT_POLICY_PATH = TOOL_ROOT / "data" / "restore_drill_policy.json"
 
@@ -123,7 +124,7 @@ def evaluate(rows: list[dict[str, Any]], *, policy: dict | None = None,
         if attempt is not None and success is not None and attempt > success \
                 and entry["attempt_status"] == "FAILED":
             status = "CRITICAL"
-            reason = (f"the most recent attempt FAILED ({attempt:%Y-%m-%d %H:%M} UTC); the last "
+            reason = (f"the most recent attempt FAILED ({format_display(attempt)}); the last "
                       f"success before it was {age_hours}h ago")
         out.append({
             "database": database,
