@@ -24,6 +24,7 @@ import sys
 from pathlib import Path
 from db_ops.lib.coerce import as_float
 from db_ops.lib.paths import TOOL_ROOT  # noqa: F401 - one definition, see that module
+from db_ops.lib.timezone import file_stamp, label_from_file_stamp
 
 
 DISK_WARN_PCT = 15.0
@@ -566,9 +567,8 @@ def build_inventory_summary(*, inventory: str | Path = DEFAULT_INVENTORY,
                             output_dir: str | Path = ".", date: str | None = None,
                             exclude_ip_prefixes=EXCLUDE_IP_PREFIXES) -> dict:
     data = json.loads(Path(inventory).read_bytes().decode("utf-8-sig"))
-    stamp = date or datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    yyyymmdd = stamp[:8]
-    date_iso = f"{yyyymmdd[:4]}-{yyyymmdd[4:6]}-{yyyymmdd[6:8]}"
+    stamp = date or file_stamp()
+    date_iso = label_from_file_stamp(stamp)
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{stamp}_database-inventory-summary.md"

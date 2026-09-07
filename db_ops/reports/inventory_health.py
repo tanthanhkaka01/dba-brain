@@ -32,6 +32,7 @@ from db_ops.lib import backup_policy
 from db_ops.reports import workload
 from db_ops.lib import health_model
 from db_ops.db.metric_store import MetricStore
+from db_ops.lib.timezone import display_now, file_stamp, format_display
 
 # Metric codes that feed the inventory health blocks.
 HEALTH_CODES = [
@@ -750,7 +751,11 @@ def build_backup_evidence(code_map, policy_result=None):
             entry["latest_finish"] = finish
         if kv.get("database"):
             entry["dbs"].add(kv["database"])
-    now = datetime.datetime.now()
+    # The operator's wall clock, deliberately naive: `finish` is a backup completion time
+    # read off a database server and carries no zone, so the two have to be on one clock
+    # for the age to mean anything. It used to be the host's - which in the worker
+    # container is UTC, seven hours out from the servers being measured.
+    now = display_now().replace(tzinfo=None)
     by_type = ((policy_result or {}).get("summary") or {}).get("byType") or {}
     out = {}
     for btype, entry in agg.items():
@@ -789,11 +794,20 @@ _SQLCFG_KEYS = {
 
 def build_sql_governance(code_map):
     """Fresh SQL governance from live metrics: ``SQL_CONFIGURATION`` (sp_configure: MAXDOP,
-    cost threshold, max/min server memory, config flags), ``SYSTEM_CPU_MEMORY`` (host RAM +
-    SQL memory in use), and ``STORAGE_TEMP_SPACE`` (tempdb size). Stored as a health block so
-    the report's governance reflects live metrics, not the semi-static ``sqlserver_resources``.
-    Fields with no metric (visible-CPU/scheduler counts, tempdb file count, database sizes)
-    are intentionally absent here and keep coming from ``sqlserver_resources``."""
+    cost threshold, max/min server memory, config flags), ``SYSTEM_CPU_MEMORY`` (host RAM,
+    SQL memory in use, **and the visible-CPU/scheduler counts**), and ``STORAGE_TEMP_SPACE``
+    (tempdb size). Stored as a health block so the report's governance reflects live metrics,
+    not the semi-static ``sqlserver_resources``.
+
+    **The CPU counts used to be in the second group and should not have been.** They were listed
+    as "fields with no metric" and kept coming from the hand-written inventory, so a host upgraded
+    from 24 to 32 vCPU went on reporting 24 until somebody remembered to edit a file — while the
+    memory figure beside it, which does come from a metric, updated by itself. The instance knows
+    both numbers and is asked every cycle now.
+
+    ``cpu_seen_at`` is recorded whether or not the counts came through, because it is what the
+    fallback needs: a reader looking at a stored count has to be able to tell "nobody has asked
+    this box in a week" from "we asked it a minute ago and it still did not say"."""
     out: dict = {"sql_cpu": {}, "memory": {}, "important_config": {}, "tempdb": {}}
     seen = False
     for item, row in items_for(code_map, "SQL_CONFIGURATION"):
@@ -802,6 +816,24 @@ def build_sql_governance(code_map):
             continue
         seen = True
         out[mapping[0]][mapping[1]] = _num_or_str(row["metric_value"])
+    cpu_row = one(code_map, "SYSTEM_CPU_MEMORY", "cpu")
+    if cpu_row:
+        cpu_kv = parse_kv(cpu_row["message"])
+        counts = {
+            "sql_visible_cpu_count": as_float(cpu_kv.get("sql_visible_cpu_count")),
+            "scheduler_count": as_float(cpu_kv.get("scheduler_count")),
+        }
+        for key, value in counts.items():
+            if value is not None:
+                out["sql_cpu"][key] = int(value)
+                seen = True
+        if any(value is not None for value in counts.values()):
+            # Only when the counts are ours: the merge cannot tell a live value from a stored one
+            # afterwards, and the report has to render them differently.
+            out["sql_cpu"]["cpu_count_source"] = "metric"
+        out["sql_cpu"]["cpu_seen_at"] = cpu_row.get("collected_at") or ""
+        seen = True
+
     for item in ("sql_memory", "system_memory"):
         row = one(code_map, "SYSTEM_CPU_MEMORY", item)
         if not row:
@@ -1426,13 +1458,13 @@ def build_inventory_health(*, sqlite_path, config=None, output_dir=None, days=2,
         for sid, (ip, code_map) in sorted(servers.items())
     ]
 
-    stamp = date or datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    stamp = date or file_stamp()
     out_dir = Path(output_dir) if output_dir else (config.runtime_dir if config else Path("."))
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{stamp}_database-inventory.json"
 
     overlay = {
-        "generated_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "generated_at": format_display(),
         "source": "db_ops metrics",
         "days_window": int(days),
         "servers": overlay_servers,

@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from db_ops.db import DbOpsStore
+from db_ops.lib import timezone as display_timezone_lib
 from db_ops.metrics.models import MetricDefinition, MetricResult, MetricTarget
 from db_ops.metrics.storage import MetricStore
 from db_ops.reports.metrics_reports import (
@@ -17,6 +18,21 @@ from db_ops.reports.metrics_reports import (
     run_scheduled_reports,
     split_telegram_message,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reports_run_at_plus_seven():
+    """These windows are written in +07, so the tests have to say so.
+
+    They used to be +07 by accident: the reports app carried a `VIETNAM_TZ` constant and every
+    `allowed_from_hour` in this file was authored against it. Once the zone became configurable
+    the accident had to become a statement — `allowed_from_hour=10` with `fixed_now` at 03:30Z is
+    only inside its window on a +07 clock, and a reader has no way to know that from the numbers.
+    """
+    before = display_timezone_lib.display_declaration()
+    display_timezone_lib.bind_display_timezone("+07:00")
+    yield
+    display_timezone_lib.bind_display_timezone(before)
 
 
 class FrozenDateTime(datetime):
@@ -311,6 +327,35 @@ def test_daily_logging_report_skips_outside_allowed_window(tmp_path, monkeypatch
     assert result["queued"] == 0
     assert result["reports"][0]["skipped_reason"] == "outside allowed hour window: 9"
     FrozenDateTime.fixed_now = datetime(2026, 6, 4, 3, 30, 0, tzinfo=timezone.utc)
+
+
+def test_the_same_window_and_the_same_instant_answer_differently_in_two_zones(tmp_path, monkeypatch):
+    """The whole reason the field exists.
+
+    One report config (`10:00-11:00`), one instant (03:30Z), two operators. In +07 it is 10:30 and
+    the report is due; in UTC it is 03:30 and it is not. Before this, the answer was decided by a
+    constant compiled into the reports app, so the second operator got Vietnam's business hours
+    and no way to see why.
+    """
+    reports_config_path = tmp_path / "reports_config.json"
+    write_report_config(reports_config_path, allowed_from_hour=10, allowed_to_hour=11)
+    monkeypatch.setattr("db_ops.reports.metrics_reports.datetime", FrozenDateTime)
+    FrozenDateTime.fixed_now = datetime(2026, 6, 4, 3, 30, 0, tzinfo=timezone.utc)
+
+    def run(zone, path):
+        display_timezone_lib.bind_display_timezone(zone)
+        return run_scheduled_reports(
+            sqlite_path=path,
+            telegram_groups={"logging": "-100"},
+            reports_config_path=reports_config_path,
+            summary_limit=150,
+        )
+
+    in_hanoi = run("+07:00", tmp_path / "hanoi.sqlite")
+    in_utc = run("UTC", tmp_path / "utc.sqlite")
+
+    assert in_hanoi["reports"][0]["skipped_reason"] != "outside allowed hour window: 10"
+    assert in_utc["reports"][0]["skipped_reason"] == "outside allowed hour window: 3"
 
 
 def test_daily_logging_report_respects_legacy_send_state_repeat_interval(tmp_path, monkeypatch):

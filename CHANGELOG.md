@@ -15,6 +15,54 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-07
+
+### Changed
+
+- **BREAKING — add `timezone` to `config.json` before upgrading.** `time_window` bounds
+  (`from_hour`, `to_hour`, `from_day`, ...) were evaluated in the node's *local* time; they are now
+  evaluated in the timezone declared in `config.json`. The field defaults to `UTC` when absent, with
+  a warning, and the tool still starts — so a root on a host set to `+07` that upgrades without
+  adding it moves every hour-bounded schedule seven hours, silently. Set it to the zone the host was
+  already on and behaviour is identical to 0.9.1. An IANA name (`Asia/Ho_Chi_Minh`) or a fixed
+  offset (`+07:00`); `DB_OPS_TIMEZONE` overrides it per node.
+- Every rendered timestamp now carries its offset, in one format: `2026-09-07 07:32:56 +07`. This
+  replaces four spellings, including `UTC+07:00` in Telegram alerts and the report headers that
+  printed a wall clock with no zone at all. **Stored timestamps are unchanged** — still UTC
+  `%Y-%m-%dT%H:%M:%SZ` on both backends; nothing was migrated.
+- `docker-compose.yml` and `docker-compose.runtime.yml` no longer pin `TZ`. That line was the real
+  timezone configuration and it shipped in the published image; the `timezone` field replaces it.
+- `tzdata` is now a core dependency — IANA names need a zone database and Windows ships none.
+- `DbOpsStore.report_exists_on_local_date()` takes `utc_offset_minutes` with no default, replacing
+  a `utc_offset_hours=7` default argument.
+
+### Added
+
+- `timezone` in `config.json`, and `db_ops/lib/timezone.py` as its single implementation.
+- `runtime_nodes` (store schema 3, additive): which clock each node is running on. Master and worker
+  share one store and each reads its own config, so nothing could answer "is the estate on one
+  clock?".
+- `common.cli timezone` reports this node's resolved zone and touches nothing;
+  `db.cli timezone --record --list` writes it to `runtime_nodes` and reads the cluster back.
+
+### Fixed
+
+- A `+07` offset compiled into the reports app decided the backup-health window and its header.
+- Report filename stamps came off the host clock while the row describing them was UTC.
+- Log files carried two interleaved clocks: `logging`'s `asctime` was host-local while the daemon's
+  own lines were not. The rotation boundary now agrees with both.
+- Backup retention kept ~7 extra hours at `+07`: a UTC cutoff compared against server-local mtimes.
+- Backup ages were measured host-local against server-local finish times.
+- A backfilled report covered a UTC day rather than the operator's.
+- `server_report.html` rendered one axis in the *viewer's browser* zone and one label in UTC.
+- Six listings stripped the `Z` from a UTC timestamp and left an unlabelled wall clock.
+
+### Documentation
+
+- `docs/01_runtime_store.md` now states who creates what: SQLite creates its own file; PostgreSQL
+  creates **neither** the database nor the schema and needs a login already in the secret store —
+  it builds only its tables. The schema name is free; `db_ops` is a default, not a requirement.
+
 ## [0.9.1] - 2026-09-05
 
 ### Added

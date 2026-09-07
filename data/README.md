@@ -142,6 +142,24 @@ This is **not** about the databases db_ops monitors — those live in `db_instan
 Rules:
 
 - `backend` picks the live section: `sqlite` or `postgresql` (`postgres` accepted as an alias).
+- **Who creates what.** On `sqlite`, db_ops creates the file and its parent folder itself — the
+  path is the whole configuration. On `postgresql` it creates **neither the database nor the
+  schema**: point it at ones that already exist and it builds only the tables inside them, on
+  first use. An absent database fails at connect (`3D000 database "..." does not exist`) rather
+  than being created silently. `python -m db_ops.db.cli create-store-database` is an optional,
+  idempotent helper that will `CREATE DATABASE` + `CREATE SCHEMA` when the login may; where a
+  DBA provisions them, skip it and run `init` alone. See `docs/01_runtime_store.md`.
+- **`schema` is free** — any name works and the tables land there, not in `public`; blank means
+  `public`. `db_ops` is only what this tree happens to use.
+- **PostgreSQL also needs a login, already in place.** SQLite has none — the file is reached by
+  path. PostgreSQL needs `postgresql.username` here, the password already encrypted into
+  `encrypted_secret_text.json` under the name `password_ref` gives, and the passphrase supplied
+  at run time (`DB_OPS_SECRET_KEY` / `--key-base64`). None of the three is created for you, and
+  a ref that is configured but absent raises rather than connecting as nobody. A missing role and
+  a wrong password look identical (`28P01 password authentication failed`), so check both. The
+  role needs `CONNECT` on the database and `USAGE` **+ `CREATE`** on the schema, because `init`
+  issues DDL there — with `USAGE` alone it connects and then fails with
+  `42501 permission denied for schema ...`.
 - `connection_string` is authoritative when non-empty; the sibling fields are the readable
   breakdown and build the string when it is blank. Only one of the two is ever read, so the file
   cannot state two different destinations.

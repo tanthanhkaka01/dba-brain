@@ -90,6 +90,12 @@ The coverage half is now its own metric:
 | `QUERY_STORE_QUERY_ISSUES` | `sqlserver/023_...query_issues.sql` | every 15 min | is a query heavy / regressed / blocked right now |
 | `QUERY_STORE_COVERAGE` | `sqlserver/070_...coverage.sql` | `repeat_interval` 72000, `from_hour` 8 → `to_hour` 10 | **every** database's Query Store state and settings — one row each, OK ones included |
 
+A metric's `from_hour`/`to_hour` are hours in the **configured timezone** (`config.json` →
+`timezone`), not on the host clock. That matters most for the 22 metrics declared `from_hour: 1,
+to_hour: 6` — the heavy overnight scans — which ran during the working day on any node whose OS
+clock was not the operator's. `collected_at` is stored in UTC and is unaffected. See "Timezone
+convention" in [`docs/13_common.md`](./13_common.md).
+
 A `repeat_interval` longer than the window makes the **window** the thing that schedules it: one
 report each morning. Its `condition_grouping` keys on `instance_key` + `issue_type` rather than the
 database, so the finding reads "9 databases have Query Store off on this instance" instead of nine

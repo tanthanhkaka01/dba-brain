@@ -1,6 +1,7 @@
 from __future__ import annotations
 from db_ops.lib.metric_score import target_score as _target_score  # noqa: F401 - one definition
 from db_ops.lib.text_format import format_utc as _format_utc  # noqa: F401 - one definition, see that module
+from db_ops.lib.timezone import display_now, format_display, format_display_text, format_offset, offset_minutes, to_display  # noqa: F401 - one definition, see that module
 
 import json
 import re
@@ -32,7 +33,6 @@ from db_ops.lib.telegram_text import (
 
 CRITICAL_LINE_LIMIT = 30
 WARNING_LINE_LIMIT = 40
-VIETNAM_TZ = timezone(timedelta(hours=7))
 DEFAULT_REPORTS_CONFIG_PATH = DEFAULT_DATA_DIR / "reports_config.json"
 DEFAULT_METRIC_DEFINITIONS_PATH = DEFAULT_DATA_DIR / "metric_definitions.json"
 BACKUP_HEALTH_CODE = "rp_backup_health_daily"
@@ -274,7 +274,10 @@ def create_backup_health_report(
     display_name: str | None = None,
 ) -> dict[str, Any]:
     store = DbOpsStore(sqlite_path)
-    local_now = datetime.now(VIETNAM_TZ)
+    # The configured display timezone. This was a +07 offset compiled into the reports app,
+    # deciding both the run-hour window and the clock in the report header - for every
+    # operator of a published tool, wherever they were.
+    local_now = display_now()
     run_hour_window = TimeWindow(from_hour=int(run_hour), to_hour=int(run_hour)) if run_hour is not None else None
     if run_hour_window is not None and not force and not is_time_window_open(run_hour_window, local_now):
         return {
@@ -288,7 +291,8 @@ def create_backup_health_report(
             ],
         }
     if not force and store.report_exists_on_local_date(
-            report_code=BACKUP_HEALTH_CODE, local_date=local_now.date().isoformat()):
+            report_code=BACKUP_HEALTH_CODE, local_date=local_now.date().isoformat(),
+            utc_offset_minutes=offset_minutes(at=local_now)):
         return {
             "created": 0,
             "report_ids": [],
@@ -875,7 +879,7 @@ def _create_scheduled_report(
 def _schedule_skip_reason(*, report_config: dict[str, Any], evaluated_at: datetime, last_sent_at: str) -> str:
     if not bool(report_config.get("active", True)):
         return "inactive"
-    local_now = evaluated_at.astimezone(VIETNAM_TZ)
+    local_now = to_display(evaluated_at)
     time_window = _report_time_window(report_config)
     closed_reason = time_window_closed_reason(time_window, local_now)
     if closed_reason:
@@ -1192,13 +1196,17 @@ def _format_metric_history_report(
     status_counts: dict[str, int],
 ) -> str:
     status_text = ", ".join(f"{status}={count}" for status, count in status_counts.items() if count) or "unknown"
-    local_start = window_start.astimezone(VIETNAM_TZ).strftime("%Y-%m-%d %H:%M:%S")
-    local_end = window_end.astimezone(VIETNAM_TZ).strftime("%Y-%m-%d %H:%M:%S")
+    # The offset is read off the rendered instant rather than written into the sentence beside
+    # it. The header used to say "UTC+07:00" next to two times converted with a constant, so
+    # the label could never be wrong and the times could.
+    local_start = format_display(window_start)
+    local_end = format_display(window_end)
+    local_offset = format_offset(offset_minutes(at=window_end))
     lines = [
         "[Metric History Report]",
         f"Server ID: {server_id}",
         f"Metric: {metric_code}",
-        f"Window: {local_start} to {local_end} UTC+07:00 (last {hours} hour(s))",
+        f"Window: {local_start} to {local_end} (last {hours} hour(s))",
         f"Rows: {total_row_count}; displayed: {len(rows)}; targets: {len(target_ids)}",
         f"Status: {status_text}",
     ]
@@ -1207,7 +1215,7 @@ def _format_metric_history_report(
     omitted_count = max(0, total_row_count - len(rows))
     if omitted_count:
         lines.append(f"... {omitted_count} older row(s) omitted by summary limit")
-    lines.extend(["", "Time (UTC+07) | Target ID | Item | Value | Status | Message"])
+    lines.extend(["", f"Time ({local_offset}) | Target ID | Item | Value | Status | Message"])
     for row in rows:
         raw_unit = str(row["metric_unit"] or "").strip()
         value = _value_with_unit(
@@ -1261,7 +1269,7 @@ def _format_backup_health_report(
 
     lines = [
         f"[{report_title}]",
-        f"Generated: {generated_at.strftime('%Y-%m-%d %H:%M:%S')}",
+        f"Generated: {format_display(generated_at)}",
         f"Window: last {days} days",
         "Source: SQLite metric_results only; grouped by SQL Server database",
         "",
@@ -1860,7 +1868,7 @@ def _local_time_text(value: str) -> str:
     parsed = _parse_utc(value)
     if not parsed:
         return value.replace("T", " ").replace("Z", "")[:19] if value else "unknown"
-    return parsed.astimezone(VIETNAM_TZ).strftime("%Y-%m-%d %H:%M:%S")
+    return to_display(parsed).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _parse_utc(value: str) -> datetime | None:
@@ -2069,7 +2077,7 @@ def _latest_run_time(rows: list[object]) -> str:
     values = [str(row["collected_at"] or "") for row in rows if str(row["collected_at"] or "")]
     if not values:
         return "unknown"
-    return max(values).replace("T", " ").replace("Z", "")[:16]
+    return format_display_text(max(values))
 
 
 def _alert_line(row: object, *, labels: dict[str, str]) -> str:

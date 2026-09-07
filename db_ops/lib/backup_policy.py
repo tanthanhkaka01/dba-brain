@@ -23,6 +23,7 @@ on it when the chain was in fact intact has destroyed a restore path for no reas
 
 from __future__ import annotations
 from db_ops.lib.coerce import as_float
+from db_ops.lib import timezone as timezone_lib
 
 import datetime
 import json
@@ -110,7 +111,11 @@ def collect_evidence(rows: list[dict], *, now: datetime.datetime | None = None) 
     for a database that has no such row at all. Rows from any other metric are ignored, so a caller
     may hand over its whole snapshot.
     """
-    now = now or datetime.datetime.now()
+    # The operator's wall clock, deliberately naive: a backup's `latest_finish` is read off
+    # a database server and carries no zone, so both sides of the subtraction have to be on
+    # one clock for the age to mean anything. It used to be the host's - which in the worker
+    # container is UTC, hours away from the servers being measured.
+    now = now or timezone_lib.display_now().replace(tzinfo=None)
     evidence: dict[str, dict] = {}
 
     def entry(database: str) -> dict:

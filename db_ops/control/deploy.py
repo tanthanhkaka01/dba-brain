@@ -28,6 +28,7 @@ from db_ops.control._support import (
     ssh_run,
 )
 from db_ops.lib.data_files import local_only_names, required_in_bundle
+from db_ops.lib.timezone import file_stamp
 from db_ops.lib.secret_text import resolve_cli_key
 from db_ops.control.worker_data import merge_worker_config, merge_worker_secrets, pull_sql_tree
 
@@ -211,7 +212,7 @@ def prune_superseded_dirs(client, bundle: Path, remote_dir: str) -> dict[str, li
     superseded = superseded_dirs(bundle, _remote_subdirs(client, remote_dir))
     if not superseded:
         return {}
-    stamp = time.strftime("%Y%m%d_%H%M%S")
+    stamp = file_stamp()
     quarantine = f"{remote_dir}/{SUPERSEDED_DIR_NAME}/{stamp}"
     named = ", ".join(f"{owned}/{name}" for owned, names in superseded.items() for name in names)
     print(f"The bundle no longer carries {named} - moving aside to {quarantine} ...")

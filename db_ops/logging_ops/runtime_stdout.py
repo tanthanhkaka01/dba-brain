@@ -10,6 +10,7 @@ from pathlib import Path
 from collections.abc import Callable
 
 from db_ops.logging_ops.handlers import archive_yesterday_if_missing, ensure_current_log_file
+from db_ops.lib.timezone import display_now
 from db_ops.logging_ops.writer import LOG_SCOPE_ENV_VAR, build_log_paths
 from db_ops.lib.paths import TOOL_ROOT
 
@@ -47,7 +48,7 @@ class TeeStdout:
         archive_yesterday_if_missing(self.path)
         ensure_current_log_file(self.path)
         with self.path.open("a", encoding="utf-8") as file:
-            timestamp = f"{datetime.now():%Y-%m-%d %H:%M:%S}"
+            timestamp = f"{display_now():%Y-%m-%d %H:%M:%S}"
             for line in message.splitlines():
                 if line.strip():
                     file.write(f"{timestamp}|LOGGING|{self.app_name}|{self.hostname}|{self.stream_name}|{line}\n")

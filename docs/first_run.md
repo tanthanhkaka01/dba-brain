@@ -64,8 +64,8 @@ failure below is silent in a different way.
 | File | Decides | You edit it |
 | --- | --- | :---: |
 | `AGENTS.md` | how to drive this tool root — written for whatever comes next | — |
-| `config.json` | where logs, runtime and the other config files live | — |
-| `data/store_config.json` | which database holds the results. **SQLite, always, on a first run** | — |
+| `config.json` | where logs, runtime and the other config files live, and **`timezone`** | **the timezone** |
+| `data/store_config.json` | which database holds the results. **SQLite, always, on a first run** — the file is created for you. (On PostgreSQL later, the database and schema must already exist; only the tables are created.) | — |
 | `data/db_instances.json` | **the estate**: one record per monitored instance | **yes** |
 | `data/users.json` | credentials by name — never a password, only a `password_ref` | **yes** |
 | `secrets/secret_text.json` | the plaintext passwords, encrypted in 2.3 and then deletable | **yes** |
@@ -74,6 +74,19 @@ failure below is silent in a different way.
 | `data/telegram_support_commands.json` | the bot commands the toolkit answers in a chat | — |
 | `data/app_commands.json` | **what the daemon runs and how often** | to enable or retime |
 | `data/telegram_config.json`, `data/telegram_groups.json` | delivery — only if you want alerts | for 2.5 |
+
+**Set `timezone` before the first scheduled run.** `init` writes `"timezone": "UTC"`, because it
+runs wherever you happen to be standing and the daemon runs wherever it is deployed — a default
+read off the installing machine is how a tool ends up with three different clocks. It decides two
+things: what every displayed time says (`2026-09-07 07:32:56 +07` — the offset is always
+printed), and what a `time_window`'s `from_hour`/`to_hour` mean. Give it an IANA name
+(`Asia/Ho_Chi_Minh`, `America/New_York` — these follow daylight saving) or a fixed offset
+(`+07:00`). Changing it later moves every schedule that names an hour, so it is cheaper now.
+Stored timestamps are UTC and stay UTC either way.
+
+```bash
+db-ops common timezone '{"format":"txt"}'    # what this node resolved
+```
 
 **SQLite on a first run is a decision, not a convenience.** Expecting PostgreSQL would mean the
 first thing a new user meets is installing a database to hold the results of monitoring a database.

@@ -1,7 +1,8 @@
 {
   "report_base_url": "",
   "notes": [
-    "'inventory_exclude_ip_prefixes' lists server ip prefixes the inventory pages leave out. It was a constant in db_ops/lib/inventory_render.py until 2026-08-21, which meant the rendering library itself decided which of this estate's machines nobody gets to see. Empty means show everything."
+    "'inventory_exclude_ip_prefixes' lists server ip prefixes the inventory pages leave out. It was a constant in db_ops/lib/inventory_render.py until 2026-08-21, which meant the rendering library itself decided which of this estate's machines nobody gets to see. Empty means show everything.",
+    "Every 'time_window' hour and day bound is read in the timezone DBA Brain runs in - the 'timezone' field in config.json - on every node, whatever clock the host or container keeps. So 'from_hour': 1 is 01:00 there, not 01:00 UTC and not 01:00 on the machine. There is no per-entry timezone: one declaration decides every window in every file. Changing it moves every schedule that names an hour, so set it before the first scheduled run."
   ],
   "inventory_exclude_ip_prefixes": [
     "192.168.18."

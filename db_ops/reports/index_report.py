@@ -26,6 +26,7 @@ from typing import Any
 
 from db_ops.lib import report_archive
 from db_ops.db.metric_store import MetricStore
+from db_ops.lib.timezone import display_now, format_display
 from db_ops.db import DbOpsStore
 from db_ops.reports.server_report import page_href
 
@@ -851,9 +852,9 @@ def create_index_reports(*, sqlite_path: str | Path, days: int = 3,
         return {"created": 0, "report_ids": [],
                 "skipped": [{"reason": "no index metric data in the window"}]}
 
-    generated_at = datetime.now().isoformat(timespec="seconds")
+    generated_at = format_display()
     # A backfill is dated by the day it describes, not by the day it is run.
-    day = (as_of or "")[:10].replace("-", "") or datetime.now().strftime("%Y%m%d")
+    day = (as_of or "")[:10].replace("-", "") or display_now().strftime("%Y%m%d")
     report_ids: list[int] = []
     published_count = 0
     for name in sorted(rendered):

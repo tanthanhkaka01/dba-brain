@@ -325,6 +325,22 @@ const SERVERS = __SERVERS__;
 /* ---------- helpers ---------- */
 const esc = s => String(s ?? "").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const fmt = n => n==null ? "—" : n.toLocaleString("en-US");
+/* The report's clock, injected by the builder from config.json's `timezone`. Baked in at
+   build time, not read from the browser: a report is a file that gets shared, and it has
+   to say the same hour to everyone who opens it. */
+const DISPLAY_OFFSET_MINUTES = __UTC_OFFSET_MINUTES__;
+const DISPLAY_OFFSET_LABEL = "__UTC_OFFSET_LABEL__";
+/* A stored timestamp ("2026-09-07T00:32:56Z") on the configured clock, saying which.
+   This used to be `.replace("T"," ").replace("Z","")`, which removed the only mark saying
+   whose clock it was and changed nothing else. */
+const whenStored = v => {
+  const text = String(v||"").trim();
+  if(!text) return "";
+  const ms = Date.parse(text.endsWith("Z") || /[+-]\d\d:?\d\d$/.test(text) ? text : text+"Z");
+  if(isNaN(ms)) return text;
+  return new Date(ms + DISPLAY_OFFSET_MINUTES*60000).toISOString().slice(0,19)
+           .replace("T"," ") + " " + DISPLAY_OFFSET_LABEL;
+};
 const SEVRANK = {crit:0, warn:1, idle:2, ok:3};
 const diskColor = d => d.sev==="crit"?"var(--crit)" : d.sev==="warn"?"var(--warn)" : d.sev==="ok"?"var(--ok)" : "var(--faint)";
 const diskText = d => {
@@ -535,7 +551,7 @@ const dbTable = s => {
   const asOf = rows.map(d=>d.asOf).filter(Boolean).sort().pop();
   return `<div class="f" style="margin-top:12px">
     <div class="k" style="color:var(--muted);font-size:11px;text-transform:uppercase">Databases (${rows.length})
-      ${asOf?`<span class="src-tag">live · ${esc(String(asOf).replace('T',' ').replace('Z',''))}</span>`:''}</div>
+      ${asOf?`<span class="src-tag">live · ${esc(whenStored(asOf))}</span>`:''}</div>
     <div class="tbl-scroll" style="margin-top:5px"><table class="db-tbl">
       <thead><tr><th>Database</th><th>State</th><th>Recovery</th><th class="num-cell">Data</th>
         <th class="num-cell">Log (used)</th><th class="center">Compat</th><th>Page verify</th>
@@ -601,7 +617,7 @@ const freshLine = s => {
   if(f.collectFailed) return '<span style="color:var(--crit)">collection failed — values below are the last known ones</span>';
   if(!f.asOf) return '<span style="color:var(--warn)">no live metrics — values are the last known inventory snapshot</span>';
   const age = f.ageHours==null || f.ageHours < 1 ? '' : ` (${ageH(f.ageHours)} ago)`;
-  return `live metrics as of ${esc(String(f.asOf).replace('T',' ').replace('Z',''))}${age}`;
+  return `live metrics as of ${esc(whenStored(f.asOf))}${age}`;
 };
 
 /* ---------- Linked servers (fleet-wide) ----------

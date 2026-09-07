@@ -32,6 +32,8 @@ from db_ops.lib import backup_policy
 from db_ops.reports import inventory_health
 from db_ops.reports.inventory_health import merged_drives, merged_sql_resources
 from db_ops.lib.paths import TOOL_ROOT  # noqa: F401 - one definition, see that module
+from db_ops.lib.timezone import (file_stamp, format_offset, label_from_file_stamp,
+                                 offset_minutes)
 
 TEMPLATE_HTML = Path(__file__).resolve().parent / "templates" / "inventory_report.html"
 
@@ -193,6 +195,23 @@ def _build_backup(server) -> dict:
             "note": note}
 
 
+def _fmt_cpu(cfg) -> str:
+    """``32`` when the instance said so; ``24 ⚠ stored, asked <UTC>`` when it did not.
+
+    A stored count is not wrong so much as undated — it was right for the hardware someone typed
+    it against. The timestamp is what separates "nobody has collected from this box in a week"
+    from "we asked it a minute ago and it still cannot tell us", and only the second of those is
+    a reason to go and edit the inventory file.
+    """
+    value = cfg.get("cpu")
+    if value is None:
+        return "—"
+    if cfg.get("cpuLive"):
+        return str(value)
+    seen = cfg.get("cpuSeenAt")
+    return f"{value} ⚠ stored, asked {seen}" if seen else f"{value} ⚠ stored"
+
+
 def _build_cfg(server) -> dict:
     sr = merged_sql_resources(server)
     if not sr:
@@ -205,6 +224,11 @@ def _build_cfg(server) -> dict:
     return {
         "cpu": cpu.get("sql_visible_cpu_count"),
         "sched": cpu.get("scheduler_count"),
+        # Where the two counts came from, and when the instance was last asked. After the merge a
+        # live value and a hand-written one look identical, and they must not read identically:
+        # one is what the box says now, the other is what somebody typed before the last upgrade.
+        "cpuLive": cpu.get("cpu_count_source") == "metric",
+        "cpuSeenAt": cpu.get("cpu_seen_at") or "",
         "maxdop": cpu.get("max_degree_of_parallelism"),
         "cost": cpu.get("cost_threshold_for_parallelism"),
         "maxmemMB": mem.get("max_server_memory_mb"),
@@ -979,6 +1003,8 @@ def render_html(scope, models, triage, date_iso, linked_servers=None) -> str:
     template = TEMPLATE_HTML.read_text(encoding="utf-8")
     return (template
             .replace("__SNAPSHOT_DATE__", date_iso)
+            .replace("__UTC_OFFSET_MINUTES__", str(offset_minutes()))
+            .replace("__UTC_OFFSET_LABEL__", format_offset(offset_minutes()))
             .replace("__SCOPE__", json.dumps(scope, ensure_ascii=False))
             .replace("__SERVERS__", json.dumps(models, ensure_ascii=False, indent=2))
             .replace("__TRIAGE__", json.dumps(triage, ensure_ascii=False, indent=2))
@@ -1119,7 +1145,7 @@ def render_md(scope, models, triage, date_iso) -> str:
         cost_txt = f"✗ {cost}" if (cost is not None and cost < 30) else _fmt(cost)
         blocked = "—" if c.get("blockedThr") is None else ("✓" if c["blockedThr"] > 0 else "✗")
         xp = "—" if c.get("xpcmd") is None else ("! on" if c["xpcmd"] == 1 else "off")
-        L.append(f"| **{m['role']}** `{m['ip']}` | {_fmt(c.get('cpu'))} | {_fmt(c.get('maxdop'))} | {cost_txt} "
+        L.append(f"| **{m['role']}** `{m['ip']}` | {_fmt_cpu(c)} | {_fmt(c.get('maxdop'))} | {cost_txt} "
                  f"| {_max_mem(c.get('maxmemMB'))} | {yn(c.get('backupCompr'), 1)} | {yn(c.get('remoteDac'), 1)} "
                  f"| {yn(c.get('optAdhoc'), 1)} | {blocked} | {xp} |")
 
@@ -1143,7 +1169,7 @@ def render_md(scope, models, triage, date_iso) -> str:
             if m["ple"] is not None or m["sessions"] is not None:
                 L.append(f"| **PLE / Sessions** | {_fmt(m['ple'])} / {_fmt(m['sessions'])} |")
         if not c.get("govMissing") and not m.get("oracle"):
-            L.append(f"| **CPU / MAXDOP / Cost** | {_fmt(c.get('cpu'))} / {_fmt(c.get('maxdop'))} / {_fmt(c.get('cost'))} |")
+            L.append(f"| **CPU / MAXDOP / Cost** | {_fmt_cpu(c)} / {_fmt(c.get('maxdop'))} / {_fmt(c.get('cost'))} |")
             L.append(f"| **Max / committed mem** | {_max_mem(c.get('maxmemMB'))} / {_max_mem(c.get('committedMB'))} |")
             L.append(f"| **TempDB** | {c.get('tempdb', '—')} |")
         if m["disks"]:
@@ -1246,15 +1272,15 @@ def build_inventory_report(*, inventory: str | Path = DEFAULT_INVENTORY,
     """Render the fleet report. With ``sqlite_path``, also render one metric-history page per
     server (charts over the same window) and link every server row to its page."""
     data = json.loads(Path(inventory).read_bytes().decode("utf-8-sig"))
-    stamp = date or datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    stamp = date or file_stamp()
     # Displayed datetime is parsed from this file's own stamp (the YYYYMMDD_HHMMSS prefix
     # of its filename), so a snapshot served via webhost ?date= always shows the moment
     # that file belongs to — not the current wall-clock time of whoever is viewing it.
-    yyyymmdd = stamp[:8]
-    date_iso = f"{yyyymmdd[:4]}-{yyyymmdd[4:6]}-{yyyymmdd[6:8]}"
-    hhmmss = stamp[9:15]  # time part after the 'YYYYMMDD_' prefix, when present
-    if len(hhmmss) == 6 and hhmmss.isdigit():
-        date_iso = f"{date_iso} {hhmmss[:2]}:{hhmmss[2:4]}:{hhmmss[4:6]}"
+    #
+    # It now carries its offset. "Snapshot 2026-09-07 07:32:56" was a wall-clock time on an
+    # unnamed clock: the reader could not tell whose 07:32 it was, and could not line it up
+    # against metric_results.collected_at, which is UTC.
+    date_iso = label_from_file_stamp(stamp)
 
     scope, models = build_models(data, exclude_ip_prefixes=inventory_exclude_ip_prefixes())
     triage = build_triage(models)

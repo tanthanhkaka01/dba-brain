@@ -24,6 +24,7 @@ from typing import Any
 # The size budget and the default depth are the same rule every /spbot_list_* reply follows, and
 # saying them twice is how two listings end up disagreeing about what fits in one message.
 from db_ops.lib.listing import DEFAULT_LISTING_LIMIT, LISTING_CHARACTER_BUDGET
+from db_ops.lib.timezone import format_display_text
 
 #: A ceiling, so a typo in a request cannot ask the store for the whole table.
 MAX_LIMIT = 200
@@ -37,7 +38,7 @@ def collect(store: Any, *, limit: int = DEFAULT_LISTING_LIMIT,
 
 
 def _one_line(row: Any) -> str:
-    started = str(row["started_at"] or "")[:19].replace("T", " ").replace("Z", "")
+    started = format_display_text(row["started_at"])
     duration = row["duration_ms"]
     elapsed = f"{int(duration) / 1000:.0f}s" if duration is not None else "-"
     rowcount = row["row_count"]

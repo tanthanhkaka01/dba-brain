@@ -22,7 +22,7 @@ The SQL Task Runner runs scheduled SQL task workflows against configured targets
 
 `data/sql_commands.json` defines SQL command IDs/codes and SQL script definitions using `script_type` plus `script_path` or `script_paths`. `data/sql_targets.json` maps commands to database targets, credentials, optional `database_name`, repeat intervals, time windows, timeout, and alert behavior.
 
-**Timezone**: `time_window` hours are the **node's local time — +07 (Asia/Ho_Chi_Minh) on both master and worker** — so `from_hour: 1` runs at 01:00 +07. Store rows (`sql_runs.created_at` etc.) are written in **UTC (+00)** on either backend; add +07 when reading them manually. See "Timezone convention" in [`docs/13_common.md`](./13_common.md).
+**Timezone**: `time_window` hours are the **configured timezone** (`config.json` → `timezone`), so `from_hour: 1` runs at 01:00 in that zone on every node, whatever clock the host keeps. Store rows (`sql_runs.created_at` etc.) are written in **UTC (+00)** on either backend and are unaffected; the CLI listings render them on the display clock and print its offset. See "Timezone convention" in [`docs/13_common.md`](./13_common.md).
 
 For SQL Server targets, set `database_name` in `data/sql_targets.json` when a task must execute inside a specific database, for example `"database_name": "Globex_Prod"`. `service_name` identifies the database service/instance target; it is not the execution database name. When `database_name` is omitted, SQL Server tasks connect to `master`.
 

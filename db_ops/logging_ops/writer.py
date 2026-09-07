@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 import os
 from pathlib import Path
 
@@ -26,6 +27,16 @@ def validate_log_scope(log_scope: str | None) -> str:
         raise RuntimeError(f"log_scope contains invalid filename character(s): {clean_scope}")
     return clean_scope
 
+
+def _display_timetuple(seconds: float | None = None):
+    """`logging`'s `converter` hook, answering in the configured display timezone."""
+    from db_ops.lib.timezone import display_zone
+
+    moment = (datetime.fromtimestamp(seconds, tz=timezone.utc) if seconds is not None
+              else datetime.now(timezone.utc))
+    return moment.astimezone(display_zone()).timetuple()
+
+
 def setup_app_logger(
     config: DbOpsConfig,
     *,
@@ -47,6 +58,12 @@ def setup_app_logger(
         fmt="%(asctime)s|%(logtype)s|%(name)s|%(hostname)s|%(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
+    # `logging` stamps `asctime` with `time.localtime` — the host's clock. The daemon writes its
+    # own event lines into the same files through `display_now()`, so without this one file would
+    # carry two clocks, interleaved, with nothing on either line saying which. The delimited format
+    # has no room for an offset, which is why the rotation boundary in `handlers.py` reads the same
+    # zone: a file named _20260906 has to hold the day its lines claim.
+    formatter.converter = _display_timetuple
 
     if enable_console:
         console = logging.StreamHandler()

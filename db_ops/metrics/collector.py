@@ -25,6 +25,7 @@ from db_ops.lib.event_policy import (
 )
 from db_ops.lib.target_profile import TargetProfile, candidate_variants, select_variant, version_matches
 from db_ops.lib.time_window import is_time_window_open, job_due
+from db_ops.lib.timezone import to_display
 from db_ops.config import DbOpsConfig
 from db_ops.metrics.definitions import DEFAULT_DEFINITIONS_PATH, load_max_parallel_servers, load_metric_definitions
 from db_ops.metrics.executor import execute_metric_sql
@@ -1312,11 +1313,16 @@ def _metric_window_open(*, metric: MetricDefinition, now: datetime) -> bool:
 
     Deliberately separate from :func:`_metric_due`, which answers "has enough time elapsed".
     Keeping the window inside the due check made it collateral damage of ``--force``: anything
-    that skipped the interval also skipped the window. Bounds are local time; unset bounds mean
-    always open, so real-time metrics are unaffected.
+    that skipped the interval also skipped the window. Unset bounds mean always open, so
+    real-time metrics are unaffected.
+
+    Bounds are hours in the **configured** timezone (``config.json`` -> ``timezone``), not on
+    the host's clock. ``now.astimezone()`` read the machine's zone, so the 22 metrics declared
+    ``from_hour: 1, to_hour: 6`` - the heavy overnight ones - ran during the working day on
+    any node whose OS clock was not set to the operator's zone.
     """
     window = getattr(metric, "schedule_window", None)
-    return window is None or is_time_window_open(window, now.astimezone())
+    return window is None or is_time_window_open(window, to_display(now))
 
 
 def _window_label(metric: MetricDefinition) -> str:

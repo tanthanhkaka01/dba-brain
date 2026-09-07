@@ -60,9 +60,23 @@ python -m db_ops.db.cli --config config.json init
 ```
 
 That is the toolkit's own database — job runs, metric results, reports, history. It is SQLite here
-(`data/store_config.json`), which is why this step needs nothing installed. The same file already
-carries a filled-in PostgreSQL section: switching a real installation over is a one-word edit of
-`backend`, not a rediscovery of host, port and credentials.
+(`data/store_config.json`), which is why this step needs nothing installed: **on SQLite the toolkit
+creates the file itself**, so the path is the whole configuration.
+
+The same file already carries a filled-in PostgreSQL section, so switching a real installation over
+is a one-word edit of `backend` rather than a rediscovery of host, port and credentials — with one
+thing to know first. **On PostgreSQL the toolkit creates neither the database nor the schema.** Give
+it ones that already exist and it builds only its own tables inside them; a database that is not
+there fails at connect rather than being created behind you. Either ask your DBA for an empty
+database and a schema, or run the idempotent `python -m db_ops.db.cli create-store-database` when
+the login may create them.
+
+It also needs a **login that already exists** — SQLite needs none, because a file is reached by
+path. That means `postgresql.username` in `data/store_config.json`, that role's password already
+encrypted into `data/encrypted_secret_text.json` under the name `password_ref` gives, and the
+passphrase supplied at run time; plus `CONNECT` on the database and `USAGE` + `CREATE` on the
+schema, since `init` issues DDL there. See
+[`docs/01_runtime_store.md`](../../docs/01_runtime_store.md).
 
 ## 3. Put the password in the secret store
 

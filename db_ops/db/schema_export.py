@@ -92,6 +92,7 @@ def export_table(conn, table_name: str, create_sql: str) -> dict[str, Any]:
 def table_comment(table_name: str) -> str:
     comments = {
         "schema_meta": "Tracks local SQLite schema version.",
+        "runtime_nodes": "One row per node: which clock (config.json timezone) it runs on, plus its role, hostname and version. Master and worker share a store and can disagree.",
         "job_runs": "Append-only operational job run log.",
         "report_types": "Parent lookup table for report types and their alert level.",
         "reports": "Generated report rows waiting to be pushed to delivery queues.",

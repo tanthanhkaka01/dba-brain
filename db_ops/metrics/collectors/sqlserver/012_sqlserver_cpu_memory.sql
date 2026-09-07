@@ -1,6 +1,13 @@
 ;WITH cpu AS
 (
   SELECT
+    -- The CPU the ENGINE sees, and the schedulers it runs on. Both were only ever in the
+    -- hand-written inventory, so a box that gained cores kept reporting the old number
+    -- until somebody remembered to edit a file. They come from the instance now.
+    sql_visible_cpu_count = (SELECT si.cpu_count FROM sys.dm_os_sys_info si),
+    scheduler_count =
+      (SELECT COUNT(*) FROM sys.dm_os_schedulers
+       WHERE status = 'VISIBLE ONLINE' AND is_online = 1),
     SQLProcessUtilization = rb.SQLProcessUtilization,
     SystemIdle = rb.SystemIdle,
     IsCpuDataValid =
@@ -123,6 +130,10 @@ SELECT
             AS varchar(32)
           )
     END
+    + ', sql_visible_cpu_count='
+    + COALESCE(CAST(cpu.sql_visible_cpu_count AS varchar(32)), 'N/A')
+    + ', scheduler_count='
+    + COALESCE(CAST(cpu.scheduler_count AS varchar(32)), 'N/A')
     AS varchar(1024)
   ) AS message
 FROM cpu

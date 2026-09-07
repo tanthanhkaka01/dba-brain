@@ -247,6 +247,7 @@
     }
   ],
   "notes": [
-    "node_role is 'all' here so a single-machine install works as copied: 'all' runs on any node. A two-node estate sets 'master' or 'worker' per command and declares each node's role with the DB_OPS_NODE_ROLE environment variable - it is deliberately not in config.json, so a config copied between nodes cannot mislabel one."
+    "node_role is 'all' here so a single-machine install works as copied: 'all' runs on any node. A two-node estate sets 'master' or 'worker' per command and declares each node's role with the DB_OPS_NODE_ROLE environment variable - it is deliberately not in config.json, so a config copied between nodes cannot mislabel one.",
+    "Every 'time_window' hour and day bound is read in the timezone DBA Brain runs in - the 'timezone' field in config.json - on every node, whatever clock the host or container keeps. So 'from_hour': 1 is 01:00 there, not 01:00 UTC and not 01:00 on the machine. There is no per-entry timezone: one declaration decides every window in every file. Changing it moves every schedule that names an hour, so set it before the first scheduled run."
   ]
 }

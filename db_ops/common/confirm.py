@@ -38,6 +38,7 @@ from typing import Any, Callable, Sequence, TextIO
 
 from db_ops.common.evidence import FAIL, OK, GateReport
 from db_ops.lib.paths import TOOL_ROOT  # noqa: F401 - one definition, see that module
+from db_ops.lib.timezone import format_display
 
 __all__ = [
     "CONFIRM_WORD",
@@ -238,7 +239,7 @@ def require_confirmation(
     answered nothing, so a terminal run still asks.
     """
     reason = str(request.get("reason") or "").strip()
-    decided_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    decided_at = format_display()
     channel = str((request.get("authorized_by") or {}).get("channel") or "").strip() \
         if isinstance(request.get("authorized_by"), dict) else ""
 

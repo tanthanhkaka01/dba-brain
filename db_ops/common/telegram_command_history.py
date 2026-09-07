@@ -33,6 +33,7 @@ from typing import Any
 # The size budget and the default depth are the rule every /spbot_list_* reply follows; a second
 # copy of them here is how two listings end up disagreeing about what fits in one message.
 from db_ops.lib.listing import DEFAULT_LISTING_LIMIT, LISTING_CHARACTER_BUDGET
+from db_ops.lib.timezone import format_display_text
 from db_ops.lib.telegram_command_text import (
     command_key_from_message,
     parse_command_message,
@@ -198,7 +199,7 @@ def render(result: dict[str, Any]) -> str:
 def _one_entry(index: int, entry: dict[str, Any]) -> str:
     """The line to copy comes first; everything under it is context for deciding to copy it."""
     line = f"{index}. {entry['line']}"
-    sent = str(entry.get("sent_at") or "")[:19].replace("T", " ").replace("Z", "")
+    sent = format_display_text(entry.get("sent_at"))
     parts = [sent or "date unknown"]
     times = int(entry.get("times") or 1)
     if times > 1:

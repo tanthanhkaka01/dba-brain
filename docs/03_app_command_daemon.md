@@ -60,7 +60,7 @@ The current configured commands are `APP-SQL_TASKS`, `APP-METRICS`, `APP-REPORTS
 
 `data/app_commands.json` -> active command filter -> local `time_window` check -> duplicate-running check by `app_command_id` -> latest `job_runs.started_at` interval check -> subprocess start with `DB_OPS_LOG_SCOPE` environment -> runtime log files -> final `job_runs` update.
 
-The `time_window` check uses the node's **local time (+07 on both master and worker)**, while `job_runs` timestamps are stored in **UTC (+00)** — see "Timezone convention" in [`docs/13_common.md`](./13_common.md).
+The `time_window` check uses the **configured timezone** (`config.json` → `timezone`), so `from_hour: 1` means 01:00 in that zone on every node regardless of the host clock. `job_runs` timestamps are stored in **UTC (+00)** and are unaffected by it — see "Timezone convention" in [`docs/13_common.md`](./13_common.md).
 
 ## How to Run
 

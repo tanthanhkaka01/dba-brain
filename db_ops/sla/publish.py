@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from db_ops.sla.models import SlaPolicyResult, SlaValidationSummary, state_key
+from db_ops.lib.timezone import file_stamp, format_display
 
 
 # Status -> (emoji, css class) used in both the Telegram text and the HTML page.
@@ -180,7 +181,7 @@ UNMEASURABLE_QUALITY = ("NO_DATA", "COLLECTION_FAILED", "STALE", "INSUFFICIENT_D
 
 def render_html(summary: SlaValidationSummary, *, recent_runs: list[dict],
                 previous_state: dict[str, str] | None = None, history_limit: int = 0) -> str:
-    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+    generated_at = format_display()
     # Sections per server, not one fleet-wide list: see _server_sections.
     rows = _server_sections(summary)
     history = "\n".join(_html_history_row(run) for run in recent_runs) or (
@@ -283,7 +284,9 @@ def publish_html(summary: SlaValidationSummary, *, recent_runs: list[dict], out_
     # archive_daily also keeps the naming identical to the other published reports.
     from db_ops.lib.report_archive import archive_daily
 
-    archive_daily([stable_path], stamp=datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S"))
+    # The archive groups by day, so the stamp has to be on the same clock as every other
+    # archived report - this one was UTC while all the rest were the host's.
+    archive_daily([stable_path], stamp=file_stamp())
     publish_index(summary, out_dir=directory)
     return stable_path
 
@@ -299,7 +302,7 @@ def publish_index(summary: SlaValidationSummary | None, *, out_dir: str | Path) 
 
 
 def render_index_html(summary: SlaValidationSummary | None, *, directory: Path) -> str:
-    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+    generated_at = format_display()
     if summary is not None:
         emoji, css = STATUS_DISPLAY.get(summary.status, ("", "nodata"))
         sla_status = (

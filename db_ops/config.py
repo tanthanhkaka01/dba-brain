@@ -6,6 +6,7 @@ import sys
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
+from db_ops.lib import timezone as timezone_lib
 from db_ops.lib.paths import TOOL_ROOT  # noqa: F401 - one definition, see that module
 
 
@@ -357,6 +358,12 @@ class DbOpsConfig:
     master: tuple[ClusterNode, ...] = ()
     worker: tuple[ClusterNode, ...] = ()
     node_role: str = "master"
+    # The clock this install SHOWS. Storage stays UTC; this is the zone every rendered wall-clock
+    # time is in, and the zone a time_window's from_hour/to_hour are compared against. Declared in
+    # config.json because the alternatives - the host's TZ, a compose-file env, a constant in the
+    # reports app - are all answers the operator cannot see and did not choose. Resolved by
+    # db_ops.lib.timezone; DB_OPS_TIMEZONE overrides it per node, like node_role.
+    timezone: str = timezone_lib.DEFAULT_TIMEZONE
 
     def __post_init__(self) -> None:
         """Keep ``sqlite_path`` and ``store`` from ever disagreeing.
@@ -378,6 +385,14 @@ class DbOpsConfig:
                 "store",
                 replace(self.store, sqlite=SqliteStoreConfig(path=Path(self.sqlite_path))),
             )
+        # Same argument as the pair above, for the same reason. ``parse_config`` already binds the
+        # display zone, but a ``DbOpsConfig`` built directly - by a test, by a standalone caller -
+        # would otherwise carry a ``timezone`` that nothing renders in, and the object would say
+        # one thing while every report said another. Normalised too, so ``"+07"`` and ``"+07:00"``
+        # are not two values of one field.
+        normalised = timezone_lib.bind_display_timezone(self.timezone, context="DbOpsConfig.timezone")
+        if normalised != self.timezone:
+            object.__setattr__(self, "timezone", normalised)
 
 
 def _parse_cluster_nodes(raw_list: Any) -> tuple[ClusterNode, ...]:
@@ -406,6 +421,42 @@ def _resolve_node_role() -> str:
     if env_role in ("master", "worker"):
         return env_role
     return "master"
+
+
+#: Printed once per process when ``timezone`` is missing, so an operator upgrading an install that
+#: predates the field learns which clock they are now on instead of discovering it from a report.
+_TIMEZONE_WARNED = False
+
+
+def _resolve_timezone(raw: dict[str, Any], *, source: str) -> str:
+    """This node's display timezone: the env first, then the file, then UTC.
+
+    The env wins because the worker runs a *copy* of the master's ``config.json`` - the same reason
+    ``DB_OPS_NODE_ROLE`` exists, and the same mechanism, so there is one thing to learn rather than
+    two.
+
+    A missing field warns and falls back to UTC rather than raising: the field is mandatory in the
+    schema, but an install that predates it must still start. A field that is *present and wrong*
+    does raise, here, where the config is read - the alternative is an estate of reports stamped in
+    a clock nobody questions until a month later.
+    """
+    global _TIMEZONE_WARNED
+    from_env = timezone_lib.declaration_from_env()
+    if from_env:
+        return timezone_lib.bind_display_timezone(
+            from_env, context=f"{timezone_lib.TIMEZONE_ENV_VAR} (env)")
+    declared = raw.get("timezone")
+    if declared in (None, ""):
+        if not _TIMEZONE_WARNED:
+            print(
+                f"[db_ops.config] {source} declares no 'timezone'; showing all times in UTC. "
+                f"Add e.g. \"timezone\": \"Asia/Ho_Chi_Minh\" (an IANA name or a fixed offset "
+                f"like \"+07:00\") to say which clock this node runs on.",
+                file=sys.stderr,
+            )
+            _TIMEZONE_WARNED = True
+        return timezone_lib.bind_display_timezone(timezone_lib.DEFAULT_TIMEZONE)
+    return timezone_lib.bind_display_timezone(declared, context=f"{source}:timezone")
 
 
 def load_config(path: str | Path | None = None) -> DbOpsConfig:
@@ -487,6 +538,11 @@ def parse_config(raw: dict[str, Any], *, base_dir: Path) -> DbOpsConfig:
     master = _parse_cluster_nodes(raw.get("master"))
     worker = _parse_cluster_nodes(raw.get("worker"))
     node_role = _resolve_node_role()
+    # Bound here, once, for the whole process. Producers deep in the reports and telegram apps
+    # then call db_ops.lib.timezone.format_display() without being handed a timezone they have no
+    # other reason to know about - and the producer that would otherwise be missed in the plumbing
+    # is exactly the one that prints a second clock.
+    display_timezone = _resolve_timezone(raw, source=str(base_dir / "config.json"))
 
     return DbOpsConfig(
         app_name=str(raw.get("app_name", "db_ops")),
@@ -500,6 +556,7 @@ def parse_config(raw: dict[str, Any], *, base_dir: Path) -> DbOpsConfig:
         master=master,
         worker=worker,
         node_role=node_role,
+        timezone=display_timezone,
     )
 
 

@@ -64,6 +64,7 @@ from typing import Any, Callable, Iterable, Sequence
 from db_ops.common import confirm, data_sources, hostcmd, remote_exec
 from db_ops.common import data_sources as target_resolve
 from db_ops.lib import time_window
+from db_ops.lib.timezone import display_now
 from db_ops.lib.target_profile import (
     RUNTIME_DOCKER, RUNTIME_K8S, SOURCE_CONFIG, SOURCE_REQUEST, TargetProfile,
     parse_os_version, select_powershell_dialect,
@@ -916,7 +917,10 @@ def check_maintenance_window(
     """
     if not window:
         return
-    current = now or datetime.now()
+    # The operator's clock, not this machine's: a maintenance window is agreed with people
+    # in a timezone, and `datetime.now()` answers in whichever one the runner happens to
+    # sit in - naive, so nothing downstream could even tell which.
+    current = now or display_now()
     start = str(window.get("start") or "").strip()
     end = str(window.get("end") or "").strip()
     if start or end:

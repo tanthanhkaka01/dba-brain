@@ -45,6 +45,7 @@ from db_ops.logging_ops import log_event, setup_app_logger
 from db_ops.telegram.commands import can_run_command
 from db_ops.telegram.sql_commands import execute_sql_support_command
 from db_ops.lib.paths import DEFAULT_DATA_DIR, REPO_ROOT, TOOL_ROOT  # noqa: F401 - one definition, see that module
+from db_ops.lib.timezone import file_stamp
 
 
 DEFAULT_COMMANDS_PATH = DEFAULT_DATA_DIR / "telegram_support_commands.json"
@@ -1367,7 +1368,7 @@ def _queue_listing_document(
     caption: str,
 ) -> str:
     """Write ``payload`` as a JSON file and queue it back as a Telegram document."""
-    timestamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
+    timestamp = file_stamp()
     output_dir = resolve_result_output_dir("runtime/output/telegram/config_exports").resolve()
     if not is_relative_to(output_dir, TOOL_ROOT):
         raise TelegramCommandError(
@@ -1664,7 +1665,7 @@ def execute_sql_to_xlsx_command(
         # report it verbatim so the reply template can show it.
         raise TelegramCommandError(safe_error_summary(exc), exit_code=1) from exc
 
-    timestamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
+    timestamp = file_stamp()
     output_dir = resolve_result_output_dir(
         str(config.get("output_dir") or "runtime/output/telegram/sql_to_xlsx")
     ).resolve()
@@ -2094,7 +2095,7 @@ def create_sql_run_result_file(
 
     result = json.loads(str(sql_run["result_json"] or "{}"))
     result_text = extract_result_column_text(result, column_name=str(config.get("result_column") or "ResultJson"))
-    timestamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
+    timestamp = file_stamp()
     output_root = resolve_result_output_dir(str(config.get("output_dir") or "runtime/output/telegram"))
     folder_template = str(config.get("folder_name_template") or "")
     folder_name = ""

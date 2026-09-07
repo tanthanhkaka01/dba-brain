@@ -4,12 +4,15 @@
     "This file answers 'where does the tool put its own runtime state, and which declaration files does it read'. It deliberately holds no thresholds, targets or schedules - those are data/*.json, one file per decision.",
     "Relative paths resolve against the directory holding this file, so a copied tool root stays self-consistent.",
     "The tool root is found by a stated order and NOT by where the package sits on disk: DB_OPS_HOME, then the working directory when it holds data/ or config.json, then the package location. DB_OPS_DATA_DIR moves the data folder on its own. See docs/configuration.md.",
+    "'timezone' is mandatory and is the clock this node SHOWS: every rendered time carries its offset (2026-09-07 07:32:56 +07), and a time_window's from_hour/to_hour mean hours in this zone on every node. Storage stays UTC regardless. Give an IANA name (Asia/Ho_Chi_Minh, America/New_York - follows daylight saving) or a fixed offset (UTC, +07:00, -03:30). DB_OPS_TIMEZONE overrides it per node, so one config file can be copied to a worker in another zone.",
     "'console_level' and 'file_level' are the two logging thresholds: DEBUG, INFO, WARNING, ERROR.",
     "'master' and 'worker' are only read by the control app (docs/11_control_app.md), which builds an image on one machine and deploys it to another. A single-machine install can delete both lists.",
     "A worker node's 'password_ref' names a key in data/encrypted_secret_text.json - never a password itself."
   ],
 
   "app_name": "db_ops",
+
+  "timezone": "UTC",
 
   "log_dir": "logs",
   "runtime_dir": "runtime",

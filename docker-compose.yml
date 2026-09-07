@@ -25,7 +25,13 @@ services:
     environment:
       DB_OPS_CONFIG: config.json
       DB_OPS_DAEMON_DELAY: "2"
-      TZ: Asia/Ho_Chi_Minh
+      # No TZ here. It used to say `TZ: Asia/Ho_Chi_Minh`, and that line WAS the timezone
+      # configuration: the image sets none, so the container is UTC, and every rendered timestamp
+      # and every time_window hour took its meaning from this file. Shipping it publicly gave
+      # Vietnam's business hours to anyone who ran the compose file, and deleting it silently
+      # moved every overnight window seven hours. The zone is now `timezone` in config.json,
+      # which is mounted below and read by db_ops itself. Set DB_OPS_TIMEZONE here only when this
+      # node must differ from the config file it shares with the master.
     # Publish the web host port (webhost app_command serves reports on 8080 inside this
     # container). Use `docker compose run --service-ports` so the mapping is applied.
     ports:

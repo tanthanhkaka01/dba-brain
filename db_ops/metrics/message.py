@@ -4,12 +4,15 @@ from datetime import datetime, timezone
 from typing import Any
 
 from db_ops.levels import ERROR, LOGGING, WARNING
+from db_ops.lib.timezone import format_display
 from db_ops.metrics.health import InstanceHealth
 
 
 def build_metrics_message(instances: list[InstanceHealth], *, title: str, level: str | None = None) -> str:
     filtered = [item for item in instances if level is None or item.level == level]
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+    # The alert is read by a person the moment it lands, so it is on their clock and says
+    # which one. The metric rows it summarises are still stored in UTC.
+    now = format_display()
     counts = {
         LOGGING: sum(1 for item in instances if item.level == LOGGING),
         WARNING: sum(1 for item in instances if item.level == WARNING),

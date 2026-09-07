@@ -5,6 +5,7 @@ import argparse
 import sys
 
 from db_ops.lib.policy_engine import status_rank
+from db_ops.lib.timezone import format_display_text
 from db_ops.lib.secret_text import add_key_argument, set_key_env
 from db_ops.db.metric_definitions import definition_supports_db_type
 from db_ops.db.metric_results import rows_by_target
@@ -642,7 +643,12 @@ def _report_value(metric_code: str, row: object) -> str:
 
 
 def _format_report_time(value: str) -> str:
-    return value.replace("T", " ").replace("Z", "")
+    """A row's collected_at, on the operator's clock and saying so.
+
+    It used to strip the ``Z`` and leave the rest, which is the worst of the three
+    options: the reader got a wall-clock time that was neither theirs nor labelled.
+    """
+    return format_display_text(value)
 
 
 def _target_column_name(target_id: str) -> str:

@@ -409,8 +409,15 @@ def _config(app_name: str) -> dict:
             "Runtime paths, and which declaration files to read.",
             "Every relative path here is resolved against this file's directory, so the whole tree",
             "can be moved or copied without editing anything.",
+            "'timezone' is the clock this node shows: an IANA name (Asia/Ho_Chi_Minh) or a fixed",
+            "offset (+07:00). Stored timestamps stay UTC; this is what rendered times and a",
+            "time_window's from_hour/to_hour mean. Set it before the first scheduled run.",
         ],
         "app_name": app_name,
+        # UTC rather than this machine's zone: `init` runs where the operator happens to be, the
+        # daemon runs wherever it is deployed, and a default read off the installing machine is
+        # how the tool ended up with three different clocks in the first place.
+        "timezone": "UTC",
         "log_dir": "logs",
         "runtime_dir": "runtime",
         "console_level": "INFO",

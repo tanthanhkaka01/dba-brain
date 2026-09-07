@@ -15,7 +15,10 @@ from db_ops.db.backend import StoreTarget
 
 
 #: 2 — added telegram_send_messages.message_type and the job_runs_history archive table.
-SCHEMA_VERSION = 2
+#: 3 — added runtime_nodes: which clock each node in the cluster is actually running on. A master
+#:     and a worker share one store and can hold different config.json timezones, so "what time is
+#:     this row in" had no answer the store could give.
+SCHEMA_VERSION = 3
 
 #: Columns copied verbatim when a job_runs row ages into job_runs_history. Listed rather than
 #: `SELECT *` so a future column added to job_runs fails loudly here instead of silently
@@ -885,6 +888,83 @@ class DbOpsStore:
             )
             return int(cursor.lastrowid)
 
+    def record_runtime_node(
+        self,
+        *,
+        node_id: str,
+        node_role: str,
+        hostname: str,
+        timezone_name: str,
+        utc_offset_minutes: int,
+        tz_abbreviation: str = "",
+        app_version: str = "",
+    ) -> None:
+        """Record which clock this node runs on. One row per node, upserted forever.
+
+        Written by ``python -m db_ops.common.cli timezone '{"record": true}'`` — never implicitly
+        by an app, because a store write that happens as a side effect of rendering a timestamp is
+        a store write nobody can find.
+
+        The reason it exists: master and worker share one PostgreSQL store and each reads its own
+        ``config.json``. Nothing in the store could say whether the two agreed about the hour, so a
+        ``time_window`` that fired at the wrong time on one of them looked exactly like a schedule
+        that had never been due.
+
+        ``utc_offset_minutes`` is a **snapshot true as of ``updated_at``** and ``timezone`` is the
+        setting. Both are kept because under daylight saving the first changes twice a year, and
+        only the second can be written back into a config file — neither derives from the other.
+
+        ``first_seen_at`` survives the upsert: when a node first reported is history, and an
+        upsert that reset it would erase the only record of it.
+        """
+        self.initialize()
+        now = utc_now_text()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO runtime_nodes
+                    (node_id, node_role, hostname, timezone, utc_offset_minutes,
+                     tz_abbreviation, app_version, first_seen_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(node_id) DO UPDATE SET
+                    node_role = excluded.node_role,
+                    hostname = excluded.hostname,
+                    timezone = excluded.timezone,
+                    utc_offset_minutes = excluded.utc_offset_minutes,
+                    tz_abbreviation = excluded.tz_abbreviation,
+                    app_version = excluded.app_version,
+                    updated_at = excluded.updated_at;
+                """,
+                (
+                    str(node_id),
+                    str(node_role),
+                    str(hostname),
+                    str(timezone_name),
+                    int(utc_offset_minutes),
+                    str(tz_abbreviation or ""),
+                    str(app_version or ""),
+                    now,
+                    now,
+                ),
+            )
+
+    def list_runtime_nodes(self) -> list[dict[str, Any]]:
+        """Every node that has ever reported, newest report first.
+
+        The answer to "is the estate on one clock?" — which is a question, not a fact, the moment
+        there is more than one node.
+        """
+        self.initialize()
+        with self.connect() as conn:
+            return [dict(row) for row in conn.execute(
+                """
+                SELECT node_id, node_role, hostname, timezone, utc_offset_minutes,
+                       tz_abbreviation, app_version, first_seen_at, updated_at
+                FROM runtime_nodes
+                ORDER BY updated_at DESC, node_id ASC;
+                """
+            ).fetchall()]
+
     def archive_old_job_runs(
         self,
         *,
@@ -1115,7 +1195,7 @@ class DbOpsStore:
             )
 
     def report_exists_on_local_date(self, *, report_code: str, local_date: str,
-                                    utc_offset_hours: int = 7) -> bool:
+                                    utc_offset_minutes: int) -> bool:
         """Has this report already been produced on the given **local** calendar day?
 
         The daily guard behind a once-a-day report. Local, not UTC, because "today" for the
@@ -1140,13 +1220,19 @@ class DbOpsStore:
 
         A ``local_date`` that is not a date raises rather than answering ``False``: "no report
         today" is the answer that lets a duplicate out.
+
+        ``utc_offset_minutes`` has **no default**, on purpose. It used to default to 7 hours — a
+        Vietnam business calendar, decided in the store layer, applying to every operator of a
+        published tool. Whose midnight this is is the caller's decision, and the caller takes it
+        from the configured timezone (``db_ops.lib.timezone``). Minutes rather than hours because
+        half-hour zones exist and an int of hours cannot express +05:30.
         """
         self.initialize()
         try:
             midnight = datetime.strptime(str(local_date), "%Y-%m-%d")
         except (TypeError, ValueError) as exc:
             raise ValueError(f"local_date must be YYYY-MM-DD, got {local_date!r}") from exc
-        offset = timedelta(hours=int(utc_offset_hours))
+        offset = timedelta(minutes=int(utc_offset_minutes))
         window_start = (midnight - offset).strftime("%Y-%m-%dT%H:%M:%SZ")
         window_end = (midnight + timedelta(days=1) - offset).strftime("%Y-%m-%dT%H:%M:%SZ")
         with self.connect() as conn:
@@ -2158,6 +2244,22 @@ CREATE TABLE IF NOT EXISTS telegram_background_tasks
 
 CREATE INDEX IF NOT EXISTS ix_telegram_background_tasks_status
     ON telegram_background_tasks (status, created_at ASC);
+
+CREATE TABLE IF NOT EXISTS runtime_nodes
+(
+    node_id TEXT NOT NULL PRIMARY KEY,
+    node_role TEXT NOT NULL DEFAULT 'master',
+    hostname TEXT NOT NULL DEFAULT '',
+    timezone TEXT NOT NULL DEFAULT 'UTC',
+    utc_offset_minutes INTEGER NOT NULL DEFAULT 0,
+    tz_abbreviation TEXT NOT NULL DEFAULT '',
+    app_version TEXT NOT NULL DEFAULT '',
+    first_seen_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS ix_runtime_nodes_updated_at
+    ON runtime_nodes (updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS report_types
 (

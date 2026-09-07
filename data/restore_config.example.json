@@ -7,7 +7,8 @@
     "'jobs' is one entry per backup kind, each with its own schedule and retention, so a full and a log backup of the same database are independent. 'time_window' and 'notify' are the same shared objects used everywhere else.",
     "A restore entry's 'databases' list scopes what is restored. An empty list means 'everything found', which quietly goes on restoring ageing files after a database is removed from the source plan - name them explicitly unless you want that.",
     "'target_retention_seconds' is how long a restored copy is kept before it is dropped. A drill target is disposable by design; keeping copies indefinitely fills the target instance and turns a proof into an incident.",
-    "A physical restore carries the SOURCE instance's logins and passwords with it. After a drill the target answers to the source's credentials, and the target's own stored credential goes stale - expect that rather than being surprised by it."
+    "A physical restore carries the SOURCE instance's logins and passwords with it. After a drill the target answers to the source's credentials, and the target's own stored credential goes stale - expect that rather than being surprised by it.",
+    "Every 'time_window' hour and day bound is read in the timezone DBA Brain runs in - the 'timezone' field in config.json - on every node, whatever clock the host or container keeps. So 'from_hour': 1 is 01:00 there, not 01:00 UTC and not 01:00 on the machine. There is no per-entry timezone: one declaration decides every window in every file. Changing it moves every schedule that names an hour, so set it before the first scheduled run."
   ],
 
   "backup_restore": {
