@@ -63,6 +63,7 @@ from dataclasses import dataclass, field
 from db_ops.sre.docker_db import healthcheck, register_config
 from db_ops.sre.docker_db.models import ENGINE_META
 from db_ops.sre.docker_db.provisioner import DEFAULT_CONTAINERS_DIR
+from db_ops.lib.timezone import file_stamp, format_stored
 
 #: Where the bundle is written on both hosts. Under /tmp on purpose: it is reproducible output
 #: that must not survive a reboot, and a half-finished bundle left in the containers dir would
@@ -457,7 +458,10 @@ def export_bundle(host, facts: InstanceFacts, spec: MoveSpec, *, log=print) -> d
         # and is wrong — the same reason the volume copy happens inside the stopped window.
         log(f"Stopping {spec.name} so its filesystem can be committed ...")
         stop_containers(host, facts.containers)
-        stamp = time.strftime("%Y%m%d%H%M%S")
+        # The configured clock, like every other stamp the tool writes. This tag ends up on a
+        # docker image an operator reads back later, so "moved-20260907144419" has to mean the
+        # hour they think it does rather than the hour the host was set to.
+        stamp = file_stamp().replace("_", "")
         images = []
         for container in facts.containers:
             moved = f"db_ops/{spec.name.lower()}-{facts.services.get(container, container).lower()}:moved-{stamp}"
@@ -515,7 +519,9 @@ def export_bundle(host, facts: InstanceFacts, spec: MoveSpec, *, log=print) -> d
 
     manifest = {
         "moved_by": "db_ops.sre.move-db-docker",
-        "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        # UTC, like every other timestamp this tool records. It was the host's local time with
+        # a %z offset - self-describing, but a different clock from everything beside it.
+        "created_at": format_stored(),
         "source_host": getattr(host, "host", ""),
         "instance": facts.to_dict(),
         "images": images,

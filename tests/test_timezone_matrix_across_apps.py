@@ -410,6 +410,72 @@ def test_the_run_once_and_manual_conventions_are_zone_blind(zone):
 
 
 # --------------------------------------------------------------------------------------------- #
+# 9b. A time that stands on its own must name its clock
+# --------------------------------------------------------------------------------------------- #
+
+@pytest.mark.parametrize("zone,offset", [(UTC, "+00"), (PLUS7, "+07")])
+def test_the_run_line_of_a_report_carries_its_offset(zone, offset):
+    """`Run: 2026-09-07 14:44:14` was shipped in 0.10.0 and is the bug this pins.
+
+    It reached Telegram with no zone on it — the exact unlabelled wall clock the release existed to
+    remove — because it borrowed the *column* renderer, which may omit the offset only because a
+    table header states it once. A line that stands on its own has no header to lean on.
+    """
+    from db_ops.reports import metrics_reports
+
+    tz.bind_display_timezone(zone)
+    text = metrics_reports._run_time_text(
+        {"started_at": "2026-09-07T02:30:00Z", "finished_at": "2026-09-07T02:30:00Z"})
+
+    assert text.endswith(offset), f"{text!r} does not name its clock"
+
+
+def test_a_window_refusal_says_what_time_it_thinks_it_is():
+    """The message explaining why a host restart was blocked. If it names an hour without a zone,
+    the reader cannot tell whether the tool disagrees with them about the time or about the rule."""
+    from db_ops.common import evidence, host_ops
+
+    with at(UTC):
+        report = evidence.GateReport("probe")
+        host_ops.check_maintenance_window(
+            report, window={"from_hour": 9, "to_hour": 10}, ignore=False)
+    detail = [g for g in report.gates if g.name == "schedule.maintenance_window"][0].detail
+
+    assert "+00" in detail, f"{detail!r} names an hour but not a clock"
+
+
+def test_no_producer_renders_a_bare_wall_clock():
+    """The guard for the whole class, because two of these were missed by hand.
+
+    A `strftime("%Y-%m-%d %H:%M…")` with no offset beside it is how the bug looks in source. The
+    two allowed exceptions are named, each with the reason it is one — anything new has to justify
+    itself here rather than reach a reader unlabelled.
+    """
+    import re
+    from pathlib import Path
+
+    ALLOWED = {
+        # A table cell: the column header carries the offset once for every row.
+        "db_ops/reports/metrics_reports.py",
+        # A comparison key compared against server-local file mtimes as text, not a rendered time.
+        "db_ops/lib/backupfiles_retention.py",
+    }
+    pattern = re.compile(r'strftime\("%Y-%m-%d %H:%M')
+    offenders = []
+    for path in Path("db_ops").rglob("*.py"):
+        rel = path.as_posix()
+        if rel in ALLOWED or rel.endswith("lib/timezone.py"):
+            continue
+        if pattern.search(path.read_text(encoding="utf-8")):
+            offenders.append(rel)
+
+    assert not offenders, (
+        f"these render a wall clock with no offset: {offenders}. Use "
+        f"db_ops.lib.timezone.format_display / format_display_text, or add the file to ALLOWED "
+        f"with the reason it is an exception.")
+
+
+# --------------------------------------------------------------------------------------------- #
 # 10. The whole matrix in one assertion, so a NEW caller is caught
 # --------------------------------------------------------------------------------------------- #
 
