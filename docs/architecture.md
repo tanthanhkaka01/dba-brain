@@ -170,7 +170,58 @@ all — not even from `lib`. A shape with a dependency stops being a shape.
 
 ---
 
-## 5. The shape of a request
+## 5. Who the architecture is shaped for
+
+Two readers, and the same properties serve both — which is why there is one set of them rather
+than a tool with an agent mode bolted on.
+
+| | **SRE / DevOps** | **An AI agent** |
+| --- | --- | --- |
+| Reach | Nothing installed on a monitored machine; it connects the way an operator does | Same. There is no host to provision before an agent can act |
+| Interface | A CLI command per capability | The *same* CLI command — one JSON object in, one envelope out |
+| Configuration | JSON files in version control; a threshold change is a diff | JSON files an agent writes; the schema is the same schema a person edits |
+| Evidence | A `job_runs` row and a log line per run | The same row and the same line, whoever started it |
+| Blast radius | The set of commands that exist | The set of commands that exist — not "whatever SQL it composed" |
+
+**The last row is the load-bearing one.** The alternative to a typed operation is an agent writing
+SQL and shell from prose, where what it can do is bounded only by what it happened to generate.
+Here a capability either exists as a reviewed command or it cannot be reached at all, and the
+review already happened when the command was written.
+
+**And it is the load-bearing one for cost, too.** The call graph is the argument:
+
+```text
+   agent  ->  raw SQL / shell, once per check   ->  database
+              ...and every row comes back into the model's context,
+              healthy or not, to be graded there, on every cycle
+
+   agent  ->  DBA Brain  ->  database
+              ...one request out, one graded envelope back; the evidence
+              is fetched only for a check that came back bad
+```
+
+Grading is a fixed decision. It belongs in SQL that somebody reviewed and that runs the same way
+every time — not in a judgement a model re-derives from raw rows on every pass, paying for the rows
+that were fine. What the agent's context is then spent on is the part that is genuinely hard: what
+to do about the check that failed.
+
+That is also why the envelope carries `status` and `message` beside `data`. A caller that only
+needs to know whether to care never reads `data` at all.
+
+**One code path, not two.** There is no agent-facing API beside the human-facing one, and that is
+deliberate: a second entry point is a second place for a capability to diverge, and the one that
+diverges is always the one nobody reads. It also means an agent cannot reach anything a human
+cannot audit — "what did the agent do last night" is the same query as "what did the daemon do
+last night", against the same table.
+
+**What this does not make it.** Nothing here talks to a model, holds a prompt, or decides anything.
+A layer that does not reason is a layer you can audit, and every judgement that carries
+consequences — restore this, fail over that — stays with whoever is accountable for it. The value
+is that the operation underneath is typed, logged and identical no matter who asked for it.
+
+---
+
+## 6. The shape of a request
 
 Every `common` command takes **one JSON object** — inline, from a file, or on stdin — with the same
 shape as the configuration files, and answers with a response envelope
@@ -195,7 +246,7 @@ the port, the protocol or the parameter binding wrong.
 
 ---
 
-## 6. How a run actually flows
+## 7. How a run actually flows
 
 ```text
 scheduler (db_ops/jobs) — reads data/app_commands.json
@@ -224,7 +275,7 @@ Two boundaries in that picture are load-bearing:
 
 ---
 
-## 7. Where the configuration comes from
+## 8. Where the configuration comes from
 
 Not from where the code sits. `DB_OPS_HOME`, then the working directory if it holds `data/` or
 `config.json`, then the package location — guarded by `tests/test_tool_root_resolution.py`, with

@@ -82,7 +82,7 @@ The playbook installs MySQL from the Oracle APT repo, deploys `/etc/mysql/conf.d
 ### Prerequisites
 
 - VMware Workstation template exists and has been bootstrapped (see [Template Bootstrap](#template-bootstrap-one-time)).
-- Windows SSH key pair exists at the path configured in `sre_config.json â†’ sre.credentials.ssh_identity_file`.
+- Windows SSH key pair exists at the path configured in `sre_config.json → sre.credentials.ssh_identity_file`.
 
 ---
 
@@ -124,7 +124,7 @@ python -m db_ops.sre.cli run-powershell 04-fix-guest-identity -- -Group shared
 python -m db_ops.sre.cli run-powershell 04-fix-guest-identity -- -Group mysql
 ```
 
-Sets the correct hostname, regenerates machine-id, and assigns the static IP defined in `sre_config.json â†’ sre.inventory`. VMs reboot automatically after this step.
+Sets the correct hostname, regenerates machine-id, and assigns the static IP defined in `sre_config.json → sre.inventory`. VMs reboot automatically after this step.
 
 ---
 
@@ -166,9 +166,9 @@ python -m db_ops.sre.cli run-bastion-script bootstrap-bastion-ansible -- mysql
 
 SSHes from Windows host to bastion-01 and runs `automation/bash/bootstrap-bastion-ansible.sh mysql`. This script:
 1. Installs `ansible`, `openssh-client`, `python3`, and other control-node packages via apt.
-2. Writes `~/.ssh/config` with hostnameâ†’IP mappings for mysql-01/02/03.
+2. Writes `~/.ssh/config` with hostname→IP mappings for mysql-01/02/03.
 3. Seeds `~/.ssh/known_hosts` via `ssh-keyscan`.
-4. **Configures NOPASSWD sudo** on each MySQL node (SSHes from bastion â†’ mysql-0x and runs `sudo bash`). Required for Ansible `become: yes`.
+4. **Configures NOPASSWD sudo** on each MySQL node (SSHes from bastion → mysql-0x and runs `sudo bash`). Required for Ansible `become: yes`.
 5. Validates passwordless SSH: `ssh mysql-01 hostname`, etc.
 6. Runs `ansible -m ping` to confirm Ansible connectivity.
 
@@ -536,7 +536,7 @@ Then run:
 python -m db_ops.sre.cli run-powershell stage-oracle-installer
 ```
 
-Transfer path: **Windows host â†’ bastion-01 â†’ rac01, rac02**
+Transfer path: **Windows host → bastion-01 → rac01, rac02**
 
 1. SCPs both ZIPs to bastion `/tmp/oracle-installer-stage/`.
 2. From bastion, SCPs each ZIP to `/u01/app/stage/` on rac01 and rac02.
@@ -613,7 +613,7 @@ python -m db_ops.sre.cli run-powershell 03-start-vms -- -Group oracle_dg
 python -m db_ops.sre.cli run-powershell 04-fix-guest-identity -- -Group oracle_dg
 ```
 
-Assigns static IPs (198.51.100.51 â†’ orapri, 198.51.100.52 â†’ orastb), sets hostnames, reboots.
+Assigns static IPs (198.51.100.51 → orapri, 198.51.100.52 → orastb), sets hostnames, reboots.
 
 ### Step 5 — Sync Repo and Deploy Bastion Key
 
@@ -658,7 +658,7 @@ Then run:
 python -m db_ops.sre.cli run-powershell stage-oracle-installer -- -Group oracle_dg
 ```
 
-Transfer path: **Windows host â†’ bastion-01 â†’ orapri, orastb**
+Transfer path: **Windows host → bastion-01 → orapri, orastb**
 
 Only the DB Home ZIP is transferred. Ownership is set to `oracle:oinstall`. The Grid installer is not required for DataGuard.
 
@@ -787,11 +787,11 @@ python -m db_ops.sre.cli --config data/sre_config.json setup-sequence oracle-dg 
 | 13 | `run-bastion-script bootstrap-bastion-ansible` | `<db_group>` | 2–3m |
 | 14 | `run-bastion-playbook <playbook>.yml` | `-i inventory/<db_group>/hosts.yml` | mysql ~12m / pg ~12m / mssql ~6m |
 
-Group â†’ playbook: `mysql` â†’ `mysql-cluster.yml`, `postgresql` â†’ `postgresql-ha.yml`, `mssql` (group `sqlserver`) â†’ `sqlserver-ag.yml`.
+Group → playbook: `mysql` → `mysql-cluster.yml`, `postgresql` → `postgresql-ha.yml`, `mssql` (group `sqlserver`) → `sqlserver-ag.yml`.
 
 Actual total time: **mysql/postgresql ~25–30m** · **mssql ~15–20m** from scratch.
 
-**Note on `01-clone-vms`:** Skips if the VM directory already exists (no overwrite). To re-clone from scratch: delete the VM directory first, or run with `-Force`. If the VM is deleted in VMware but the directory remains â†’ clone is skipped but `02-set-vm-resources` will fail (VM still running).
+**Note on `01-clone-vms`:** Skips if the VM directory already exists (no overwrite). To re-clone from scratch: delete the VM directory first, or run with `-Force`. If the VM is deleted in VMware but the directory remains → clone is skipped but `02-set-vm-resources` will fail (VM still running).
 
 **oracle-rac** — 18 steps:
 
@@ -864,7 +864,7 @@ Use this flow when the DB VMs already exist and are reachable on the network but
 | fix-bastion-identity | `run-powershell 04-fix-guest-identity -- -VmName bastion-01` | bastion-01 | No |
 | deploy-host-key-bastion | `run-powershell 08-deploy-host-ssh-key -- -VmName bastion-01` | bastion-01 | No |
 | repo-sync-bastion | `scp` to bastion IP + `ssh bastion-IP` extract | None (SCP/SSH only) | No |
-| bastion-key-to-sql-nodes | `ssh bastion-IP` â†’ `sshpass ssh <sql-ip>` | None (SSH only) | SSH+password only |
+| bastion-key-to-sql-nodes | `ssh bastion-IP` → `sshpass ssh <sql-ip>` | None (SSH only) | SSH+password only |
 | bootstrap-bastion-ansible | `run-bastion-script bootstrap-bastion-ansible -- sqlserver` | None (SSH only) | Via Ansible key-auth |
 | playbook-sqlserver-ag | `run-bastion-playbook sqlserver-ag.yml` | None (SSH only) | Via Ansible key-auth |
 | verify-always-on | `ssh 198.51.100.31` (ProxyJump via bastion) | None (SSH only) | Via SSH ProxyJump |
@@ -921,10 +921,10 @@ Results written to `db_ops/sre/data_folder/<date>_result_install_sql_server.json
 | fix-bastion-identity | `run-powershell 04-fix-guest-identity -- -VmName bastion-01` (waits 40s) | bastion-01 only |
 | deploy-host-key-bastion | `run-powershell 08-deploy-host-ssh-key -- -VmName bastion-01` | bastion-01 only |
 | repo-sync-bastion | Tarballs `db_ops/sre/`, SCPs to bastion `/opt/db-sre/repo/`, fixes CRLF | No |
-| bastion-key-to-sql-nodes | SSHâ†’bastion â†’ `sshpass` pushes bastion pubkey to each SQL node | No |
+| bastion-key-to-sql-nodes | SSH→bastion → `sshpass` pushes bastion pubkey to each SQL node | No |
 | bootstrap-bastion-ansible | `run-bastion-script bootstrap-bastion-ansible -- sqlserver` | No |
 | playbook-sqlserver-ag | `run-bastion-playbook sqlserver-ag.yml -i inventory/sqlserver/hosts.yml` | No |
-| verify-always-on | `ssh 198.51.100.31` â†’ `sqlcmd -Q "SELECT ... FROM sys.availability_groups ..."` (non-critical) | No |
+| verify-always-on | `ssh 198.51.100.31` → `sqlcmd -Q "SELECT ... FROM sys.availability_groups ..."` (non-critical) | No |
 
 ---
 
@@ -1008,7 +1008,7 @@ python -m db_ops.sre.cli run-bastion-script bootstrap-bastion-ansible -- oracle_
 python -m db_ops.sre.cli run-bastion-playbook automation/ansible/playbooks/oracle-rac-os-prep.yml `
     -i inventory/oracle/rac/hosts.yml
 
-# 6. Stage Oracle installers: Windows â†’ bastion SCP â†’ RAC nodes SCP (no vmrun)
+# 6. Stage Oracle installers: Windows → bastion SCP → RAC nodes SCP (no vmrun)
 python -m db_ops.sre.cli run-powershell stage-oracle-installer -- -Group oracle_rac
 
 # 7. Install Grid Infrastructure (SSH only, 20–40 min)
@@ -1050,7 +1050,7 @@ python -m db_ops.sre.cli run-bastion-script bootstrap-bastion-ansible -- oracle_
 python -m db_ops.sre.cli run-bastion-playbook automation/ansible/playbooks/oracle-dg-os-prep.yml `
     -i inventory/oracle/dataguard/hosts.yml
 
-# 6. Stage DB installer: Windows â†’ bastion SCP â†’ DG nodes SCP (no vmrun)
+# 6. Stage DB installer: Windows → bastion SCP → DG nodes SCP (no vmrun)
 python -m db_ops.sre.cli run-powershell stage-oracle-installer -- -Group oracle_dg
 
 # 7. Install Oracle DB + create primary database (SSH only, 20–40 min)
@@ -1070,7 +1070,7 @@ python -m db_ops.sre.cli ssh 198.51.100.51 -- "sudo -u oracle ORACLE_HOME=/u01/a
 ## Stop VMs
 
 ```powershell
-# Stop a specific group (graceful soft stop â†’ hard stop if timeout)
+# Stop a specific group (graceful soft stop → hard stop if timeout)
 python -m db_ops.sre.cli run-powershell stop-vms -- -Group mysql
 python -m db_ops.sre.cli run-powershell stop-vms -- -Group postgresql
 python -m db_ops.sre.cli run-powershell stop-vms -- -Group sqlserver
@@ -1339,13 +1339,13 @@ python -m db_ops.sre.cli run-powershell add-oracle-shared-disks
 python -m db_ops.sre.cli run-powershell add-oracle-shared-disks -- -OcrDiskGb 15 -DataDiskGb 80 -FraDiskGb 50
 python -m db_ops.sre.cli run-powershell add-oracle-shared-disks -- -Force
 
-# Oracle installer staging (Windows â†’ bastion â†’ nodes via SCP)
+# Oracle installer staging (Windows → bastion → nodes via SCP)
 # RAC: requires oracle.grid_installer_path + oracle.db_installer_path
 # DG:  requires oracle.db_installer_path only
 python -m db_ops.sre.cli run-powershell stage-oracle-installer -- -Group oracle_rac
 python -m db_ops.sre.cli run-powershell stage-oracle-installer -- -Group oracle_dg
 
-# Stop VMs by group (soft â†’ hard)
+# Stop VMs by group (soft → hard)
 python -m db_ops.sre.cli run-powershell stop-vms -- -Group mysql
 python -m db_ops.sre.cli run-powershell stop-vms -- -Group postgresql
 python -m db_ops.sre.cli run-powershell stop-vms -- -Group sqlserver
@@ -1920,41 +1920,41 @@ Full rationale, the current layout table, the audit one-liner, and the relocatio
 
 ```
 db_ops.sre.cli
-  â”‚
-  â”œâ”€â”€ run-powershell <script>
-  â”‚     powershell -File <ps1> -DbSrePayloadJsonBase64 <config> [args]
-  â”‚     â†’ VMware Workstation via vmrun.exe (no SSH required)
-  â”‚     â†’ Output streamed line-by-line to terminal
-  â”‚
-  â”œâ”€â”€ run-bastion-playbook / run-bastion-script / run-bastion-ansible
-  â”‚     SSH Windows â†’ bastion-01 â†’ ansible-playbook / bash / ansible
-  â”‚
-  â”œâ”€â”€ check-shared-vms
-  â”‚     SSH Windows â†’ shared node IP (bastion, mon, log)
-  â”‚
-  â”œâ”€â”€ check-mysql-cluster / check-postgresql-ha
-  â”‚     SSH Windows â†’ bastion-01 (ProxyJump) â†’ primary node â†’ mysqlsh / psql
-  â”‚     Windows host never connects directly to MySQL/PostgreSQL nodes
-  â”‚
-  â””â”€â”€ ssh <host>
-        SSH Windows â†’ bastion-01 (ProxyJump) â†’ target host
+  │
+  ├── run-powershell <script>
+  │     powershell -File <ps1> -DbSrePayloadJsonBase64 <config> [args]
+  │     → VMware Workstation via vmrun.exe (no SSH required)
+  │     → Output streamed line-by-line to terminal
+  │
+  ├── run-bastion-playbook / run-bastion-script / run-bastion-ansible
+  │     SSH Windows → bastion-01 → ansible-playbook / bash / ansible
+  │
+  ├── check-shared-vms
+  │     SSH Windows → shared node IP (bastion, mon, log)
+  │
+  ├── check-mysql-cluster / check-postgresql-ha
+  │     SSH Windows → bastion-01 (ProxyJump) → primary node → mysqlsh / psql
+  │     Windows host never connects directly to MySQL/PostgreSQL nodes
+  │
+  └── ssh <host>
+        SSH Windows → bastion-01 (ProxyJump) → target host
 ```
 
 ### SSH Access Model
 
 ```
-Windows host â”€â”€(key)â”€â”€â–º bastion-01 â”€â”€(bastion key)â”€â”€â–º mysql-01/02/03
-                                   â”œâ”€â”€(bastion key)â”€â”€â–º pg-01/02/03
-                                   â”œâ”€â”€(bastion key)â”€â”€â–º mssql-01/02/03
-                                   â”œâ”€â”€(bastion key)â”€â”€â–º rac01/rac02
-                                   â””â”€â”€(bastion key)â”€â”€â–º orapri/orastb
+Windows host ──(key)──► bastion-01 ──(bastion key)──► mysql-01/02/03
+                                   ├──(bastion key)──► pg-01/02/03
+                                   ├──(bastion key)──► mssql-01/02/03
+                                   ├──(bastion key)──► rac01/rac02
+                                   └──(bastion key)──► orapri/orastb
 ```
 
 - **Windows host key** is deployed only to bastion-01 (`08-deploy-host-ssh-key -Group shared`).
 - **bastion key** is deployed to all database nodes (`07-bootstrap-bastion-ansible -TargetGroup <group>`).
 - For any SSH target that is not bastion, the Python CLI routes via bastion as a hop — bastion runs the inner `ssh` to the final node using its own key.
 - Database nodes (MySQL, PostgreSQL, SQL Server, Oracle RAC) never need the Windows host key.
-- For Oracle RAC installer staging, files are transferred Windows â†’ bastion via SCP, then bastion â†’ RAC nodes via SCP (not vmrun). This is because Oracle Linux VMs are treated as pre-existing infrastructure.
+- For Oracle RAC installer staging, files are transferred Windows → bastion via SCP, then bastion → RAC nodes via SCP (not vmrun). This is because Oracle Linux VMs are treated as pre-existing infrastructure.
 
 ### Why VMware Tools for Steps 1–6
 

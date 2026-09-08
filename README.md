@@ -10,6 +10,69 @@ monitored machine.
 connects to the databases and hosts you list, and — only if you turn it on and give it a token —
 to a chat service. Nothing else.
 
+**Two ways to read what it is, and both are accurate:**
+
+| | |
+| --- | --- |
+| **A database tool for SRE / DevOps** | Nothing is installed on a monitored machine — it reaches instances and hosts the way an operator does, over a connection and a credential you already have. Every decision is a JSON file you keep in version control, so a threshold change is a diff and a review rather than an edit to somebody's script. It schedules itself, or your scheduler drives it. |
+| **A database operations layer for an AI agent** | Every capability is one command that takes **one JSON object and answers with one**, with five keys always present. There is no natural-language layer to translate through and no separate agent API: the command a person runs is byte-for-byte the command an agent runs. |
+
+The second is not a later ambition. It is why the shape is what it is — and it is the **supported
+path today**, because the console that would let a person add an instance in a browser is not
+finished yet (see [Two ways to drive it](#two-ways-to-drive-it)).
+
+**One code path is the point, not a convenience.** An agent cannot reach a capability a human
+cannot audit, because there is only one of each. Every run is a row in `job_runs` and a line in a
+log with the same shape whoever started it, so "what did the agent do last night" is the same
+query as "what did the daemon do last night".
+
+---
+
+## The goal
+
+**To be a tool a DBA, a DevOps engineer or an SRE can rely on — one that works alongside an AI
+agent and saves a large amount of its tokens, and works just as well with no agent at all.**
+
+Three commitments, and they are meant to be held to:
+
+| | |
+| --- | --- |
+| **Reliable** | Every operation is typed, logged and repeatable. A scheduled run that failed can be replayed by hand from the same JSON request. Backups are not reported as successful — they are **restored, and the restore is the proof**. |
+| **Cheap for an agent to use** | An agent working a database from a shell pays, in context, for every raw result set it reads — on every check, most of them healthy. Here it sends a small request and reads a **graded verdict**, then pulls the evidence only for what came back bad. |
+| **Not dependent on one** | No model is required, configured, or contacted. Remove the agent and the daemon, the schedules, the reports and the alerts all still run. The agent is a caller, never a component. |
+
+The shape of that, because it is the whole argument in one picture:
+
+```text
+  WITHOUT a tool                              WITH DBA Brain
+  agent -> raw SQL -> agent                   agent -> DBA Brain -> database
+
+  "check this database"                       "check this database"
+    -> SELECT ... dm_os_wait_stats              -> one JSON request
+    <- every row, into the context
+    -> SELECT ... sys.databases                 <- one graded envelope:
+    <- every row, into the context                    41 checks, 40 OK,
+    -> SELECT ... backupset                           1 WARNING: appdb  
+    <- every row, into the context                    log backup 31h old
+    -> ... once per check, per run
+    <- all of it, healthy or not               -> fetch the evidence for
+                                                  the ONE that came back bad
+  The model reads the evidence and
+  derives the verdict, every time.            The verdict was derived in
+  It pays for the 95% that was fine.          reviewed SQL, once, by a person.
+```
+
+The saving is not compression — it is **not sending what nobody needed to read**. Grading a metric
+is a fixed decision that belongs in SQL somebody reviewed, not a judgement re-made by a model on
+every cycle from raw rows. The agent's context is then spent on the thing that is actually hard:
+what to do about the one check that failed.
+
+**And the target that is not met yet:** a person who has never seen this project should go from
+`pip install dbabrain` to a collecting install by pointing an AI agent at these docs — no estate
+bundle from another machine, and no assumption that they already know what a database ought to be
+checked for. Today that path expects more DBA knowledge than it should. Closing that gap is the
+current priority; see [`docs/first_run.md`](./docs/first_run.md) for where it stands.
+
 > **This project is being renamed.** The distribution and the module path are still `db_ops`, so
 > every command below reads `python -m db_ops.<app>.cli`. They become `dbabrain` when the code
 > moves to the public repository; nothing else changes with them.
@@ -20,11 +83,12 @@ to a chat service. Nothing else.
 
 ## What it is not
 
-- **It is not an AI agent.** It is a toolkit with a CLI, where every capability takes one JSON
-  object and answers with one. That shape is what lets a human, a shell script, a chat command and
-  an AI agent all drive the same operation without a translation layer — and it is why an
-  agent-facing interface can be added later without rewriting anything underneath it. Today
-  nothing here talks to a model.
+- **It is not an AI agent — it is what an agent operates.** Nothing here talks to a model, holds a
+  prompt, or decides anything on its own. It is a toolkit with a CLI, where every capability takes
+  one JSON object and answers with one, and that shape is what lets a human, a shell script, a chat
+  command and an agent drive the same operation without a translation layer. The distinction is
+  worth keeping: a layer that does not reason is a layer you can audit, and the judgement about
+  whether to restore production stays with whoever is accountable for it.
 - **It does not replace incident analysis, change approval, or runbooks.** It supports them. A
   restore drill proves a backup is restorable; deciding to restore production is still yours.
 - **It is not a dashboard product.** It has a web console for reading reports and editing
@@ -36,9 +100,21 @@ to a chat service. Nothing else.
 ## Who it is for
 
 A DBA or small team responsible for a handful to a few dozen instances across more than one
-engine, who already know what they want checked and are tired of it living in twelve cron jobs and
-a folder of scripts. If you have one PostgreSQL cluster and a hosted monitoring product you are
-happy with, this is more machinery than you need.
+engine, tired of it living in twelve cron jobs and a folder of scripts. If you have one PostgreSQL
+cluster and a hosted monitoring product you are happy with, this is more machinery than you need.
+
+Two more, deliberately:
+
+**The person who gets paged about a database without being a DBA** — the DevOps or SRE owner of a
+service, in a company that has no DBA at all. They need the same operations and should not have to
+design a monitoring strategy to get them, so **the shipped catalogue is meant to be that
+expertise**: adopting this should be configuring an estate, not deciding what a healthy database
+looks like. That is the intent — `docs/first_run.md` is honest about how far it holds today.
+
+**Whoever is building an agent that has to touch a database** and does not want to hand it a shell.
+The alternative to a typed operation is an agent composing SQL and `psql` invocations from prose,
+where the blast radius is whatever it happened to write. Here what it can do is the set of commands
+that exist: each one reviewed when it was written, each one logged the way a human's run is.
 
 ---
 

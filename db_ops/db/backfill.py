@@ -1,11 +1,19 @@
 """Carry the history a stand-in node recorded back into the shared store.
 
 The situation this exists for: the worker is stopped and the estate is run from somewhere else —
-a laptop, a fresh install, a stand-in node — whose store is a local SQLite file. The work is real:
-metrics are collected, reports are built, SQL tasks run, alerts are delivered. But the *record* of
-it lands in a file nobody queries, so the shared store shows a hole exactly as wide as the outage,
-and every question asked of history afterwards ("how did this instance trend last week", "was that
-SLA met") is answered from a series with a gap in it.
+a laptop, a fresh install, a stand-in node — whose store is somewhere nobody queries. The work is
+real: metrics are collected, reports are built, SQL tasks run, alerts are delivered. But the
+*record* of it lands out of the way, so the shared store shows a hole exactly as wide as the
+outage, and every question asked of history afterwards ("how did this instance trend last week",
+"was that SLA met") is answered from a series with a gap in it.
+
+**The source is either a SQLite file or another schema on the same PostgreSQL server.** A stand-in
+on its own SQLite file is the original case. A stand-in given its own *schema* is the same case
+with a different container — proving a node before it writes where every other node's record lives
+is the whole point of `TEST_MOVE_ESTATE_TO_FRESH_DBABRAIN_INSTALL.md` §3a, and a node that proved
+itself still has history to bring home. Nothing below this paragraph knows which it was reading:
+the carrying logic reads rows, drops the key, rewrites links and inserts, and the three places
+that needed SQLite's catalog now ask `db_ops.db.backend`, which answers for both.
 
 Measured after one eleven-hour stand-in run: 214,591 metric results, 14,215 job runs, 431 reports
 and 3,660 SLA results — all of it about the production estate, none of it in the production store.
@@ -90,7 +98,7 @@ class TablePlan:
 
 
 def open_source(sqlite_path: str | Path) -> sqlite3.Connection:
-    """The stand-in's store, read-only. It is never written by this command."""
+    """The stand-in's SQLite store, read-only. It is never written by this command."""
     path = Path(sqlite_path)
     if not path.is_file():
         raise BackfillError(f"source store not found: {path}")
@@ -99,8 +107,54 @@ def open_source(sqlite_path: str | Path) -> sqlite3.Connection:
     return conn
 
 
-def _source_columns(conn: sqlite3.Connection, table: str) -> list[str]:
-    return [str(row["name"]) for row in conn.execute(f'PRAGMA table_info("{table}")')]
+class _SchemaSource:
+    """Another schema on the destination's own PostgreSQL server, read like a source store.
+
+    Its own connection, with ``search_path`` pinned to the source schema, so the two ends are two
+    connections and never one with a path that has to be flipped between statements. A flipped path
+    is the failure that would be silent: the read and the write would both succeed and land in the
+    same schema.
+
+    Read-only is enforced on the session, not by convention — this command has no reason to write
+    to the source, and a bug that made it try must fail rather than mutate a store somebody is
+    still deciding whether to trust.
+    """
+
+    def __init__(self, store: Any, schema: str) -> None:
+        self._store = store
+        self.schema = str(schema)
+        self._conn = None
+
+    def __enter__(self):
+        from dataclasses import replace as _replace
+
+        from db_ops.db.backend import StoreTarget
+
+        source_store = _replace(
+            self._store.target.store,
+            postgresql=_replace(self._store.target.store.postgresql, schema=self.schema,
+                                explicit_connection_string=""),
+        )
+        target = StoreTarget(source_store, key=self._store.target.key,
+                             password=self._store.target.password)
+        self._conn = target.connect().__enter__()
+        self._conn.execute("SET TRANSACTION READ ONLY")
+        return self._conn
+
+    def __exit__(self, *exc) -> None:
+        if self._conn is not None:
+            try:
+                self._conn.__exit__(*exc)
+            finally:
+                self._conn = None
+
+    def close(self) -> None:
+        self.__exit__(None, None, None)
+
+
+def _source_columns(conn: Any, table: str) -> list[str]:
+    """Columns of *table* in whichever kind of store the source turned out to be."""
+    return _destination_columns(conn, table)
 
 
 def _destination_columns(conn: Any, table: str) -> list[str]:
@@ -116,7 +170,7 @@ def _destination_columns(conn: Any, table: str) -> list[str]:
     return [str(row["name"]) for row in conn.execute(f'PRAGMA table_info("{table}")')]
 
 
-def _present(source: sqlite3.Connection, conn: Any, spec: TableSpec) -> bool:
+def _present(source: Any, conn: Any, spec: TableSpec) -> bool:
     """Do both stores have this table?
 
     A store whose SLA app never ran has no ``sla_runs``, and one built by an older release may not
@@ -127,10 +181,10 @@ def _present(source: sqlite3.Connection, conn: Any, spec: TableSpec) -> bool:
     """
     from db_ops.db import backend as backend_mod
 
-    in_source = source.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (spec.name,)
-    ).fetchone() is not None
-    return in_source and backend_mod.table_exists(conn, spec.name)
+    # `sqlite_master` was asked directly here until the source could also be PostgreSQL. It is the
+    # same question at both ends now, and `table_exists` is the one place that knows how to ask it
+    # of either backend.
+    return backend_mod.table_exists(source, spec.name) and backend_mod.table_exists(conn, spec.name)
 
 
 def _nullable_columns(conn: Any, table: str) -> set[str]:
@@ -158,7 +212,7 @@ def _watermark(conn: Any, spec: TableSpec) -> str:
     return str(row["hi"] or "") if row is not None and row["hi"] is not None else ""
 
 
-def _shared_columns(source: sqlite3.Connection, conn: Any, spec: TableSpec) -> list[str]:
+def _shared_columns(source: Any, conn: Any, spec: TableSpec) -> list[str]:
     """The columns both stores have, minus the key. Order differences do not matter: every
     statement names its columns, which is also why a store that gained a column later still
     works as either end."""
@@ -167,9 +221,46 @@ def _shared_columns(source: sqlite3.Connection, conn: Any, spec: TableSpec) -> l
             if name != spec.key and name in destination]
 
 
-def plan(*, sqlite_path: str | Path, store: Any) -> list[TablePlan]:
+def _resolve_source(sqlite_path: str | Path | None, source_schema: str | None, store: Any):
+    """The source, as something with `.execute` and `.close`, whichever kind was asked for.
+
+    Exactly one of the two must be given. Accepting both would mean choosing one silently, and the
+    one not chosen is the one the caller meant often enough to matter.
+    """
+    if (sqlite_path is None) == (source_schema is None):
+        raise BackfillError(
+            "give exactly one source: a SQLite path, or the name of another schema on this "
+            "PostgreSQL server.")
+    if sqlite_path is not None:
+        return open_source(sqlite_path)
+
+    from db_ops.db import backend as backend_mod
+
+    if not isinstance(store.target.store.backend, str) or store.target.store.backend != "postgresql":
+        raise BackfillError(
+            "a schema source only makes sense when the destination is PostgreSQL; this store is "
+            f"{store.target.store.backend}.")
+    destination_schema = store.target.store.postgresql.schema or "public"
+    if source_schema == destination_schema:
+        raise BackfillError(
+            f"source and destination are the same schema ({source_schema}). Nothing would be "
+            f"carried, and a watermark read from the table being written is not a window.")
+    holder = _SchemaSource(store, source_schema)
+    conn = holder.__enter__()
+    conn._backfill_holder = holder  # noqa: SLF001 - kept so the caller can close the session
+    assert backend_mod is not None
+    return conn
+
+
+def _close_source(source: Any) -> None:
+    holder = getattr(source, "_backfill_holder", None)
+    (holder or source).close()
+
+
+def plan(*, sqlite_path: str | Path | None = None, store: Any,
+         source_schema: str | None = None) -> list[TablePlan]:
     """What would cross, per table, and from which point. Reads both stores and writes nothing."""
-    source = open_source(sqlite_path)
+    source = _resolve_source(sqlite_path, source_schema, store)
     plans: list[TablePlan] = []
     try:
         with store.connect() as conn:
@@ -186,11 +277,12 @@ def plan(*, sqlite_path: str | Path, store: Any) -> list[TablePlan]:
                 ).fetchone()["n"]
                 plans.append(TablePlan(spec.name, watermark, int(total), int(carried), columns))
     finally:
-        source.close()
+        _close_source(source)
     return plans
 
 
-def apply(*, sqlite_path: str | Path, store: Any, progress: Any = None) -> dict[str, Any]:
+def apply(*, sqlite_path: str | Path | None = None, store: Any, progress: Any = None,
+          source_schema: str | None = None) -> dict[str, Any]:
     """Carry the missing rows. Returns what was inserted, per table.
 
     One transaction per table, not one for the whole run: a 200,000-row insert held open across
@@ -198,7 +290,7 @@ def apply(*, sqlite_path: str | Path, store: Any, progress: Any = None) -> dict[
     an interrupted run would roll back work that was already correct. Per table, an interruption
     leaves the destination consistent and the next run carries what is still missing.
     """
-    source = open_source(sqlite_path)
+    source = _resolve_source(sqlite_path, source_schema, store)
     mappings: dict[str, dict[int, int]] = {}
     inserted: dict[str, int] = {}
     unlinked: dict[str, int] = {}
@@ -260,7 +352,7 @@ def apply(*, sqlite_path: str | Path, store: Any, progress: Any = None) -> dict[
             if progress is not None:
                 progress(spec.name, inserted[spec.name], unlinked.get(spec.name, 0))
     finally:
-        source.close()
+        _close_source(source)
     return {"inserted": inserted, "unlinked": unlinked, "left_behind": left_behind,
             "total": sum(inserted.values())}
 
