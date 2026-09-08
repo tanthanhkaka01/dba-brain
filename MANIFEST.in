@@ -1,0 +1,15 @@
+# What the SOURCE distribution carries beyond the package itself.
+#
+# The wheel installs `db_ops/` and nothing else, so `pip install dbabrain` leaves a reader with no
+# reference documentation at all - measured 2026-09-08 on a clean install, where the directory held
+# `.venv` and nothing more. `dbabrain guide` answers the getting-started half without a network,
+# and this answers the rest for anyone who takes the sdist.
+#
+# It is deliberately not the whole fix. Getting `docs/` into the WHEEL means relocating it under
+# the package, and 121 places in this tree reference `docs/` by its current path; that is a
+# refactor with its own review, not a line in a packaging file.
+include README.md
+include CHANGELOG.md
+include LICENSE
+include NOTICE
+recursive-include docs *.md

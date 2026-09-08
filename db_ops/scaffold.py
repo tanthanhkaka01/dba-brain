@@ -382,7 +382,7 @@ No server role, and no access to your data.
 Optional, and off until a token exists.
 
 1. Create a bot with `@BotFather`, copy the token.
-2. Add it to `secrets/secret_text.json` as `TELEGRAM_BOT_TOKEN`, and re-run `encrypt-secret-text`.
+2. Add it to `secrets/secret_text.json` as `TELEGRAM_BOT_TOKEN`, and re-run `encrypt-secret`.
 3. Add the chat to `data/telegram_groups.json` with a `notify_level`.
 4. Set `enabled` to `true` in `data/telegram_config.json`.
 
@@ -395,11 +395,72 @@ Move later by filling in the `postgresql` block in `data/store_config.json` and 
 to `postgresql`. The block is already there with every field, which is why the file looks larger
 than a first run needs.
 
-## What this release does and does not do
+## Set the clock before anything is scheduled
 
-It collects metrics from SQL Server and alerts to Telegram. Backup and restore validation, SLA
-checks, scheduled SQL tasks, reports, host provisioning and the web console are **not** in this
-release; they arrive later.
+`config.json` carries a **`timezone`** field, and it decides two things: what every displayed time
+says, and what an hour in a schedule means.
+
+```json
+"timezone": "Asia/Ho_Chi_Minh"
+```
+
+An IANA name (follows daylight saving) or a fixed offset (`+07:00`, `UTC`). `init` writes `UTC`,
+because it runs wherever you happen to be standing and the scheduler runs wherever it is deployed.
+
+**Change it before the first scheduled run, not after.** A window written as `from_hour: 1` means
+01:00 in this zone; changing the zone later moves every schedule that names an hour. Stored
+timestamps are UTC either way and are not affected.
+
+```bash
+db-ops common timezone '{"format":"txt"}'      # what this node resolved
+```
+
+## Running it on a schedule
+
+Everything above is one collection, by hand. The daemon is what makes it an estate: it reads
+`data/app_commands.json` and runs each app on its own interval and window.
+
+```bash
+db-ops daemon --config config.json --once      # one pass of every due command, then exit
+db-ops daemon --config config.json             # stay up and keep running them
+```
+
+**`DB_OPS_NODE_ROLE=worker` is not optional and is the easiest thing to miss.** Every entry in
+`app_commands.json` is `node_role: worker`; a daemon left in the default `master` role schedules
+**nothing** and looks like a healthy idle process.
+
+```bash
+export DB_OPS_NODE_ROLE=worker
+export DB_OPS_SECRET_KEY=<passphrase>
+```
+
+Ask it what happened, rather than reading logs:
+
+```bash
+db-ops db --config config.json check --counts    # tables and row counts
+db-ops db --config config.json ops-status '{}'   # each app's last run, and what is overdue
+```
+
+**Only one scheduler may run an estate at a time.** Two double every collection, every report and
+every alert, and the second is invisible in the first one's store.
+
+## What this release does
+
+Metrics, alerting, scheduled SQL, backup and restore validation, SLA/SLO reporting, report
+generation and a web console for reading them - across SQL Server, Oracle, PostgreSQL and MySQL.
+`db-ops --help` lists every app; each app's own `--help` lists its commands.
+
+The web console **reads** reports and edits configuration. Adding a database through it - host,
+port, user, password - is the one thing not in this release, which is why the JSON above is the
+supported path.
+
+## Where the full documentation is
+
+This file is the shortest path to a first collection. The reference is not in the package:
+
+<https://github.com/tanthanhkaka01/dba-brain> - `docs/first_run.md` for both paths step by step,
+`docs/configuration.md` for every file and field, `docs/architecture.md` for how the parts fit,
+and one `docs/NN_*.md` per component.
 """
 
 

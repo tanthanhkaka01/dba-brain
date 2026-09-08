@@ -23,7 +23,7 @@ license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Trieu Tan Thanh" }]
 keywords = ["dba", "database", "sqlserver", "oracle", "postgresql", "mysql", "monitoring", "operations"]
-version = "0.11.0"
+version = "0.12.0"
 
 # Measured 2026-08-21, not guessed (D-05):
 #
@@ -100,6 +100,11 @@ dev = ["pytest>=8.0.0"]
 # reason the dispatcher is a lookup table and not twelve script declarations.
 [project.scripts]
 db-ops = "db_ops.cli:main"
+# The distribution is `dbabrain`, so `dbabrain` has to be a command. Measured on a clean install:
+# a reader who runs `pip install dbabrain` and then types `dbabrain` was told "command not found",
+# with no README, no guide and no config in the directory to suggest otherwise. `db-ops` stays --
+# it is in every runbook, every dated record and every operator's notes.
+dbabrain = "db_ops.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/tanthanhkaka01/dba-brain"

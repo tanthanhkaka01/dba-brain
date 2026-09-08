@@ -700,6 +700,7 @@ def _usage() -> str:
     lines += [
         "",
         "  init                   create a tool root here: config, a SQLite store, empty inventory",
+        "  guide                  print the getting-started guide (writes nothing)",
         "  encrypt-secret         encrypt secrets/secret_text.json into the store the tool reads",
         "  check-credentials      does every configured target resolve to a real login",
         "  export-data            write this machine's whole configuration to one JSON file",
@@ -709,6 +710,60 @@ def _usage() -> str:
         "Every app is also runnable as `python -m <module>`, which is what the daemon does.",
     ]
     return "\n".join(lines)
+
+
+def _tool_root_exists() -> bool:
+    """Is there a tool root here yet?
+
+    `config.json` beside `data/` is what every app resolves against. Asking the filesystem rather
+    than loading the config on purpose: this runs before anything is configured, and the answer
+    has to be available when loading would fail.
+    """
+    here = Path.cwd()
+    return (here / "config.json").is_file() and (here / "data").is_dir()
+
+
+def first_run_banner() -> str:
+    """What to print when there is nothing here yet.
+
+    A list of twelve apps is the right answer to "what can this do" and the wrong one to "I have
+    just installed this". None of those apps can run before a tool root exists, so leading with
+    them sends the reader to twelve dead ends. Measured on a clean install: the directory holds
+    `.venv` and nothing else, and `init` was thirteenth in the list.
+    """
+    from db_ops import __version__
+
+    return "\n".join([
+        f"dbabrain {__version__} - database operations toolkit",
+        "",
+        "There is no tool root in this directory yet, so there is nothing to run against.",
+        "",
+        "  dbabrain init      create one here: config.json, data/, and a guide to fill it in",
+        "  dbabrain guide     read that guide now, without creating anything",
+        "",
+        "`init` writes AGENTS.md beside the configuration - the shortest path from here to a",
+        "first collection, written to be followed by a person or by an AI agent.",
+        "",
+        "Full documentation: https://github.com/tanthanhkaka01/dba-brain",
+        "",
+        "Already have a tool root? Run this from that directory, or `dbabrain --help`.",
+    ])
+
+
+def _guide_command(argv: list[str]) -> int:
+    """``guide`` - print the getting-started document without writing anything.
+
+    The same text `init` writes to `AGENTS.md`. It exists as a command because until `init` has
+    run there is no file to read, and a reader who has just installed the package and wants to
+    know what they are getting should not have to create a directory tree to find out.
+    """
+    if argv and argv[0] in {"-h", "--help"}:
+        print("usage: dbabrain guide\n\nPrint the getting-started guide. Writes nothing.")
+        return 0
+    from db_ops.scaffold import AGENTS_GUIDE
+
+    print(AGENTS_GUIDE)
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -723,6 +778,13 @@ def main(argv: list[str] | None = None) -> int:
     """
     argv = list(sys.argv[1:] if argv is None else argv)
 
+    # Bare, in a directory with no tool root, is somebody who has just installed this. Twelve app
+    # names is the right answer to "what can it do" and the wrong one to "what do I type now" -
+    # none of them can run yet. `--help` still gives the full listing, because a reader who asked
+    # for help asked for everything.
+    if not argv and not _tool_root_exists():
+        print(first_run_banner())
+        return 0
     if not argv or argv[0] in ("-h", "--help", "help"):
         print(_usage())
         return 0
@@ -759,6 +821,9 @@ def main(argv: list[str] | None = None) -> int:
     # tool root exists, so it must not be reachable only after one does.
     if argv[0] == "init":
         return _init_command(argv[1:])
+
+    if argv[0] == "guide":
+        return _guide_command(argv[1:])
 
     if argv[0] in {"encrypt-secret", "encrypt-secret-text"}:
         return _encrypt_secret_command(argv[1:])
