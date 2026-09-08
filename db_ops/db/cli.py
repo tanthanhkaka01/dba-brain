@@ -136,9 +136,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     fill = subparsers.add_parser(
         "backfill-from-sqlite",
-        help="Carry the history a stand-in node recorded in a local SQLite store into this store.")
-    fill.add_argument("--source", required=True,
-                      help="The stand-in's SQLite store. Read-only; never written.")
+        help="Carry the history a stand-in node recorded into this store, from a SQLite file "
+             "(--source) or from another schema on this PostgreSQL server (--source-schema).")
+    source = fill.add_mutually_exclusive_group(required=True)
+    source.add_argument("--source",
+                        help="The stand-in's SQLite store. Read-only; never written.")
+    source.add_argument("--source-schema",
+                        help="Another schema on the SAME PostgreSQL server and database as this "
+                             "store — a stand-in that was given its own schema rather than its "
+                             "own file. Read-only; the session is opened READ ONLY.")
     fill.add_argument("--plan-only", action="store_true",
                       help="Say what would cross, per table, and write nothing.")
     _add_secret_args(fill)
@@ -371,6 +377,11 @@ def _handle_backfill(args: argparse.Namespace) -> int:
     Plan first, always. The plan names the watermark each table starts from, so the reader can see
     that the window is the outage and not the whole of the stand-in's history — and a second run
     against an unchanged source plans zero rows, which is what makes the apply safe to repeat.
+
+    The source is a SQLite file (``--source``) or another schema on this same PostgreSQL server
+    (``--source-schema``). One command rather than two: the operation is identical once the rows
+    are in hand, and the hard part — dropping identity keys and rewriting every child link through
+    its parent's new mapping — is exactly what must not exist in two copies.
     """
     from db_ops.db import DbOpsStore
     from db_ops.db import backfill
@@ -380,14 +391,15 @@ def _handle_backfill(args: argparse.Namespace) -> int:
     config, _target = _active_target(args)
     store = DbOpsStore.from_config(config, key=_resolved_key(args),
                                    password=getattr(args, "password", None))
+    source_schema = getattr(args, "source_schema", None)
     try:
-        plans = backfill.plan(sqlite_path=args.source, store=store)
+        plans = backfill.plan(sqlite_path=args.source, store=store, source_schema=source_schema)
     except backfill.BackfillError as exc:
         print(f"backfill refused: {exc}", file=sys.stderr)
         return 1
 
     total = sum(item.carried for item in plans)
-    print(f"source: {args.source}")
+    print(f"source: {args.source or f'schema {source_schema}'}")
     print(f"{'table':<26} {'in source':>10} {'would carry':>12}  from (destination watermark)")
     for item in plans:
         print(f"{item.table:<26} {item.source_rows:>10} {item.carried:>12}  "
@@ -405,7 +417,8 @@ def _handle_backfill(args: argparse.Namespace) -> int:
 
     print("")
     try:
-        outcome = backfill.apply(sqlite_path=args.source, store=store, progress=progress)
+        outcome = backfill.apply(sqlite_path=args.source, store=store, progress=progress,
+                                 source_schema=source_schema)
     except backfill.BackfillError as exc:
         print(f"backfill stopped: {exc}", file=sys.stderr)
         return 1

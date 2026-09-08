@@ -15,6 +15,32 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-08
+
+### Added
+
+- **`db-ops db backfill-from-sqlite --source-schema <name>`** — carry a stand-in node's history home
+  when its store was another **schema** on this PostgreSQL server rather than a local SQLite file.
+  `--source` (a file) and `--source-schema` are mutually exclusive and one is required.
+
+  One command rather than two on purpose: the difficult part is not reading rows, it is that ids
+  cannot be carried (every key is an identity column) so each child link must be rewritten through
+  its parent's new mapping. `sla_results.sla_run_id` would be *rejected*; `metric_results.run_id`
+  is unenforced and would be silently **wrong**. Those rules live once, in `TABLES`.
+
+  The source session is opened `READ ONLY` — a bug that wrote to the store being read would be
+  writing to one somebody is still deciding whether to trust.
+
+  Refused, each verified: carrying a schema into itself (the watermark would come from the table
+  being written), naming both sources, naming neither, and naming a schema when the destination is
+  SQLite.
+
+### Changed
+
+Nothing an existing tool root must do. `--source <path>` behaves exactly as before. The command
+keeps its `backfill-from-sqlite` name: `backfill-from-store` reads better, but the old name is in
+the move procedure, in two dated run records and in operators' notes.
+
 ## [0.10.1] - 2026-09-07
 
 ### Fixed
