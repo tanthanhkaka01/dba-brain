@@ -150,7 +150,11 @@ def test_the_agent_guide_is_written_beside_the_json_it_describes(root: Path) -> 
     guide = (root / "AGENTS.md").read_text(encoding="utf-8")
 
     assert "db_instances.json" in guide
-    assert "encrypt-secret-text" in guide
+    # `encrypt-secret` and `encrypt-secret-text` both dispatch to the same handler, so either name
+    # works. The guide teaches the canonical one, and used to use both — one in the main flow and
+    # the other in the Telegram section, which reads as two different commands to anyone who has
+    # not seen the alias table.
+    assert "encrypt-secret" in guide
     assert "--dry-run" in guide
     assert "sqlite" in guide.lower()
 

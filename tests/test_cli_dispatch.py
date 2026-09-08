@@ -71,8 +71,37 @@ def test_help_needs_no_app_and_no_driver(capsys) -> None:
         assert name in printed
 
 
-def test_no_arguments_is_the_same_as_help(capsys) -> None:
+def test_no_arguments_inside_a_tool_root_is_the_same_as_help(tmp_path, monkeypatch, capsys) -> None:
+    """Bare means "what can this do" once there is something to do it to.
+
+    The working directory is pinned rather than inherited, and that is the point of the change to
+    this test. It used to run wherever pytest was started, which in this repository is a tool root
+    — so it passed here and failed in the public tree, where there is no `config.json`. Same code,
+    two answers, decided by a directory nobody had noticed the test depended on.
+    """
+    (tmp_path / "config.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "data").mkdir()
+    monkeypatch.chdir(tmp_path)
+
     assert cli.main([]) == 0
+    assert "usage: db-ops <app>" in capsys.readouterr().out
+
+
+def test_no_arguments_without_a_tool_root_says_what_to_type(tmp_path, monkeypatch, capsys) -> None:
+    """And the other half: a reader who has just installed this is asking a different question."""
+    monkeypatch.chdir(tmp_path)
+
+    assert cli.main([]) == 0
+    out = capsys.readouterr().out
+    assert "no tool root in this directory" in out
+    assert "dbabrain init" in out
+
+
+def test_help_gives_the_full_listing_wherever_it_is_run(tmp_path, monkeypatch, capsys) -> None:
+    """`--help` is an explicit request for everything, and must not depend on the directory."""
+    monkeypatch.chdir(tmp_path)
+
+    assert cli.main(["--help"]) == 0
     assert "usage: db-ops <app>" in capsys.readouterr().out
 
 

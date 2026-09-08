@@ -129,6 +129,11 @@ PUBLIC_PATHS: tuple[str, ...] = (
     "CODE_OF_CONDUCT.md",
     "CHANGELOG.md",
     "pyproject.toml",
+    # What the sdist carries beyond the package. It has to travel: `--force` empties the public
+    # tree except `.git`, so a MANIFEST.in written only over there disappears on the next export -
+    # and the sdist would silently go back to shipping no documentation, which is the exact thing
+    # it was added to fix.
+    "MANIFEST.in",
     "requirements.txt",
     "pytest.ini",
     ".gitignore",
@@ -292,4 +297,4 @@ PRIVATE_TESTS: dict[str, str] = {
 #: version is immutable** — it cannot be re-uploaded after deletion, so the mistake is permanent.
 #: The public tree starts where a first release starts.
 PUBLIC_DISTRIBUTION_NAME = "dbabrain"
-PUBLIC_VERSION = "0.11.0"
+PUBLIC_VERSION = "0.12.0"

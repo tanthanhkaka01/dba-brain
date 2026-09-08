@@ -15,6 +15,32 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-09-08
+
+### Added
+
+- **`dbabrain` is now a console script**, alongside `db-ops`. The distribution is named `dbabrain`
+  and the only command was `db-ops`, so the first thing anyone typed after `pip install dbabrain`
+  answered "command not found" — in a directory holding `.venv` and nothing else.
+- **`dbabrain guide`** prints the getting-started document and writes nothing. Until `init` runs
+  there is no file to read.
+- **A first-run banner.** Bare, with no tool root, the toolkit now says what to type instead of
+  listing twelve apps that cannot run yet. `--help` and the in-a-tool-root listing are unchanged.
+- The **sdist** now carries `docs/`, `README.md` and `CHANGELOG.md`.
+
+### Fixed
+
+- `AGENTS.md` — the only document a fresh install ships — claimed backup/restore validation, SLA
+  checks, scheduled SQL, reports, provisioning and the web console were "not in this release". All
+  six are in `db-ops --help`. It also never mentioned `timezone` (required since 0.10.0, and its
+  absence silently moves schedules to UTC) or the daemon and `DB_OPS_NODE_ROLE=worker`, without
+  which a reader ends with one manual collection and nothing scheduled.
+
+### Known not to work
+
+- The **wheel** still ships no `docs/`; `pip install` uses the wheel, so the full reference is a
+  URL. Relocating `docs/` under the package is a refactor of 121 references, not a packaging line.
+
 ## [0.11.0] - 2026-09-08
 
 ### Added
