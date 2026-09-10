@@ -575,7 +575,8 @@ def export(store: ConfigStore, *, data_dir: str | Path | None = None,
     }
 
 
-def drift(store: ConfigStore, *, data_dir: str | Path | None = None) -> list[dict[str, Any]]:
+def drift(store: ConfigStore, *, data_dir: str | Path | None = None,
+          files: tuple[str, ...] | list[str] = ()) -> list[dict[str, Any]]:
     """Files where the store and ``data/`` disagree, with what differs. Writes nothing.
 
     This is the question a deploy has to ask before it ships anything. The store is shared between
@@ -585,14 +586,19 @@ def drift(store: ConfigStore, *, data_dir: str | Path | None = None) -> list[dic
 
     Records whose payload matches but whose formatting does not are reported as
     ``formatting only``: the deploy has no reason to stop for those.
+
+    ``files`` narrows it to what a *partial* push ships. A push of one config file has no opinion
+    about the others — it does not carry them — and reporting their drift would stop a two-second
+    upload over a disagreement it cannot cause and cannot resolve.
     """
-    return [item for item in export(store, data_dir=data_dir, dry_run=True)["files"]
+    return [item for item in export(store, data_dir=data_dir, files=files, dry_run=True)["files"]
             if item["status"] == "differs"]
 
 
-def content_drift(store: ConfigStore, *, data_dir: str | Path | None = None) -> list[dict[str, Any]]:
+def content_drift(store: ConfigStore, *, data_dir: str | Path | None = None,
+                  files: tuple[str, ...] | list[str] = ()) -> list[dict[str, Any]]:
     """Only the drift that changes what an app would read."""
-    return [item for item in drift(store, data_dir=data_dir)
+    return [item for item in drift(store, data_dir=data_dir, files=files)
             if not str(item.get("detail", "")).startswith("formatting only")]
 
 

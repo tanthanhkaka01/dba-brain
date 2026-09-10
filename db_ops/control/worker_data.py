@@ -346,25 +346,16 @@ def merge_worker_config(
     """
     to_master = Path(to_master_path or DEFAULT_MASTER_DATA_PATH)
     client = ssh_connect(host, user, password, port)
-    total = 0
     try:
         sftp = client.open_sftp()
         try:
-            print(f"# merge worker config {user}@{host}:{from_worker_path} -> {to_master}"
-                  f"{' (dry-run)' if dry_run else ''}", flush=True)
-
-            plans = [(name, key, fields, ()) for name, key, fields in MERGED_ON_DEPLOY]
-            plans += [(name, key, fields, paths)
-                      for name, key, fields, paths in FIELD_MERGED_ON_DEPLOY]
-
-            for name, list_key, key_fields, worker_owned_paths in plans:
+            def read_source(name: str):
                 remote = f"{from_worker_path.rstrip('/')}/{name}"
-                local = to_master / name
                 try:
                     with tempfile.TemporaryDirectory() as tmpdir:
                         worker_copy = Path(tmpdir) / name
                         sftp.get(remote, str(worker_copy))
-                        worker_data = json.loads(worker_copy.read_text(encoding="utf-8-sig"))
+                        return json.loads(worker_copy.read_text(encoding="utf-8-sig"))
                 except IOError as exc:
                     # A file that is *there but unreadable* is the dangerous case, and it used to
                     # be indistinguishable from an absent one: both printed "not on worker", the
@@ -381,49 +372,82 @@ def merge_worker_config(
                             f"file's ownership/permissions on the worker and deploy again — "
                             f"`ls -l {remote}` shows who owns it."
                         ) from exc
-                    print(f"  MISSING  {name} (not on worker)", flush=True)
-                    continue
-                if not local.exists():
-                    print(f"  MISSING  {name} (not on master)", flush=True)
-                    continue
-                master_text = local.read_text(encoding="utf-8-sig")
-                master_data = json.loads(master_text)
-                master_records = list(master_data.get(list_key) or [])
-                worker_records = list(worker_data.get(list_key) or [])
+                    return None
 
-                if worker_owned_paths:
-                    merged, added, changed = merge_records_by_field(
-                        master=master_records, worker=worker_records,
-                        key_fields=key_fields, worker_owned_paths=worker_owned_paths,
-                    )
-                else:
-                    merged, added = merge_record_lists(
-                        master=master_records, worker=worker_records, key_fields=key_fields)
-                    changed = []
-
-                if not added and not changed:
-                    print(f"  SAME     {name}", flush=True)
-                    continue
-
-                details = [f"+{len(added)} added"] if added else []
-                if changed:
-                    details.append(f"{len(changed)} field(s) taken from worker")
-                shown = ", ".join(["/".join(k) for k in added[:4]] + changed[:4])
-                extra = len(added) + len(changed) - len(added[:4]) - len(changed[:4])
-                more = f" (+{extra} more)" if extra > 0 else ""
-                verb = "WOULD" if dry_run else "MERGED"
-                print(f"  {verb:<8} {name}: {', '.join(details)} [{shown}{more}]", flush=True)
-                total += len(added) + len(changed)
-                if not dry_run:
-                    master_data[list_key] = merged
-                    _write_json_atomic(local, master_data,
-                                       indent=_detect_json_indent(master_text))
+            return merge_config_sources(
+                read_source=read_source, to_master=to_master,
+                source_label=f"{user}@{host}:{from_worker_path}", dry_run=dry_run)
         finally:
             sftp.close()
     finally:
         client.close()
+
+
+def merge_config_sources(
+    *,
+    read_source,
+    to_master: Path,
+    source_label: str,
+    dry_run: bool = False,
+) -> int:
+    """The merge itself, over a reader — so a second transport reuses it instead of copying it.
+
+    ``read_source(name)`` returns the parsed document, ``None`` when the source does not have the
+    file, or raises :class:`WorkerConfigUnreadable` when it has it and cannot read it. Everything
+    about *which* files merge and *how* stays in :data:`MERGED_ON_DEPLOY` and
+    :data:`FIELD_MERGED_ON_DEPLOY`; a transport supplies bytes and nothing else.
+    """
+    total = 0
+    print(f"# merge config {source_label} -> {to_master}"
+          f"{' (dry-run)' if dry_run else ''}", flush=True)
+
+    plans = [(name, key, fields, ()) for name, key, fields in MERGED_ON_DEPLOY]
+    plans += [(name, key, fields, paths)
+              for name, key, fields, paths in FIELD_MERGED_ON_DEPLOY]
+
+    for name, list_key, key_fields, worker_owned_paths in plans:
+        local = to_master / name
+        worker_data = read_source(name)
+        if worker_data is None:
+            print(f"  MISSING  {name} (not on the source)", flush=True)
+            continue
+        if not local.exists():
+            print(f"  MISSING  {name} (not on master)", flush=True)
+            continue
+        master_text = local.read_text(encoding="utf-8-sig")
+        master_data = json.loads(master_text)
+        master_records = list(master_data.get(list_key) or [])
+        worker_records = list(worker_data.get(list_key) or [])
+
+        if worker_owned_paths:
+            merged, added, changed = merge_records_by_field(
+                master=master_records, worker=worker_records,
+                key_fields=key_fields, worker_owned_paths=worker_owned_paths,
+            )
+        else:
+            merged, added = merge_record_lists(
+                master=master_records, worker=worker_records, key_fields=key_fields)
+            changed = []
+
+        if not added and not changed:
+            print(f"  SAME     {name}", flush=True)
+            continue
+
+        details = [f"+{len(added)} added"] if added else []
+        if changed:
+            details.append(f"{len(changed)} field(s) taken from worker")
+        shown = ", ".join(["/".join(k) for k in added[:4]] + changed[:4])
+        extra = len(added) + len(changed) - len(added[:4]) - len(changed[:4])
+        more = f" (+{extra} more)" if extra > 0 else ""
+        verb = "WOULD" if dry_run else "MERGED"
+        print(f"  {verb:<8} {name}: {', '.join(details)} [{shown}{more}]", flush=True)
+        total += len(added) + len(changed)
+        if not dry_run:
+            master_data[list_key] = merged
+            _write_json_atomic(local, master_data,
+                               indent=_detect_json_indent(master_text))
     verb = "would apply" if dry_run else "applied"
-    print(f"{verb} {total} worker change(s) to the master config.", flush=True)
+    print(f"{verb} {total} change(s) to the master config.", flush=True)
     return total
 
 
@@ -453,11 +477,35 @@ def _merge_secret_store(
         resolve_key,
     )
 
-    resolved_key = resolve_key(key)
     with tempfile.TemporaryDirectory() as tmp:
         worker_copy = Path(tmp) / local.name
         sftp.get(remote, str(worker_copy))
-        worker_secrets = load_secret_text_file(worker_copy, key=resolved_key)
+        return _merge_secret_stores_from_files(
+            node=worker_copy, master=local, key=key, plaintext=plaintext, dry_run=dry_run)
+
+
+def _merge_secret_stores_from_files(
+    *,
+    node: Path,
+    master: Path,
+    key: str | None,
+    plaintext: Path | None = None,
+    dry_run: bool = False,
+) -> str:
+    """The union itself, over two files — the transport above only has to produce them.
+
+    Split out on 2026-09-09 so a node that is a local directory merges by exactly the rules the
+    SSH path uses, rather than by a second implementation that agrees with it until it does not.
+    """
+    from db_ops.lib.secret_text import (
+        encrypt_secret_text,
+        load_secret_text_file,
+        resolve_key,
+    )
+
+    local = master
+    resolved_key = resolve_key(key)
+    worker_secrets = load_secret_text_file(node, key=resolved_key)
     master_secrets = load_secret_text_file(local, key=resolved_key)
     plaintext_secrets = (
         load_secret_text_file(plaintext, key=resolved_key) if plaintext is not None else {}
@@ -753,3 +801,84 @@ def create_db_docker_on_worker(
         print("\n=== worker-pull-data-config ===", flush=True)
         pull_data_config(host=host, user=user, password=password, port=port, **(pull_kwargs or {}))
     return rc
+
+
+def merge_node_config(
+    *,
+    from_node_path: str | Path,
+    to_master_path: str | None = None,
+    dry_run: bool = False,
+) -> int:
+    """Carry back what a **local** node originated — a PC root, not the container worker.
+
+    `db_ops` is the origin for code and for deliberate configuration, and everything downstream is
+    a copy. One flow runs the other way and it is not optional: the bot and the web console
+    *create* configuration on whichever node is running. A `/spbot_create_db_docker` run registers
+    a lab container and stores its password there, and if that node is later replaced, the
+    container survives with a password nobody holds.
+
+    ``deploy --merge`` and ``worker-pull-data-config`` already do this for the worker **container**
+    over SSH. The estate has since moved to an ordinary directory on a PC, where neither applies —
+    so the carry-back was being done by hand, which is how a secret ref and a
+    `docker_db_connections` record sat on a soak node on 2026-09-09 with no copy in this tree.
+
+    Same rules as the SSH path, because it is the same function underneath: union by key for
+    :data:`MERGED_ON_DEPLOY`, the master winning a shared key; the named leaves only for
+    :data:`FIELD_MERGED_ON_DEPLOY`.
+    """
+    source = Path(from_node_path)
+    if not source.is_dir():
+        raise FileNotFoundError(f"{source} is not a directory; point --from at a node's data/.")
+
+    def read_source(name: str):
+        path = source / name
+        if not path.is_file():
+            return None
+        try:
+            return json.loads(path.read_text(encoding="utf-8-sig"))
+        except OSError as exc:
+            # Present but unreadable is the dangerous case, exactly as it is over SFTP: skipping
+            # it silently is what lets the next push overwrite the change being rescued.
+            raise WorkerConfigUnreadable(
+                f"{name} is on the node but could not be read ({exc}). Merging would skip it and "
+                f"the next export would then overwrite it.") from exc
+
+    return merge_config_sources(
+        read_source=read_source,
+        to_master=Path(to_master_path or DEFAULT_MASTER_DATA_PATH),
+        source_label=str(source),
+        dry_run=dry_run,
+    )
+
+
+#: Files a node legitimately differs on, which must **never** be carried back.
+#:
+#: ``store_config.json`` is per-node by design - it is what says "this node writes to its own
+#: sqlite" - and copying it back would point the master at a test node's file.
+#: ``telegram_config.json`` holds ``update_offset``, the getUpdates cursor: it is runtime
+#: bookkeeping wearing a config file's name, and a newer offset copied onto a node that has not
+#: consumed those updates skips messages silently.
+NEVER_CARRIED_BACK: tuple[str, ...] = ("store_config.json", "telegram_config.json")
+
+
+def merge_node_secrets(
+    *,
+    from_node_path: str | Path,
+    to_master_path: str | None = None,
+    key: str | None = None,
+    plaintext: str | Path | None = None,
+    dry_run: bool = False,
+) -> str:
+    """Union a local node's encrypted secret store into the master's. Conflicts refuse.
+
+    The same contract as the SSH path: a ref holding different values in the two stores is a
+    conflict and nothing is written, because guessing which password is current is the one thing
+    this must not do.
+    """
+    source = Path(from_node_path) / SECRET_STORE_FILENAME
+    if not source.is_file():
+        return f"no {SECRET_STORE_FILENAME} on the node; nothing to merge"
+    master = Path(to_master_path or DEFAULT_MASTER_DATA_PATH) / SECRET_STORE_FILENAME
+    return _merge_secret_stores_from_files(
+        node=source, master=master, key=key,
+        plaintext=Path(plaintext) if plaintext else None, dry_run=dry_run)

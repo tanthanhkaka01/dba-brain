@@ -73,11 +73,17 @@ def describe(drifted: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def check(store: Any, *, data_dir: str | Path | None = None) -> list[dict[str, Any]]:
-    """The drift that matters — content, not formatting. Empty list means the gate is open."""
+def check(store: Any, *, data_dir: str | Path | None = None,
+          files: tuple[str, ...] | list[str] = ()) -> list[dict[str, Any]]:
+    """The drift that matters — content, not formatting. Empty list means the gate is open.
+
+    ``files`` scopes the question to what this run actually ships: a partial push
+    (``deploy --type config --file-name ...``) carries the files it names and no others, so drift
+    elsewhere is neither caused by it nor resolvable by it.
+    """
     from db_ops.db import config_sync
 
-    return config_sync.content_drift(store, data_dir=data_dir)
+    return config_sync.content_drift(store, data_dir=data_dir, files=files)
 
 
 def resolve(
@@ -85,6 +91,7 @@ def resolve(
     *,
     data_dir: str | Path | None = None,
     decision: str = "ask",
+    files: tuple[str, ...] | list[str] = (),
     actor: str = "deploy",
     interactive: bool | None = None,
     ask: Any = None,
@@ -103,7 +110,7 @@ def resolve(
         raise ConfigDriftAbort(
             f"--on-config-drift must be one of {', '.join(DRIFT_CHOICES)}; got '{decision}'.")
 
-    drifted = check(store, data_dir=data_dir)
+    drifted = check(store, data_dir=data_dir, files=files)
     if not drifted:
         return {"drifted": [], "decision": "none", "applied": False}
 
@@ -125,16 +132,16 @@ def resolve(
         raise ConfigDriftAbort("Deploy stopped: config drift was not resolved.")
 
     if chosen == "adopt":
-        result = config_sync.export(store, data_dir=data_dir)
+        result = config_sync.export(store, data_dir=data_dir, files=files)
         print(f"  adopted the store's values: {result['totals']['written']} file(s) rewritten.",
               file=stream, flush=True)
     else:
-        result = config_sync.sync(store, data_dir=data_dir, actor=actor)
+        result = config_sync.sync(store, data_dir=data_dir, files=files, actor=actor)
         print(f"  kept this master's files: {result['totals']['updated']} record(s) replaced in "
               "the store; the previous values stay in config_item_revisions.",
               file=stream, flush=True)
 
-    remaining = check(store, data_dir=data_dir)
+    remaining = check(store, data_dir=data_dir, files=files)
     if remaining:
         # The resolution has to actually resolve. Shipping after a half-applied fix would put the
         # deploy back in exactly the state the gate exists to catch.

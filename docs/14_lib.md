@@ -274,6 +274,8 @@ means — they build a request and read a response — and they are the only two
 | `web_auth.py` | password hashing and session tokens for the web console |
 | `data_files.py` | what is in `data/`, and how each file moves between the master and the worker — the list every transfer consults first. See below |
 | `config_bundle.py` | what a portable configuration bundle *is* — one JSON file that carries a whole estate to a machine that has never seen this project. See below |
+| `deploy_selection.py` | which files a *partial* deploy ships — the rules for `deploy --type/--file-name`, with no transport in them. See below |
+| `workflow_steps.py` | one step of a Telegram conversation: what may be answered, what may be skipped, where Back goes, and the keyboard the operator sees. See below |
 
 #### `data_files.py` — the list every transfer reads first
 
@@ -297,6 +299,56 @@ fails if the two ever describe different sets.
 Refused, never defaulted. The default anybody reaches for on a malformed manifest is "do not move
 it", and that reads as a working deploy that quietly ships less — which is the failure this module
 exists to make impossible.
+
+#### `workflow_steps.py` — Back is a transition, not a string comparison
+
+The Telegram bot walks a command's steps one reply at a time. Which step comes next, whether this
+one may be skipped, and what the operator is shown are decided here, over the step definition and
+the answers so far — no store, no network, and nothing of Telegram beyond the shape of a keyboard
+object.
+
+The alternative was `if message.text == "back"` inside each command's handler, which is how a
+workflow acquires as many meanings of Back as it has commands. Three rules are worth reading in
+the module itself, because each of them was a bug waiting in the obvious implementation:
+
+- **Back walks the ask history, never `position - 1`.** With `ask_when` branching some positions
+  are never asked; counting backwards re-asks a question the run excluded and then treats its
+  answer as meaningful.
+- **`clear_unreachable_answers`** blanks the answers of steps the current branch no longer
+  reaches. Answer `password`, type one, go Back, choose `key_file` — without this the abandoned
+  password still reaches the CLI, while the visible flow says it was discarded.
+- **An optional step is asked only when it says `allow_skip: true`.** Optional parameters have
+  never been prompted for, which is exactly why a Skip button could not exist; making them all
+  prompt would have started interrogating people about arguments they left out on purpose.
+
+`db_ops/telegram/command_processor.py` supplies what this cannot: the store writes, the queued
+prompt, and the trail row in `telegram_workflow_steps`.
+
+#### `deploy_selection.py` — what a partial deploy is allowed to carry
+
+`control.deploy` grew a fast path: `deploy --type config --file-name sql_targets.json` uploads
+that one file and stops. It is not a smaller deploy — it builds no image and restarts nothing —
+because on the worker `data/` and `assets/` are bind mounts, the scheduler re-reads
+`app_commands.json` on every scan, and every app command is a fresh process. The file is live on
+its next run.
+
+The rules for *which* files may be named live here, apart from the SFTP that moves them, so they
+can be read and tested without a worker:
+
+- `--type` is either `config` (the catalogued `data/*.json`, read from the manifest above) or a
+  directory under `PUSHABLE_DIRS` — `assets`, `assets/tasks`, `data/ssh_keys`. Backslashes are
+  normalised, so the PowerShell spelling `assets\tasks` is the same type.
+- `--file-name` is a filename, a path under the type, or a glob; it may be repeated.
+- A `transfer: local` file is refused **by name**, saying it is master-only — not reported as
+  missing, because the operator spelled it correctly.
+- **A name that matches nothing is an error.** Pushing the empty set and printing success is the
+  failure `config_sync` grew `unknown_files` to prevent; a typo must not read as a completed
+  deploy.
+- `database-inventory.json` lands at `data/` **and** `runtime/reports/`, exactly as a bundle
+  writes it — half of it would leave the worker rendering the other copy with nothing missing.
+
+Nothing is pruned. `control.deploy.superseded_dirs` can retire a directory only because a bundle
+is the whole picture; a push is a statement about the files it names and about nothing else.
 
 #### `config_bundle.py` — one estate, one file
 

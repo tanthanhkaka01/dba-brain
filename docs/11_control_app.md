@@ -87,9 +87,11 @@ control app) — they do **not** decide this node's role. Each daemon tick logs 
 | `copy [--host --user --password --remote-dir]` | SFTP the bundle to the worker (overwrites config/data/assets/image; keeps `logs/` and `runtime/db_ops.sqlite`). The bundle also carries the canonical `architecture/database-inventory.json` (repo copy, where static blocks like `sqlserver_resources`/`deployment` are edited) into the worker's `runtime/reports/database-inventory.json` — the worker-side canonical the reports app merges health into. Health blocks are rebuilt from the runtime store on the next `inventory-workflow` run, so the overwrite loses nothing durable. After the upload it also **moves aside any top-level directory under `data/` or `assets/` that the bundle no longer carries** — see [Directories the bundle owns](#directories-the-bundle-owns). |
 | `start-daemon [... --key-base64/--key --container --node-role]` | `docker load`, replace the container, start the daemon with `DB_OPS_NODE_ROLE` (default `worker`), set `restart=unless-stopped`, verify the version, then **prune the images this deploy superseded** (see below). |
 | `deploy [... all of the above ...] [--merge]` | `build-image` → `copy` → `start-daemon` in one shot. **Master → worker**: the master's `data/` and `assets/` overwrite the worker's, so anything registered through the bot since the last deploy is deleted. `--merge` prepends **merge worker secrets** → **merge worker config** → pull `*.sql`, which pulls what the bot created on the worker (SQL tasks/targets, Telegram groups/users, new secret refs) into the master first; a secret ref that differs on both sides then aborts the deploy before anything is built. See [Syncing worker-side config](#syncing-worker-side-config-back-to-the-master). |
+| `deploy --type <what> [--file-name NAME ...] [--dry-run]` | **Push only what changed.** Uploads the named files into the worker's `data/`/`assets/` bind mounts and stops there - no image build, no bundle, no container restart. `--type config` is the catalogued `data/*.json`, `--type assets` (or `assets/tasks`, `assets\tasks`, `data/ssh_keys`) is a directory; `--file-name` narrows it by filename, path or glob and may be repeated. The config-drift gate still runs, scoped to the files being pushed. See [Pushing one file instead of deploying](#pushing-one-file-instead-of-deploying). |
 | `worker-status [--host --user --key... --container --json --no-metrics]` | Read-only health check: is the daemon container up?, which db_ops version it runs, and — via the in-container `python -m db_ops.jobs.status` — every app command on that node (active?, last run time/status, due now?, last error) plus metric freshness per target. If the deployed image predates the status module the command **says so and exits** — it does not fall back to an inline query. The old fallback hard-coded a SQLite path, so against a PostgreSQL node it reported "no data" for a healthy worker; see the note at `db_ops/control/worker_status.py:17`. It closes with **container network reservations** — see below. |
 | `worker-run [--host --user --key... --container] -- <command...>` | Run an **arbitrary command inside the worker container** from the master. The command after `--` is passed through verbatim (each token shell-quoted), so any `python -m db_ops.<app>.cli ...` can be triggered on the worker without hard-coding. Exit code + stdout/stderr are returned. |
 | `worker-create-db-docker [--host --user --key... --container] --name --engine --version --mode --replicas --host-port --password-env [--worker-host --containers-dir --no-register --force --dry-run --pull-config]` | Convenience wrapper: runs `sre.cli create-db-docker` **inside the worker container** via `worker-run` (provisions a lab DB container, see `docs/10_sre_app.md`), then, with `--pull-config`, pulls the updated `data/` config back to the master. The `--key`/`--key-base64` is forwarded to the in-container command so it can resolve the DB password from the secret store. |
+| `pull-node-config --from <node>/data [--merge-secrets --key... --dry-run]` | **Carry back what a LOCAL node created.** The sibling of `worker-pull-data-config` for a node that is an ordinary directory on a PC rather than the worker container - which is what the estate is since it moved off the container. Same merge rules, because it is the same function underneath: union by key with the master winning a shared key, named leaves only for field-merged files, and a secret ref that differs on both sides refuses and writes nothing. `store_config.json` and `telegram_config.json` are never carried back - a node's own store declaration and its `getUpdates` cursor are per-node state, and copying either back breaks the node it came from or the one it lands on. |
 | `worker-pull-data-config [--host --user --key... --from-worker-path --to-master-path --files --all-json --include-secrets --merge-secrets --plaintext-secret-path --overwrite --dry-run]` | Copy updated `data/` config files from the worker back to the master over SFTP (the worker's `data/` is bind-mounted on the host at `<remote-dir>/data`). Defaults to just `docker_db_connections.json`; `--all-json` widens to every `*.json` (still excluding the encrypted secret store unless `--include-secrets`). Existing master files are skipped unless `--overwrite`; `--dry-run` prints the plan. |
 
 **The secret store is not an ordinary file.** `--include-secrets` copies it like any other, which is last-writer-wins: a ref the master added *after* the last deploy exists only on the master, and the worker's file would silently delete it. Use **`--merge-secrets`** whenever the worker created a secret (the Telegram `spbot_create_db_docker` command does): it decrypts and unions the worker encrypted store, the master encrypted store, and the master plaintext source (`secrets/secret_text.json`). Both master stores are synchronized to that union. If one ref holds different values in any participating store, it reports a conflict and writes nothing rather than guessing which password is current. It needs `--key`/`--key-base64`, implies `--include-secrets`, and accepts `--plaintext-secret-path` when the plaintext source is not at its repository default. The plaintext file remains local and gitignored; it is never copied to the worker.
@@ -206,6 +208,58 @@ python -m db_ops.control.cli worker-pull-data-config `
 - `inventory-health` never copies the live store — it runs the extraction query
   inside the container and transfers only the small dated overlay.
 - The host key is auto-accepted (`AutoAddPolicy`); intended for trusted hosts.
+
+---
+
+## Pushing one file instead of deploying
+
+A full `deploy` builds a ~700 MB image, ships the whole bundle and replaces the container. That is
+the right shape for a **code** change and pure cost for the change that happens ten times a day: a
+threshold in a `data/*.json`, one new `.sql` under `assets/tasks`.
+
+Neither of those needs any of it. On the worker `data/` and `assets/` are **bind mounts**
+(`docker-compose.runtime.yml`), the scheduler re-reads `app_commands.json` on every scan, and every
+app command runs as a fresh process - so a file written into those directories is what the next run
+reads. `--type` uploads exactly what is named and stops:
+
+```powershell
+# one config file
+python -m db_ops.control.cli deploy --key-base64 <K> --type config --file-name sql_targets.json
+
+# every SQL task (or one subtree, or one script)
+python -m db_ops.control.cli deploy --key-base64 <K> --type assets\tasks
+python -m db_ops.control.cli deploy --key-base64 <K> --type assets\tasks --file-name "oracle/*.sql"
+
+# all catalogued config, and a plan run that uploads nothing
+python -m db_ops.control.cli deploy --key-base64 <K> --type config
+python -m db_ops.control.cli deploy --key-base64 <K> --type assets --dry-run
+```
+
+`--file_name` is accepted as a spelling of `--file-name`.
+
+**What it keeps.** The [config-drift gate](#the-config-drift-gate) below, scoped to the files being
+pushed: a push of `sql_targets.json` can revert a console edit exactly as a deploy can, so it still
+asks - about that file, not about the whole catalogue. It also reclaims ownership of the worker's
+`data/`/`assets/` first, because the container writes there as root, and it refreshes the encrypted
+secret store from the plaintext source when that file is in the push.
+
+**What it deliberately does not do**, because each would be a larger operation wearing a small
+command's clothes:
+
+| Not done | Why, and what to run instead |
+| --- | --- |
+| build or load an image | a change under `db_ops/` is code; run the full `deploy`. |
+| restart the container | nothing needs it - the next scheduled run reads the file. A change to `config.json` or to the compose file does, and neither is pushable. |
+| merge the worker's own config back | that is `deploy --merge`, in the other direction. `--merge` with `--type` is refused rather than half-honoured. |
+| retire a directory the bundle stopped carrying | [`superseded_dirs`](#directories-the-bundle-owns) can only conclude that from a whole bundle. A push says nothing about files it does not name. |
+
+**Selection is the manifest's, not the operator's.** `--type config` means the catalogued
+`data/*.json` from [`data/data_files.json`](#datadata_filesjson--the-list-every-transfer-reads-first),
+so a `transfer: local` file is refused by name as master-only rather than shipped, and a file
+nobody catalogued does not become shippable by being typed on a command line. A `--file-name` that
+matches nothing **stops the run** - uploading the empty set and printing success is how a typo
+becomes a deploy that never happened. `database-inventory.json` lands at both `data/` and
+`runtime/reports/`, exactly as the bundle writes it.
 
 ---
 

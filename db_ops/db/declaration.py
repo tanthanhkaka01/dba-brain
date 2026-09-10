@@ -128,3 +128,64 @@ def redact(raw: Any) -> dict[str, Any]:
 def for_path(sqlite_path: str | Path) -> dict[str, Any]:
     """A sqlite declaration, for tests and for callers that already hold a path."""
     return {"backend": "sqlite", "sqlite": {"path": str(sqlite_path)}}
+
+
+#: The backends a declaration may name, in the spelling the file uses.
+SWITCHABLE_BACKENDS: tuple[str, ...] = ("sqlite", "postgresql")
+
+
+def switch_backend(raw: dict[str, Any], backend: str, *,
+                   sqlite_path: str | Path | None = None) -> dict[str, Any]:
+    """Return the declaration with ``backend`` selected, or say why it cannot be.
+
+    Editing this by hand was the **only** hand-edit left in moving an estate onto a new node, and
+    it is the one that matters most: ``store_config.json`` travels inside a config bundle, so an
+    import faithfully points a machine that has never run at the store every other node shares.
+    The procedure said "change backend to sqlite afterwards" and there was no command for it — a
+    step in prose, on the path where forgetting it writes an unproven build's rows into the shared
+    record.
+
+    **The other section is left exactly as it was.** Switching to sqlite must not discard the
+    postgresql block: the usual reason to switch is to prove a node on its own file *before*
+    pointing it back at the shared store, and a switch that erased the way back would make that
+    round trip a retyping exercise.
+
+    Refuses a backend whose section cannot stand on its own, because the failure it prevents is
+    silent: a declaration naming ``postgresql`` with no host resolves at *connect* time, inside
+    whichever app command happens to touch the store first.
+    """
+    if not isinstance(raw, dict):
+        raise StoreDeclarationError("store_config.json does not hold an object.")
+    wanted = str(backend or "").strip().lower()
+    if wanted == "postgres":
+        wanted = "postgresql"
+    if wanted not in SWITCHABLE_BACKENDS:
+        raise StoreDeclarationError(
+            f"backend must be one of {', '.join(SWITCHABLE_BACKENDS)}; got {backend!r}.")
+
+    updated = {k: (dict(v) if isinstance(v, dict) else v) for k, v in raw.items()}
+    if wanted == "sqlite":
+        section = dict(updated.get("sqlite") or {})
+        if sqlite_path is not None:
+            section["path"] = str(sqlite_path)
+        if not str(section.get("path") or "").strip():
+            raise StoreDeclarationError(
+                "the sqlite section names no path, and none was given. Pass a path, or fill in "
+                "sqlite.path in store_config.json.")
+        updated["sqlite"] = section
+    else:
+        updated["postgresql"] = dict(updated.get("postgresql") or {})
+
+    updated["backend"] = wanted
+    # Completeness is whatever `parse` requires, asked by calling it rather than by keeping a
+    # second list of required fields here - two lists is how the checker and the reader come to
+    # disagree, and the half that matters is the reader's. A declaration this build cannot read is
+    # never written, and the refusal names the field instead of arriving at connect time inside
+    # whichever app command touches the store first.
+    try:
+        parse(updated)
+    except StoreDeclarationError as exc:
+        raise StoreDeclarationError(
+            f"switching to {wanted} would leave a declaration that cannot be read: {exc} "
+            "Fill that section in first.") from exc
+    return updated

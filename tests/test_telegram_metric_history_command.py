@@ -118,7 +118,9 @@ def test_metric_history_missing_argument_prompts_for_next_value(
     )
 
     assert result["status"] == "waiting_for_input"
-    assert _messages(sqlite_path)[-1]["message_text"] == expected_prompt
+    # Every prompt now ends with the control line ("Type back / cancel at any point."), so the
+    # question is asserted as the head of the message rather than the whole of it.
+    assert _messages(sqlite_path)[-1]["message_text"].startswith(expected_prompt)
 
 
 @pytest.mark.parametrize(

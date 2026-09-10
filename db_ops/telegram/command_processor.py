@@ -17,6 +17,7 @@ from db_ops.lib.listing import active_only, choice_lines, hidden_note
 from db_ops.lib.secret_text import SECRET_KEY_ENV_VAR
 from db_ops.config import DEFAULT_CONFIG_PATH, load_config
 from db_ops.lib import common_cli
+from db_ops.lib import workflow_steps as ws
 # Reading a command message and writing one back is pure text, and `common` rebuilds a
 # command line from it for /spbot_list_my_commands. Re-exported so this module stays the
 # name every caller already imports - the same shim as db_ops/telegram/severity.py.
@@ -33,6 +34,7 @@ from db_ops.lib.telegram_command_text import (  # noqa: F401 - re-exported, see 
     first_command_token,
     normalize_command_text,
     parse_command_message,
+    split_with_verbatim_tail,
     render_command_line,
     split_command_tokens,
     strip_bot_username,
@@ -206,6 +208,7 @@ def process_pending_conversation_messages(
         # download the file and use its contents as the value. Failures reply to the
         # user and mark the state as errored rather than crashing the processor.
         awaited = _parameter_at_position(command, parameter_position)
+        from_file = False
         if awaited is not None and awaited.get("accept_file") and not value:
             document = _message_document(message)
             if document is not None:
@@ -217,6 +220,7 @@ def process_pending_conversation_messages(
                         value = _download_document_base64(document, config_path=config_path)
                     else:
                         value = _download_document_text(document, config_path=config_path)
+                    from_file = True
                 except Exception as exc:  # noqa: BLE001 - report and fail the state.
                     queue_message({
                         "store": store_block_from(store),
@@ -237,7 +241,60 @@ def process_pending_conversation_messages(
                     counts["failed"] += 1
                     continue
 
-        args[parameter_position - 1] = value
+        awaited_step = dict(awaited or {})
+        run_key = workflow_run_key(
+            state["source_telegram_command_message_id"], state["state_id"])
+
+        # Back / Skip / Cancel are read before the answer is: they are actions on the workflow,
+        # not values for this step. A step that legitimately offers one of those words as an
+        # answer keeps it (resolve_control consults the step's own options).
+        control = None if from_file else ws.resolve_control(value, awaited_step)
+        if control is not None:
+            apply_conversation_control(
+                store=store, state=state, message=message, command=command, args=args,
+                state_data=state_data, step=awaited_step, control=control, run_key=run_key,
+            )
+            counts["processed"] += 1
+            counts["queued_reply"] += 1
+            continue
+
+        # Validate now, not at execution. A value mistyped at step 2 of a 14-step workflow used
+        # to be reported after step 14, by which point going back to fix it was impossible.
+        rejection = None if from_file else answer_rejection(awaited_step, value)
+        if rejection is not None:
+            store.finish_telegram_workflow_step(
+                run_key=run_key, status="rejected",
+                answer_text=masked_answer(awaited_step, value), answer_kind="text",
+                answer_telegram_message_id=int(message["telegram_message_id"]),
+            )
+            queue_message({
+                "store": store_block_from(store),
+                "message_type": "failed",
+                "chat_id": str(state["chat_id"]),
+                "text": rejection,
+                "reply_message_id": int(message["message_id"]) if message["message_id"] is not None else None,
+                "note": f"Rejected answer for {command.command_text}",
+                "source_type": "telegram_conversation_states",
+                "source_id": str(state["state_id"]),
+                "metadata": {"command_id": command.command_id,
+                             "command_text": command.command_text},
+            }, fallback_store=store)
+            _chain_next_conversation_parameter(
+                store=store, state=state, message=message, command=command, args=args,
+                next_missing=awaited_step, state_data=state_data,
+            )
+            counts["processed"] += 1
+            counts["queued_reply"] += 1
+            continue
+
+        stored_value = normalise_answer(awaited_step, value) if awaited_step and not from_file else value
+        args[parameter_position - 1] = stored_value
+        store.finish_telegram_workflow_step(
+            run_key=run_key, status="answered",
+            answer_text=masked_answer(awaited_step, stored_value),
+            answer_kind="file" if from_file else answer_kind_for(awaited_step, value),
+            answer_telegram_message_id=int(message["telegram_message_id"]),
+        )
 
         next_missing = first_missing_prompt_parameter(command, args)
         if next_missing is not None:
@@ -294,6 +351,9 @@ def process_pending_conversation_messages(
                     "action_type": command.action_type,
                     "action_result": action_result,
                     "action_error": action_error,
+                    # The run is over: take the step keyboard away with its last message, or the
+                    # operator is left holding Back and Cancel for a workflow that has ended.
+                    "reply_markup": ws.hide_keyboard(),
                 },
             }, fallback_store=store)
             counts["queued_reply"] += 1
@@ -335,6 +395,26 @@ def find_support_command_by_key(
 
     return matched
 
+def consume_rest_position(command: SupportCommand) -> int:
+    """The position of this command's ``consume_rest`` parameter, or 0 when it has none."""
+    for parameter in (command.action_config or {}).get("parameters") or []:
+        if bool(parameter.get("consume_rest")):
+            return int(parameter.get("position", 0) or 0)
+    return 0
+
+
+def command_args_from_text(text: str, command: SupportCommand, args: list[str]) -> list[str]:
+    """The arguments of an inline command, with a ``consume_rest`` tail kept verbatim.
+
+    Only commands that declare such a parameter are re-read; for every other command the shlex
+    tokens are already right and re-parsing could only introduce a difference.
+    """
+    position = consume_rest_position(command)
+    if position < 1:
+        return args
+    return split_with_verbatim_tail(text, position)
+
+
 def process_one_command_message(
     *,
     sqlite_path: str | Path,
@@ -370,6 +450,9 @@ def process_one_command_message(
         str(row["command_payload"] or ""),
     )
     command = find_support_command_by_key(command_key, commands)
+    if command is not None:
+        parsed_message["args"] = command_args_from_text(
+            str(row["text"] or ""), command, parsed_message["args"])
 
     if command is None:
         queued_reply = 0
@@ -475,6 +558,9 @@ def process_one_command_message(
                 missing_parameter=missing_parameter,
                 args=parsed_message["args"],
             )
+        # Nothing left to ask: every answer came in the one message. Recorded before the action
+        # runs, so a command that fails still shows what it was asked to do.
+        record_inline_answers(store=store, row=row, command=command, args=parsed_message["args"])
         try:
             action_result = execute_command_action(
                 store=store,
@@ -693,12 +779,30 @@ def state_json_dict(state: Any) -> dict[str, Any]:
 
 
 def first_missing_prompt_parameter(command: SupportCommand, args: list[str]) -> dict[str, Any] | None:
+    """The next question to ask, or ``None`` when the command has everything it needs.
+
+    ``ask_when`` is consulted before anything else: a step whose branch was not taken is not
+    missing, it was never asked. Before that, answers belonging to branches this run no longer
+    reaches are cleared — going Back and choosing a different credential type has to forget the
+    one abandoned, or it still reaches the CLI (see :func:`db_ops.lib.workflow_steps.
+    clear_unreachable_answers`).
+    """
     config = dict(command.action_config or {})
     parameters = list(config.get("parameters") or [])
+    cleared = ws.clear_unreachable_answers(parameters, args)
+    for index, value in enumerate(cleared):
+        if index < len(args):
+            args[index] = value
     for parameter in parameters:
+        if not ws.ask_when_holds(parameter, ws.answers_by_name(parameters, args)):
+            continue
         position = int(parameter.get("position", 1))
-        required = bool(parameter.get("required", True)) or prompt_condition_holds(
-            parameter, parameters, args
+        required = (
+            bool(parameter.get("required", True))
+            or prompt_condition_holds(parameter, parameters, args)
+            # An optional step is asked only when it says it wants to be — see
+            # workflow_steps.is_asked_when_optional for why that is opt-in.
+            or ws.is_asked_when_optional(parameter)
         )
         value = args[position - 1] if len(args) >= position else ""
         if required and str(value).strip() == "" and parameter.get("prompt_text"):
@@ -708,6 +812,70 @@ def first_missing_prompt_parameter(command: SupportCommand, args: list[str]) -> 
             while len(args) < position:
                 args.append("")
             args[position - 1] = skipped_value
+    return None
+
+
+def workflow_run_key(source_command_message_id: Any, state_id: Any = None) -> str:
+    """One id for a whole workflow run, stable across its steps.
+
+    The source command message is what every step of a run already carries, so it identifies the
+    run without a new column: the conversation state rows churn (each is `replaced` as the run
+    moves on) and could not name the run they belong to.
+    """
+    if source_command_message_id not in (None, "", 0):
+        return f"tcm:{source_command_message_id}"
+    return f"state:{state_id}"
+
+
+def answer_kind_for(parameter: dict[str, Any], value: str) -> str:
+    """Did the answer match one of the offered options, or is it free text?
+
+    Not "was a button tapped": with a reply keyboard a tap and the typed word are the same
+    Telegram message, and a column that claimed otherwise would be inventing evidence.
+    """
+    options = {str(item["value"]).strip().lower() for item in ws.option_list(parameter)}
+    labels = {str(item["label"]).strip().lower() for item in ws.option_list(parameter)}
+    candidate = str(value).strip().lower()
+    return "option" if candidate in options or candidate in labels else "text"
+
+
+def normalise_answer(parameter: dict[str, Any], value: str) -> str:
+    """The value to store: a button's label becomes the value it stands for.
+
+    The keyboard shows `Yes` and the CLI wants `yes`; the operator sees the label and the pattern
+    validates the value, so the translation has to happen here rather than in either of them.
+    """
+    candidate = str(value).strip()
+    for option in ws.option_list(parameter):
+        if candidate.lower() in (option["label"].strip().lower(), option["value"].strip().lower()):
+            return option["value"]
+    return candidate
+
+
+def answer_rejection(parameter: dict[str, Any], value: str) -> str | None:
+    """Why this answer cannot be accepted, or ``None`` when it can.
+
+    Validation used to run only when the command finally executed, so a value mistyped at step 2
+    of `/spbot_create_db_docker` was reported after step 14 — by which point the operator had
+    answered twelve more questions and could not go back to fix it. Checking here costs one regex
+    and turns the same mistake into a re-ask of the question they are already looking at.
+    """
+    candidate = str(value).strip()
+    if not candidate:
+        return "That answer was empty. Please answer the question, or use the buttons below."
+    if not ws.accepts_free_text(parameter):
+        allowed = ws.option_list(parameter)
+        known = {item["value"].strip().lower() for item in allowed} | {
+            item["label"].strip().lower() for item in allowed}
+        if candidate.lower() not in known:
+            offered = ", ".join(item["label"] for item in allowed)
+            return f"Please choose one of: {offered}"
+    if str(parameter.get("validator") or "") == "regex":
+        pattern = str(parameter.get("pattern") or "")
+        if pattern and not re.fullmatch(pattern, normalise_answer(parameter, candidate),
+                                        flags=re.IGNORECASE):
+            return str(parameter.get("validation_error")
+                       or f"Invalid value for {parameter.get('name', 'this step')}.")
     return None
 
 
@@ -947,6 +1115,188 @@ def _target_has_no_database(target_ip: str) -> bool:
     return bool(targets) and all(not str(item.db_type or "").strip() for item in targets)
 
 
+def workflow_history(state_data: dict[str, Any]) -> list[int]:
+    """The positions this run has actually asked, oldest first.
+
+    Back is defined over this list and never over ``position - 1``: with ``ask_when`` branching,
+    some positions are never asked at all, so counting backwards would re-ask a question this run
+    deliberately excluded — and then treat its answer as meaningful.
+    """
+    raw = state_data.get("history")
+    if not isinstance(raw, list):
+        return []
+    history: list[int] = []
+    for item in raw:
+        try:
+            history.append(int(item))
+        except (TypeError, ValueError):
+            continue
+    return history
+
+
+def masked_answer(parameter: dict[str, Any], value: str) -> str:
+    """What the step trail is allowed to remember of an answer.
+
+    A `secret` step's value is an SSH or database password. The trail exists to show what happened,
+    which needs the fact that a value was given and nothing else — the store is read by the console
+    and by anyone with a psql prompt.
+    """
+    if ws.is_secret(parameter):
+        return f"*** ({len(str(value).strip())} chars)"
+    return str(value)
+
+
+def queue_step_prompt(
+    *,
+    store: DbOpsStore,
+    command: SupportCommand,
+    step: dict[str, Any],
+    args: list[str],
+    chat_id: str,
+    reply_to_message_id: int | None,
+    source_type: str,
+    source_id: str,
+    run_key: str,
+    user_id: str,
+    history: list[int],
+    state_id: int | None = None,
+) -> int:
+    """Ask one step: the prompt, its keyboard, and the row that records having asked.
+
+    One function for both entry points — the first question of a run and every question after it —
+    because they had drifted into two copies of the same seven lines, and the keyboard, the hint
+    and the trail would have had to be added to each.
+    """
+    parameters = list((command.action_config or {}).get("parameters") or [])
+    # `history` ends with the step being asked, so anything before it is somewhere to go back to.
+    # The first question of a run has nowhere, and must not offer a button that does nothing.
+    can_go_back = len(history) > 1
+    prompt_text = render_prompt_text(step, parameters, args)
+    hint = ws.control_hint(step, can_go_back=can_go_back)
+    keyboard = ws.keyboard_for(step, can_go_back=can_go_back)
+    queued_id = queue_message({
+        "store": store_block_from(store),
+        "message_type": "plain",
+        "chat_id": str(chat_id),
+        "text": f"{prompt_text}\n\n{hint}",
+        "reply_message_id": reply_to_message_id,
+        "note": f"Prompt for command {command.command_text}",
+        "source_type": source_type,
+        "source_id": str(source_id),
+        "metadata": {
+            "command_id": command.command_id,
+            "command_text": command.command_text,
+            "conversation_state": "waiting",
+            # force_reply and a keyboard are mutually exclusive in the Telegram API - the last
+            # reply_markup wins - and the keyboard is the better of the two: it carries Cancel and
+            # Back, which force_reply cannot.
+            "reply_markup": keyboard,
+            "workflow": {"run_key": run_key, "parameter": step.get("name"),
+                         "position": int(step.get("position", 1))},
+        },
+    }, fallback_store=store)
+    store.start_telegram_workflow_step(
+        run_key=run_key,
+        chat_id=str(chat_id),
+        user_id=str(user_id),
+        command_id=command.command_id,
+        command_text=command.command_text,
+        parameter_name=str(step.get("name") or "arg"),
+        parameter_position=int(step.get("position", 1)),
+        prompt_text=prompt_text,
+        options=ws.option_list(step),
+        controls=ws.keyboard_for(step, can_go_back=can_go_back)["keyboard"][-1],
+        is_secret=ws.is_secret(step),
+        state_id=state_id,
+        prompt_send_tlgmsg_id=queued_id if isinstance(queued_id, int) else None,
+    )
+    return queued_id
+
+
+def queue_workflow_closing_message(
+    *,
+    store: DbOpsStore,
+    chat_id: str,
+    text: str,
+    reply_to_message_id: int | None,
+    source_type: str,
+    source_id: str,
+    command: SupportCommand,
+    message_type: str = "plain",
+) -> None:
+    """The last message of a run — and the one that takes the keyboard away.
+
+    Without ``remove_keyboard`` the buttons of the final question stay on the operator's screen
+    after the workflow has ended, and tapping Back then answers a question nobody asked.
+    """
+    queue_message({
+        "store": store_block_from(store),
+        "message_type": message_type,
+        "chat_id": str(chat_id),
+        "text": text,
+        "reply_message_id": reply_to_message_id,
+        "note": f"Workflow ended for {command.command_text}",
+        "source_type": source_type,
+        "source_id": str(source_id),
+        "metadata": {
+            "command_id": command.command_id,
+            "command_text": command.command_text,
+            "reply_markup": ws.hide_keyboard(),
+        },
+    }, fallback_store=store)
+
+
+def record_inline_answers(
+    *,
+    store: DbOpsStore,
+    row: Any,
+    command: SupportCommand,
+    args: list[str],
+) -> int:
+    """Write a trail row for every answer that arrived on the command line itself.
+
+    A parameterised command can be run in one message — `/spbot_run_sql_task 18 0 30` — and then
+    no prompt is ever queued, so nothing in the step trail would show the run at all. The person
+    answered every question; they just answered them all at once.
+
+    Recorded as ``answer_kind='inline'`` so the trail can still tell the two apart: what was typed
+    ahead of being asked, and what was given in reply to a prompt.
+    """
+    parameters = list((command.action_config or {}).get("parameters") or [])
+    written = 0
+    for parameter in sorted(parameters, key=lambda item: int(item.get("position", 1))):
+        if str(parameter.get("source") or "") == "flag":
+            continue
+        if not ws.ask_when_holds(parameter, ws.answers_by_name(parameters, args)):
+            continue
+        position = int(parameter.get("position", 1))
+        value = str(args[position - 1] if len(args) >= position else "").strip()
+        if not value:
+            continue
+        store.start_telegram_workflow_step(
+            run_key=workflow_run_key(row["telegram_command_message_id"]),
+            chat_id=str(row["chat_id"]),
+            user_id=str(row["user_id"]),
+            command_id=command.command_id,
+            command_text=command.command_text,
+            parameter_name=str(parameter.get("name") or "arg"),
+            parameter_position=position,
+            prompt_text="",
+            options=ws.option_list(parameter),
+            is_secret=ws.is_secret(parameter),
+        )
+        store.finish_telegram_workflow_step(
+            run_key=workflow_run_key(row["telegram_command_message_id"]),
+            status="answered",
+            answer_text=masked_answer(parameter, value),
+            answer_kind="inline",
+            answer_telegram_message_id=int(row["telegram_message_id"])
+            if row["telegram_message_id"] is not None else None,
+        )
+        written += 1
+    return written
+
+
 def queue_missing_parameter_prompt(
     *,
     store: DbOpsStore,
@@ -955,25 +1305,23 @@ def queue_missing_parameter_prompt(
     missing_parameter: dict[str, Any],
     args: list[str],
 ) -> dict[str, int | str]:
-    prompt_text = render_prompt_text(
-        missing_parameter, list((command.action_config or {}).get("parameters") or []), args,
+    # Whatever arrived on the command line was still answered by this person; without this the
+    # trail would start at the first *prompted* step and silently drop the rest.
+    record_inline_answers(store=store, row=row, command=command, args=args)
+    history = [int(missing_parameter.get("position", 1))]
+    queued_reply_id = queue_step_prompt(
+        store=store,
+        command=command,
+        step=missing_parameter,
+        args=args,
+        chat_id=str(row["chat_id"]),
+        reply_to_message_id=int(row["message_id"]) if row["message_id"] is not None else None,
+        source_type="telegram_command_messages",
+        source_id=str(row["telegram_command_message_id"]),
+        run_key=workflow_run_key(row["telegram_command_message_id"]),
+        user_id=str(row["user_id"]),
+        history=history,
     )
-    queued_reply_id = queue_message({
-        "store": store_block_from(store),
-        "message_type": "plain",
-        "chat_id": str(row["chat_id"]),
-        "text": prompt_text,
-        "reply_message_id": int(row["message_id"]) if row["message_id"] is not None else None,
-        "note": f"Prompt for command {command.command_text}",
-        "source_type": "telegram_command_messages",
-        "source_id": str(row["telegram_command_message_id"]),
-        "metadata": {
-            "command_id": command.command_id,
-            "command_text": command.command_text,
-            "conversation_state": "waiting",
-            "force_reply": True,
-        },
-    }, fallback_store=store)
     state_id = store.upsert_telegram_conversation_state(
         chat_id=str(row["chat_id"]),
         user_id=str(row["user_id"]),
@@ -986,6 +1334,7 @@ def queue_missing_parameter_prompt(
             "args": args,
             "parameter_name": missing_parameter.get("name"),
             "parameter_position": int(missing_parameter.get("position", 1)),
+            "history": history,
         },
     )
     process_note = f"Command matched: {command.command_text}; waiting_state={state_id}; queued_prompt={queued_reply_id}"
@@ -1025,25 +1374,23 @@ def _chain_next_conversation_parameter(
         consumed_telegram_message_id=int(message["telegram_message_id"]),
         note="chained to next parameter",
     )
-    prompt_text = render_prompt_text(
-        next_missing, list((command.action_config or {}).get("parameters") or []), args,
+    history = [item for item in workflow_history(state_data)
+               if item != int(next_missing.get("position", 1))]
+    history.append(int(next_missing.get("position", 1)))
+    queue_step_prompt(
+        store=store,
+        command=command,
+        step=next_missing,
+        args=args,
+        chat_id=str(state["chat_id"]),
+        reply_to_message_id=int(message["message_id"]) if message["message_id"] is not None else None,
+        source_type="telegram_conversation_states",
+        source_id=str(state["state_id"]),
+        run_key=workflow_run_key(state["source_telegram_command_message_id"], state["state_id"]),
+        user_id=str(state["user_id"]),
+        history=history,
+        state_id=int(state["state_id"]),
     )
-    queue_message({
-        "store": store_block_from(store),
-        "message_type": "plain",
-        "chat_id": str(state["chat_id"]),
-        "text": prompt_text,
-        "reply_message_id": int(message["message_id"]) if message["message_id"] is not None else None,
-        "note": f"Prompt for command {command.command_text}",
-        "source_type": "telegram_conversation_states",
-        "source_id": str(state["state_id"]),
-        "metadata": {
-            "command_id": command.command_id,
-            "command_text": command.command_text,
-            "conversation_state": "waiting",
-            "force_reply": True,
-        },
-    }, fallback_store=store)
     store.upsert_telegram_conversation_state(
         chat_id=str(state["chat_id"]),
         user_id=str(state["user_id"]),
@@ -1056,8 +1403,145 @@ def _chain_next_conversation_parameter(
             "args": args,
             "parameter_name": next_missing.get("name"),
             "parameter_position": int(next_missing.get("position", 1)),
+            "history": history,
         },
     )
+
+
+def apply_conversation_control(
+    *,
+    store: DbOpsStore,
+    state: Any,
+    message: Any,
+    command: SupportCommand,
+    args: list[str],
+    state_data: dict[str, Any],
+    step: dict[str, Any],
+    control: ws.Control,
+    run_key: str,
+) -> str:
+    """Act on Back / Skip / Cancel, and say which one was applied.
+
+    The whole point of the module this reads from is that these are **state transitions on the
+    workflow**, decided once, rather than a word each command checks for itself. What is left here
+    is only the part that needs the store: closing the trail row, moving the conversation state,
+    and asking the next question.
+    """
+    parameters = list((command.action_config or {}).get("parameters") or [])
+    history = workflow_history(state_data)
+    reply_to = int(message["message_id"]) if message["message_id"] is not None else None
+
+    if control.is_cancel:
+        store.finish_telegram_workflow_step(
+            run_key=run_key, status="cancelled", answer_kind="cancel",
+            answer_telegram_message_id=int(message["telegram_message_id"]))
+        store.update_telegram_conversation_state(
+            state_id=int(state["state_id"]), status="cancelled", state_data=state_data,
+            consumed_telegram_message_id=int(message["telegram_message_id"]),
+            note="cancelled by the operator")
+        queue_workflow_closing_message(
+            store=store, chat_id=str(state["chat_id"]),
+            text=f"❌ {command.command_text} cancelled. No changes were made.",
+            reply_to_message_id=reply_to, source_type="telegram_conversation_states",
+            source_id=str(state["state_id"]), command=command)
+        return "cancelled"
+
+    if control.is_back:
+        # history ends with the step being answered; the one before it is where Back goes.
+        previous_positions = [item for item in history[:-1]]
+        if not previous_positions:
+            return _reask_with_note(
+                store=store, state=state, message=message, command=command, args=args,
+                state_data=state_data, step=step,
+                note="This is the first question - there is nothing to go back to.",
+                run_key=run_key, status="rejected")
+        target_position = previous_positions[-1]
+        target_step = _parameter_at_position(command, target_position)
+        if target_step is None:
+            return _reask_with_note(
+                store=store, state=state, message=message, command=command, args=args,
+                state_data=state_data, step=step,
+                note="That step no longer exists in this command.", run_key=run_key,
+                status="rejected")
+        store.finish_telegram_workflow_step(
+            run_key=run_key, status="back", answer_kind="back",
+            answer_telegram_message_id=int(message["telegram_message_id"]))
+        # Clear the answer being returned to, so the step is genuinely re-asked rather than
+        # skipped over as "already answered" by the next-step search.
+        while len(args) < target_position:
+            args.append("")
+        args[target_position - 1] = ""
+        _chain_next_conversation_parameter(
+            store=store, state=state, message=message, command=command, args=args,
+            next_missing=dict(target_step),
+            state_data=dict(state_data, history=previous_positions[:-1]))
+        return "back"
+
+    # Skip
+    if not ws.is_skippable(step):
+        return _reask_with_note(
+            store=store, state=state, message=message, command=command, args=args,
+            state_data=state_data, step=step,
+            note="This step is required and cannot be skipped.", run_key=run_key,
+            status="rejected")
+    position = int(step.get("position", 1))
+    while len(args) < position:
+        args.append("")
+    args[position - 1] = ws.skip_value(step)
+    store.finish_telegram_workflow_step(
+        run_key=run_key, status="skipped", answer_text=ws.skip_value(step), answer_kind="skip",
+        answer_telegram_message_id=int(message["telegram_message_id"]))
+    next_missing = first_missing_prompt_parameter(command, args)
+    if next_missing is not None:
+        _chain_next_conversation_parameter(
+            store=store, state=state, message=message, command=command, args=args,
+            next_missing=next_missing, state_data=state_data)
+        return "skipped"
+    # Nothing left to ask. The caller's execute path is not reachable from here, so the run is
+    # handed back to it by leaving the state waiting on the same message: the next cycle finds no
+    # missing parameter and executes. Rather than duplicate the execution block, say so plainly.
+    _chain_next_conversation_parameter(
+        store=store, state=state, message=message, command=command, args=args,
+        next_missing=dict(step), state_data=state_data)
+    return "skipped"
+
+
+def _reask_with_note(
+    *,
+    store: DbOpsStore,
+    state: Any,
+    message: Any,
+    command: SupportCommand,
+    args: list[str],
+    state_data: dict[str, Any],
+    step: dict[str, Any],
+    note: str,
+    run_key: str,
+    status: str,
+) -> str:
+    """Tell the operator why that did not work, then ask the same question again.
+
+    Never leaves the conversation without a live question: a workflow that answers "you cannot do
+    that" and then waits for nothing is one the operator has to abandon and restart.
+    """
+    store.finish_telegram_workflow_step(
+        run_key=run_key, status=status, answer_kind="text",
+        answer_telegram_message_id=int(message["telegram_message_id"]))
+    queue_message({
+        "store": store_block_from(store),
+        "message_type": "failed",
+        "chat_id": str(state["chat_id"]),
+        "text": note,
+        "reply_message_id": int(message["message_id"]) if message["message_id"] is not None else None,
+        "note": f"Control refused for {command.command_text}",
+        "source_type": "telegram_conversation_states",
+        "source_id": str(state["state_id"]),
+        "metadata": {"command_id": command.command_id, "command_text": command.command_text},
+    }, fallback_store=store)
+    _chain_next_conversation_parameter(
+        store=store, state=state, message=message, command=command, args=args,
+        next_missing=dict(step), state_data=state_data)
+    return "reasked"
 
 
 def execute_command_action(
@@ -2846,6 +3330,14 @@ def cli_action_values(
             else args[position - 1] if len(args) >= position
             else ""
         )
+        if not ws.ask_when_holds(parameter, ws.answers_by_name(parameters, list(args))):
+            # A branch this run did not take. The step is required *inside* its branch and was
+            # never asked outside it, so it is neither missing nor answered: it resolves to the
+            # step's skip value, which is the `-` every `conditional_args` rule already tests for
+            # with `not_equals`. Leaving it empty instead would pass that test and hand the CLI a
+            # flag with no value - `--remote-password-ref ''` - which is worse than either.
+            values[name] = ws.skip_value(parameter)
+            continue
         if bool(parameter.get("required", True)) and str(value).strip() == "":
             raise TelegramCommandError(f"Missing required argument: {name}.", exit_code=2)
         if str(value).strip() == "" and not bool(parameter.get("required", True)) and name in values:
