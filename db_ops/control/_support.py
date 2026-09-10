@@ -258,3 +258,29 @@ def sftp_get(client, remote_path: str, local_path: Path) -> None:
         sftp.get(remote_path, str(local_path))
     finally:
         sftp.close()
+
+
+def sftp_put_files(client, pairs, *, on_file=None) -> None:
+    """Upload named files over one SFTP session, creating the directories above them.
+
+    The counterpart of :func:`sftp_put_tree` for a push that names its files instead of a
+    directory. One session for the batch, not one per file: a whole ``assets/`` push is a few
+    hundred small files, and a session handshake each would cost more than the transfer.
+
+    ``confirm`` defaults to true in paramiko, so a truncated transfer raises here rather than
+    leaving the worker holding half a config file that parses as valid JSON right up to where it
+    stops.
+    """
+    sftp = client.open_sftp()
+    try:
+        made: set[str] = set()
+        for local_path, remote_path in pairs:
+            parent = remote_path.rsplit("/", 1)[0]
+            if parent and parent not in made:
+                _sftp_mkdirs(sftp, parent)
+                made.add(parent)
+            sftp.put(str(local_path), remote_path)
+            if on_file is not None:
+                on_file(local_path, remote_path)
+    finally:
+        sftp.close()

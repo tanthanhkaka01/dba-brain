@@ -313,3 +313,39 @@ def test_an_unknown_decision_is_refused(estate) -> None:
 # --------------------------------------------------------------------------- #
 
 
+
+
+# --------------------------------------------------------------------------- #
+# Scoped to what a run actually ships
+# --------------------------------------------------------------------------- #
+def test_a_push_of_one_file_is_asked_about_that_file_only(estate) -> None:
+    """`deploy --type config --file-name X` carries X and nothing else.
+
+    The gate still runs — a push reverts a console edit exactly as a deploy does — but it must
+    ask about what is being shipped. Halting a one-file upload over drift in a file it does not
+    carry is a question the operator cannot act on, and the two answers would both do something
+    much larger than the push they were asked about.
+    """
+    edit_in_console(estate, 3600)
+    leave_master_behind(estate, 7200)
+
+    assert config_gate.check(estate["store"], data_dir=estate["data"],
+                             files=["sql_targets.json"]) == []
+    assert [item["file"] for item in config_gate.check(
+        estate["store"], data_dir=estate["data"], files=["app_commands.json"])] == [
+        "app_commands.json"]
+
+
+def test_resolving_a_scoped_gate_touches_only_the_scoped_file(estate) -> None:
+    """"Keep" re-syncs the store from data/ — for the pushed file, not for the whole catalogue."""
+    edit_in_console(estate, 3600)
+    leave_master_behind(estate, 7200)
+    (estate["data"] / "reports_config.json").write_text('{"reports": []}', encoding="utf-8")
+
+    result = config_gate.resolve(estate["store"], data_dir=estate["data"], decision="keep",
+                                 files=["app_commands.json"], out=io.StringIO())
+
+    assert result["decision"] == "keep"
+    assert interval_in_store(estate["store"]) == 7200
+    assert [item["file"] for item in result["result"]["files"]] == ["app_commands.json"], (
+        "the emptied reports_config.json was neither read nor synced")

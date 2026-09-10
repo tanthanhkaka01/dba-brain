@@ -99,3 +99,64 @@ def _is_one_token(value: str) -> bool:
         return split_command_tokens(value) == [value]
     except ValueError:  # pragma: no cover - split_command_tokens already handles it
         return False
+
+
+def split_with_verbatim_tail(text: str, tail_position: int) -> list[str]:
+    """Arguments where everything from ``tail_position`` on is the message **as typed**.
+
+    ``shlex.split`` is right for positional arguments and wrong for the last one when that last
+    one is a ``consume_rest`` body — a SQL statement, a note. Measured on 2026-09-09, pasting a
+    query after the command mangled it twice over:
+
+    * ``WHERE name = 'Tan Thanh'`` arrived as ``WHERE name = Tan Thanh`` — shlex removes the
+      quotes, and the statement is now different or invalid;
+    * a multi-line paste was flattened to one line, so a ``-- comment`` swallowed everything after
+      it and the query silently became ``SELECT id``.
+
+    Neither failure says anything, which is what makes them worth a scanner. The head arguments are
+    read the way the dispatcher has always read them — quotes honoured, because
+    :func:`render_command_line` writes quoted head arguments and the two directions have to agree —
+    and the tail is then whatever is left of the raw text, byte for byte.
+    """
+    stripped = text.strip()
+    if tail_position < 1:
+        return split_command_tokens(stripped)
+    head: list[str] = []
+    index = _skip_spaces(stripped, 0)
+    # The command word itself is the first token, and it is not an argument.
+    token, index = _read_token(stripped, index)
+    while len(head) < tail_position - 1 and index < len(stripped):
+        index = _skip_spaces(stripped, index)
+        token, index = _read_token(stripped, index)
+        if token == "" and index >= len(stripped):
+            break
+        head.append(token)
+    tail = stripped[_skip_spaces(stripped, index):]
+    return head + ([tail] if tail else [])
+
+
+def _skip_spaces(text: str, index: int) -> int:
+    while index < len(text) and text[index].isspace():
+        index += 1
+    return index
+
+
+def _read_token(text: str, index: int) -> tuple[str, int]:
+    """One token from ``index``: quoted if it opens with a quote, whitespace-delimited otherwise.
+
+    An unbalanced quote reads as an ordinary character rather than running to the end of the
+    message — the tail of a SQL body is full of apostrophes, and a head argument that opens one
+    without closing it is a typo, not a request to swallow the query.
+    """
+    if index >= len(text):
+        return "", index
+    quote = text[index]
+    if quote in ("'", '"'):
+        closing = text.find(quote, index + 1)
+        if closing != -1:
+            return text[index + 1:closing], closing + 1
+    end = index
+    while end < len(text) and not text[end].isspace():
+        end += 1
+    return text[index:end], end
+

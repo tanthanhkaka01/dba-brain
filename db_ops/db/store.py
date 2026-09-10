@@ -10,6 +10,7 @@ from pathlib import Path
 
 from db_ops.config import StoreConfig
 from db_ops.db.job_runs import JobRun
+from db_ops.lib.rows import row_value
 from db_ops.db import backend as backend_mod
 from db_ops.db.backend import StoreTarget
 
@@ -18,7 +19,10 @@ from db_ops.db.backend import StoreTarget
 #: 3 — added runtime_nodes: which clock each node in the cluster is actually running on. A master
 #:     and a worker share one store and can hold different config.json timezones, so "what time is
 #:     this row in" had no answer the store could give.
-SCHEMA_VERSION = 3
+#: 4 — added telegram_workflow_steps: what the operator was asked, what came back, and which step
+#:     of a conversation is live. The conversation state row says only what a run is waiting for,
+#:     and Back needs the history it was throwing away.
+SCHEMA_VERSION = 4
 
 #: Columns copied verbatim when a job_runs row ages into job_runs_history. Listed rather than
 #: `SELECT *` so a future column added to job_runs fails loudly here instead of silently
@@ -765,6 +769,135 @@ class DbOpsStore:
                 """,
                 (status, consumed_telegram_message_id, state_json, note, utc_now_text(), state_id),
             )
+
+    # ------------------------------------------------------------------ #
+    # Workflow step trail — what was asked, what came back, what is live
+    # ------------------------------------------------------------------ #
+    def start_telegram_workflow_step(
+        self,
+        *,
+        run_key: str,
+        chat_id: str,
+        user_id: str,
+        command_id: int,
+        command_text: str,
+        parameter_name: str,
+        parameter_position: int,
+        prompt_text: str = "",
+        options: list | None = None,
+        controls: list | None = None,
+        is_secret: bool = False,
+        state_id: int | None = None,
+        prompt_send_tlgmsg_id: int | None = None,
+    ) -> int:
+        """Record that a step has been asked, and make it the live one.
+
+        Any step of this run still marked ``active`` is closed as ``abandoned`` first. Nothing
+        should normally leave one behind — every path here resolves its step — but a daemon killed
+        between the answer and the next prompt would, and two live steps in one run is a state the
+        table must not be able to hold.
+
+        ``step_no`` is assigned here rather than by the caller: it is the order the questions were
+        actually asked in, which after a Back is not the order of the step definitions.
+        """
+        self.initialize()
+        asked_at = utc_now_text()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE telegram_workflow_steps
+                SET status = 'abandoned', answered_at = ?
+                WHERE run_key = ? AND status = 'active';
+                """,
+                (asked_at, str(run_key)),
+            )
+            row = conn.execute(
+                "SELECT MAX(step_no) AS last_step FROM telegram_workflow_steps WHERE run_key = ?;",
+                (str(run_key),),
+            ).fetchone()
+            last_step = 0
+            if row is not None:
+                last_step = int(row_value(row, "last_step") or 0)
+            cursor = conn.execute(
+                """
+                INSERT INTO telegram_workflow_steps
+                (run_key, chat_id, user_id, command_id, command_text, step_no, parameter_name,
+                 parameter_position, status, prompt_text, options_json, controls_json,
+                 is_secret, state_id, prompt_send_tlgmsg_id, asked_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?);
+                """,
+                (
+                    str(run_key), str(chat_id), str(user_id), int(command_id), str(command_text),
+                    last_step + 1, str(parameter_name), int(parameter_position), str(prompt_text),
+                    json.dumps(options or [], ensure_ascii=False),
+                    json.dumps(controls or [], ensure_ascii=False),
+                    1 if is_secret else 0, state_id, prompt_send_tlgmsg_id, asked_at,
+                ),
+            )
+            return int(cursor.lastrowid)
+
+    def finish_telegram_workflow_step(
+        self,
+        *,
+        run_key: str,
+        status: str,
+        answer_text: str | None = None,
+        answer_kind: str | None = None,
+        answer_telegram_message_id: int | None = None,
+    ) -> int:
+        """Close the live step of a run. Returns how many rows it closed (0 or 1).
+
+        Addressed by ``run_key`` rather than by id because every caller already knows the run and
+        would otherwise have to look the id up first — and because "the live step" is precisely
+        what this table exists to make unambiguous.
+        """
+        self.initialize()
+        with self.connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE telegram_workflow_steps
+                SET status = ?, answer_text = ?, answer_kind = ?,
+                    answer_telegram_message_id = COALESCE(?, answer_telegram_message_id),
+                    answered_at = ?
+                WHERE run_key = ? AND status = 'active';
+                """,
+                (str(status), answer_text, answer_kind, answer_telegram_message_id,
+                 utc_now_text(), str(run_key)),
+            )
+            return int(cursor.rowcount or 0)
+
+    def fetch_telegram_workflow_steps(self, *, run_key: str) -> list:
+        """Every step of one run, in the order it was asked."""
+        self.initialize()
+        with self.connect() as conn:
+            return list(conn.execute(
+                """
+                SELECT workflow_step_id, run_key, chat_id, user_id, command_id, command_text,
+                       step_no, parameter_name, parameter_position, status, prompt_text,
+                       options_json, controls_json, answer_text, answer_kind, is_secret,
+                       state_id, prompt_send_tlgmsg_id, answer_telegram_message_id,
+                       asked_at, answered_at
+                FROM telegram_workflow_steps
+                WHERE run_key = ?
+                ORDER BY step_no;
+                """,
+                (str(run_key),),
+            ).fetchall())
+
+    def fetch_active_telegram_workflow_step(self, *, run_key: str):
+        """The step this run is waiting on, or ``None``."""
+        self.initialize()
+        with self.connect() as conn:
+            return conn.execute(
+                """
+                SELECT workflow_step_id, step_no, parameter_name, parameter_position, status,
+                       prompt_text, options_json, controls_json, asked_at
+                FROM telegram_workflow_steps
+                WHERE run_key = ? AND status = 'active'
+                ORDER BY step_no DESC;
+                """,
+                (str(run_key),),
+            ).fetchone()
 
     def insert_telegram_background_task(
         self,
@@ -2189,6 +2322,59 @@ CREATE INDEX IF NOT EXISTS ix_telegram_conversation_states_status_created
 
 CREATE INDEX IF NOT EXISTS ix_telegram_conversation_states_chat_user_status
     ON telegram_conversation_states (chat_id, user_id, status);
+
+-- What the operator was asked, what they answered, and which question is live right now.
+--
+-- `telegram_conversation_states` answers only "what is this run waiting for": the answers live in
+-- a positional `args` list inside `state_json`, the prompt that produced each one is not kept, and
+-- a row is marked `replaced` as the run moves on. So "which step is the operator on, what were
+-- they shown, and what did they say" could not be answered from the store at all -- which is
+-- exactly what a workflow with branching and a Back button has to be able to answer.
+--
+-- One row per *asked* step. A re-ask after Back is a NEW row rather than an update, because it is
+-- a new question at a new moment; the old row keeps status='back' and the answer that was undone.
+-- Exactly one row per run is 'active', and that is the definition of "the live step".
+CREATE TABLE IF NOT EXISTS telegram_workflow_steps
+(
+    workflow_step_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_key TEXT NOT NULL,
+    chat_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    command_id INTEGER NOT NULL,
+    command_text TEXT NOT NULL,
+    step_no INTEGER NOT NULL,
+    parameter_name TEXT NOT NULL,
+    parameter_position INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active'
+        CHECK (status IN ('active', 'answered', 'rejected', 'skipped', 'back', 'cancelled',
+                          'abandoned')),
+    prompt_text TEXT NOT NULL DEFAULT '',
+    options_json TEXT NOT NULL DEFAULT '[]',
+    controls_json TEXT NOT NULL DEFAULT '[]',
+    answer_text TEXT NULL,
+    -- 'option' means the answer matched one of the values offered, 'text' that it did not. With a
+    -- reply keyboard a tap and the same word typed by hand arrive as the same Telegram message, so
+    -- this column does NOT claim to know which one happened -- see the plan's 8a.
+    answer_kind TEXT NULL
+        CHECK (answer_kind IN ('option', 'text', 'inline', 'skip', 'back', 'cancel',
+                              'auto', 'file')),
+    is_secret INTEGER NOT NULL DEFAULT 0 CHECK (is_secret IN (0, 1)),
+    state_id INTEGER NULL,
+    prompt_send_tlgmsg_id INTEGER NULL,
+    answer_telegram_message_id INTEGER NULL,
+    asked_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    answered_at TEXT NULL,
+    CHECK (json_valid(options_json)),
+    CHECK (json_valid(controls_json)),
+    FOREIGN KEY (state_id) REFERENCES telegram_conversation_states (state_id),
+    UNIQUE (run_key, step_no)
+);
+
+CREATE INDEX IF NOT EXISTS ix_telegram_workflow_steps_run
+    ON telegram_workflow_steps (run_key, step_no);
+
+CREATE INDEX IF NOT EXISTS ix_telegram_workflow_steps_active
+    ON telegram_workflow_steps (status, asked_at DESC);
 
 CREATE TABLE IF NOT EXISTS telegram_send_messages
 (

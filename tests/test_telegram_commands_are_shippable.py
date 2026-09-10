@@ -241,3 +241,51 @@ def test_command_ids_are_unique_within_a_catalogue(path: Path) -> None:
 
     duplicated = {number: count for number, count in counts.items() if count > 1}
     assert not duplicated, f"{path.name}: command_id used more than once: {duplicated}"
+
+
+@pytest.mark.parametrize("path", [PACKAGED, ESTATE], ids=["packaged", "estate"])
+def test_every_offered_option_value_is_a_single_token(path: Path) -> None:
+    """A `choice` value with a space in it cannot survive being written back as a command line.
+
+    A command is positional text: `render_command_line` writes a run's answers out as the line a
+    person would type to repeat it, and `/spbot_list_my_commands` shows exactly that. A value
+    holding a space parses back as two arguments and shifts every later one — see
+    `tests/test_telegram_command_line_round_trip.py` for the measurements.
+
+    **Labels are exempt and deliberately so.** The label is what the button says and is mapped
+    back to its value before anything is stored, so `[Yes - destroy and rebuild]` is a fine button
+    for the value `yes`. This is the whole reason `options` carries the pair rather than one
+    string: it is what lets a question read like English and still answer in one token.
+    """
+    offenders = [
+        f"{command['command_text']}.{parameter['name']}: {option['value']!r}"
+        for command in _commands(path)
+        for parameter in (command.get("action_config") or {}).get("parameters") or []
+        for option in parameter.get("options") or []
+        if isinstance(option, dict) and str(option.get("value", "")).strip() !=
+        "".join(str(option.get("value", "")).split())
+    ]
+
+    assert not offenders, "option values must be one token: " + "; ".join(offenders)
+
+
+@pytest.mark.parametrize("path", [PACKAGED, ESTATE], ids=["packaged", "estate"])
+def test_consume_rest_is_only_ever_the_last_parameter(path: Path) -> None:
+    """`consume_rest` swallows everything after its position, so anything behind it is unreachable.
+
+    The dispatcher joins `args[position - 1:]` for such a parameter. A later parameter would
+    therefore never receive its own value — it would already be inside the tail — and the failure
+    is silent: the command runs with an argument that quietly contains three answers.
+    """
+    offenders = []
+    for command in _commands(path):
+        parameters = (command.get("action_config") or {}).get("parameters") or []
+        positions = [int(item.get("position", 1)) for item in parameters]
+        last = max(positions) if positions else 0
+        offenders += [
+            f"{command['command_text']}.{item['name']} at {item.get('position')} of {last}"
+            for item in parameters
+            if bool(item.get("consume_rest")) and int(item.get("position", 1)) != last
+        ]
+
+    assert not offenders, "consume_rest must be the last parameter: " + "; ".join(offenders)

@@ -383,6 +383,7 @@ The path form is deliberate: ~20 call sites in `db_ops/` and the whole test suit
 | `telegram_messages` | Telegram App | Saved Telegram updates. |
 | `telegram_command_messages` | Telegram App | Parsed `/spbot...` command rows. |
 | `telegram_conversation_states` | Telegram App | ForceReply-style pending conversation state. |
+| `telegram_workflow_steps` | Telegram App | One row per **asked** step of a conversation: the prompt shown, the options offered, the answer (masked when the step is `secret`), and `status='active'` on exactly one row per run - which is how "which question is live" is answered. Schema v4. |
 | `telegram_send_messages` | Telegram App | Outgoing Telegram send queue. |
 | `telegram_background_tasks` | Telegram App | In-flight background restore subprocesses (pid, stdout/stderr paths, status). |
 | `backup_restore_history` | Backup Restore App | Restore history for database/file/status checks. |
@@ -772,3 +773,33 @@ FROM information_schema.columns
 WHERE table_schema = 'db_ops'
 ORDER BY table_name, ordinal_position;
 ```
+
+### Pointing a node at its own store — `db-ops db use-store` (2026-09-09)
+
+`data/store_config.json` is catalogued configuration, so it **travels inside a config bundle**: an
+`import-data` faithfully points a machine that has never run at the store the bundle came from —
+in practice the shared production one. That is right for the file and wrong for a node being
+proved, so every procedure that stands one up ended with "now edit that file and change `backend`
+to `sqlite`".
+
+There is now a command, because a hand-edit in a procedure is the step that gets skipped, and this
+is the one where skipping it writes an unproven build's rows into the record every other node
+shares:
+
+```bash
+db-ops db --config config.json use-store sqlite              # this node writes to its own file
+db-ops db --config config.json use-store sqlite --dry-run    # print the change, write nothing
+db-ops db --config config.json use-store postgresql          # and back, once it has proved itself
+```
+
+Three properties worth knowing:
+
+- **The other section is kept.** Switching to sqlite does not discard the postgresql block — the
+  usual reason to switch is to prove a node on its own file *before* pointing it back, and a
+  switch that erased the way back would make the return a retyping exercise.
+- **A section that cannot be read is refused**, naming the missing field, rather than resolving at
+  connect time inside whichever app command touches the store first. Completeness is decided by
+  calling the same `parse` the reader uses, not by a second list of required fields.
+- **It prints the resolved connection afterwards**, because the mistake this command exists to
+  prevent is *believing* a node is on its own file.
+

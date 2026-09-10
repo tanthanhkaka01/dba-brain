@@ -21,6 +21,8 @@ The Telegram App sends pending queue rows through the Telegram Bot API, saves up
 - Writes `telegram_messages`.
 - Writes/updates `telegram_command_messages`.
 - Reads/writes `telegram_conversation_states`.
+- Writes `telegram_workflow_steps` — one row per **asked** step: the prompt, the options offered,
+  the answer, and which step of a run is live. See [Back, Skip and Cancel](#back-skip-and-cancel-2026-09-09).
 - Reads/writes `telegram_background_tasks` (in-flight background `cli_execute` process tracking).
 - Reads `reports` indirectly through compatibility report queue commands.
 
@@ -292,19 +294,218 @@ When `action_type` requires more than one parameter and the initial command mess
 
 Important ordering rule: the current `waiting` state is updated to `done` **before** `upsert_telegram_conversation_state` is called for the next parameter, because the upsert first sets all existing `waiting` rows for the chat/user to `replaced`.
 
-Only a **required** parameter is prompted for. Two rules bend that, both declared in
-`action_config` rather than in code, because whether a question applies can depend on an answer
-already given:
+Only a **required** parameter is prompted for — plus an optional one that declares
+`allow_skip: true` (see [the step schema](#the-step-schema-2026-09-09)). Three rules bend that,
+all declared in `action_config` rather than in code, because whether a question applies can depend
+on an answer already given:
 
 | Rule | Effect |
 | --- | --- |
 | `"skip_when": {"condition": "target_has_no_database", "parameter": "target_ip", "value": "-"}` | Does **not** ask a required question that cannot apply — an OS-only host has no db_type or port — and fills the value instead. |
+| `"ask_when": {"parameter": "remote_auth", "equals": "secret_ref"}` | **The general one (2026-09-09).** Asks the step only when a named earlier answer matches. Unlike the two below it takes no hardcoded condition name, so a new branch is config rather than Python. |
 | `"prompt_when": {"condition": "sql_task_has_parameters", "parameter": "sql_id"}` | **Does** ask an optional question that this run needs. `/spbot_run_sql_task`'s `task_params` is optional because most tasks declare none; a task that *requires* one was therefore run with none and failed telling the operator to pass a `--param` they were never asked for. The condition holds when the sql_id already answered names a task declaring parameters — asked of the sql_tasks app through `python -m db_ops.sql_tasks.cli list-tasks --sql-id N`, never by reading its config. |
 
 A prompt may contain `{sql_task_parameters}`, replaced with the names that task declares — the
 operator picked a task by number, so "the parameters this task declares" is not something they
 can answer without being told. Answering `-` means "no values": Telegram cannot send an empty
 message, and `-` is the same sentinel `skip_when` fills in.
+
+### Answering everything in one message (the inline form)
+
+The conversation is a **fallback, not a toll gate**. Every parameterised command can be run in one
+message, and only what is still missing is asked:
+
+```
+/spbot_run_sql_task 18 0 30      -> nothing missing, runs immediately, no prompt at all
+/spbot_run_sql_task 18           -> position 1 filled, the bot asks the rest
+/spbot_run_sql_task              -> asks from the first question
+```
+
+Arguments fill **positions**, in order, split with `shlex.split` (so a value with a space must be
+quoted — see [Spaces in an answer](#spaces-in-an-answer--what-actually-decides-2026-09-09)). The dispatcher then looks for the first missing answer exactly as
+it would mid-conversation, which is why a partly-typed command resumes where it stops rather than
+starting over.
+
+**All of them are recorded.** Answers typed ahead of the question are written to
+`telegram_workflow_steps` as `answer_kind='inline'` before the run proceeds, so a command answered
+entirely in one message still has a full step trail — with the same masking for `secret` steps.
+Without that, the trail would begin at the first *prompted* step and silently drop everything the
+operator had already supplied.
+
+#### Copy-paste a whole command: one step, one word
+
+This is the case the no-space rule is really about. Answering the prompts one by one, a space is
+harmless — the reply is taken whole. **Pasting the whole command in one message is where a space
+becomes a second argument**, and every later parameter shifts by one:
+
+```
+/spbot_add_sql SRV my daily report ...     -> "my", "daily", "report" are three arguments
+/spbot_add_sql SRV "my daily report" ...   -> one argument, but nobody types quotes in a chat
+```
+
+So a command meant to be copy-pasted should answer every step with an id, a code or a `choice`
+value. A step that legitimately needs free text with spaces goes **last** and is declared
+`consume_rest: true`; a multi-word answer anywhere else still works when it is *answered at the
+prompt* (it is quoted when the command is written back), and only breaks when someone types the
+command inline without quotes. The full table is in
+[Spaces in an answer](#spaces-in-an-answer--what-actually-decides-2026-09-09).
+
+#### A long SQL body, and anything else full of spaces
+
+Three ways, and the first two are the ones to use:
+
+| How | What happens |
+| --- | --- |
+| **Answer the prompt** with the SQL as one message | The reply is stored **verbatim** — newlines, quotes, indentation. Nothing splits it. This is the normal path for `/spbot_add_sql` and `/spbot_sql_to_xlsx` |
+| **Attach a `.sql` file** in reply to the prompt | The parameter declares `accept_file: true`; the document is downloaded and its text becomes the value. Best for anything long, and it survives Telegram's 4096-character message limit |
+| Paste it inline after the command | Works, because the parameter is `consume_rest: true` — see the note below on what that had to be taught |
+
+`consume_rest` means the parameter takes **everything from its position onward**, which is why it
+may only be the last one. It is how `sql_text` (`/spbot_add_sql` position 5, `/spbot_sql_to_xlsx`
+position 2) and `task_params` (`/spbot_run_sql_task` position 3) are declared.
+
+> **Fixed 2026-09-09.** That tail used to be rebuilt by joining the `shlex` tokens with single
+> spaces, which mangled pasted SQL twice over and said nothing either time:
+>
+> | Pasted | Reached the CLI as |
+> | --- | --- |
+> | `WHERE name = 'Tan Thanh'` | `WHERE name = Tan Thanh` — shlex ate the quotes |
+> | `SELECT id`<br>`-- only the active ones`<br>`FROM users WHERE ok = 1` | `SELECT id -- only the active ones FROM users WHERE ok = 1` — flattened to one line, so the comment swallowed the query and it ran as `SELECT id` |
+>
+> A `consume_rest` tail is now taken from the raw message text
+> (`split_with_verbatim_tail`), so quotes, line breaks and indentation arrive exactly as typed.
+> Head arguments are still read with quotes honoured, because `render_command_line` writes them
+> that way. Pinned by `tests/test_telegram_command_line_round_trip.py`.
+
+**A binary body cannot go inline at all.** `/spbot_xlsx_to_table`'s `xlsx_base64` declares
+`accept_file: true` with `file_encoding: "base64"`: a spreadsheet is a zip, and decoding it as
+text either raises or silently corrupts it. Attach the file.
+
+#### Positions count the steps a branch will not ask
+
+This is the one thing `ask_when` does **not** simplify, and it is worth knowing before typing a
+long command:
+
+| | |
+| --- | --- |
+| In a conversation | only the questions this run needs are asked — `remote_auth: password` is followed straight by the password |
+| On the command line | every parameter still occupies its **defined** position, including the branches this run skips |
+
+```
+/spbot_demo_flow lab01 password hunter2-hunter2      ❌ the password lands in the skipped
+                                                        password_ref slot, is discarded with it,
+                                                        and the bot asks for the password again
+/spbot_demo_flow lab01 password - hunter2-hunter2    ✅ the placeholder holds the skipped position
+```
+
+The failure is quiet — a value that went into a slot the branch discards looks exactly like a
+value nobody gave — so for a branched command with many steps, **answering the prompts is the
+reliable form** and the inline form is for short, familiar commands.
+
+> `/spbot_create_db_docker` was renumbered on 2026-09-09 when `remote_auth` was inserted at
+> position 10. Any inline invocation of it written before that date has its later arguments
+> shifted by one and must be retyped — or, better, answered through the prompts.
+
+### Spaces in an answer — what actually decides (2026-09-09)
+
+**Nothing in the config says "this step must be one word".** There is no such field and there is
+deliberately none: measured on this estate, **14 of 21** registered task names contain spaces
+(`TANS Employee mapping`, `Deploy Material WareHouse INT-185`), they are answered at a prompt every
+week, and they work. What decides is *where* the answer arrives and *which* field the step
+declares:
+
+| Field in `telegram_support_commands.json` | Effect | Read by |
+| --- | --- | --- |
+| `consume_rest: true` | This parameter takes **everything from its position onward**, spaces and newlines included. Only allowed on the last parameter | `consume_rest_position` / `command_args_from_text` (`command_processor.py:398`), and the argv builder (`:3329`) |
+| `accept_file: true` | The answer may be a **document** instead of text; the file's contents become the value | the conversation loop (`command_processor.py:212`) |
+| `file_encoding: "base64"` | That document is **binary** (a spreadsheet), carried as base64 rather than decoded as text | `command_processor.py:219` |
+| `options` + `allow_text_input: false` | A closed list, so the answer is one of the values — which are themselves single tokens, guarded by a test | `db_ops/lib/workflow_steps.py` |
+
+All four are data. Nothing about any particular command is hard-coded.
+
+**Where a space is harmless, and where it is not:**
+
+| | Multi-word answer |
+| --- | --- |
+| Answering a **prompt** | ✅ kept verbatim — the reply is one message and is stored whole |
+| A **middle** argument, replayed from `/spbot_list_my_commands` | ✅ `render_command_line` quotes it, and the reader honours quotes |
+| The **last** argument when it is `consume_rest` | ✅ taken verbatim from the raw message |
+| The **last** argument when it is **not** `consume_rest` | ❌ written unquoted, so the replay parses it as several arguments |
+| Typed **inline** without quotes | ❌ `shlex.split` makes it several arguments, shifting every later parameter |
+
+So the rule to design against is narrower than "one word everywhere":
+
+> **A step whose answer may contain spaces must either be the `consume_rest` tail, or must not be
+> the last answer of the run.** For the copy-paste form to work at all, prefer ids, codes and
+> `choice` values for everything else.
+
+What enforces it: `options[].value` must be a single token and `consume_rest` may only be the last
+parameter — both in `tests/test_telegram_commands_are_shippable.py`. The rest is the shape of the
+command you write, which is why it is written down here.
+
+### Back, Skip and Cancel (2026-09-09)
+
+Every prompt now carries a keyboard and every workflow understands three words. They are one state
+machine in `db_ops/lib/workflow_steps.py` — a pure module with no store and no Telegram in it —
+rather than a string comparison inside each command, which is how a workflow ends up with as many
+ideas of "back" as it has commands.
+
+| Word | Button | What happens | Offered |
+| --- | --- | --- | --- |
+| `cancel` | 🚫 Cancel | The run ends. `telegram_conversation_states.status = 'cancelled'`, the trail row is `cancelled`, the reply says `No changes were made.` and the keyboard is removed. **Nothing executes.** | always |
+| `back` | ⬅️ Back | The previous **asked** step is asked again, and its answer is cleared | when the run has asked more than one step |
+| `skip` | ⏭️ Skip | The step's `skip_value` (default `-`) is stored and the run moves on | only where the step allows it |
+
+**Back walks the ask history, not `position - 1`.** With `ask_when` branching some positions are
+never asked, so counting backwards would re-ask a question the run excluded and then treat its
+answer as meaningful. The history lives in `state_json.history`.
+
+**Re-choosing a branch forgets the one abandoned.** Answer `password`, type one, go Back, choose
+`key_file`: the password is cleared, because a value belonging to a branch this run no longer
+reaches would otherwise still be handed to the CLI.
+
+Buttons are a **reply keyboard**, not an inline one: a tap arrives as an ordinary text message
+through the intake that already works, and typing the word by hand is exactly as valid. The cost
+is that the store cannot tell a tap from typing — `answer_kind` therefore says `option` when the
+answer matched one of the offered values and `text` when it did not, and claims nothing about
+which finger produced it. Inline keyboards need `callback_query`, which `updates.py` does not
+store; that is a later change.
+
+### The step schema (2026-09-09)
+
+Additive — a parameter that declares none of these behaves exactly as before.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `input_type` | `text` | `choice` puts `options` on buttons; `secret` keeps the answer out of the trail |
+| `options` | `[]` | `[{"label": "Yes", "value": "yes"}]`, or the short form `["yes", "no"]`. The **label** is shown, the **value** is stored |
+| `allow_text_input` | `true` | `false` refuses anything that is not one of the options, **at that step** |
+| `allow_skip` | `not required` | Whether ⏭️ Skip appears. On an **optional** step, declaring it `true` is also what makes the step get asked at all — an optional parameter is otherwise never prompted for, which is why Skip could not exist before |
+| `skip_value` | `"-"` | What a skip stores. `-` is the sentinel every CLI here already reads as "not given" |
+| `ask_when` | — | `{"parameter": "remote_auth", "equals": "secret_ref"}` — the step is asked only when an earlier answer matches. Also accepts `not_equals`, `in`, `not_in` |
+
+A step whose `ask_when` does not hold resolves to its `skip_value` when the argv is built, so the
+`conditional_args` rules that test `not_equals: "-"` keep working unchanged. Leaving it empty would
+pass that test and produce a flag with no value.
+
+**Answers are validated at the step**, not when the command finally runs. A value mistyped at step
+2 of a 14-step workflow used to be reported after step 14, by which point it could not be fixed.
+
+#### The branch, as `/spbot_create_db_docker` uses it
+
+```
+deploy_target
+   ├── worker            → 9 questions, no SSH question at all
+   └── <ip>              → remote_user
+         └── remote_auth [Secret ref] [Password] [SSH key file]
+               ├── secret_ref → remote_password_ref   and nothing more
+               ├── password   → remote_password_text  (secret)
+               └── key_file   → remote_key_name
+```
+
+Before this, all fourteen questions were asked every time and the operator answered `-` to the
+ones that did not apply — including, after giving a stored secret ref, to both the password and
+the key file.
 
 ### A prompt that lists the answers (`prompt_choices`, 2026-08-17)
 

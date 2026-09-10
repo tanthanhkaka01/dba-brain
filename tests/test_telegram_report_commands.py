@@ -140,7 +140,11 @@ def test_report_force_hourly_missing_ip_returns_usage_message(tmp_path):
 
     messages = fetch_send_messages(sqlite_path)
     assert result["status"] == "waiting_for_input"
-    assert messages[-1]["message_text"] == "Usage: /spbot_report_hourly_metrics <target_ip>"
+    # The prompt now closes with the line naming the words that work at any point in a workflow
+    # (2026-09-09). The question itself is unchanged, which is what this test is about.
+    assert messages[-1]["message_text"].startswith(
+        "Usage: /spbot_report_hourly_metrics <target_ip>")
+    assert messages[-1]["message_text"].endswith("Type cancel at any point.")
 
 
 def test_report_force_hourly_invalid_ip_returns_validation_error(tmp_path):

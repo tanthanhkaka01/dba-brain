@@ -90,12 +90,20 @@ def _add_drift_argument(parser) -> None:
              "keep (ship data/ and re-sync the store from it), abort.")
 
 
-def _gate_config_drift(args) -> None:
+def _gate_config_drift(args, *, files: tuple[str, ...] | list[str] = (),
+                       report_only: bool = False) -> None:
     """Stop a deploy that would silently revert what the web console changed.
 
     Skipped only when the store cannot be opened at all — a master with no access to the runtime
     store has no drift to detect, and refusing to deploy from it would be a new failure rather
     than a caught one. That case is reported, never swallowed.
+
+    ``files`` scopes the gate to a partial push's own files. It still asks — that is the whole
+    point of the gate, and a push is exactly as capable of reverting a console edit as a deploy
+    is — but it asks about what is being shipped rather than about every catalogued file.
+
+    ``report_only`` is for ``--dry-run``: the drift is printed and nothing is decided. A plan that
+    rewrote ``data/`` or the store on its way to changing nothing would be a plan that lies.
     """
     try:
         from db_ops.config import load_config
@@ -108,8 +116,15 @@ def _gate_config_drift(args) -> None:
         print(f"NOTE: config drift not checked ({exc}); the deploy will ship data/ as it is.",
               file=sys.stderr)
         return
+    if report_only:
+        drifted = config_gate.check(store, files=files)
+        if drifted:
+            print(config_gate.describe(drifted), file=sys.stderr)
+            print("  --dry-run: not resolved. A real push asks this before it uploads.",
+                  file=sys.stderr)
+        return
     config_gate.resolve(store, decision=getattr(args, "on_config_drift", "ask"),
-                        actor="deploy-gate")
+                        files=files, actor="deploy-gate")
 
 
 def _refresh_encrypted_secret_store(*, key: str | None, key_base64: str | None) -> None:
@@ -135,6 +150,103 @@ def _refresh_encrypted_secret_store(*, key: str | None, key_base64: str | None) 
         return
     count = encrypt_secret_text_file(DEFAULT_PLAINTEXT_SECRET, DEFAULT_ENCRYPTED_SECRET, resolved)
     print(f"Refreshed encrypted secret store: {count} secrets -> {DEFAULT_ENCRYPTED_SECRET}")
+
+
+def _pull_node_config_command(args) -> int:
+    """The carry-back for a node that is a directory rather than the worker container.
+
+    `db_ops` is the origin for code and for deliberate configuration, but the bot and the console
+    *create* config on whichever node runs the estate, and that is the one flow that has to come
+    back here. Over SSH `worker-pull-data-config` does it; the estate now runs from an ordinary
+    directory on a PC, where nothing did — so it was being done by hand.
+    """
+    from db_ops.control import worker_data
+
+    try:
+        changes = worker_data.merge_node_config(
+            from_node_path=args.from_node_path, dry_run=args.dry_run)
+    except FileNotFoundError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    except worker_data.WorkerConfigUnreadable as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
+    if args.merge_secrets:
+        try:
+            key = resolve_cli_key(args.key, args.key_base64) or _secret_key_from_env()
+        except ValueError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
+        if not key:
+            print("ERROR: --merge-secrets needs --key/--key-base64 or DB_OPS_SECRET_KEY: both "
+                  "stores have to be decrypted to be unioned.", file=sys.stderr)
+            return 2
+        try:
+            status = worker_data.merge_node_secrets(
+                from_node_path=args.from_node_path, key=key, dry_run=args.dry_run)
+        except worker_data.SecretMergeConflict as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
+        print(f"secret store: {status}")
+
+    print(f"\nNot carried back, by design: {', '.join(worker_data.NEVER_CARRIED_BACK)} - "
+          "a node's own store declaration and its getUpdates cursor are per-node state, and "
+          "copying either one back breaks the node it came from or the one it lands on.")
+    return 0
+
+
+def _push_command(args) -> int:
+    """``deploy --type ...`` — upload named config/assets and nothing else.
+
+    Everything a full deploy does that a push does not is a deliberate omission, documented at
+    :func:`db_ops.control.deploy.push_selected`. What a push keeps is the **drift gate**: the
+    store is shared with the worker and the web console writes to it, so a push of
+    ``sql_targets.json`` can revert a console edit exactly as a deploy can. It is asked scoped to
+    the files being pushed — a question about files this run does not carry is one it cannot
+    answer.
+    """
+    from db_ops.lib import deploy_selection
+    from db_ops.lib.data_files import DataFileError
+
+    if args.merge_worker:
+        print("ERROR: --merge and --type are different operations. --merge pulls the worker's own "
+              "config back before rebuilding everything; --type ships named files one way. Run "
+              "the full deploy with --merge first if the bot has registered something.",
+              file=sys.stderr)
+        return 2
+    try:
+        selected = deploy_selection.select_push_files(
+            tool_root=DB_OPS_ROOT, push_type=args.push_type, names=args.file_names,
+            # Explicit, so the tree being read and the manifest deciding what may leave it are
+            # never two different trees.
+            data_dir=DB_OPS_ROOT / "data")
+    except (deploy_selection.PushSelectionError, DataFileError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+
+    # Catalogued config is `data/<name>.json`; `data/ssh_keys/<key>` is estate material with no
+    # store record, so it is not part of the drift question.
+    config_names = [Path(item.relative).name for item in selected
+                    if item.relative.startswith("data/") and item.relative.count("/") == 1]
+    if config_names:
+        _gate_config_drift(args, files=config_names, report_only=args.dry_run)
+        if DEFAULT_ENCRYPTED_SECRET.name in config_names and not args.dry_run:
+            _refresh_encrypted_secret_store(key=args.key, key_base64=args.key_base64)
+    else:
+        print("No data/*.json in this push, so the store/data drift gate does not apply to it.")
+
+    if args.dry_run:
+        deploy_ops.push_selected(host="", user="", password="", remote_dir=args.remote_dir,
+                                 files=selected, dry_run=True)
+        return 0
+    host = _resolve_host(args)
+    password = resolve_password(args.password, host=host, user=args.user,
+                                key_base64=args.key_base64, key=args.key,
+                                password_ref=default_worker_password_ref())
+    deploy_ops.push_selected(host=host, user=args.user, password=password, port=args.port,
+                             remote_dir=args.remote_dir, files=selected, dry_run=False)
+    return 0
 
 
 def parse_args(argv):
@@ -199,6 +311,39 @@ def parse_args(argv):
                      help="Deprecated no-op kept so existing runbook lines keep working; this is "
                           "now the default.")
     dep.set_defaults(merge_worker=False)
+    # The fast path. A config edit or a new .sql needs neither an image nor a restart — data/ and
+    # assets/ are bind mounts on the worker and the scheduler re-reads its commands every scan —
+    # so `deploy --type ...` uploads exactly what is named and stops there. Same command as the
+    # full deploy on purpose: the operator's question is "ship this", and the answer should not be
+    # a different verb depending on what "this" is.
+    dep.add_argument("--type", dest="push_type", default=None,
+                     help="Push only part of the tree instead of building and restarting: "
+                          "'config' (the catalogued data/*.json), 'assets', a subtree such as "
+                          "'assets/tasks' (backslashes are fine), or 'data/ssh_keys'.")
+    # --file_name too: it is what the runbook line says, and an operator who typed the underscore
+    # form should not get 'unrecognized arguments' for a spelling.
+    dep.add_argument("--file-name", "--file_name", dest="file_names", action="append", default=[],
+                     metavar="NAME",
+                     help="With --type, push only the files matching NAME: a filename, a path "
+                          "under the type, or a glob ('sql_targets.json', 'oracle/*.sql'). "
+                          "Repeatable. A NAME that matches nothing is an error, never an empty "
+                          "push reported as success.")
+    dep.add_argument("--dry-run", dest="dry_run", action="store_true",
+                     help="With --type, list what would be uploaded and change nothing.")
+
+    pull = sub.add_parser(
+        "pull-node-config",
+        help="Carry back what a LOCAL node registered (bot/console) into this master's data/.")
+    pull.add_argument("--from", dest="from_node_path", required=True, metavar="PATH",
+                      help="The node's data/ directory, e.g. D:/Projects/dbabrain_soak_20260909/data")
+    pull.add_argument("--merge-secrets", action="store_true",
+                      help="Also union the node's encrypted secret store. Needs --key/--key-base64; "
+                           "a ref differing on both sides refuses and writes nothing.")
+    pull.add_argument("--key-base64", dest="key_base64", default=None,
+                      help="Base64 secret passphrase, for --merge-secrets.")
+    pull.add_argument("--key", default=None, help="Secret passphrase (plaintext alternative).")
+    pull.add_argument("--dry-run", action="store_true",
+                      help="Report what would be carried back and write nothing.")
 
     exp = sub.add_parser(
         "export-public",
@@ -491,6 +636,9 @@ def _run(args) -> int:
     if args.command == "export-public":
         return _export_public_command(args)
 
+    if args.command == "pull-node-config":
+        return _pull_node_config_command(args)
+
     if args.command == "bump-version":
         version_ops.bump_version(part=args.part, set_to=args.set_to, dry_run=args.dry_run)
         return 0
@@ -536,6 +684,20 @@ def _run(args) -> int:
             return 1
         print(f"Encrypted {count} secrets -> {args.dest}")
         return 0
+
+    if args.command == "deploy" and args.push_type:
+        # Before the host and password are resolved, because a --dry-run must not need either:
+        # resolve_password() falls back to an interactive prompt, so a plan run without a key
+        # would sit waiting for a password it is never going to use.
+        return _push_command(args)
+    if args.command == "deploy" and (args.dry_run or args.file_names):
+        # Both belong to --type. Ignoring them would turn "let me see the plan first" into a
+        # full build, upload and container restart, which is the one misreading that costs
+        # something.
+        stray = "--dry-run" if args.dry_run else "--file-name"
+        print(f"ERROR: {stray} applies to a push; add --type (config, assets, assets/tasks, "
+              "data/ssh_keys). A full deploy has no plan mode.", file=sys.stderr)
+        return 2
 
     # remaining commands need the worker host + password. The password is taken from
     # --password, else decrypted from the secret store via the worker password_ref +

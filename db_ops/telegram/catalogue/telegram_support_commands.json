@@ -386,7 +386,31 @@
             "source": "arg",
             "position": 2,
             "required": true,
-            "prompt_text": "Format? xlsx (spreadsheet), csv (spreadsheet or another tool), txt (aligned table), xml (structured), json (for another program to read)."
+            "prompt_text": "Format? xlsx (spreadsheet), csv (spreadsheet or another tool), txt (aligned table), xml (structured), json (for another program to read).",
+            "input_type": "choice",
+            "allow_text_input": false,
+            "options": [
+              {
+                "label": "xlsx",
+                "value": "xlsx"
+              },
+              {
+                "label": "csv",
+                "value": "csv"
+              },
+              {
+                "label": "txt",
+                "value": "txt"
+              },
+              {
+                "label": "xml",
+                "value": "xml"
+              },
+              {
+                "label": "json",
+                "value": "json"
+              }
+            ]
           },
           {
             "name": "sql_text",
@@ -787,11 +811,28 @@
             "name": "backup_type",
             "source": "arg",
             "position": 2,
-            "required": true,
+            "required": false,
             "validator": "regex",
             "pattern": "full|diff|log|-",
             "validation_error": "backup_type must be full, diff, log, or - to let the schedule decide",
-            "prompt_text": "Level? full / diff / log - or type - to let the script decide (Sunday = full, otherwise diff for Oracle/PostgreSQL). Note: Oracle and PostgreSQL have no 'log' level; their archive/WAL backups are their own backup_id."
+            "prompt_text": "Level? full / diff / log - or Skip to let the schedule decide (Sunday = full, otherwise diff for Oracle/PostgreSQL).\nOracle and PostgreSQL have no 'log' level here: their archivelog and WAL backups run on their own schedule.",
+            "input_type": "choice",
+            "allow_text_input": false,
+            "allow_skip": true,
+            "options": [
+              {
+                "label": "full",
+                "value": "full"
+              },
+              {
+                "label": "diff",
+                "value": "diff"
+              },
+              {
+                "label": "log",
+                "value": "log"
+              }
+            ]
           }
         ],
         "completion_probe": {
@@ -867,7 +908,19 @@
             "validator": "regex",
             "pattern": "on|off",
             "validation_error": "state must be 'on' or 'off'",
-            "prompt_text": "Turn metrics on or off? (on / off)"
+            "prompt_text": "Turn metrics on or off? (on / off)",
+            "input_type": "choice",
+            "allow_text_input": false,
+            "options": [
+              {
+                "label": "on",
+                "value": "on"
+              },
+              {
+                "label": "off",
+                "value": "off"
+              }
+            ]
           },
           {
             "name": "scope",
@@ -1023,7 +1076,27 @@
             "validator": "regex",
             "pattern": "postgres|mysql|mssql|oracle",
             "validation_error": "engine must be one of: postgres, mysql, mssql, oracle",
-            "prompt_text": "Engine? postgres / mysql / mssql / oracle"
+            "prompt_text": "Engine? postgres / mysql / mssql / oracle",
+            "input_type": "choice",
+            "allow_text_input": false,
+            "options": [
+              {
+                "label": "postgres",
+                "value": "postgres"
+              },
+              {
+                "label": "mysql",
+                "value": "mysql"
+              },
+              {
+                "label": "mssql",
+                "value": "mssql"
+              },
+              {
+                "label": "oracle",
+                "value": "oracle"
+              }
+            ]
           },
           {
             "name": "version",
@@ -1043,38 +1116,54 @@
             "validator": "regex",
             "pattern": "single|ha-lab",
             "validation_error": "mode must be 'single' or 'ha-lab'",
-            "prompt_text": "Mode? single / ha-lab   (ha-lab: postgres streaming replication · mysql async replica · mssql Always On AG with CLUSTER_TYPE=NONE — each primary + 2 replicas · oracle Data Guard 1 primary + 1 physical standby. Manual failover, no listener.)"
+            "prompt_text": "Mode? single / ha-lab   (ha-lab: postgres streaming replication · mysql async replica · mssql Always On AG with CLUSTER_TYPE=NONE — each primary + 2 replicas · oracle Data Guard 1 primary + 1 physical standby. Manual failover, no listener.)",
+            "input_type": "choice",
+            "allow_text_input": false,
+            "options": [
+              {
+                "label": "single",
+                "value": "single"
+              },
+              {
+                "label": "ha-lab",
+                "value": "ha-lab"
+              }
+            ]
           },
           {
             "name": "host_port",
             "source": "arg",
             "position": 5,
-            "required": true,
+            "required": false,
             "validator": "regex",
             "pattern": "\\d{2,5}|-",
             "validation_error": "host_port must be a number, or - for the engine default",
-            "prompt_text": "Host port? Type - for the engine default (postgres 5432 · mysql 3306 · mssql 1433 · oracle 1521). Pick another if that port is already taken on the worker."
+            "prompt_text": "Host port? Skip for the engine default (postgres 5432 / mysql 3306 / mssql 1433 / oracle 1521). Pick another if that port is already taken on the target host.",
+            "allow_skip": true
           },
           {
             "name": "password_env",
             "source": "arg",
             "position": 6,
-            "required": true,
+            "required": false,
             "validator": "regex",
             "pattern": "[A-Za-z_][A-Za-z0-9_]{2,63}|-",
             "validation_error": "password_env must be an env-var style name (A-Z, 0-9, _), or - for the default",
-            "prompt_text": "DB password — secret ref? Type - for the default <NAME>_PASSWORD (e.g. MSSQL_LAB_01_PASSWORD). This is the ref the DB password is stored under in the encrypted secret store."
+            "prompt_text": "DB password - secret ref? Skip for the default <NAME>_PASSWORD (e.g. MSSQL_LAB_01_PASSWORD). This is the ref the DB password is stored under in the encrypted secret store.",
+            "allow_skip": true
           },
           {
             "name": "password_text",
             "source": "arg",
             "position": 7,
-            "required": true,
+            "required": false,
             "secret": true,
             "validator": "regex",
             "pattern": ".{8,128}|-",
             "validation_error": "password must be 8-128 chars, or - to reuse the ref in password_env (stored on a previous run)",
-            "prompt_text": "DB password — value? Stored in the encrypted secret store under the ref in password_env and used to start the container. Type - to REUSE a ref already stored on a previous run (then set password_env to that ref name). NOTE: in a group chat this is visible — use a private chat."
+            "prompt_text": "DB password - value? Stored in the encrypted secret store under the ref above and used to start the container. Skip to REUSE a ref that already holds a password from an earlier run.\nIn a group chat this is visible - use a private chat.",
+            "allow_skip": true,
+            "input_type": "secret"
           },
           {
             "name": "deploy_target",
@@ -1084,7 +1173,15 @@
             "validator": "regex",
             "pattern": "worker|\\d{1,3}(\\.\\d{1,3}){3}",
             "validation_error": "deploy_target must be 'worker' (in-container on the worker host) or a remote Ubuntu IP",
-            "prompt_text": "Deploy where? 'worker' = the worker container's docker host (<ip>, as before) · or an IP = provision directly on that Ubuntu host over SSH."
+            "prompt_text": "Deploy where? Tap 'worker' for the worker container's own docker host, or type the IP of an Ubuntu host to provision there over SSH.",
+            "input_type": "choice",
+            "allow_text_input": true,
+            "options": [
+              {
+                "label": "worker",
+                "value": "worker"
+              }
+            ]
           },
           {
             "name": "remote_user",
@@ -1092,60 +1189,138 @@
             "position": 9,
             "required": true,
             "validator": "regex",
-            "pattern": "[A-Za-z0-9._-]{1,64}|-",
-            "validation_error": "remote_user must be an SSH username, or - when deploy_target=worker",
-            "prompt_text": "SSH user on the remote host? Type - when deploy_target=worker."
+            "pattern": "[A-Za-z0-9._-]{1,64}",
+            "validation_error": "remote_user must be an SSH username",
+            "prompt_text": "SSH user on the remote host?",
+            "ask_when": {
+              "parameter": "deploy_target",
+              "not_equals": "worker"
+            }
+          },
+          {
+            "name": "remote_auth",
+            "source": "arg",
+            "position": 10,
+            "required": true,
+            "input_type": "choice",
+            "allow_text_input": false,
+            "allow_skip": false,
+            "ask_when": {
+              "parameter": "deploy_target",
+              "not_equals": "worker"
+            },
+            "options": [
+              {
+                "label": "Secret ref",
+                "value": "secret_ref"
+              },
+              {
+                "label": "Password",
+                "value": "password"
+              },
+              {
+                "label": "SSH key file",
+                "value": "key_file"
+              }
+            ],
+            "validator": "regex",
+            "pattern": "secret_ref|password|key_file",
+            "validation_error": "choose one of: secret_ref, password, key_file",
+            "prompt_text": "How does db_ops authenticate to that host?\nSecret ref = a credential already in the encrypted secret store (nothing more to type).\nPassword = type it here once.\nSSH key file = a private key already in data/ssh_keys/ on this node."
           },
           {
             "name": "remote_password_ref",
             "source": "arg",
-            "position": 10,
+            "position": 11,
             "required": true,
             "validator": "regex",
-            "pattern": "[A-Za-z_][A-Za-z0-9_]{2,63}|-",
-            "validation_error": "remote_password_ref must be an env-var style secret ref, or - to skip",
-            "prompt_text": "SSH password — secret ref? A ref already stored in the encrypted secret store (e.g. REMOTE_198_51_100_146_DBA_USER). Type - to instead give the SSH password as text below, or when deploy_target=worker."
+            "pattern": "[A-Za-z_][A-Za-z0-9_]{2,63}",
+            "validation_error": "remote_password_ref must be an env-var style secret ref",
+            "prompt_text": "Which secret ref holds the SSH password? (e.g. REMOTE_192_0_2_115_DEV)",
+            "ask_when": {
+              "parameter": "remote_auth",
+              "equals": "secret_ref"
+            }
           },
           {
             "name": "remote_password_text",
             "source": "arg",
-            "position": 11,
+            "position": 12,
             "required": true,
             "secret": true,
             "validator": "regex",
-            "pattern": ".+|-",
-            "validation_error": "remote_password_text must be the SSH password, or - to skip",
-            "prompt_text": "SSH password — value? The SSH password as text (passed via env, never argv). Type - when you gave a ref/key, or when deploy_target=worker. In a group chat this is visible — use a private chat."
+            "pattern": ".+",
+            "validation_error": "the SSH password cannot be empty",
+            "prompt_text": "The SSH password? It is passed to the CLI through the environment, never on the command line.\nIn a group chat this is visible - use a private chat.",
+            "input_type": "secret",
+            "ask_when": {
+              "parameter": "remote_auth",
+              "equals": "password"
+            }
           },
           {
             "name": "remote_key_name",
             "source": "arg",
-            "position": 12,
-            "required": true,
-            "validator": "regex",
-            "pattern": "[A-Za-z0-9._-]{1,128}|-",
-            "validation_error": "remote_key_name must be an SSH key file name in data/ssh_keys/ on the worker, or - to skip",
-            "prompt_text": "SSH key file name? For key-auth VMs (e.g. Oracle Cloud), the private key's file name in data/ssh_keys/ on the worker (e.g. oracle-cloud.key). Type - when using a password or when deploy_target=worker."
-          },
-          {
-            "name": "recreate",
-            "source": "arg",
             "position": 13,
             "required": true,
             "validator": "regex",
-            "pattern": "yes|no",
-            "validation_error": "answer yes or no",
-            "prompt_text": "If an instance with that name already exists, recreate it? yes / no\nyes = DESTROYS the existing containers AND their data volumes, then rebuilds from scratch (and replaces the stored password for that ref). Answer no unless you mean it — an existing instance is never touched otherwise."
+            "pattern": "[A-Za-z0-9._-]{1,128}",
+            "validation_error": "remote_key_name must be a file name in data/ssh_keys/",
+            "prompt_text": "Which key file in data/ssh_keys/ on this node? (e.g. oracle-cloud.key)",
+            "ask_when": {
+              "parameter": "remote_auth",
+              "equals": "key_file"
+            }
           },
           {
-            "name": "install_docker",
+            "name": "recreate",
             "source": "arg",
             "position": 14,
             "required": true,
             "validator": "regex",
             "pattern": "yes|no",
             "validation_error": "answer yes or no",
-            "prompt_text": "Install docker + compose on the remote VM if missing? yes / no\nyes = SSH in and install Docker (needs the SSH user to have sudo), add it to the docker group, create the containers dir. Use yes for a fresh Ubuntu VM. Answer no for deploy_target=worker or a VM that already has Docker."
+            "prompt_text": "If an instance with that name already exists, recreate it? yes / no\nyes = DESTROYS the existing containers AND their data volumes, then rebuilds from scratch (and replaces the stored password for that ref). Answer no unless you mean it — an existing instance is never touched otherwise.",
+            "input_type": "choice",
+            "allow_text_input": false,
+            "allow_skip": false,
+            "options": [
+              {
+                "label": "No",
+                "value": "no"
+              },
+              {
+                "label": "Yes - destroy and rebuild",
+                "value": "yes"
+              }
+            ]
+          },
+          {
+            "name": "install_docker",
+            "source": "arg",
+            "position": 15,
+            "required": true,
+            "validator": "regex",
+            "pattern": "yes|no",
+            "validation_error": "answer yes or no",
+            "prompt_text": "Install docker + compose on the remote VM if missing? yes / no\nyes = SSH in and install Docker (needs the SSH user to have sudo), add it to the docker group, create the containers dir. Use yes for a fresh Ubuntu VM. Answer no for deploy_target=worker or a VM that already has Docker.",
+            "input_type": "choice",
+            "allow_text_input": false,
+            "allow_skip": false,
+            "options": [
+              {
+                "label": "No",
+                "value": "no"
+              },
+              {
+                "label": "Yes - install it",
+                "value": "yes"
+              }
+            ],
+            "ask_when": {
+              "parameter": "deploy_target",
+              "not_equals": "worker"
+            }
           }
         ]
       }

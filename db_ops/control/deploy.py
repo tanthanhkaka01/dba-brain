@@ -22,6 +22,7 @@ from db_ops.control._support import (
     require_docker,
     resolve_password,
     run_local,
+    sftp_put_files,
     sftp_put_tree,
     ssh_capture,
     ssh_connect,
@@ -258,6 +259,70 @@ def copy_bundle(*, host: str, user: str, password: str, port: int = 22,
         ssh_run(client, f"ls -la {remote_dir}")
     finally:
         client.close()
+
+
+
+def push_selected(*, host: str, user: str, password: str, port: int = 22,
+                  remote_dir: str = DEFAULT_REMOTE_DIR, files, dry_run: bool = False) -> int:
+    """Ship named files straight into the worker's bind mounts. No image, no restart.
+
+    The fast path for the change that is made ten times a day - a threshold in a ``data/*.json``,
+    one new ``.sql`` under ``assets/tasks`` - where the full deploy's build, 700 MB upload and
+    container replacement buy nothing. ``data/`` and ``assets/`` are bind mounts
+    (``docker-compose.runtime.yml``), the scheduler re-reads ``app_commands.json`` on every scan,
+    and every app command runs as a fresh process: a file written here is what the next run reads.
+
+    What this deliberately does **not** do is as important as what it does. It never prunes a
+    directory the worker has (:func:`superseded_dirs` needs a whole bundle to conclude that), it
+    never merges the worker's own edits back (that is ``--merge`` on a full deploy, and a push is
+    a statement about the named files only), and it never touches the image - a change under
+    ``db_ops/`` is code, and code still arrives by rebuild.
+
+    Ownership is left where :func:`copy_bundle` leaves it, with the SSH user. The container runs
+    as root and root ignores the mode, so what the bot writes is unaffected; taking a different
+    decision here would make a pushed file and a deployed file differ in something nobody would
+    think to look at.
+
+    Returns the number of uploads, so a caller can report a push that moved nothing rather than
+    calling it a success.
+    """
+    selected = list(files)
+    pairs: list[tuple[Path, str]] = [(item.local, f"{remote_dir}/{target}")
+                                     for item in selected for target in item.targets]
+    print(f"=== direction: master -> worker (push, {len(pairs)} file(s)) ===")
+    print(f"Each file below overwrites the worker's copy under {remote_dir}.")
+    print("Nothing else on the worker is read, merged or removed.")
+    for local_path, remote_path in pairs:
+        size_kb = local_path.stat().st_size / 1024
+        print(f"  {local_path.name:<40} -> {remote_path}  ({size_kb:.1f} KB)")
+    if dry_run:
+        print("\n--dry-run: nothing was uploaded.")
+        return 0
+
+    # Before the upload, not after: the container runs as root and anything it wrote into these
+    # bind mounts is root-owned, so an SFTP put as the ordinary SSH user fails on exactly the
+    # files the bot has been maintaining - the ones a push most often has to correct.
+    reclaim_worker_files(host=host, user=user, password=password, port=port,
+                         remote_dir=remote_dir)
+
+    client = ssh_connect(host, user, password, port)
+    try:
+        print("\n=== push ===")
+        done = [0]
+
+        def _report(_local: Path, remote_path: str) -> None:
+            done[0] += 1
+            print(f"  [{done[0]}/{len(pairs)}] {remote_path}", flush=True)
+
+        sftp_put_files(client, pairs, on_file=_report)
+    finally:
+        client.close()
+
+    print(f"\nPushed {len(pairs)} file(s). The worker reads them on its next run: data/ and "
+          "assets/ are bind mounts, the scheduler re-reads app_commands.json every scan, and "
+          "every app command is a fresh process - so nothing is restarted here.")
+    print("A change under db_ops/ is code, not config; that still needs a full deploy.")
+    return len(pairs)
 
 
 #: How long a deploy waits for the daemon and its children to finish before killing them. Long

@@ -36,6 +36,7 @@ from db_ops.lib.timezone import display_now
 from db_ops.common import data_sources
 from db_ops.common.cli import _read_json_request
 from db_ops.config import DEFAULT_CONFIG_PATH, load_config, resolve_config_path
+from db_ops.db import declaration
 from db_ops.db import postgres_store
 from db_ops.db import sqlite_to_postgres as migration
 from db_ops.db.schema_export import export_sqlite_schema
@@ -51,6 +52,17 @@ def build_parser() -> argparse.ArgumentParser:
     info = subparsers.add_parser(
         "store-info", help="Show the resolved store declaration (backend, connection, paths).")
     info.set_defaults(handler=_handle_store_info)
+
+    use = subparsers.add_parser(
+        "use-store",
+        help="Point this node at sqlite or postgresql, in data/store_config.json.")
+    use.add_argument("backend", choices=list(declaration.SWITCHABLE_BACKENDS),
+                     help="Which backend this node writes to from now on.")
+    use.add_argument("--sqlite-path", default=None,
+                     help="Where the sqlite file lives (default: keep what the file already names).")
+    use.add_argument("--dry-run", action="store_true",
+                     help="Print the declaration that would be written, and write nothing.")
+    use.set_defaults(handler=_handle_use_store)
 
     init = subparsers.add_parser(
         "init",
@@ -187,6 +199,60 @@ def _postgres_target(args):
 
 def _resolved_key(args) -> str | None:
     return secret_text.resolve_cli_key(getattr(args, "key", None), getattr(args, "key_base64", None))
+
+
+def _handle_use_store(args) -> int:
+    """Switch the store this node writes to — the last hand-edit in moving an estate.
+
+    ``store_config.json`` travels inside a config bundle, so `import-data` faithfully points a
+    machine that has never run at the store the bundle came from: in practice the shared
+    production one. Every procedure that stands up a node therefore ended with "now edit
+    store_config.json and change backend to sqlite", which is a step in prose on the one path
+    where forgetting it writes an unproven node's rows into the record every other node shares.
+
+    Prints the resolved connection afterwards rather than only saying "done": the mistake this
+    command exists to prevent is *believing* a node is on its own file, so the answer has to be
+    the connection string, not an acknowledgement.
+    """
+    config_path = resolve_config_path("db", args.config)
+    config = load_config(config_path)
+    declared = config.store.config_file
+    if not declared:
+        print("ERROR: this config has no data/store_config.json to switch - the store is the "
+              "legacy config.json sqlite_path. Create the declaration first (db-ops init).",
+              file=sys.stderr)
+        return 2
+    path = Path(declared)
+    text = path.read_text(encoding="utf-8-sig")
+    raw = json.loads(text)
+    try:
+        updated = declaration.switch_backend(raw, args.backend, sqlite_path=args.sqlite_path)
+    except declaration.StoreDeclarationError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+
+    if raw.get("backend") == updated.get("backend") and raw == updated:
+        print(f"already on {updated['backend']}; nothing written.")
+    elif args.dry_run:
+        print(f"--dry-run: would switch {raw.get('backend')} -> {updated['backend']} in {path}")
+        return 0
+    else:
+        # The file carries long explanatory notes as keys; write it back at its own indent so the
+        # diff is the backend line and nothing else.
+        indent = 2
+        for line in text.splitlines():
+            stripped = line.lstrip(" ")
+            if stripped.startswith('"') and line != stripped:
+                indent = len(line) - len(stripped)
+                break
+        path.write_text(json.dumps(updated, ensure_ascii=False, indent=indent) + chr(10),
+                        encoding="utf-8")
+        print(f"switched {raw.get('backend')} -> {updated['backend']} in {path}")
+
+    after = load_config(config_path)
+    print(f"backend            : {after.store.backend}")
+    print(f"active connection  : {after.store.connection_string}")
+    return 0
 
 
 def _handle_store_info(args) -> int:
