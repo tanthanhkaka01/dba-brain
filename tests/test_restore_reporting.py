@@ -64,12 +64,19 @@ def _run(monkeypatch, harness, *, outcome, output=None):
     """Run one due restore whose inner workflow either succeeds, returns ``output``, or raises."""
     monkeypatch.setattr(workflow, "load_restore_configs", lambda _p: [_config()])
 
+    import inspect
+
+    import db_ops.backup_restore.cli as cli
+    real = inspect.signature(cli.run_restore_workflow)
+
     def _inner(**kwargs):
+        # Bound against the real signature: a `**kwargs` stub accepts a renamed parameter, and
+        # that is how `delete_hours` -> `delete_retention` reached the daemon's path green.
+        real.bind(**kwargs)
         if outcome == "error":
             raise RuntimeError("RESTORE DATABASE failed: media set has 2 media families")
         return output if output is not None else {"status": "SUCCESS"}
 
-    import db_ops.backup_restore.cli as cli
     monkeypatch.setattr(cli, "run_restore_workflow", _inner)
 
     return workflow.run_scheduled_restores(
@@ -166,7 +173,7 @@ def test_the_copy_boundaries_are_announced_by_whoever_does_the_copy(monkeypatch)
     monkeypatch.setattr("db_ops.backup_restore.restore_script.transfer_backup_to_target",
                         lambda *a, **k: {"copied": 3, "skipped": 1, "bytes_copied": 99, "pruned": 0})
 
-    module.restore_by_id({"restore_id": "R1"}, on_phase=lambda p, m, e=None: seen.append(p))
+    module.restore_by_id({"cleanup_retention": 691200, "restore_id": "R1"}, on_phase=lambda p, m, e=None: seen.append(p))
 
     assert seen == ["COPY_START", "COPY_DONE"]
 
@@ -219,7 +226,7 @@ def test_script_restores_report_too(monkeypatch, harness):
     # restore_by_id instead of shipping a shell script. What this test is about - that a
     # script-driven entry reports START and END like every other job - is unchanged.
     monkeypatch.setattr("db_ops.backup_restore.restore_by_id.restore_by_id",
-                        lambda *a, **k: {"restore_id": "X", "db_type": "oracle", "steps": []})
+                        lambda *a, **k: {"cleanup_retention": 691200, "restore_id": "X", "db_type": "oracle", "steps": []})
 
     workflow.run_scheduled_restores(
         app_config=SimpleNamespace(sqlite_path=":memory:"), config_path="x.json", force=True,
@@ -241,32 +248,36 @@ def test_the_default_retention_spans_more_than_one_weekly_full():
     """8 days is not arbitrary. The full backup is weekly, so the newest full is at most 7 days
     old; a cutoff shorter than that would delete the full while its incrementals survive, and
     an incremental without its parent restores nothing."""
-    from db_ops.backup_restore.config import DEFAULT_TARGET_RETENTION_SECONDS
+    from db_ops.backup_restore.config import DEFAULT_CLEANUP_RETENTION
 
-    assert DEFAULT_TARGET_RETENTION_SECONDS >= 8 * 24 * 3600
+    assert DEFAULT_CLEANUP_RETENTION >= 8 * 24 * 3600
 
 
 def test_retention_is_read_per_entry_so_targets_can_differ():
-    from db_ops.backup_restore.config import (
-        DEFAULT_TARGET_RETENTION_SECONDS,
-        parse_target_retention_seconds,
-    )
+    import pytest as _pytest
 
-    assert parse_target_retention_seconds({"target_retention_seconds": 86400}, context="x") == 86400
-    assert parse_target_retention_seconds({}, context="x") == DEFAULT_TARGET_RETENTION_SECONDS
-    # 0 is a real setting, not "unset": it means never delete.
-    assert parse_target_retention_seconds({"target_retention_seconds": 0}, context="x") == 0
+    from db_ops.backup_restore.config import parse_cleanup_retention
+
+    assert parse_cleanup_retention({"cleanup_retention": 86400}, context="x") == 86400
+    # 0 is a real setting, not "unset": it removes the *age* gate and leaves the chain rule alone.
+    assert parse_cleanup_retention({"cleanup_retention": 0}, context="x") == 0
+
+    # An absent field used to fall back to the release's default. It no longer does, and this
+    # assertion is the change: on 2026-09-11 six of fourteen restore entries had no field at all
+    # and were each running on whatever that default happened to be, which nobody had chosen.
+    with _pytest.raises(ValueError, match="required"):
+        parse_cleanup_retention({}, context="x")
 
 
 def test_a_negative_or_unparsable_retention_is_refused():
     """Silently treating garbage as the default would hide a typo that changes how much of the
     backup set survives on the target."""
     import pytest as _pytest
-    from db_ops.backup_restore.config import parse_target_retention_seconds
+    from db_ops.backup_restore.config import parse_cleanup_retention
 
     for bad in (-1, "soon", []):
         with _pytest.raises(ValueError):
-            parse_target_retention_seconds({"target_retention_seconds": bad}, context="entry")
+            parse_cleanup_retention({"cleanup_retention": bad}, context="entry")
 
 
 def test_pruning_is_skipped_when_retention_is_zero():

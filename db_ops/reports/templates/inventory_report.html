@@ -184,13 +184,14 @@
   .toolbar{display:flex; gap:8px; justify-content:flex-end; margin-bottom:-8px}
   .btn{font-size:12px; font-family:var(--sans); border:1px solid var(--line); background:var(--surface); color:var(--muted); padding:6px 12px; border-radius:7px; cursor:pointer}
   .btn:hover{color:var(--ink); border-color:var(--faint)}
+__BANNER_CSS__
 </style>
 </head>
 <body>
 
 <header class="masthead">
   <div class="wrap">
-    <p class="eyebrow">ORG / TRX — Database Operations</p>
+    __PAGE_BANNER__
     <h1 class="title">Database Inventory &amp; Health Report</h1>
     <p class="subtitle">Snapshot <b>__SNAPSHOT_DATE__</b> · generated from <code>architecture/database-inventory.json</code> (full inventory + merged health). Lab/test VMs and credentials excluded.</p>
     <div class="kpi-strip" id="kpiStrip"></div>
@@ -308,7 +309,7 @@
   </section>
 
   <footer>
-    <span>Database Inventory Report · template v2 · ORG/TRX DBA Operations</span>
+    <span>DBA Brain · Database Inventory Report</span>
     <span>Source: <code style="font-family:var(--mono)">architecture/database-inventory.json</code> · __SNAPSHOT_DATE__</span>
   </footer>
 </div>

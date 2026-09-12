@@ -424,10 +424,13 @@ def export(
         raise ExportError(
             f"{target} is inside a git repository that can push "
             f"({repository}, remote: {remotes})."
-            "\nThe public tree must not be written into one: it is one push away from an "
-            "early release, and HR-1 says the public repository does not exist yet. Export to a "
-            "plain directory - or a `git init` with no remote - review it, and connect a remote "
-            "only when it is ready to be public."
+            "\nAn export lands as a working-tree change one command away from a push, and what it "
+            "would publish is source that has not been soaked. Export to a plain directory, review "
+            "it, and push only what a release gate has passed."
+            "\n\nIf this IS the release checkout - the normal case once a public repository "
+            "exists - pass --allow-inside-git. The refusal defaults on because the cost of the "
+            "two mistakes is not symmetric: an unnecessary flag is an inconvenience, an early "
+            "push of unproven source cannot be taken back."
         )
 
     if target.exists() and any(target.iterdir()):

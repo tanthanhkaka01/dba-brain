@@ -13,3 +13,9 @@ include CHANGELOG.md
 include LICENSE
 include NOTICE
 recursive-include docs *.md
+
+# The worked examples, and the showcase of real published pages inside them. Added for 0.15.0,
+# when the operator ruled that `examples/` ships with every public release: a reader who takes the
+# sdist gets the two quickstart tool roots, the walkthroughs, and an actual estate's reports with
+# every name replaced - which is the only honest way to show what the output looks like.
+recursive-include examples *

@@ -58,6 +58,14 @@ READS_LOCAL_CONFIG: dict[str, str] = {
                                 "needing a key path no longer imports the paramiko transport.",
     "data_sources/target_resolve.py": "is the target resolver — db_instances.json is its input.",
     "host_ops.py": "resolves a host's OS credential before running anything on it.",
+    # `showcase.py` was listed here for one commit on 2026-09-10 and taken out again by this
+    # file's own second guard: it reaches the inventory only *through* `identifier_scan`, which is
+    # already listed, so it reads no local state of its own. The allowance was the reflex and the
+    # test was right — one module owns the question, and everything else inherits its answer.
+    "instance_admin.py": "writes db_instances.json, users.json and the encrypted secret store. "
+                        "Editing the config IS the operation, the same reason config_admin.py is "
+                        "listed - a version taking the folder as a value would still have to be "
+                        "told which folder, and that is the one thing a tool root already knows.",
     "identifier_scan.py": "searches for the estate's own names, so the inventory is not a "
                           "dependency it happens to have — it is the question. A version taking "
                           "the terms as an argument would need a maintained map beside the "

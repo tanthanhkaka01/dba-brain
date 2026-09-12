@@ -52,7 +52,9 @@ SQLITE_STORE = {
         "'backend' picks which block below is live. It starts on sqlite because a first run has no",
         "PostgreSQL, and needing one to store the results of monitoring is a poor first request.",
         "Move to postgresql when more than one machine writes to the store, or when the history",
-        "should outlive this one: fill in the postgresql block and change 'backend' to postgresql.",
+        "should outlive this one: fill in the postgresql block below, then switch with",
+        "  db-ops db use-store postgresql",
+        "which validates the block and keeps this sqlite one, so the way back is not a retype.",
     ],
     "backend": "sqlite",
     "sqlite": {
@@ -172,17 +174,27 @@ STARTER_METRICS = {
 TELEGRAM_CONFIG = {
     "schema_version": 1,
     "notes": [
-        "Alert delivery. Leave 'enabled' false until you have a bot token.",
+        "'enabled' switches ALERTS to groups, and it ships TRUE: alerts start the moment a token is",
+        "stored and a group has a level, with no third step to forget. Nothing is sent before both",
+        "exist. Set it false to mute alerts. It is not a master switch - commands sent to the bot are",
+        "answered either way.",
         "",
-        "To turn it on:",
+        "To set it up:",
         "  1. Create a bot with @BotFather and copy the token",
-        "  2. Put it in secrets/secret_text.json as TELEGRAM_BOT_TOKEN",
-        "  3. Add your chat to data/telegram_groups.json with a notify_level",
-        "  4. Set 'enabled' to true here",
+        "  2. Pipe {\"ref\": \"TELEGRAM_BOT_TOKEN\", \"value\": \"<token>\"} into",
+        "     python -m db_ops.common.cli secret-set -      (stdin: never on the command line)",
+        "  3. Message the bot from yourself and from each group, then",
+        "     db-ops telegram user-level --user @you --level 100",
+        "     db-ops telegram group-level --group \"<title>\" --level warning",
+        "  Alerts are already on; that is all.",
         "",
         "level_chat_map routes a severity to a chat. Anything not mapped falls back to 'private'.",
     ],
-    "enabled": False,
+    # True since 2026-09-11, at the operator's direction: shipping it false made "store the token"
+    # and "turn alerts on" two steps, and a node that had done the first answered commands while
+    # sending no alert at all - which read as broken. It cannot send early: with no token the
+    # Telegram app skips, and with no group level nothing routes (routing.route_for_level).
+    "enabled": True,
     # Three ways in, tried in this order: the environment variable named by `bot_token_env`, then
     # the secret store under `telegram_bot_token_ref`, then the literal `bot_token`. The middle one
     # is the one to use, and the scaffold missed it until a real send failed with "bot token is
@@ -379,20 +391,32 @@ No server role, and no access to your data.
 
 ## Alerts to Telegram
 
-Optional, and off until a token exists.
+Optional. Nothing is sent or answered until a token exists.
 
 1. Create a bot with `@BotFather`, copy the token.
-2. Add it to `secrets/secret_text.json` as `TELEGRAM_BOT_TOKEN`, and re-run `encrypt-secret`.
-3. Add the chat to `data/telegram_groups.json` with a `notify_level`.
-4. Set `enabled` to `true` in `data/telegram_config.json`.
+2. Store it encrypted, never in clear — the request goes on stdin, not the command line:
+   `{"ref": "TELEGRAM_BOT_TOKEN", "value": "<token>"}` piped into
+   `python -m db_ops.common.cli secret-set -`.
+   From then on the bot **answers commands** — the running daemon picks the token up.
+3. Send the bot one message from yourself and one in each group, so they are discovered, then
+   say what each is for: `db-ops telegram user-level --user @you --level 100` and
+   `db-ops telegram group-level --group "<title>" --level warning`.
+
+That is all: **alerts are on by default** (`enabled: true` in `data/telegram_config.json`) and
+start as soon as a group has a level. Set `enabled` to `false` to mute alerts; commands are
+answered either way.
+
+Do not run `encrypt-secret` after step 2 unless `secrets/secret_text.json` holds the token too: it
+replaces the store with that file, and the file `init` wrote holds no secrets.
 
 ## Where the results go
 
 **SQLite, in `runtime/`.** Nothing to install: a first run has no PostgreSQL, and needing one to
 hold the results of monitoring is a poor first request.
 
-Move later by filling in the `postgresql` block in `data/store_config.json` and changing `backend`
-to `postgresql`. The block is already there with every field, which is why the file looks larger
+Move later by filling in the `postgresql` block in `data/store_config.json` and then switching
+with `db-ops db use-store postgresql`, which checks the block before it points anything at it and
+keeps the section you left, so coming back is not a retyping exercise. The block is already there with every field, which is why the file looks larger
 than a first run needs.
 
 ## Set the clock before anything is scheduled
@@ -533,6 +557,16 @@ PACKAGED_DEFAULTS: dict[str, str] = {
     # public tree's suite: the confirmation tests pass where the file exists and fail where it
     # does not, which is the difference between the two trees.
     "data/emergency_operations.json": "common/catalogue/emergency_operations.json",
+    # Ships **empty**, and that is the content rather than a placeholder: a restore target is an
+    # estate fact with no sensible default. What it carries is the shape and the word "empty".
+    #
+    # It is here because the absence was not readable. `data_files.json` lists
+    # `restore_config.json` as one of the toolkit's files, `init` never wrote one, and switching
+    # the backup/restore command on made the app fail every cycle with the whole of its error text
+    # being `'prod_backup_share'` - a key name, naming neither the missing file nor the app that
+    # wanted it. The loader reports "nothing configured" properly now; this gives the operator the
+    # file the manifest already promised them.
+    "data/restore_config.json": "backup_restore/catalogue/restore_config.json",
 }
 
 PACKAGED_CATALOGUE = Path(__file__).parent / "metrics" / "catalogue" / "metric_definitions.json"
@@ -586,7 +620,7 @@ def _files(app_name: str) -> list[tuple[str, dict]]:
                          "data/app_commands.json", "data/config_catalog.json",
                          "data/data_files.json", "data/emergency_operations.json",
                          "data/webhost_config.json", "data/sla_policies.json",
-                         "data/ops_status_request.json")
+                         "data/ops_status_request.json", "data/restore_config.json")
             if (content := packaged_default(name)) is not None
         ),
         ("data/users.json", EMPTY_USERS),

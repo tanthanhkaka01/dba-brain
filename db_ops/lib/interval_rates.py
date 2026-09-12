@@ -26,6 +26,14 @@ the only thing missing was the arithmetic — and the three rules that make it h
 * **No pair means no answer.** The caller says "no interval data yet" and must never fall back to
   the cumulative average, which is the very thing this exists to replace.
 
+**Gauges take the other arithmetic, and it is in here too.** ``window_gauge`` summarises several
+readings of a *current-state* counter — buffer pool size, memory grants pending, page life
+expectancy — into latest / lowest / highest over the same windows. It is not a variant of the
+subtraction and must never be mistaken for one: differencing a gauge produces a figure that looks
+like a rate and means nothing, and printing one reading of a gauge invites the conclusion that a
+single instant is the instance's profile. Both mistakes were made about the same instance on
+2026-09-11, which is why the two functions sit here under names that say which is which.
+
 This arithmetic lived here until 2026-08-11 and was withdrawn with the rest of
 ``PERFORMANCE_IO_LATENCY``'s bespoke *grading* path — per-metric machinery in the collector is what
 this codebase does not do. It comes back on the other side of that line: nothing here grades
@@ -210,4 +218,88 @@ def io_latency_interval(samples: list[dict[str, Any]]) -> dict[str, Any] | None:
         "readIops": round(reads / result["seconds"], 1) if result["seconds"] else None,
         "writeIops": round(writes / result["seconds"], 1) if result["seconds"] else None,
         "countersSince": result["counters_since"],
+    }
+
+
+def window_gauge(samples: list[dict[str, Any]], *, fields: list[str], window_hours: float,
+                 newest_only: bool = False) -> dict[str, Any] | None:
+    """Summarise **gauge** readings over a window: latest, lowest, highest and mean.
+
+    The counterpart to :func:`window_delta`, and deliberately not a variant of it. A cumulative
+    counter only means something once two readings are subtracted; a gauge means something on its
+    own and means nothing at all subtracted — the difference between two page-life-expectancy
+    readings is a number that looks like a rate and is not one. Which arithmetic a metric takes is
+    a property of the metric, so the two live side by side under names that say which is which.
+
+    **Why a range and not a reading.** Asked on 2026-09-11, when an instance was called short of
+    memory because page life expectancy read 54 seconds — and the same counter read 447 shortly
+    afterwards, with its five NUMA nodes spread over 378 to 721. Neither number was wrong and
+    neither was the instance's memory profile; a gauge sampled once is the value at one instant,
+    and a page that prints one instant invites exactly that conclusion. ``min`` and ``max`` are
+    what make the reader see the spread, and for most of these rows one of the two ends is the
+    finding: the lowest page life expectancy, the highest number of pending memory grants.
+
+    ``newest_only`` is the "latest interval" column — the most recent reading alone, where min,
+    max and mean are all that one sample and the span is zero. It is a column about *now* and
+    stating a range for it would be inventing one.
+
+    ``restarted`` marks a window whose samples do not all share a ``counters_since``. A gauge
+    survives a restart in a way a counter does not, so the window is still reported — but page
+    life expectancy starts near zero after one and climbs, so a minimum drawn from across a
+    restart is the restart rather than memory pressure, and the page has to be able to say so.
+
+    Returns ``None`` when the window holds no reading of any requested field. The mean is over
+    samples, not weighted by time: these gauges are collected on a fixed cadence, so the two agree
+    except where collections were missed — and a window that missed collections reports the span
+    it actually covered, which is the honest place for that to show.
+    """
+    stamped: list[tuple[float, str, dict[str, Any]]] = []
+    for sample in samples:
+        stamp = as_epoch(sample.get("collected_at"))
+        if stamp is None:
+            continue
+        stamped.append((stamp, str(sample.get("counters_since") or ""), sample))
+    if not stamped:
+        return None
+    stamped.sort(key=lambda item: item[0])
+
+    newest_stamp = stamped[-1][0]
+    if newest_only:
+        inside = stamped[-1:]
+    else:
+        floor = newest_stamp - window_hours * 3600
+        inside = [item for item in stamped if item[0] >= floor]
+    if not inside:
+        return None
+
+    readings: dict[str, dict[str, Any]] = {}
+    for name in fields:
+        # Per field, not per sample: a collection where one item failed costs that item's reading
+        # and not the whole window. `window_delta` drops the sample whole for the opposite reason —
+        # a counter missing from one end of a subtraction has no difference at all.
+        values = [as_float(item[2].get(name)) for item in inside]
+        values = [value for value in values if value is not None]
+        if not values:
+            continue
+        latest = next((as_float(item[2].get(name)) for item in reversed(inside)
+                       if as_float(item[2].get(name)) is not None), None)
+        readings[name] = {
+            "latest": latest,
+            "min": min(values),
+            "max": max(values),
+            "avg": sum(values) / len(values),
+            "count": len(values),
+        }
+    if not readings:
+        return None
+
+    markers = {item[1] for item in inside if item[1]}
+    return {
+        "seconds": round(newest_stamp - inside[0][0], 1),
+        "from": inside[0][0],
+        "to": newest_stamp,
+        "samples": len(inside),
+        "readings": readings,
+        "restarted": len(markers) > 1,
+        "counters_since": stamped[-1][1],
     }

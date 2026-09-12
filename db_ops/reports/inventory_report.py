@@ -32,6 +32,7 @@ from db_ops.lib import backup_policy
 from db_ops.reports import inventory_health
 from db_ops.reports.inventory_health import merged_drives, merged_sql_resources
 from db_ops.lib.paths import TOOL_ROOT  # noqa: F401 - one definition, see that module
+from db_ops.lib import page_banner
 from db_ops.lib.timezone import (file_stamp, format_offset, label_from_file_stamp,
                                  offset_minutes)
 
@@ -999,9 +1000,22 @@ def build_fleet_linked_servers(sqlite_path, *, days: int, as_of: str | None = No
     return rows
 
 
-def render_html(scope, models, triage, date_iso, linked_servers=None) -> str:
+def render_html(scope, models, triage, date_iso, linked_servers=None, report_dir=None) -> str:
     template = TEMPLATE_HTML.read_text(encoding="utf-8")
     return (template
+            .replace("__BANNER_CSS__", page_banner.CSS)
+            # The head offered three pages and never the index reports, which is how an estate
+            # published fourteen of them nightly with nothing linking to any. `report_dir` is
+            # optional so a caller that only wants markup still gets it - and without one the
+            # filter cannot run, so the three stable siblings are offered as before.
+            .replace("__PAGE_BANNER__", page_banner.render(
+                title="Fleet inventory", snapshot_at=date_iso,
+                here="database-inventory.html",
+                links=None if report_dir is None else page_banner.siblings_present(
+                    lambda name: name == "database-inventory.html"
+                    or (Path(report_dir) / name).exists(),
+                    index_usage=page_banner.pick_index_usage(
+                        path.name for path in Path(report_dir).glob("index-usage_*.htm*")))))
             .replace("__SNAPSHOT_DATE__", date_iso)
             .replace("__UTC_OFFSET_MINUTES__", str(offset_minutes()))
             .replace("__UTC_OFFSET_LABEL__", format_offset(offset_minutes()))
@@ -1310,8 +1324,9 @@ def build_inventory_report(*, inventory: str | Path = DEFAULT_INVENTORY,
             model["indexUrl"] = index_file if (Path(output_dir) / index_file).exists() else ""
 
     linked_servers = build_fleet_linked_servers(sqlite_path, days=int(days)) if sqlite_path else []
-    html_path.write_text(render_html(scope, models, triage, date_iso, linked_servers),
-                         encoding="utf-8")
+    html_path.write_text(
+        render_html(scope, models, triage, date_iso, linked_servers, report_dir=output_dir),
+        encoding="utf-8")
     md_path.write_text(render_md(scope, models, triage, date_iso), encoding="utf-8")
     print(f"Wrote {html_path}")
     print(f"Wrote {md_path}")

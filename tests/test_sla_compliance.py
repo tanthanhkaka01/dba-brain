@@ -1,3 +1,5 @@
+import json
+
 from db_ops.metrics.models import MetricResult
 from db_ops.metrics.storage import MetricStore
 from db_ops.sla.compliance import validate_sla_policies
@@ -58,11 +60,30 @@ def test_validate_sla_policy_fails_when_actual_is_below_objective(tmp_path):
         sqlite_path=tmp_path / "db_ops.sqlite",
         policies=[policy],
         window_end="2026-05-28T04:00:00Z",
+        data_dir=_configured_data_dir(tmp_path),
     )
 
     assert summary.status == "FAILED"
     assert summary.failed_count == 1
     assert summary.results[0].actual_percent == 50.0
+
+
+def _configured_data_dir(tmp_path):
+    """A `data/` naming one enabled instance, so "nothing is configured" is not the answer.
+
+    `validate_sla_policies` distinguishes *nothing to measure* from *everything stopped reporting* -
+    both produce a page of NO_DATA and only one is an incident - by reading the inventory. A test
+    that does not say which inventory reads the tree it happens to run in: green on an operator's
+    checkout, NO_DATA in the distribution, where `data/db_instances.json` does not ship. Stating it
+    here is what makes the assertion about the SLI rather than about the checkout.
+    """
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(exist_ok=True)
+    (data_dir / "db_instances.json").write_text(json.dumps({"db_instances": [
+        {"server_id": "ACME-192-0-2-9", "db_type": "sqlserver", "ip": "192.0.2.9",
+         "port": 1433, "service_name": "MSSQLSERVER", "enabled": True},
+    ]}), encoding="utf-8")
+    return data_dir
 
 
 def test_validate_sla_policy_reports_no_data(tmp_path):
@@ -79,6 +100,7 @@ def test_validate_sla_policy_reports_no_data(tmp_path):
         sqlite_path=tmp_path / "db_ops.sqlite",
         policies=[policy],
         window_end="2026-05-28T04:00:00Z",
+        data_dir=_configured_data_dir(tmp_path),
     )
 
     assert summary.status == "FAILED"

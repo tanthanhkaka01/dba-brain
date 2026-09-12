@@ -112,7 +112,7 @@ def run_scheduled_restores(
     logger: Any = None,
     restore_id: str | None = None,
     copy_hours: int = 24,
-    delete_hours: int | None = None,
+    delete_retention: int | None = None,
     dry_run: bool = False,
     force: bool = False,
     key: str | None = None,
@@ -212,7 +212,7 @@ def run_scheduled_restores(
                 restore_configs=[config],
                 app_config=app_config,
                 copy_hours=copy_hours,
-                delete_hours=delete_hours,
+                delete_retention=delete_retention,
                 dry_run=False,
                 force=force,
                 logger=logger,
@@ -386,7 +386,7 @@ def run_workflow(
     env_overrides: dict[str, str] | None = None,
     backup_type: str | None = None,
     copy_hours: int = 24,
-    delete_hours: int | None = None,
+    delete_retention: int | None = None,
     skip_backup: bool = False,
     skip_restore: bool = False,
 ) -> dict[str, Any]:
@@ -403,7 +403,7 @@ def run_workflow(
     if not skip_restore:
         result["restore"] = run_scheduled_restores(
             app_config=app_config, config_path=config_path, logger=logger,
-            restore_id=restore_id, copy_hours=copy_hours, delete_hours=delete_hours,
+            restore_id=restore_id, copy_hours=copy_hours, delete_retention=delete_retention,
             dry_run=dry_run, force=force, key=key, key_base64=key_base64,
         )
 

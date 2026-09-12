@@ -20,6 +20,17 @@ The Backup Restore App copies backup files, restores SQL Server FULL (and option
 
 `data/restore_config.json` defines source/target paths, SQL Server connection metadata, database mapping, certificate import settings, copy/delete windows, and restore verification behavior. Secrets are resolved through the same local secret pattern as other database connections.
 
+**Nothing configured is a state, not a failure.** `db-ops init` writes the file from
+`db_ops/backup_restore/catalogue/restore_config.json`: `{"backups": [], "restores": []}` plus
+`notes` giving the shape and the `cleanup_retention` contract. It ships empty because a restore
+target is an estate fact and has no sensible default. An empty list, an absent `restores` key and
+an absent file all load as **no entries**: the scheduled `workflow` has nothing due, reports
+`configured: 0` and exits 0, while a manual command that needs one restore (`copy-backup`,
+`restore-latest`, `verify-restore`, ...) fails with a message naming `data/restore_config.json`. Before
+2026-09-11 they did not: `init` wrote no file at all, the loader parsed its own empty defaults as one
+malformed entry, and the only thing the operator saw was `ERROR: 'prod_backup_share'` on every cycle.
+`restores: []` was also refused outright, which would have made the shipped empty file fail too.
+
 ## Data Flow
 
 Restore config -> copy recent backup files into import location -> optionally import certificate -> locate latest FULL backup -> generate/execute SQL Server restore SQL -> verify restored database -> write `backup_restore_history` and logs -> delete old copied files when requested.
@@ -44,7 +55,8 @@ python -m db_ops.backup_restore.cli copy-backup --config config.json --restore-i
 # Still here because restore-workflow calls it and the daemon schedules that; nothing new
 # should use it. It computes its own set from a retention window and a *.bak glob, so what it
 # would remove cannot be inspected first — which is the whole reason the replacement exists.
-python -m db_ops.backup_restore.cli delete-backup --config config.json --hours 48
+python -m db_ops.backup_restore.cli delete-backup --config config.json --dry-run
+python -m db_ops.backup_restore.cli delete-backup --config config.json --retention-seconds 172800
 
 # Import encryption certificate (dry-run first)
 python -m db_ops.backup_restore.cli import-certificate --config config.json --source-id ACME-192-0-2-250 --dry-run
@@ -154,9 +166,10 @@ cadences. Reporting is the default and `--apply` is what deletes, the opposite d
 `backup`: reporting a backup that did not happen is a wasted run, reporting a deletion that did not
 happen is not.
 
-Each entry is judged with **its own `retention_days`** — the same number its own script prunes with,
-so the two cannot drift — through `common`'s `prune-backup-files` (`docs/13_common.md`), `mode=age`
-by default. `--retention-days` and `--mode` override for one run. Oracle and PostgreSQL entries are
+Each entry is judged with **its own `cleanup_retention`** — the same number its own script prunes
+with, so the two cannot drift — through `common`'s `prune-backup-files` (`docs/13_common.md`),
+`mode=age` by default. `--retention-seconds` and `--mode` override for one run (`--retention-days`
+is the deprecated spelling and is multiplied on the way in). Oracle and PostgreSQL entries are
 listed from the filesystem; SQL Server entries are **skipped by name**, because their listing goes
 through the instance and needs a login this command does not carry. Each run writes its own
 `job_runs` row under `backup_restore.prune_job.<backup_id>.<job>`, so "did the cleanup run" is a
@@ -805,15 +818,33 @@ Note the transfer itself is **not** bounded by the entry's `time_window.timeout`
 governs the script step. A run longer than the timeout still completes, but the reaper will mark
 its `job_runs` row `TIMEOUT` in the meantime.
 
-## Target Retention (`target_retention_seconds`)
+## Retention (`cleanup_retention`)
 
-How long a restore keeps the backup files it staged **on the machine it restores onto**. This is
-the *target's* retention and has nothing to do with the source's: the source decides how far back
-it can recover from, the target only needs enough to run its next restore. Without it a staging
-directory only grows — the transfer copies what the source has and never removes what the source
-dropped — until it fills the disk it restores onto.
+**One field, one unit, both halves.** `cleanup_retention` is **seconds**, it is **mandatory** on
+every restore entry and every backup job, and each side acts on it differently:
 
-Set per restore entry, in seconds. `0` means never delete.
+| Side | Where | What it prunes, and when |
+| --- | --- | --- |
+| backup | `backups[].jobs[].cleanup_retention` | the directory that job **wrote to**, after the backup |
+| restore | `restores[].cleanup_retention` | what the restore **staged on the target**, after the restore |
+
+It was two fields in two units until 2026-09-11 — `retention_days` on a backup job and
+`target_retention_seconds` on a restore entry — which an operator asked about directly: *"why
+both?"* One idea wearing two costumes reads as an inconsistency because it is one. Both old
+spellings still load (days are converted, not guessed at) so a config written before this does not
+stop working, but nothing writes them any more.
+
+Seconds also removed a rounding nobody could see: the delete engine spoke hours and the configured
+seconds were converted with `max(1, seconds // 3600)` on the way in, so any retention under an hour
+silently became one hour. A setting the tool quietly replaces is worse than one it refuses.
+
+`0` is a real value and means **no age gate** — not "keep everything". Every file becomes a
+candidate and the chain rule alone decides: never the newest full, nor anything at or after it.
+
+The restore side is the *target's* retention and has nothing to do with the source's: the source
+decides how far back it can recover from, the target only needs enough to run its next restore.
+Without it a staging directory only grows — the transfer copies what the source has and never
+removes what the source dropped — until it fills the disk it restores onto.
 
 | Entry | Value | Why |
 | --- | --- | --- |
@@ -836,8 +867,20 @@ margin is deliberate rather than tight.
 Pruning runs **after** the copy, never before — pruning first would delete files the run is about
 to need and the copy would fetch them again over the same slow link.
 
-`--delete-hours` on `workflow` / `restore-workflow` overrides it for one run (in hours). Unset
-means "use each entry's own value".
+`--delete-retention-seconds` on `workflow` / `restore-workflow` overrides it for one run, and
+`delete-backup` takes `--retention-seconds`. Unset means "use each entry's own value", which is
+now always something. The `--delete-hours` / `--hours` spellings still work and are multiplied by
+3600 in the open (`cli._retention_override`), rather than the configured seconds being divided
+down somewhere inside the workflow.
+
+Whole days are still derived at the two edges that only speak days: `RETENTION_DAYS` in the backup
+scripts' environment, and the day-based planner in `db_ops/lib/backupfiles_retention.py`. Neither
+is a second setting — `BackupJob.retention_days` is a read-only property over this one.
+
+Both phases announce themselves to the store (`DELETE_START` / `DELETE_DONE`) with
+`files_considered` / `deleted` / `skipped`. Until 2026-09-11 the cleanup wrote nothing at all: across
+254 recorded workflow runs there was no row saying whether retention had ever pruned anything, and
+`SUCCESS` covered both "pruned thirteen files" and "scanned nothing".
 
 ---
 
@@ -925,6 +968,7 @@ Two properties are deliberate:
 - PITR fails with "no log backups found": log backups are required in the import folder covering the target point in time; verify that log files were copied with `copy-backup` before using `--point-in-time`.
 - PITR fails with "cannot parse point-in-time": use the exact format `YYYY-MM-DD HH:MM:SS +HH:MM` (space before the timezone offset, not a colon-less `+HHMM`).
 - `--restore-id` not found: the value must match the `restore_id` key exactly (case-sensitive) in `restore_config.json`.
+- `APP-BACKUP-RESTORE` fails with the whole error text `'prod_backup_share'`: the node runs a build from before 2026-09-11 and has no restore configured. Nothing is broken in the config; an upgrade reports it as "nothing configured" instead. Until then, copy the shipped empty `restore_config.json` into `data/`, or set the command `active: false` on that node. From 2026-09-11 the command ships **active**: with both lists empty it finishes `status=done` and does nothing.
 - `[WinError 53] The network path was not found: \\host\SQLBK_IMPORT\`: the SMB share does not exist on the target Windows VM. The preflight will attempt auto-create via WinRM. If auto-create fails, see the `SQLBK_IMPORT` section above for manual fix steps and WinRM setup instructions.
 - Ubuntu/Linux target gets `[WinError 53]` or UNC error: check `vm_platform` is `"linux"` in `restore_config.json`; Linux targets must not have a UNC `vm_import_unc` — use `vm_import_linux_path` instead.
 - Database left in RESTORING state by a failed run: the next `restore-workflow` run automatically handles this — the RESTORING state guard skips `SET SINGLE_USER` and `RESTORE DATABASE WITH REPLACE` overwrites the stale database.
@@ -948,7 +992,7 @@ App-specific config file: `config.backup_restore.json`
 
 **Standalone mode**: copy `config.backup_restore.json` next to the EXE. The file must contain both the shared config keys and the `backup_restore` source definitions. Point the store at a local path - a standalone EXE is the one layout where `sqlite_path` is still the natural setting, because it has no shared server. No other app needs to be running.
 
-Required config keys: `log_dir`, a resolvable runtime store, and at least one entry in the `backup_restore` sources array within the config.
+Required config keys: `log_dir` and a resolvable runtime store. The `backup_restore` section may be empty: `workflow` then has nothing due and exits 0, and a manual restore command says that no entry is configured.
 
 ## Optional Integrations
 

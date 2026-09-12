@@ -42,6 +42,7 @@ from db_ops.common.data_sources import resolve_ssh_key, resolve_ssh_password
 from db_ops.common.ssh import open_ssh_client
 from db_ops.lib.ssh_errors import SshError
 from db_ops.lib.notify import NotifyConfig
+from db_ops.lib import cleanup_retention
 from db_ops.lib.time_window import TimeWindow, is_time_window_open, job_due, parse_time_window_config
 from db_ops.config import DbOpsConfig
 from db_ops.db.job_runs import JobRun
@@ -78,7 +79,10 @@ class BackupJob:
     server_id: str
     script: str
     backup_dir: str
-    retention_days: int | None
+    #: How long the directory this job writes to keeps its files, in seconds. The one retention
+    #: field, shared with the restore side - see db_ops.lib.cleanup_retention. Not defaulted:
+    #: every job states it, and a default here would reintroduce the silent fallback just removed.
+    cleanup_retention: int
     time_window: TimeWindow
     active: bool = True
     env: dict[str, str] = field(default_factory=dict)
@@ -93,6 +97,18 @@ class BackupJob:
     # Per-job notify object (db_ops.lib.notify), inherited from the backup entry and
     # overridable rule by rule on the sub-job.
     notify: NotifyConfig = field(default_factory=NotifyConfig)
+
+    @property
+    def retention_days(self) -> int | None:
+        """``cleanup_retention`` in whole days, for the two readers that only speak days.
+
+        Derived, never configured: the backup scripts take ``RETENTION_DAYS`` in their environment
+        and the planner in ``db_ops.lib.backupfiles_retention`` reasons in days, and neither is a
+        second setting - they are this one, rounded down, at the edge where it leaves Python.
+        ``None`` when the window is under a day, so the reader keeps its own default rather than
+        being handed a 0 it would read as "delete everything".
+        """
+        return int(cleanup_retention.as_days(self.cleanup_retention)) or None
 
     @property
     def job_code(self) -> str:
@@ -169,7 +185,10 @@ def load_backup_jobs(config_path: str | Path | None = None) -> list[BackupJob]:
                 raise ValueError(f"{backup_id}.{job_name} requires backup_dir (on the job or the entry).")
             context = f"backup_restore.backups[{index}].jobs[{job_index}]"
             parsed = parse_time_window_config(raw_job, context=context)
-            retention = raw_job.get("retention_days")
+            # The same field the restore side reads, in the same unit, handled differently:
+            # backup prunes the directory it wrote to, restore prunes what it staged. One idea,
+            # one spelling - see db_ops.lib.cleanup_retention.
+            retention_seconds = cleanup_retention.parse(raw_job, context=f"{backup_id}.{job_name}")
             job_env = raw_job.get("env") or {}
             if not isinstance(job_env, dict):
                 raise ValueError(f"{backup_id}.{job_name}.env must be an object.")
@@ -184,7 +203,7 @@ def load_backup_jobs(config_path: str | Path | None = None) -> list[BackupJob]:
                 server_id=server_id,
                 script=script,
                 backup_dir=job_backup_dir,
-                retention_days=int(retention) if retention not in (None, "") else None,
+                cleanup_retention=retention_seconds,
                 time_window=parsed.time_window,
                 active=entry_active and bool(raw_job.get("active", True)),
                 env={str(k): str(v) for k, v in job_env.items()},

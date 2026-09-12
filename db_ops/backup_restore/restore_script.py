@@ -55,8 +55,8 @@ from db_ops.backup_restore.server_metadata import (
 )
 from db_ops.backup_restore.transfer import prune_target_dir, sync_backup_dir
 from db_ops.backup_restore.config import (
-    DEFAULT_TARGET_RETENTION_SECONDS,
-    parse_target_retention_seconds,
+    DEFAULT_CLEANUP_RETENTION,
+    parse_cleanup_retention,
 )
 from db_ops.lib import instance_bundle
 from db_ops.lib.notify import NotifyConfig
@@ -87,8 +87,8 @@ class ScriptRestore:
     # the database resolves the path in its own namespace. Empty means the two are the same.
     target_visible_dir: str = ""
     # How long staged files are kept on the target host (seconds; 0 = never delete). See
-    # db_ops.backup_restore.config.DEFAULT_TARGET_RETENTION_SECONDS.
-    target_retention_seconds: int = DEFAULT_TARGET_RETENTION_SECONDS
+    # db_ops.backup_restore.config.DEFAULT_CLEANUP_RETENTION.
+    cleanup_retention: int = DEFAULT_CLEANUP_RETENTION
     active: bool = True
     # Opt-in: also replay the source instance's server-level metadata around this restore.
     # Absent means the restore behaves exactly as it did before this existed.
@@ -195,7 +195,7 @@ def load_script_restores(config_path: str | Path | None = None) -> list[ScriptRe
             target_backup_dir=target_backup_dir,
             target_visible_dir=str(entry.get('target_visible_dir') or '').strip(),
             source_backup_host_dir=source_backup_host_dir,
-            target_retention_seconds=parse_target_retention_seconds(
+            cleanup_retention=parse_cleanup_retention(
                 entry, context=f"backup_restore.restores[{index}]"
             ),
             backup_dir=str(entry["backup_dir"]).strip(),
@@ -489,7 +489,7 @@ def transfer_backup_to_target(
             # about to need and the copy would fetch them again over the same slow link. After
             # the copy, whatever is old here is old at the source too.
             pruned = prune_target_dir(
-                target_client, job.target_backup_dir, job.target_retention_seconds, log=log,
+                target_client, job.target_backup_dir, job.cleanup_retention, log=log,
             )
         finally:
             target_client.close()

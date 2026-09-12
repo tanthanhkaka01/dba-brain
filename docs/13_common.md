@@ -381,7 +381,7 @@ turning one on is deliberate. A ready-to-adapt entry:
  "env_secrets": {"BACKUP_ENCRYPTION_PASSWORD": "<secret ref>"},
  "jobs": [{"job": "full", "active": false,
            "script": "assets/backup/sqlserver/mssql_backup_database.ps1",
-           "retention_days": 14,
+           "cleanup_retention": 1209600,
            "env": {"BACKUP_LEVEL": "full", "MSSQL_SERVER": "."},
            "time_window": {"from_hour": 1, "to_hour": 5,
                            "repeat_interval": 72000, "timeout": 7200}}]}
@@ -395,20 +395,23 @@ Measured on 2026-08-07 against 203.0.113.188: an RMAN archivelog backup through
 `docker exec`, `RESULT=ok` in 16s — the same run through `backup_restore.cli backup --force` took
 17s, because it is now the same code.
 
-### `prune-backup-files` — the part that decides, with 14 days as the default
+### `prune-backup-files` — the part that decides, with 8 days as the default
 
 The piece between listing and deleting: which files are obsolete. It lists through the same code
 path `list-backup-files` uses — so a caller cannot be shown one set by `list` and have a different
 set judged by `prune` — then applies a rule, then optionally hands the paths to `delete-files`.
 
-**`retention_days` defaults to 14**, which is what `restore_config.json` already says for every
-`database`/`full` job and what the backup scripts default to themselves.
+**`cleanup_retention` is seconds**, the one name both halves of `backup_restore` read
+(`docs/08_backup_restore_app.md`), and it **defaults to 8 days** here — this command is also run by
+hand against a directory nobody has configured, which is the one case where "the entry states it"
+has no answer. `retention_days` is still read, in days, for a request written before 2026-09-11.
+The planner underneath reasons in whole days, so the seconds are converted at this edge, once.
 
 Two rules, and **`age` is the default**:
 
 | mode | rule |
 | --- | --- |
-| `age` (default) | a file finished before `now - retention_days` is obsolete — full, diff and log alike, whatever depends on it |
+| `age` (default) | a file finished before `now - cleanup_retention` is obsolete — full, diff and log alike, whatever depends on it |
 | `recovery_window` | keep whatever is needed to restore to *any* point in the window: the anchor is the newest FULL at or before the cutoff, and everything from there on stays. RMAN's `DELETE OBSOLETE … RECOVERY WINDOW OF n DAYS` |
 
 They differ only when fulls are taken rarely relative to the window. Restoring to a point ten days
@@ -1288,6 +1291,17 @@ Three things it takes care to get right rather than merely report:
   through instead of reporting 8 EiB, and every figure carries the source it came from.
 - **Docker or the OS, and which OS.** `platform.platform()` answers "Linux" to both Ubuntu and RHEL,
   which does not help anyone deciding whether a package name applies.
+- **Where its own pages are — built, never recited.** The block added on 2026-09-10 lists the
+  console, the reports mount and the pages under stable names, with the port taken from the
+  webhost entry's own `command_text` (`data_sources.webhost_endpoints`). Stating a port from
+  memory in a status report is the same defect the block exists to catch. A node with no webhost
+  entry says *not served from this node* rather than inventing a default, and a disabled entry is
+  named because nothing is listening on it.
+- **Whether the published links still point here.** `report_base_url` is one configured string and
+  nothing re-renders a page that is already on disk, so a moved estate keeps publishing links to
+  the node it moved off — measured on 2026-09-10, two days after the move, when every index-usage
+  page still named the retired worker. `self-status` now compares that setting against this node's
+  own base and prints a `WARNING` naming both when they disagree.
 
 No third-party dependency does any of this — the package has two, and neither is `psutil`. What the
 standard library cannot answer on a platform is reported as unavailable rather than guessed.
@@ -1532,6 +1546,29 @@ script it belongs in `common` with a CLI — and the reason is visible in the ou
 lift moved 90 records and checked 183 file references in one command, and refused twice before it
 was allowed to write.
 
+## Storing one secret (`secret-set`, 2026-09-11)
+
+`encrypt-secret` is the bulk path: it encrypts a whole plaintext `secrets/secret_text.json`, so one
+new secret meant writing it to disk in clear first. `secret-set` is the single-entry path — the
+store is decrypted, the ref added, and the whole of it re-encrypted with the same key
+(`lib.secret_text.set_secret_text`, which `instance-add` already used for database passwords).
+
+```powershell
+'{"ref": "TELEGRAM_BOT_TOKEN", "value": "<token>"}' | python -m db_ops.common.cli secret-set -
+```
+
+- **Stdin only — the one exception to the JSON-request contract.** Still one JSON object, but
+  inline JSON puts the secret in argv (readable by every process on the box) and `@file` is the
+  plaintext this exists to avoid. Both are refused with the reason; the exception is listed and
+  checked on its own in `tests/test_common_cli_json_contract.py` (`STDIN_ONLY_COMMANDS`).
+- **The value is never echoed**, not in the answer and not in an error.
+- **`overwrite`** is required to replace a ref holding a *different* value.
+- **Read `plaintext_source` in the answer.** `encrypt-secret` *replaces* the store with the
+  plaintext file, so if that file exists without this ref the next `encrypt-secret` drops it — and
+  on a fresh node, whose scaffold holds no secrets, it drops every secret `instance-add` and
+  `secret-set` stored. The warning says which case applies. **`also_plaintext: true`** writes both,
+  for a master whose deploy regenerates the store from that file.
+
 ## Checking a secret still works (`secret_check`)
 
 The read-only half of the pair. `rotate-password` changes a password; this proves one, and both
@@ -1657,6 +1694,161 @@ by union, which would restore the pre-rotation values.
 
 ---
 
+## Publishing real pages safely (`showcase`)
+
+`build-showcase` copies the published HTML reports into a folder with every identifier this estate
+owns replaced by a stable fake one. The reports are the best documentation db_ops has - real fleets,
+real fragmentation, real verdicts, over real days - and none of it could be shown to anyone, because
+every page names the operator.
+
+Three properties, in the order they matter:
+
+1. **The terms are not guessed.** Addresses, `server_id`s, credentials and people come from
+   `identifier_scan.collect_identifiers`, which reads the operator's own inventory and knows all
+   three spellings of an address. Database, schema, table and index names are read off the pages
+   in **db_ops's own shapes** — the `db\schema.table.index` metric item and the `db=`/`schema=`/
+   `table=`/`index=` fields a collector writes — because no configuration file names them and they
+   are the more revealing half: a table called `EmployeeTimeKeepingResult` says more about a
+   customer than an IP does. Read from the page rather than the store because **`common` may not
+   import `db`**; the limit that buys is stated plainly in `object_terms` — a name reaching a page
+   in some other shape is not found, and `extra_terms` is how an operator adds it.
+
+   The vocabulary is learnt in **one pass over every page, then applied to all of them**. A table
+   that first appears on day three has to be mapped on day one's page too, or one object is two
+   fake names across the window and the set stops being a record of one estate.
+2. **Only what the scanner would act on.** A configured value at `review` confidence - an ordinary
+   word that happens to be a database name - is left alone, exactly where `identifier_scan` draws
+   that line. Measured on 2026-09-10: without the filter, `inventory` was a term and the first run
+   renamed `database-inventory-report.html` to `database-FORECAST-report.html`. The scrub had begun
+   rewriting the product's own vocabulary. The values left alone are listed in the result as
+   `left_as_ordinary_words`, so the judgement can be checked rather than taken.
+3. **It certifies itself, and a failure deletes the output.** `check-identifiers` is run over the
+   written folder, with `unrecognised_addresses` counted as failures too - a report page carries
+   addresses the collectors found on the wire that no configuration ever named. Any finding removes
+   the folder and fails the command: a partially scrubbed page is the one that gets published.
+
+The replacement is stable and shaped (`db_ops.lib.pseudonym`), which is what makes the output worth
+having: one machine is the same fake machine on every page and on every day, so a reader can follow
+it from the inventory to its metrics page to its index report. Nothing reversible is written - no
+mapping file, no key. A table that turned the showcase back into the estate would *be* the estate.
+
+```bash
+python -m db_ops.common.cli build-showcase @data/showcase.json
+```
+
+Run it **on the node that serves the pages**, after the daily archive has built up the window you
+want - the source is `runtime/reports`, where `report_archive` has been writing one dated copy per
+day. A showcase of one day is a screenshot. Working from a copy of those files taken off the node
+is the same thing; where the node is comes from `report_base_url`, which the estate already states
+(`data/reports_config.json`, or derived from `config.json` -> `worker[].host`), never from an
+address typed into a command.
+
+### The names the output carries (`stamp`)
+
+`stamp` is on by default and rewrites the file name twice:
+
+* **through the mapping**, because `index-usage_<server_id>.html` is a whole `server_id` in a path -
+  scrubbing the contents and leaving the folder listing naming the estate is not a scrub;
+* **into UTC**, from the moment the page itself states. The node writes `20260825_sla.html` in its
+  own display zone, so the same page copied by two operators is filed under two different days and
+  neither name says which clock it is on. The banner carries the offset
+  (`page_banner.snapshot_stamp` reads back what `render` wrote), so the name can state it once and
+  be read the same way everywhere: `20260825T1632Z_sla.html`.
+
+A page with **no** banner keeps the name its node gave it, and is listed in the result under
+`kept_node_naming`. Stamping it with the moment it was *copied* would state something the page never
+said - and would not even distinguish, because a window of such pages would collapse onto one name.
+
+Renaming breaks every link the pages ship with, so the sibling links are repointed at the files
+that are actually in the folder: same day where the window holds it, otherwise the newest copy at or
+before that page's day - never forward. A `?date=` query is dropped, because it is answered by a
+running web host reading its archive and a folder of files has no host to ask.
+
+### Where a shipped showcase lives, and what it costs to keep it honest
+
+The output goes to `runtime/showcase` and **not** to `examples/`, which ships: a scrubber that fails
+has to fail somewhere that cannot be published. Copying the certified folder into
+`examples/showcase/` is a separate, deliberate move - `TEST_VERSION_BEFORE_RELEASE.md` step 1a, and
+R14 there is the rule that whatever is in `examples/` at export time is what the world gets.
+
+What a first run on real pages will hit, and why each refusal is the feature:
+
+* **`unrecognised_addresses`.** A report carries addresses the collectors found *on the wire* - a
+  listener, a replica, a link target, a gateway - which no configuration names, so the mapping
+  cannot learn them and the certifier refuses. Each one goes into `extra_terms` by hand, with its
+  kind. On this estate that was 23 of them.
+* **Names the page shapes cannot reach.** A term the operator writes into `extra_terms` is rewritten
+  **wherever it appears**, including inside a longer name - unlike an ordinary term, which is
+  matched as a whole name exactly as `identifier_scan` searches for one. They are being named by
+  hand precisely because they are buried: `tanthanh_dba` inside
+  `sqlserver_113.155_MSSQLSERVER_tanthanh_dba`, and an organisation label inside every `server_id`
+  a page builds for itself. Both survived a *clean* certification, because `_` and `-` are word
+  characters.
+* **Ordinary words that are this estate's database names.** `check-identifiers` puts those at
+  `review` confidence and the scrub leaves them, which is right for the product's own vocabulary
+  (`inventory`, `Export`, `ReportServer`, `DWQueue`) and wrong for a customer's (`DtradeProduction`,
+  `Scanpack`). They are listed in the result as `left_as_ordinary_words`: **read that list**, and
+  move the ones that are theirs into `extra_terms`. Nothing can make this call automatically -
+  mechanically renaming the `review` tier is how the first run renamed
+  `database-inventory-report.html`.
+
+### A page is not only its HTML
+
+`server-metrics.html` is one page listing 40 servers and one `fetch` per server against
+`server-metrics_<slug>.json`. Copy only the HTML and every chart is empty, which is how the first
+shipped showcase came out: certified clean, and unable to render. So `.json` is copied and scrubbed
+beside the pages, under the name its page asks for (put through the mapping, because the slug is a
+`server_id`) and **never stamped** - a page fetches an exact name, and a stamp there is a 404.
+
+### The page's own code is not the operator's data
+
+The same words appear on both sides. A customer table really called `Color` turned every `color:`
+in the stylesheet into a fake name, and the pages arrived unstyled; a table called `file` renamed
+the `{"file": …}` key the picker reads, and the page parsed but would not render. Neither is
+visible to any scanner - the output was clean by every check there is. So the rewrite is regional:
+
+| Region | Rewritten |
+| --- | --- |
+| `<style>` | never - a stylesheet is generated by this tool and holds nothing of anyone's |
+| `<script>` | **string literals only**, and not one followed by `:` - a property name is code. A template literal's `${…}` holes are code too |
+| `.json` data | the same rule, keys included: they are read by the page as `server.file` |
+| everything else | fully |
+
+Finding the literals needs a scanner rather than a regex, and it is in `_js_string_spans`. Four
+things break a naive one, and every one was met on a real page: escapes; comments (an apostrophe in
+`/* don't */`); regular-expression literals (`.replace(/[&<>"']/g, …)` holds one of each quote, and
+an alternation over the quote characters loses its place there and leaves everything after it
+untouched); and **template literals**, where `${…}` is not text but an expression.
+
+That last one is the only defect here that reached a *published* page rather than the scrub.
+``Could not load ${esc(err.message)}`` became ``${esc(err.AssetStatus)}``, 21 expressions were
+rewritten across the fleet report, and the first to run threw — so the reader saw `Loading…` for
+ever and the inventory's detail panel never opened. A template literal is text with holes in it;
+the holes are program, and a string inside a hole is data again.
+
+`PRODUCT_WORDS` closes the last of it from the other side: the words db_ops itself prints into a
+page (`report`, `inventory`, `usage`, `status`, `history`…) are kept, whatever an estate calls its
+own objects. Without it a schema called `reports` retitled the landing page to
+`DB Ops · QuotaStaging`. The cost is stated where the list is: a customer object with one of those
+names ships unscrubbed, which is exactly the line `identifier_scan` draws at `review` confidence.
+
+Two things the scrub learns from the page itself, both added 2026-09-12 after a certified page was
+read by hand and still named the estate:
+
+* **the dotted item.** A report renders an object as `<td>DB.schema.table.index</td>`, not in the
+  `db\schema.table.index` shape the store writes, and only the second was being read - so a
+  scrubbed index page kept every schema, table and index name the customer had invented while the
+  database name was correctly replaced. It is anchored to an element's whole content, because
+  matched loosely it reads the page's own `chart.data.datasets.length` as an object.
+* **`login=` and `host=`** out of a collector message and out of the error text a failed connection
+  hands back, which is how a DBA's own account name reached a page nothing flagged.
+
+Volume is why `Mapping.apply` makes **one pass over the text rather than one per term**: a real
+estate's index report names 52,000 objects, and neither 52,000 scans of 15 MB nor one
+200,000-branch alternation finishes (`re` walks alternatives linearly). A name is matched as a
+token and looked up in a dict; only what carries an address, or what the operator named by hand,
+needs the substring pass.
+
 ## Copying a schema between instances (`schema_copy`)
 
 Reproduce SQL Server schema `X` from one instance on another. Raised from a real deployment
@@ -1772,6 +1964,7 @@ python -m db_ops.common.cli pack-files '<json>'     # file_transfer: pack files 
 python -m db_ops.common.cli relay-file '<json>'     # file_transfer: copy one file host->host, hash-verified
 python -m db_ops.common.cli rotate-password '<json>'  # password_rotation: change a login's password
 python -m db_ops.common.cli check-secret '<json>'     # secret_check: prove each secret still logs in
+<request> | python -m db_ops.common.cli secret-set -  # lib.secret_text: one secret into the encrypted store
 python -m db_ops.common.cli inventory-summary '<json>'  # inventory_render: merge overlay + render summary
 python -m db_ops.common.cli host-facts '<json>'       # host_ops: one host's state (read-only)
 python -m db_ops.common.cli host-service '<json>'     # host_ops: start/stop/restart services + wait
@@ -1796,7 +1989,7 @@ python -m db_ops.common.cli list-backup-files '{"db_type": "oracle", "path": "/o
   "kinds": ["log"], "before": "2026-08-01 00:00:00", "host": {...}}'
 # or let prune decide, and delete in the same step:
 python -m db_ops.common.cli prune-backup-files '{"db_type": "oracle", "path": "/opt/oracle/backup/dbops",
-  "retention_days": 14, "delete": true, "dry_run": true, "host": {...}}'
+  "cleanup_retention": 691200, "delete": true, "dry_run": true, "host": {...}}'
 
 # then, with the paths that came back:
 python -m db_ops.common.cli delete-files '{"paths": ["/opt/oracle/backup/dbops/x.bkp"],

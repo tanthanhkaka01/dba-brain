@@ -72,6 +72,9 @@ USAGE = (
     "  check-identifiers  Which of this estate's real names appear in files that ship (see --help)\n"
     "  check-secret-literals  Which files that ship hold a VALUE from the secret store (see --help)\n"
     "  lift-example     Refresh a data/*.example.json from your own file, refusing identifiers\n"
+    "  build-showcase   Snapshot the published pages with every real name replaced (see --help)\n"
+    "  instance-add     Register one database to monitor: inventory, credential, secret (see --help)\n"
+    "  secret-set       Store one secret encrypted, never in clear; request on stdin (see --help)\n"
     "  probe-host       What a host listens on, and what db_ops can do with it (see --help)\n"
     "  metric-severity  Remap one metric's statuses for one server_id, e.g. WARNING -> LOGGING (see --help)\n"
     "  trace-session    Who is holding an open transaction — the app user behind a SPID (see --help)\n"
@@ -278,6 +281,157 @@ INVENTORY_SUMMARY_USAGE = (
     "\n"
     "Prints JSON: {ok, inventory, file}. Exit 0 on success, 1 on failure.\n"
 )
+
+SECRET_SET_USAGE = (
+    "usage: <request> | python -m db_ops.common.cli secret-set -\n"
+    "\n"
+    "Stores ONE secret in data/encrypted_secret_text.json without it ever being written in clear:\n"
+    "the store is decrypted, the ref added, and the whole of it re-encrypted with the same key.\n"
+    "encrypt-secret is the bulk path and needs a plaintext file first; this is the single-entry one\n"
+    "- a bot token, an API key, a password no instance-add covers.\n"
+    "\n"
+    "The request is a JSON object ON STDIN ONLY (-). Inline JSON puts the secret on the command line,\n"
+    "where every process on this machine can read it, and @file is the plaintext this exists to avoid.\n"
+    "\n"
+    '  {"ref": "TELEGRAM_BOT_TOKEN", "value": "<the secret>"}\n'
+    "\n"
+    "  ref             required. The name users.json / telegram_config.json point at\n"
+    "  value           required. Never echoed back\n"
+    "  overwrite       optional. Replace a ref that holds a DIFFERENT value (default: refuse)\n"
+    "  also_plaintext  optional. Also write it to secrets/secret_text.json when that file exists -\n"
+    "                  for a master, where deploy regenerates the store from that file\n"
+    "\n"
+    "READ THE plaintext_source FIELD OF THE ANSWER. encrypt-secret REPLACES the store with\n"
+    "secrets/secret_text.json. If that file exists and does not hold this ref, the next encrypt-secret\n"
+    "drops the secret stored here - and on a fresh node, whose scaffold holds no secrets at all, it\n"
+    "drops every secret instance-add and this command ever stored.\n"
+)
+
+
+def _secret_set_command(argv: list[str]) -> int:
+    """``secret-set`` — one secret into the encrypted store, with no plaintext file on the way.
+
+    Missing until 2026-09-11. Moving one bot token onto a new node meant writing it into a
+    plaintext source, running `encrypt-secret`, and deleting the file — while
+    `lib.secret_text.set_secret_text`, which does exactly the single-entry write, already existed
+    and `instance-add` was already using it for database passwords.
+    """
+    import os
+    from pathlib import Path
+
+    from db_ops.lib import response
+    from db_ops.lib import secret_text as _secret_text
+    from db_ops.lib.paths import DEFAULT_DATA_DIR, TOOL_ROOT
+
+    if argv and argv[0] in {"-h", "--help"}:
+        print(SECRET_SET_USAGE)
+        return 0
+    if not argv or argv[0] != "-":
+        print(SECRET_SET_USAGE, file=sys.stderr)
+        return response.emit(response.fail(
+            "secret-set", "the request must arrive on stdin (-): a secret given inline is visible "
+                          "on the command line, and one in a file is the plaintext this avoids"))
+    request, code = _read_json_request("-", SECRET_SET_USAGE)
+    if request is None:
+        return code
+    ref = str(request.get("ref") or "").strip()
+    value = str(request.get("value") or "")
+    if not ref or not value:
+        return response.emit(response.fail("secret-set", "both 'ref' and 'value' are required"))
+
+    source = Path(TOOL_ROOT) / "secrets" / "secret_text.json"
+    key = os.environ.get("DB_OPS_SECRET_KEY") or None
+    try:
+        if request.get("also_plaintext"):
+            written = _secret_text.set_secret_everywhere(
+                DEFAULT_DATA_DIR, ref, value, key=key, plaintext_store=source,
+                overwrite=bool(request.get("overwrite")))
+        else:
+            written = _secret_text.set_secret_text(
+                DEFAULT_DATA_DIR, ref, value, key=key, overwrite=bool(request.get("overwrite")))
+    except Exception as exc:  # noqa: BLE001 - reported as a response like every other command.
+        return response.emit(response.fail("secret-set", str(exc).replace(value, "<value>")))
+
+    plaintext: dict = {"path": str(source), "exists": source.exists()}
+    if source.exists():
+        try:
+            refs = {name for name in json.loads(source.read_text(encoding="utf-8-sig"))
+                    if not str(name).startswith("_")}
+        except (ValueError, AttributeError):
+            refs = set()
+        plaintext["holds_ref"] = ref in refs
+        if ref not in refs:
+            plaintext["warning"] = (
+                f"{source} exists and does not hold {ref}. encrypt-secret REPLACES the store with "
+                "that file, so running it would drop this secret"
+                + (" - and every other secret, since the file holds none." if not refs else ".")
+                + " Keep adding secrets with secret-set, or add this ref there before encrypt-secret.")
+    return response.emit(response.ok(
+        "secret-set",
+        message=(f"stored {ref} in the encrypted store" if written
+                 else f"{ref} already holds that value; nothing written"),
+        data={"ref": ref, "written": bool(written),
+              "store": str(Path(DEFAULT_DATA_DIR) / "encrypted_secret_text.json"),
+              "plaintext_source": plaintext}))
+
+
+def _instance_add_command(argv: list[str]) -> int:
+    """``instance-add`` — the CLI face of :mod:`db_ops.common.instance_admin`."""
+    import os
+
+    from db_ops.common import instance_admin
+    from db_ops.lib import response
+
+    if argv and argv[0] in {"-h", "--help"}:
+        print(instance_admin.USAGE)
+        return 0
+    if not argv:
+        print(instance_admin.USAGE, file=sys.stderr)
+        return response.emit(response.fail("instance-add", "no request given; see --help"))
+    request, code = _read_json_request(argv[0], instance_admin.USAGE)
+    if request is None:
+        return code
+    try:
+        outcome = instance_admin.add_instance(
+            request, key=os.environ.get("DB_OPS_SECRET_KEY") or None)
+    except instance_admin.InstanceAdminError as exc:
+        return response.emit(response.fail("instance-add", str(exc)))
+    verb = "replaced" if outcome["replaced"] else "registered"
+    return response.emit(response.ok(
+        "instance-add",
+        message=f"{verb} {outcome['server_id']} ({outcome['db_type']}) - wrote "
+                f"{', '.join(outcome['files_written'])}",
+        data=outcome))
+
+
+def _build_showcase_command(argv: list[str]) -> int:
+    """``build-showcase`` — the CLI face of :mod:`db_ops.common.showcase`.
+
+    The help text lives in that module beside the behaviour it describes.
+    """
+    from db_ops.common import identifier_scan, showcase
+    from db_ops.lib import response
+
+    if argv and argv[0] in {"-h", "--help"}:
+        print(showcase.USAGE)
+        return 0
+    if not argv:
+        print(showcase.USAGE, file=sys.stderr)
+        return response.emit(response.fail("build-showcase", "no request given; see --help"))
+    request, code = _read_json_request(argv[0], showcase.USAGE)
+    if request is None:
+        return code
+    try:
+        outcome = showcase.build(request)
+    except (showcase.ShowcaseError, identifier_scan.IdentifierScanError) as exc:
+        return response.emit(response.fail("build-showcase", str(exc)))
+    return response.emit(response.ok(
+        "build-showcase",
+        message=(f"{outcome['pages']} page(s) rewritten with {outcome['terms']} term(s) "
+                 f"into {outcome['output']}"),
+        data=outcome,
+        metrics={"pages": outcome["pages"], "terms": outcome["terms"]}))
+
 
 LIFT_EXAMPLE_USAGE = (
     "usage: python -m db_ops.common.cli lift-example <json>|@<file>|-\n"
@@ -1840,10 +1994,24 @@ def _self_status_command(argv: list[str]) -> int:
     except Exception:  # noqa: BLE001 - no config is a fact about the install, not an error here.
         store_text = None
 
+    # Resolved here rather than inside self_status: this is the composition root, and everything
+    # else that module reports comes from the machine rather than from data/.
+    try:
+        from db_ops.common.data_sources import webhost_endpoints
+
+        web_facts = webhost_endpoints(
+            host=self_status.host_addresses().get("ip") or "",
+            # Passed in, because whether this node can answer for its own address is a fact about
+            # the runtime: in a container the socket's address is a bridge address nobody can
+            # reach, and offering it as a link is worse than offering none.
+            runtime=self_status.runtime())
+    except Exception as exc:  # noqa: BLE001 - an unreadable config costs the links, not the report.
+        web_facts = {"served_here": False, "error": str(exc)}
+
     facts = self_status.collect(
         tool_root=Path(TOOL_ROOT), version=db_ops.__version__,
         public_version=public_version, store=store_text,
-        runtime_dir=runtime_dir)
+        runtime_dir=runtime_dir, web=web_facts)
     listing = self_status.render(facts)
 
     if str(request.get("format") or "json").strip().lower() == "txt":
@@ -2053,6 +2221,12 @@ def main(argv: list[str] | None = None) -> int:
         return _check_secret_literals_command(argv[1:])
     if argv[0] == "lift-example":
         return _lift_example_command(argv[1:])
+    if argv[0] == "build-showcase":
+        return _build_showcase_command(argv[1:])
+    if argv[0] == "instance-add":
+        return _instance_add_command(argv[1:])
+    if argv[0] == "secret-set":
+        return _secret_set_command(argv[1:])
     if argv[0] == "probe-host":
         return _probe_host_command(argv[1:])
     if argv[0] == "self-status":

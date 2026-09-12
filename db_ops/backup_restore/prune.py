@@ -39,7 +39,7 @@ LISTABLE = {"oracle", "postgresql", "postgres"}
 
 
 def prune_job_request(job: Any, *, target: Any, secrets: dict[str, str] | None = None,
-                      retention_days: int | None = None, mode: str = AGE, delete: bool = False,
+                      retention_seconds: int | None = None, mode: str = AGE, delete: bool = False,
                       dry_run: bool = False, data_dir: str | Path | None = None) -> dict[str, Any]:
     """The ``prune-backup-files`` request for one configured backup job.
 
@@ -56,8 +56,11 @@ def prune_job_request(job: Any, *, target: Any, secrets: dict[str, str] | None =
     return {
         "db_type": job.db_type,
         "path": job.backup_dir,
-        "retention_days": int(retention_days if retention_days is not None
-                              else (job.retention_days or DEFAULT_RETENTION_DAYS)),
+        # Seconds, under the one name both halves of the app read - see
+        # db_ops.lib.cleanup_retention. `prune-backup-files` converts it to whole days for the
+        # planner at its own edge.
+        "cleanup_retention": int(retention_seconds if retention_seconds is not None
+                                 else job.cleanup_retention),
         "mode": mode,
         "delete": bool(delete),
         "dry_run": bool(dry_run),
@@ -83,7 +86,7 @@ def run_prune(
     logger: Any = None,
     backup_id: str | None = None,
     job_name: str | None = None,
-    retention_days: int | None = None,
+    retention_seconds: int | None = None,
     mode: str = AGE,
     data_dir: str | Path | None = None,
     key: str | None = None,
@@ -139,7 +142,7 @@ def run_prune(
         try:
             target = resolve_backup_target(item, data_dir=data_dir)
             request = prune_job_request(item, target=target, secrets=secrets,
-                                        retention_days=retention_days, mode=mode,
+                                        retention_seconds=retention_seconds, mode=mode,
                                         delete=bool(apply), dry_run=False, data_dir=data_dir)
             result = _prune_one(request, secrets=secrets)
         except Exception as exc:  # noqa: BLE001 - one entry must not stop the rest.
@@ -182,11 +185,16 @@ def _prune_one(request: dict[str, Any], *, secrets: dict[str, str]) -> dict[str,
     and it stays an import: it is a rule about values, and a subprocess to apply arithmetic to a
     list would be the wrong shape at any speed.
     """
+    from db_ops.lib import cleanup_retention
     from db_ops.lib.backupfiles_retention import plan_retention
 
     listed = common_cli.run("list-backup-files", request)
-    plan = plan_retention(listed["files"], retention_days=request["retention_days"],
-                          mode=request["mode"])
+    plan = plan_retention(
+        listed["files"],
+        # The planner reasons in whole days; the config states seconds. One conversion, here.
+        retention_days=int(cleanup_retention.as_days(request["cleanup_retention"]))
+        or DEFAULT_RETENTION_DAYS,
+        mode=request["mode"])
     if not request.get("delete") or not plan["obsolete_paths"]:
         return {**plan, "deleted": None}
     deleted = common_cli.run("delete-files", {

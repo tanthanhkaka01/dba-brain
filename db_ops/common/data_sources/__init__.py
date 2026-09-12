@@ -34,6 +34,7 @@ so no architecture YAML file is required.
 
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -412,7 +413,7 @@ from db_ops.common.data_sources.target_resolve import (  # noqa: E402,F401
 DEFAULT_REPORT_BASE_URL = ""
 
 
-def report_base_url() -> str:
+def report_base_url(data_dir: str | Path | None = None) -> str:
     """The published base URL, from ``data/reports_config.json``.
 
     Moved here from ``common/report_archive.py`` on 2026-08-15: it was the one part of that
@@ -426,15 +427,189 @@ def report_base_url() -> str:
     """
     import json
 
-    path = Path(_resolve_data_dir(None)) / "reports_config.json"
+    path = Path(_resolve_data_dir(data_dir)) / "reports_config.json"
     try:
         data = json.loads(path.read_bytes().decode("utf-8-sig"))
     except (OSError, ValueError):
-        return DEFAULT_REPORT_BASE_URL
+        data = {}
     configured = str(data.get("report_base_url") or DEFAULT_REPORT_BASE_URL).strip()
+    if configured:
+        return configured.rstrip("/") + "/"
+
+    # Nothing configured: derive it rather than leave the node mute. The estate already states the
+    # machine that runs the worker - `config.json` -> `worker[].host`, which is what `deploy` and
+    # `worker-status` connect to - and the webhost command already states the port and mount. Both
+    # move when the estate moves, so a derived answer follows it and a literal does not.
+    #
+    # This exists because the literal was wrong three times in one day (2026-09-10): a retired VM,
+    # then a PC, then the worker again. Every one of those was a value somebody had to remember to
+    # change, in a file nothing reminds you about.
+    derived = derived_report_base_url(data_dir)
     # An empty answer stays empty: appending "/" to nothing would turn "not configured" into a
     # root-relative URL, which is a different claim and a wrong one.
-    return configured.rstrip("/") + "/" if configured else ""
+    return derived
+
+
+def _clear_report_base_url_cache() -> None:
+    """Forget the resolved base URL. For tests, which rewrite the config between assertions."""
+    _derived_report_base_url_cached.cache_clear()
+
+
+def derived_report_base_url(data_dir: str | Path | None = None) -> str:
+    """Cached wrapper — see :func:`_derive_report_base_url` for what it works out and why.
+
+    **Cached because it is on a hot path.** `index_report` asks for the base URL once per link,
+    per line, per page; before the cache one full-suite run went from four minutes to over thirty
+    and burned 1,118 seconds of CPU, because each of those calls now opened `config.json` and
+    `app_commands.json` and parsed both. A report is rendered by a short-lived process, so a value
+    that cannot change under it is the right thing to hold.
+    """
+    return _derived_report_base_url_cached(str(_resolve_data_dir(data_dir)))
+
+
+@lru_cache(maxsize=8)
+def _derived_report_base_url_cached(data_dir: str) -> str:
+    return _derive_report_base_url(data_dir)
+
+
+def _derive_report_base_url(data_dir: str | Path | None = None) -> str:
+    """Where the pages must be reachable, worked out from what the estate already declares.
+
+    Deliberately not a guess at this machine's own address: the node that *renders* a report is
+    often not the node that *serves* it, and in a container it cannot see its published address at
+    all. The worker host is the one value that means "the machine the estate runs on", it is
+    already required for `deploy` to work, and it is edited exactly once when the estate moves.
+    """
+    import json as _json
+
+    from db_ops.lib import webhost_endpoints as endpoints_lib
+
+    root = Path(_resolve_data_dir(data_dir)).parent
+    try:
+        config = _json.loads((root / "config.json").read_bytes().decode("utf-8-sig"))
+    except (OSError, ValueError):
+        return ""
+    workers = config.get("worker")
+    if isinstance(workers, dict):
+        workers = [workers]
+    host = ""
+    for record in workers or []:
+        if isinstance(record, dict) and str(record.get("host") or "").strip():
+            host = str(record["host"]).strip()
+            break
+    if not host:
+        return ""
+
+    # Port and mount only - deliberately NOT through `webhost_endpoints`, which asks
+    # `report_base_url` for the published base and would call straight back into this.
+    options: dict[str, Any] = {}
+    try:
+        commands = _json.loads(
+            (Path(_resolve_data_dir(data_dir)) / "app_commands.json").read_bytes().decode("utf-8-sig"))
+    except (OSError, ValueError):
+        commands = {}
+    records = commands.get("app_commands") if isinstance(commands, dict) else commands
+    for record in records or []:
+        if isinstance(record, dict):
+            parsed = endpoints_lib.parse_serve_options(str(record.get("command_text") or ""))
+            if parsed:
+                options = parsed
+                break
+    return endpoints_lib.base_url(
+        host=host,
+        port=int(options.get("port") or endpoints_lib.DEFAULT_PORT),
+        mount=str(options.get("mount") or endpoints_lib.DEFAULT_REPORTS_MOUNT))
+
+
+def webhost_endpoints(data_dir: str | Path | None = None, *,
+                      host: str | None = None, runtime: str = "host") -> dict[str, Any]:
+    """Where *this* node serves its own pages, read from the config that actually starts them.
+
+    The port and the reports mount come from the webhost entry in ``app_commands.json`` - the
+    command that is really run - and the console mount from ``webhost_config.json``. Neither is
+    retyped here, because a status report that states a port nobody is listening on is worse than
+    one that says nothing.
+
+    ``published_base`` is what already-rendered pages and Telegram messages link to
+    (``report_base_url``). It is reported beside this node's own base **and compared**, because
+    the two silently disagreeing is exactly what happens when the estate moves to another node:
+    the pages keep naming the machine they were generated on. ``matches_published`` is False when
+    they differ, which is a finding, not a formatting detail.
+    """
+    import json
+
+    from db_ops.lib import webhost_endpoints as endpoints_lib
+
+    root = Path(_resolve_data_dir(data_dir))
+    options: dict[str, Any] = {}
+    try:
+        commands = json.loads((root / "app_commands.json").read_bytes().decode("utf-8-sig"))
+    except (OSError, ValueError):
+        commands = {}
+    records = commands.get("app_commands") if isinstance(commands, dict) else commands
+    for record in records or []:
+        if not isinstance(record, dict):
+            continue
+        parsed = endpoints_lib.parse_serve_options(str(record.get("command_text") or ""))
+        if parsed:
+            options = parsed
+            options["enabled"] = bool(record.get("enabled", True))
+            break
+
+    console_mount = endpoints_lib.DEFAULT_CONSOLE_MOUNT
+    try:
+        web_config = json.loads((root / "webhost_config.json").read_bytes().decode("utf-8-sig"))
+        console_mount = str((web_config.get("web") or {}).get("mount") or console_mount)
+    except (OSError, ValueError, AttributeError):
+        pass
+
+    port = int(options.get("port") or endpoints_lib.DEFAULT_PORT)
+    reports_mount = str(options.get("mount") or endpoints_lib.DEFAULT_REPORTS_MOUNT)
+    # data_dir threaded through: without it a caller that names a root explicitly - every test,
+    # and any tool inspecting another install - was told the *default* root's published base.
+    published = report_base_url(data_dir)
+
+    # Inside a container the address this process can see is the bridge address on Docker's private
+    # pool and the published port is a mapping it cannot see - so the node genuinely does not know
+    # how anyone reaches it. Three answers, best first, and the last one is a blank rather than a
+    # guess: whoever configured `report_base_url` was stating exactly this fact, so use it; failing
+    # that, print a placeholder host the reader fills in.
+    contained = str(runtime or "").strip().lower() in endpoints_lib.CONTAINER_RUNTIMES
+    address_source = "node"
+    scheme = "http"
+    if contained:
+        parsed = endpoints_lib.parse_base_url(published)
+        if parsed:
+            host = str(parsed["host"])
+            port = int(parsed["port"])
+            scheme = str(parsed["scheme"])
+            address_source = "published"
+        else:
+            host = endpoints_lib.PLACEHOLDER_HOST
+            address_source = "placeholder"
+
+    urls = endpoints_lib.endpoints(
+        host=str(host or ""), port=port, scheme=scheme,
+        reports_mount=reports_mount, console_mount=console_mount)
+    own_base = urls.get("reports", "")
+    return {
+        "served_here": bool(options),
+        "enabled": bool(options.get("enabled", False)),
+        "port": port,
+        "reports_mount": reports_mount,
+        "console_mount": console_mount,
+        "urls": urls,
+        "published_base": published,
+        "runtime": str(runtime or "host"),
+        # Where the host in those URLs came from. A reader who is told this can tell a link that
+        # was measured from one that was configured, and one that is a blank to fill in.
+        "address_source": address_source,
+        # Only comparable when the node actually knows its own published address. In a container
+        # the comparison is between a bridge address and a real one, which is always "different"
+        # and never means anything - a warning that fires on every containerised node is noise.
+        "matches_published": endpoints_lib.same_site(own_base, published)
+        if (address_source == "node" and own_base and published) else None,
+    }
 
 
 def inventory_exclude_ip_prefixes(data_dir: str | Path | None = None) -> tuple[str, ...]:

@@ -146,7 +146,7 @@ def test_workflow_halves_can_be_skipped(monkeypatch, skip, expected):
 def _script_config(tmp_path, **over):
     import json
     entry = {
-        "restore_id": "ORA_DRILL", "active": True, "db_type": "oracle",
+        "cleanup_retention": 691200, "restore_id": "ORA_DRILL", "active": True, "db_type": "oracle",
         "server_id": "SRC", "target_container": "target_c",
         "backup_dir": "/backup/dbops", "script": "assets/restore/oracle/oracle_rman_restore.sh",
         "time_window": {"repeat_interval": 72000, "timeout": 7200},

@@ -24,6 +24,7 @@ import sys
 from pathlib import Path
 from db_ops.lib.coerce import as_float
 from db_ops.lib.paths import TOOL_ROOT  # noqa: F401 - one definition, see that module
+from db_ops.lib.target_flags import is_reports_enabled
 from db_ops.lib.timezone import file_stamp, label_from_file_stamp
 
 
@@ -178,6 +179,97 @@ HEALTH_BLOCKS = ["instance_health", "metric_severity", "metric_problems", "metri
 EXCLUDE_IP_PREFIXES: tuple[str, ...] = ()
 
 DBTYPE_LABEL = {"sqlserver": "SQL Server", "oracle": "Oracle", "mysql": "MySQL", "postgresql": "PostgreSQL"}
+
+#: What a seeded canonical entry keeps from each ``db_instances.json`` record: identity, and
+#: nothing that names a credential. The seed is written into ``<runtime>/reports``, which is the
+#: webhost's root - a file there is a URL - so ``default_credential_name`` and friends stay behind.
+#: Every health block arrives from the overlay on the same run, so identity is all a seed needs.
+SEED_DATABASE_FIELDS = ("db_type", "service_name", "instance_name", "sid", "db_instance_name",
+                        "port", "major_version", "platform", "runtime", "env", "enabled",
+                        "database_names")
+
+
+def seed_inventory(servers: list[dict]) -> dict:
+    """A first canonical inventory, from the ``servers`` list ``data_sources.load_inventory`` builds.
+
+    Until 2026-09-11 the workflow refused to run without a canonical file, on the reasoning that it
+    is the operator's richer description of the fleet. That left a node with the workflow switched
+    on failing every cycle with ``[Errno 2]`` and no page at all - while ``db_instances.json``
+    already named every server it was collecting from. A seed is the starting point, not a
+    replacement: the operator enriches it, and the merge only ever updates what it lists.
+
+    An empty list gives ``{"servers": []}``; the caller must not write that (see
+    ``build_inventory_workflow``) or the file would exist, never be seeded again, and list nothing.
+    """
+    seeded: dict[str, dict] = {}
+    for server in servers:
+        server_id = str(server.get("server_id") or "").strip()
+        if not server_id:
+            continue
+        databases = [{key: db[key] for key in SEED_DATABASE_FIELDS if db.get(key) not in (None, "")}
+                     for db in server.get("databases") or [] if isinstance(db, dict)]
+        entry = seeded.setdefault(server_id, {"server_id": server_id, "ip": server.get("ip"),
+                                              "databases": []})
+        if server.get("company_code") and not entry.get("company_code"):
+            entry["company_code"] = server["company_code"]
+        entry["databases"].extend(databases)
+    return {"servers": list(seeded.values())}
+
+
+def reportable_servers(servers: list[dict]) -> list[dict]:
+    """The registered servers that belong on a report, by the flags `db_instances.json` already has.
+
+    `is_reports_enabled` rather than a raw `enabled` read, because this project already has a
+    cascade and a fourth opinion would be a bug: `enabled` -> `metrics` -> `reports` -> `alerts`,
+    each defaulting to the one before it. So a plain registration with no flags at all is collected
+    **and** reported - which is what makes "add an instance and it appears" true without asking the
+    operator to know a second switch.
+
+    It also gives the precise way to say the opposite. :func:`adopt_new_servers` overrides a
+    deletion from the canonical file, so there has to be a supported route to "registered, not
+    reported": `reports: {"enabled": false}` on the instance, which keeps collection running, or
+    `enabled: false`, which stops everything. Both are read from the register, where every other
+    part of db_ops already looks.
+    """
+    return [server for server in servers
+            if not (server.get("databases") or [])
+            or any(is_reports_enabled(db) for db in server.get("databases") or []
+                   if isinstance(db, dict))]
+
+
+def adopt_new_servers(inventory: dict, seeded: dict) -> list[str]:
+    """Add every registered server the canonical inventory has never heard of. Returns their ids.
+
+    The seed runs **once**, on the first workflow run, and the merge only ever updates servers the
+    canonical file already lists. Between them that left no way in: an instance registered after
+    the seed was collected from, alerted on and given its own index report, and never appeared on
+    the fleet page. Measured on 2026-09-12 on a node whose canonical file held **1** server while
+    `db_instances.json` registered **43** — the seed had run on the afternoon the node was stood
+    up, when one was all there was.
+
+    Adoption is add-only, and that is the whole safety argument:
+
+    * an entry the operator has enriched is never touched, because only a *missing* `server_id` is
+      appended;
+    * nothing is ever removed. A server dropped from `db_instances.json` keeps its page and its
+      history until a person deletes it;
+    * a re-appearing id is adopted again, which is the honest behaviour for a file that says "the
+      fleet" — if an instance is registered and should not be reported, the place to say so is the
+      register, by switching it off (`enabled: false`), not by deleting a line the next run puts
+      back. That route is why this override is safe, and :func:`enabled_servers` is what the caller
+      passes through to honour it.
+    """
+    known = {str(server.get("server_id") or "").strip()
+             for server in inventory.get("servers") or []}
+    adopted: list[str] = []
+    for server in seeded.get("servers") or []:
+        server_id = str(server.get("server_id") or "").strip()
+        if server_id and server_id not in known:
+            inventory.setdefault("servers", []).append(server)
+            known.add(server_id)
+            adopted.append(server_id)
+    return adopted
+
 
 def _merge_overlay(overlay: dict, inventory: dict) -> int:
     """Copy each health block from the overlay onto the canonical server it belongs to.

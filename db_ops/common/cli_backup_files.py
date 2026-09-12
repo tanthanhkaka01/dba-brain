@@ -73,7 +73,7 @@ Which backups are obsolete, and optionally remove them.
 
   {{"db_type": "oracle",
    "path": "/opt/oracle/backup/dbops",
-   "retention_days": 14,             // DEFAULT 14
+   "cleanup_retention": 691200,      // seconds. DEFAULT 8 days. `retention_days` still read
    "mode": "age",                    // DEFAULT age. age | recovery_window
    "kinds": ["full", "diff", "log"], // default: all three. controlfile is opt-in, as in list
    "database": "SALESDB_STG",            // optional; judge one database of a SQL Server directory
@@ -82,7 +82,7 @@ Which backups are obsolete, and optionally remove them.
 
 {_HOST_BLOCK}}}
 
-  age              a file finished before (now - retention_days) is obsolete. Full, diff and log
+  age              a file finished before (now - cleanup_retention) is obsolete. Full, diff and log
                    alike, whatever depends on it. Predictable, and the same rule the backup
                    scripts already apply to their own directories.
   recovery_window  keep whatever is needed to restore to ANY point in the window: the anchor is
@@ -91,8 +91,8 @@ Which backups are obsolete, and optionally remove them.
 
 The two differ only when a full is taken rarely relative to the window. Restoring to a point ten
 days ago needs the FULL from before that point; under `age` it goes the moment it turns N days old
-and the newer differentials that restore onto it are kept with no base. With a daily full against a
-14-day window - what this estate runs - the newest full is never more than a day old and the rules
+and the newer differentials that restore onto it are kept with no base. With a daily full against an
+8-day window - what this estate runs - the newest full is never more than a day old and the rules
 agree.
 
 Both keep a file whose finished_at the engine could not state: "unknown age" is not "old".
@@ -156,6 +156,7 @@ def _list(request: dict) -> int:
 
 def _prune(request: dict) -> int:
     from db_ops.common.backupfiles import list_backup_files
+    from db_ops.lib import cleanup_retention
     from db_ops.lib.backupfiles_retention import DEFAULT_RETENTION_DAYS, plan_retention
 
     operation = "prune-backup-files"
@@ -164,9 +165,14 @@ def _prune(request: dict) -> int:
         # Listed through the same code path the listing command uses, so a caller cannot be shown
         # one set of files by `list` and have a different set judged by `prune`.
         listed = list_backup_files(request)
+        # `cleanup_retention` is the one spelling and it is seconds; the planner reasons in whole
+        # days, so the conversion happens here, once, at the edge. `required=False` because this
+        # command is also driven by hand against a directory nobody has configured - and unlike a
+        # scheduled entry, "I did not say" cannot be answered by reading the config.
+        retention = cleanup_retention.parse(request, context=operation, required=False)
         plan = plan_retention(
             listed["files"],
-            retention_days=request.get("retention_days", DEFAULT_RETENTION_DAYS),
+            retention_days=int(cleanup_retention.as_days(retention)) or DEFAULT_RETENTION_DAYS,
             mode=request.get("mode") or "age",
         )
     except Exception as exc:  # noqa: BLE001

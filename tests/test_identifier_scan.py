@@ -242,3 +242,55 @@ def test_a_missing_inventory_is_a_usage_error_not_a_clean_result(tmp_path) -> No
 def test_scanning_with_no_terms_refuses_rather_than_reporting_clean(tmp_path) -> None:
     with pytest.raises(identifier_scan.IdentifierScanError):
         identifier_scan.scan({"root": str(tmp_path), "from_inventory": False})
+
+
+def test_a_bare_decimal_is_a_number_and_a_shorthand_touching_a_name_is_a_machine(tmp_path):
+    """`"sharePct": 0.2` is two tenths of a percent. `sqlserver_0.2_MSSQL` is a machine.
+
+    The two-octet tier is what catches an address written the way people actually write one, and it
+    was bought by 30 real misses - every one of them `<something>_<octet>_<octet>`, a name with the
+    shorthand inside it. What it could not tell apart was a number: measured on 2026-09-12 over a
+    published inventory page, it produced 53 hits on `"sharePct": 0.2`, `"logGB": 0.01` and
+    `memory_percent=17.1`, and not one on a machine.
+
+    That mattered beyond noise, because such a page can then never be certified for publication and
+    the scrub cannot help: rewriting `0.2` inside `"sharePct": 0.2` corrupts the very page it is
+    publishing. So the shorthand must **touch a letter or an underscore** on one side.
+    """
+    from db_ops.common import identifier_scan
+
+    numbers = tmp_path / "measurements.html"
+    numbers.write_text('{"sharePct": 0.2, "logGB": 0.01}\nmemory_percent=0.2, x=1\n'
+                       "Low disk: D: 0.2 GB free\n", encoding="utf-8")
+    names = tmp_path / "names.html"
+    names.write_text("sqlserver_0.2_MSSQLSERVER and cred_0-2_SA\n", encoding="utf-8")
+
+    request = {"root": str(tmp_path), "extensions": [".html"],
+               "from_inventory": False, "extra_terms": ["172.19.0.2"]}
+
+    assert identifier_scan.scan({**request, "paths": ["measurements.html"]})["hits"] == 0
+    assert identifier_scan.scan({**request, "paths": ["names.html"]})["hits"] == 2
+
+
+def test_the_requests_allow_list_reaches_the_address_backstop(tmp_path):
+    """`AXService.exe; version: 2.53.1.0` is a build number, and nothing else can say so.
+
+    The backstop reports every IPv4-shaped literal the inventory does not name, and says outright
+    that it cannot tell a third party's address from a version. `ALWAYS_ALLOWED` answers the ones
+    this project meets often enough to name, by reading 8 characters either side - not far enough
+    to see the word `version`. Until 2026-09-12 the request's own `allow` list was consulted for
+    every other tier and not for this one, which left a caller that refuses on unrecognised
+    addresses - `showcase.certify` does - with no way past a page it could not rewrite either.
+    """
+    from db_ops.common import identifier_scan
+
+    page = tmp_path / "page.html"
+    page.write_text('{"msg": "AXService.exe; version: 2.53.1.0; stamp"}\n'
+                    '{"host": "10.9.8.7"}\n', encoding="utf-8")
+    request = {"root": str(tmp_path), "paths": ["page.html"], "extensions": [".html"],
+               "from_inventory": False, "extra_terms": ["192.0.2.1"]}
+
+    assert sorted(identifier_scan.scan(request)["unrecognised_addresses"]) == ["10.9.8.7", "2.53.1.0"]
+    allowed = identifier_scan.scan({**request, "allow": ["version: "]})
+    # The one a person judged, gone; the one nobody has explained, still reported.
+    assert sorted(allowed["unrecognised_addresses"]) == ["10.9.8.7"]

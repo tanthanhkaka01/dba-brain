@@ -14,6 +14,7 @@ from db_ops.lib.notify import (
     NotifyRule,
     parse_notify_config,
 )
+from db_ops.lib import cleanup_retention
 from db_ops.lib.time_window import TimeWindow, parse_time_window_config
 from db_ops.config import DEFAULT_CONFIG_PATH
 
@@ -56,29 +57,17 @@ def is_script_restore(item: dict[str, Any]) -> bool:
 # Over-deleting is self-correcting rather than destructive - the transfer compares against the
 # source and re-copies anything missing - but a restore in between would fail, so the margin is
 # deliberate rather than tight.
-DEFAULT_TARGET_RETENTION_SECONDS = 8 * 24 * 3600
+DEFAULT_CLEANUP_RETENTION = cleanup_retention.DEFAULT_SECONDS
 
 
-def parse_target_retention_seconds(entry: dict, *, context: str) -> int:
-    """Read ``target_retention_seconds`` from a restore entry.
+def parse_cleanup_retention(entry: dict, *, context: str) -> int:
+    """``cleanup_retention`` for a restore entry, in seconds.
 
-    **0 does not disable the cleanup** — it removes the *age* gate, so every staged file becomes a
-    candidate and the chain rule alone decides (see ``delete_backup.obsolete_only``: never the
-    newest full, nor anything at or after it). That is "clear what the next restore does not need",
-    which is what :data:`clear_staging_after_restore` asks for, not "keep everything". The older
-    wording here and on the dataclass field said the opposite and was believed for long enough to
-    matter — the 2.249 staging directory reached 16.7 GB under a 14-day window.
+    Kept under its old name so every caller here does not have to move at once; the field it reads
+    is now the shared one. See :mod:`db_ops.lib.cleanup_retention` for why there is one spelling
+    and one unit.
     """
-    raw = entry.get("target_retention_seconds")
-    if raw is None:
-        return DEFAULT_TARGET_RETENTION_SECONDS
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        raise ValueError(f"{context}.target_retention_seconds must be a whole number of seconds.") from None
-    if value < 0:
-        raise ValueError(f"{context}.target_retention_seconds must not be negative (0 = no age gate).")
-    return value
+    return cleanup_retention.parse(entry, context=context)
 
 
 BACKUP_RESTORE_NOTIFY_DEFAULTS = NotifyConfig(
@@ -121,7 +110,7 @@ def merge_notify_configs(blocks: list[NotifyConfig]) -> NotifyConfig:
 RESTORE_PARSER_DEFAULTS = {
     "copy_file_patterns": ["*.bak", "*.trn"],
     "copy_recent_hours": 24,
-    "target_retention_seconds": None,
+    "cleanup_retention": None,
     "full_backup_subdir": "FULL",
     "sqlcmd_path": "sqlcmd",
     "robocopy_path": "robocopy",
@@ -179,8 +168,8 @@ class BackupRestoreConfig:
     copy_file_patterns: tuple[str, ...] = ("*.bak", "*.trn")
     copy_recent_hours: int = 24
     # Seconds of staged backup kept on the target after a restore (0 = no age gate; see
-    # parse_target_retention_seconds).
-    target_retention_seconds: int = DEFAULT_TARGET_RETENTION_SECONDS
+    # parse_cleanup_retention).
+    cleanup_retention: int = DEFAULT_CLEANUP_RETENTION
     full_backup_subdir: str = "FULL"
     sqlcmd_path: str = "sqlcmd"
     robocopy_path: str = "robocopy"
@@ -289,6 +278,18 @@ def load_restore_configs(config_path: str | Path | None = None) -> list[BackupRe
         return _parse_restore_items(values=RESTORE_PARSER_DEFAULTS, section=values)
     if values.get("sources") is not None:
         return _parse_restore_sources(values=RESTORE_PARSER_DEFAULTS, section=values)
+    if "prod_backup_share" not in values:
+        # Nothing declared a restore anywhere: no `restores`, no `sources`, and no flat
+        # single-source block. That is **not configured**, which is a state and not a failure
+        # (docs/13_common.md) - so it is an empty list, and the caller says what is missing.
+        #
+        # It used to fall through to `parse_restore_config(RESTORE_PARSER_DEFAULTS)`, which reads
+        # `values["prod_backup_share"]` and raised a bare `KeyError: 'prod_backup_share'`. On a
+        # fresh install with the backup/restore command switched on that is what the operator got,
+        # every cycle, as the whole of the error text - a key name, naming neither the file that
+        # is missing nor the app that wanted it. Reported 2026-09-11 from a node where
+        # `data/restore_config.json` had never existed, because `init` does not write one.
+        return []
     return [parse_restore_config(values)]
 
 
@@ -378,8 +379,10 @@ def _parse_restore_items(*, values: dict[str, Any], section: dict[str, Any]) -> 
     restores = section.get("restores")
     if not isinstance(restores, list):
         raise ValueError("backup_restore.restores must be an array.")
-    if not restores:
-        raise ValueError("backup_restore.restores must contain at least one entry.")
+    # `[]` is a complete answer - "this node restores nothing" - and refusing it was the second
+    # half of the same defect: the fix for a *missing* file shipped an empty one, which then failed
+    # here instead. Three lines below already return `[]` for a list whose entries are all
+    # script-driven, so an empty list was the only shape of "no engine restores" that raised.
     restores = [item for item in restores if not (isinstance(item, dict) and is_script_restore(item))]
     if not restores:
         return []
@@ -452,7 +455,7 @@ def parse_restore_config(raw: dict[str, Any]) -> BackupRestoreConfig:
         vm_log_local=Path(str(values["vm_log_local"])),
         copy_file_patterns=_parse_patterns(values.get("copy_file_patterns")),
         copy_recent_hours=_parse_int(values.get("copy_recent_hours"), default=24),
-        target_retention_seconds=parse_target_retention_seconds(values, context="backup_restore"),
+        cleanup_retention=parse_cleanup_retention(values, context="backup_restore"),
         prod_smb_credential_target=str(values.get("prod_smb_credential_target") or ""),
         prod_smb_username=str(values.get("prod_smb_username") or ""),
         prod_smb_password_env=str(values.get("prod_smb_password_env") or ""),

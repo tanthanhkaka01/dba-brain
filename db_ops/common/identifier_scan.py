@@ -390,7 +390,7 @@ def _search_terms(terms: dict[str, str]) -> dict[str, tuple[str, str, str]]:
         for spelling in _spellings(term):
             key = spelling.lower() if level == CERTAIN else spelling
             expanded.setdefault(key, (term, kind, level))
-        for short in _address_shorthands(term):
+        for short in address_shorthands(term):
             expanded.setdefault(short, (term, kind, LIKELY))
     return expanded
 
@@ -399,7 +399,7 @@ def _search_terms(terms: dict[str, str]) -> dict[str, tuple[str, str, str]]:
 _SHORTHAND_KEY = re.compile(r"\d{1,3}[._-]\d{1,3}")
 
 
-def _address_shorthands(term: str) -> set[str]:
+def address_shorthands(term: str) -> set[str]:
     """How prose actually refers to a machine: by the part of its address that differs.
 
     Nobody writing a sentence repeats the whole address — a document says "measured on 2.248", and
@@ -457,9 +457,19 @@ def _patterns(searchable: dict[str, tuple[str, str, str]]) -> list[tuple[re.Patt
         # Accept a neighbouring letter, underscore or hyphen, because that is how prose, filenames
         # and credential refs actually write it — treating `_` as a word boundary meant every
         # `<something>_<octet>_<octet>` name read as clean, and 30 of them had.
-        built.append((re.compile(r"(?<![\d.])(?<!\d-)(?<!\d_)(?:"
-                                 + "|".join(re.escape(k) for k in shorthand)
-                                 + r")(?!\d)(?![.\-_]\d)"), False))
+        #
+        # And **require** that neighbour on one side or the other, which is the narrowing added on
+        # 2026-09-12. A shorthand standing entirely alone is not a reference to a machine, it is a
+        # number: measured over a published inventory page, the tier produced 53 hits on
+        # `"sharePct": 0.2`, `"logGB": 0.01`, `"seconds": 0.4` and `memory_percent=17.1`, and
+        # **none** on a machine. The 30 real misses that bought this tier were all
+        # `<something>_<octet>_<octet>` — a name, touching a letter. A page of measurements could
+        # otherwise never be certified, and the scrub could not help: rewriting `0.2` inside
+        # `"sharePct": 0.2` corrupts the page it is publishing.
+        core = "(?:" + "|".join(re.escape(k) for k in shorthand) + ")"
+        left, right = r"(?<![\d.])(?<!\d-)(?<!\d_)", r"(?!\d)(?![.\-_]\d)"
+        built.append((re.compile(f"(?:(?<=[A-Za-z_]){core}{right}|{left}{core}(?=[A-Za-z_]))"),
+                      False))
     return built
 
 
@@ -549,14 +559,26 @@ def scan(request: dict[str, Any] | None = None, *, data_dir: str | Path | None =
         # The backstop, per file: any IPv4 literal the inventory does not name. Reported as
         # `review` because it cannot be classified automatically — a third party's address, an
         # invented example and a version number all look the same from here.
-        for literal in unrecognised_addresses(text):
-            bucket = findings.setdefault(relative, {
-                "file": relative, "certain": 0, "likely": 0, "review": 0,
-                "terms": {}, "examples": [],
-            })
-            bucket["review"] += 1
-            bucket["terms"].setdefault(literal, REVIEW)
-            unrecognised.setdefault(literal, set()).add(relative)
+        #
+        # Walked **line by line** so the request's `allow` list applies here too. It did not until
+        # 2026-09-12, and this is the one tier that most needs it: a caller who refuses on
+        # unrecognised addresses (`showcase.certify` does) had no way past
+        # `AXService.exe; version: 2.53.1.0` — a build number the scrub cannot rewrite without
+        # corrupting the page, and cannot leave without failing for ever. `ALWAYS_ALLOWED` reads
+        # only 8 characters back, which is not far enough to see the word `version`.
+        for number, line in enumerate(text.splitlines(), start=1):
+            for literal in unrecognised_addresses(line):
+                # Not counted in `allowed`: the same line is very often allowed again by the
+                # named-term tier below, and one judgement should not read as two.
+                if _allowed(line, line.find(literal), extra_allow):
+                    continue
+                bucket = findings.setdefault(relative, {
+                    "file": relative, "certain": 0, "likely": 0, "review": 0,
+                    "terms": {}, "examples": [],
+                })
+                bucket["review"] += 1
+                bucket["terms"].setdefault(literal, REVIEW)
+                unrecognised.setdefault(literal, set()).add(relative)
         for number, line in enumerate(text.splitlines(), start=1):
             for pattern, fold_case in patterns:
                 for match in pattern.finditer(line):

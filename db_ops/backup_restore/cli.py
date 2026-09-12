@@ -75,9 +75,23 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     copy.add_argument("--force", action="store_true", help="Copy files even if they already exist in the target.")
 
     delete = subparsers.add_parser("delete-backup", parents=[config_parent], help="Delete old backup files from the target import folder.")
-    delete.add_argument("--hours", type=int, required=True, help="Delete target files older than this many hours. Use 0 or negative to delete all target files.")
+    # Seconds, and no longer required. It was `--hours`, mandatory, and the workflow converted the
+    # configured seconds into it with `max(1, seconds // 3600)` - so a retention under an hour
+    # silently became an hour. Now the entry's own `cleanup_retention` is the default and the
+    # override is in the same unit as the config. `--hours` still parses, because it was the only
+    # spelling for a year, and it says what it does to the number.
+    delete.add_argument("--retention-seconds", type=int, default=None,
+                        help="Delete target files older than this many seconds. "
+                             "Use 0 to remove the age gate. Default: each entry's cleanup_retention.")
+    delete.add_argument("--hours", type=int, default=None,
+                        help="Deprecated spelling of --retention-seconds, in hours (multiplied by 3600).")
     delete.add_argument("--source-id", help="Delete target files for only one configured source/server.")
     delete.add_argument("--restore-id", help="Delete target files only for the restore entry with this restore_id.")
+    delete.add_argument(
+        "--dry-run", action="store_true",
+        help="List what would be deleted and delete nothing. The engine has always accepted "
+             "this; the flag was missing here, so 'what would this remove' had no answer "
+             "short of running it against a real staging directory.")
 
     backup = subparsers.add_parser(
         "backup",
@@ -109,9 +123,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     prune.add_argument("--backup-id", help="Prune only one configured backup entry.")
     prune.add_argument("--job", help="Prune only this job name within the selected entries.")
     prune.add_argument(
+        "--retention-seconds", type=int, default=None,
+        help="Override the window for this run, in seconds. Default: whatever each job already "
+             "declares in cleanup_retention, which is the same number its own script prunes with.",
+    )
+    prune.add_argument(
         "--retention-days", type=int, default=None,
-        help="Override the window for this run. Default: whatever each job already declares, "
-             "which is the same number its own script prunes with.",
+        help="Deprecated spelling of --retention-seconds, in days.",
     )
     prune.add_argument(
         "--mode", choices=("age", "recovery_window"), default="age",
@@ -138,9 +156,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     workflow.add_argument("--skip-backup", action="store_true", help="Run only the restore half.")
     workflow.add_argument("--skip-restore", action="store_true", help="Run only the backup half.")
     workflow.add_argument("--copy-hours", type=int, default=24, help="Hours for the restore copy step. Default: 24.")
+    workflow.add_argument("--delete-retention-seconds", type=int, default=None,
+                          help="Override target retention for the restore half, in seconds. "
+                               "Default: each entry's cleanup_retention.")
     workflow.add_argument("--delete-hours", type=int, default=None,
-                          help="Override target retention for the restore half, in hours. "
-                               "Default: each entry's target_retention_seconds.")
+                          help="Deprecated spelling of --delete-retention-seconds, in hours.")
     workflow.add_argument(
         "--backup-type", choices=BACKUP_TYPES, default=None,
         help="Force the backup level for the backup half of this run: full | diff | log.",
@@ -188,9 +208,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     restore_workflow.add_argument("--source-id", help="Run workflow for only one configured source/server.")
     restore_workflow.add_argument("--restore-id", help="Run workflow only for the restore entry with this restore_id. Example: python -m db_ops.backup_restore.cli restore-workflow --config data/restore_config.json --restore-id ACME_TO_SQLSERVER_198_51_100_31 --force")
     restore_workflow.add_argument("--copy-hours", type=int, default=24, help="Hours for copy-backup. Default: 24.")
+    restore_workflow.add_argument("--delete-retention-seconds", type=int, default=None,
+                                  help="Override how long staged files are kept on the target, in seconds. "
+                                       "Default: each entry's cleanup_retention.")
     restore_workflow.add_argument("--delete-hours", type=int, default=None,
-                                  help="Override how long staged files are kept on the target, in hours. "
-                                       "Default: each entry's target_retention_seconds.")
+                                  help="Deprecated spelling of --delete-retention-seconds, in hours.")
     restore_workflow.add_argument("--dry-run", action="store_true", help="Dry-run restore-latest during the workflow.")
     restore_workflow.add_argument("--force", action="store_true", help="Force copy even if files already exist in the target.")
     restore_workflow.add_argument(
@@ -313,6 +335,22 @@ def _parse_env_overrides(values: list[str] | None) -> dict[str, str]:
     return overrides
 
 
+def _retention_override(seconds: int | None, hours: int | None) -> int | None:
+    """One run's retention override, in seconds, from either spelling.
+
+    ``None`` means "use what the entry states", which is now always something: `cleanup_retention`
+    is mandatory on every restore entry and every backup job. The hours form is the old flag kept
+    working; it is multiplied here, in the open, rather than the configured seconds being divided
+    down somewhere inside the workflow - the division was `max(1, seconds // 3600)` and it turned
+    every retention under an hour into one hour without a word.
+    """
+    if seconds is not None:
+        return int(seconds)
+    if hours is not None:
+        return int(hours) * 3600
+    return None
+
+
 def _default_log_scope(command: str) -> str:
     """Long-running, separately scheduled commands get their own runtime log file."""
     if command == "restore-workflow":
@@ -422,7 +460,9 @@ def main(argv: list[str]) -> int:
                 env_overrides=_parse_env_overrides(getattr(args, "env", None)),
                 backup_type=getattr(args, "backup_type", None),
                 copy_hours=int(getattr(args, "copy_hours", 24)),
-                delete_hours=getattr(args, "delete_hours", None),
+                delete_retention=_retention_override(
+                    getattr(args, "delete_retention_seconds", None),
+                    getattr(args, "delete_hours", None)),
                 skip_backup=bool(getattr(args, "skip_backup", False)),
                 skip_restore=bool(getattr(args, "skip_restore", False)),
             )
@@ -459,7 +499,9 @@ def main(argv: list[str]) -> int:
                 logger=logger,
                 backup_id=getattr(args, "backup_id", None),
                 job_name=getattr(args, "job", None),
-                retention_days=getattr(args, "retention_days", None),
+                retention_seconds=_retention_override(
+                    getattr(args, "retention_seconds", None),
+                    (getattr(args, "retention_days", None) or 0) * 24 or None),
                 mode=getattr(args, "mode", "age"),
                 key=getattr(args, "key", None),
                 key_base64=getattr(args, "key_base64", None),
@@ -500,6 +542,17 @@ def main(argv: list[str]) -> int:
             restore_configs = [config for config in restore_configs if config.active]
             if not restore_configs:
                 raise ValueError("No active backup_restore workflow entries found.")
+        if not restore_configs:
+            # An install with nothing configured loads as no entries, which is right for the
+            # scheduled `workflow` above - it has nothing due and says so. A command asked to act
+            # on one restore has nothing to act on, and without this it reached
+            # `restore_configs[0]` and failed as `IndexError: list index out of range`: the same
+            # unreadable error the empty-config fix of 2026-09-11 removed, one line further on.
+            raise ValueError(
+                f"`{args.command}` needs a restore entry and none is configured: "
+                "data/restore_config.json declares no `backup_restore.restores`. Add one through "
+                "the bot or by hand; `list-restores` shows what the file declares."
+            )
         # Apply --execution-mode CLI override (per-run only, does not persist to config file).
         execution_mode_override = getattr(args, "execution_mode", None)
         if execution_mode_override is not None:
@@ -604,22 +657,28 @@ def main(argv: list[str]) -> int:
             }
         elif args.command == "delete-backup":
             source_outputs = []
+            override = _retention_override(args.retention_seconds, args.hours)
             for config in restore_configs:
-                config = dataclasses.replace(config, copy_recent_hours=int(args.hours))
-                result = run_delete_backup(config, logger=logger)
+                if override is not None:
+                    config = dataclasses.replace(config, cleanup_retention=override)
+                result = run_delete_backup(config, logger=logger,
+                                           dry_run=bool(getattr(args, "dry_run", False)))
                 source_outputs.append(
                     {
                         "source_id": config.source_id,
                         "target_id": config.target_id,
                         "returncode": result.returncode,
                         "target_backup_dir": str(config.vm_import_unc),
-                        "delete_older_than_hours": result.delete_older_than_hours,
+                        "cleanup_retention": result.cleanup_retention,
                         "files_considered": result.files_considered,
                         "deleted": result.deleted,
+                        "skipped": getattr(result, "skipped", 0),
+                        "dry_run": bool(getattr(args, "dry_run", False)),
                     }
                 )
             output = {
                 "status": "SUCCESS",
+                "dry_run": bool(getattr(args, "dry_run", False)),
                 "sources_considered": len(source_outputs),
                 "sources": source_outputs,
             }
@@ -719,7 +778,8 @@ def main(argv: list[str]) -> int:
                 restore_configs=restore_configs,
                 app_config=app_config,
                 copy_hours=int(args.copy_hours),
-                delete_hours=args.delete_hours,
+                delete_retention=_retention_override(
+                    args.delete_retention_seconds, args.delete_hours),
                 dry_run=bool(args.dry_run),
                 force=bool(args.force),
                 logger=logger,
@@ -892,7 +952,7 @@ def run_restore_workflow(
     restore_configs: list[BackupRestoreConfig],
     app_config: object,
     copy_hours: int = 24,
-    delete_hours: int | None = None,
+    delete_retention: int | None = None,
     dry_run: bool = False,
     force: bool = False,
     logger: object | None = None,
@@ -1016,21 +1076,28 @@ def run_restore_workflow(
         summary["per_restore_results"] = per_restore_results
 
         delete_outputs = []
-        with _workflow_phase(logger, f"{_rid}restore-workflow delete-backup", summary=summary, current_phase="delete-backup", source_count=len(restore_configs), retention_hours=delete_hours):
+        # Announced like every other phase. Until 2026-09-11 the retention cleanup was the one
+        # phase that wrote nothing to the store: it logged to a file inside the container and
+        # nowhere else, so across 254 recorded workflow runs there was not a single row saying
+        # whether it had ever pruned anything. "Is retention running?" had no answer short of
+        # shelling into the worker and grepping.
+        _say("DELETE_START",
+             f"Restore {restore_configs[0].restore_id or restore_configs[0].source_id}: "
+             f"retention cleanup starting on {len(restore_configs)} source(s).",
+             {"cleanup_retention": delete_retention})
+        with _workflow_phase(logger, f"{_rid}restore-workflow delete-backup", summary=summary, current_phase="delete-backup", source_count=len(restore_configs), cleanup_retention=delete_retention):
             for config in restore_configs:
-                # Hours, because run_delete_backup speaks hours; the config is in seconds so a
-                # single field can express both this and the script path without a unit clash.
-                seconds = int(config.target_retention_seconds or 0)
-                entry_hours = max(1, seconds // 3600) if seconds else 0
-                step_config = dataclasses.replace(
-                    config, copy_recent_hours=delete_hours if delete_hours is not None else entry_hours
-                )
+                # Seconds the whole way down now. This used to convert the configured seconds into
+                # hours with `max(1, seconds // 3600)` before handing them over, which turned any
+                # retention under an hour into an hour without saying so.
+                step_config = (config if delete_retention is None
+                               else dataclasses.replace(config, cleanup_retention=delete_retention))
                 result = run_delete_backup(step_config, logger=logger, dry_run=dry_run)
                 delete_outputs.append(
                     {
                         "source_id": step_config.source_id,
                         "returncode": result.returncode,
-                        "delete_older_than_hours": result.delete_older_than_hours,
+                        "cleanup_retention": result.cleanup_retention,
                         "files_considered": result.files_considered,
                         "deleted": result.deleted,
                         "skipped": getattr(result, "skipped", 0),
@@ -1038,7 +1105,20 @@ def run_restore_workflow(
                 )
                 if result.returncode != 0:
                     raise RuntimeError(f"delete-backup failed for source_id={step_config.source_id} returncode={result.returncode}")
-        summary["delete-backup"] = {"status": "SUCCESS", "sources": delete_outputs}
+        _deleted = sum(int(item.get("deleted") or 0) for item in delete_outputs)
+        _considered = sum(int(item.get("files_considered") or 0) for item in delete_outputs)
+        _skipped = sum(int(item.get("skipped") or 0) for item in delete_outputs)
+        # The counts are the point: "SUCCESS" on its own cannot distinguish a cleanup that pruned
+        # thirteen files from one that scanned nothing, and both had been reported identically.
+        _say("DELETE_DONE",
+             f"Restore {restore_configs[0].restore_id or restore_configs[0].source_id}: "
+             f"retention cleanup finished - {_considered} considered, {_deleted} deleted, "
+             f"{_skipped} kept.",
+             {"files_considered": _considered, "deleted": _deleted, "skipped": _skipped,
+              "cleanup_retention": delete_retention})
+        summary["delete-backup"] = {"status": "SUCCESS", "sources": delete_outputs,
+                                    "files_considered": _considered, "deleted": _deleted,
+                                    "skipped": _skipped}
         summary["status"] = "SUCCESS"
         summary["overall_workflow_status"] = "SUCCESS"
         summary["duration_seconds"] = round(time.monotonic() - workflow_start, 3)

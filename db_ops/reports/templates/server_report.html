@@ -199,12 +199,13 @@
   details.fold .in{padding:0 13px 13px}
   .foot{margin-top:16px; padding:9px 12px; background:var(--surface-2); border:1px solid var(--line);
         border-radius:8px; font-size:11.5px; color:var(--muted)}
+__BANNER_CSS__
 </style>
 </head>
 <body>
 <header class="masthead">
   <div class="wrap">
-    <p class="eyebrow">__COMPANY__ · Server health</p>
+    __PAGE_BANNER__
     <h1 class="title" id="hostTitle">Server health</h1>
     <p class="subtitle" id="hostMeta">last __WINDOW_DAYS__ days · snapshot __SNAPSHOT_DATE__</p>
     <a class="back" id="inventoryLink" href="__INVENTORY_HREF__">← back to the fleet inventory report</a>
@@ -601,6 +602,217 @@ function workloadBlock(w){
       <thead><tr><th>Measure</th>${head}</tr></thead><tbody>${groups}</tbody></table></div>
     ${waitTable}
     ${cache}
+    </div></details>`;
+}
+
+/* Attribution — which database wrote the log, and which statements did the work.
+
+   Asked on 2026-09-11 from this page: WRITELOG was 36% of an instance's waits and the plan cache had
+   run 2.8M executions in 15 minutes, and nothing here said which database or which statement. Both
+   blocks are cumulative totals differenced per database / per query_hash, over the same windows as
+   the Workload table. Each window is its own fold because a table per window side by side would be
+   thirty columns wide; the newest is open. */
+const attrWait = (w, key) => {
+  const row = ((w && w.waits) || []).find(x => x.item === "WRITELOG");
+  const c = row && (row.values||{})[key];
+  return c ? ` · WRITELOG ${c.seconds.toLocaleString("en-US")} s${c.sharePct==null?"":` (${c.sharePct}% of waits)`}` : "";
+};
+const attrNum = (v, unit) => v == null ? '<span class="muted">—</span>' : esc(wlUnit(v, unit));
+
+function logBlock(l, w){
+  if (!l || (!l.available && !l.samples)) return "";
+  if (!l.available) {
+    return `<details class="fold"><summary>Transaction log by database — no interval yet</summary><div class="in">
+      <p class="sec-note">Each database needs <b>two</b> collections before its log rate exists;
+      ${l.samples||0} so far, every 15 minutes.</p></div></details>`;
+  }
+  const folds = (l.windows||[]).map((win, i) => {
+    const rows = win.databases.map(db => `<tr>
+      <td class="metric">${esc(db.database)}</td>
+      <td class="mono nowrap">${attrNum(db.logMb, "mb")}${db.logMbPerSec==null?"":`<span class="code">${esc(db.logMbPerSec.toFixed(3))} MB/s</span>`}</td>
+      <td class="mono nowrap">${db.sharePct==null?"—":esc(db.sharePct+"%")}</td>
+      <td class="mono nowrap">${attrNum(db.flushes, "count")}</td>
+      <td class="mono nowrap">${db.avgFlushKb==null?"—":esc(db.avgFlushKb.toFixed(1)+" KB")}</td>
+      <td class="mono nowrap">${attrNum(db.flushWaits, "count")}</td>
+      <td class="mono nowrap">${attrNum(db.writeTransactions, "count")}</td>
+      <td class="mono nowrap">${db.avgTxnKb==null?"—":esc(db.avgTxnKb.toFixed(1)+" KB")}</td>
+      <td class="mono nowrap">${db.writeLatencyMs==null?"—":esc(db.writeLatencyMs.toFixed(2)+" ms")}</td>
+      <td class="mono nowrap">${db.writeStallSec==null?"—":esc(db.writeStallSec < 1
+        ? Math.round(db.writeStallSec*1000)+" ms"
+        : db.writeStallSec.toLocaleString("en-US",{maximumFractionDigits:1})+" s")}${
+        db.stallSharePct==null?"":`<span class="code">${esc(db.stallSharePct+"% of log stall")}</span>`}</td>
+    </tr>`).join("");
+    const others = win.others ? `<tr><td class="metric muted">${win.others.count} more database(s)</td>
+      <td class="mono nowrap muted">${attrNum(win.others.logMb, "mb")}</td><td colspan="8"></td></tr>` : "";
+    return `<details class="fold"${i===0?" open":""}><summary>${esc(win.label)} · ${esc(wlSpan(win.seconds))} measured · ${
+        esc(wlUnit(win.totals.logMb, "mb"))} of log from ${win.totals.databases} database(s)${attrWait(w, win.key)}</summary>
+      <div class="in"><div class="tbl-wrap"><table class="rpt">
+        <thead><tr><th>Database</th><th>Log generated</th><th>Share</th><th>Flushes</th><th>Avg flush</th>
+          <th>Commits that waited</th><th>Write transactions</th><th>Log per write txn</th>
+          <th>Log write latency</th><th>Log write stall</th></tr></thead>
+        <tbody>${rows}${others}</tbody></table></div></div></details>`;
+  }).join("");
+  return `<details class="fold" open><summary>Transaction log — which database wrote it</summary><div class="in">
+    <p class="sec-note">WRITELOG is a session waiting for its log block to reach disk, so it has two
+      causes and this table separates them: <b>how much</b> log a database generates (volume, and
+      how many commits it is cut into) and <b>how long</b> writing it takes (log write latency, from
+      the log file's own write stall over the same window). A database with modest volume and high
+      latency is a storage problem; one with small transactions and many flushes is a commit-pattern
+      problem — "Log per write txn" of a few KB is row-by-row committing. <b>No DMV attributes log to
+      a procedure</b>; the nearest honest proxy is <i>logical writes</i> in the Top queries block
+      below.</p>
+    ${folds}</div></details>`;
+}
+
+function topQueriesBlock(q){
+  if (!q || (!q.available && !q.samples)) return "";
+  if (!q.available) {
+    return `<details class="fold"><summary>Top queries — no interval yet</summary><div class="in">
+      <p class="sec-note">A query's work over an interval is two collections of it subtracted; ${
+      q.samples||0} collection(s) so far, every 30 minutes.</p></div></details>`;
+  }
+  const rankings = q.rankings || [];
+  const valueOf = (row, key) => ({cpu_ms: row.cpuMs, elapsed_ms: row.elapsedMs,
+    logical_reads: row.logicalReads, physical_reads: row.physicalReads,
+    logical_writes: row.logicalWrites, executions: row.executions})[key];
+  const table = (rows, key) => `<div class="tbl-wrap"><table class="rpt">
+    <thead><tr><th>#</th><th>Statement</th><th>Executions</th><th>CPU</th><th>Duration</th>
+      <th>Logical reads</th><th>Physical reads</th><th>Logical writes</th>
+      <th>Per execution</th><th>Elapsed spread<span class="code">since cached</span></th></tr></thead>
+    <tbody>${rows.map(r => `<tr>
+      <td class="mono">${r.ranks[key]}</td>
+      <td><div class="mono" style="font-size:11px">${esc(r.database||"?")}${r.object?" · <b>"+esc(r.object)+"</b>":""}
+        <span class="code">${esc(r.hash)}${r.plans>1?" · "+r.plans+" plans":""}${
+        r.basis==="cached_in_window"?" · cached inside this window":""}</span></div>
+        <div class="sqltext">${esc(r.text||"(text no longer in cache)")}</div></td>
+      <td class="mono nowrap">${attrNum(r.executions, "count")}</td>
+      <td class="mono nowrap">${attrNum(r.cpuMs, "ms")}${r.cpuSharePct==null?"":`<span class="code">≈${esc(r.cpuSharePct+"% of instance CPU")}</span>`}</td>
+      <td class="mono nowrap">${attrNum(r.elapsedMs, "ms")}</td>
+      <td class="mono nowrap">${attrNum(r.logicalReads, "count")}</td>
+      <td class="mono nowrap">${attrNum(r.physicalReads, "count")}</td>
+      <td class="mono nowrap">${attrNum(r.logicalWrites, "count")}</td>
+      <td class="mono nowrap">${r.avgElapsedMs==null?"—":esc(r.avgElapsedMs.toFixed(2)+" ms")}<span class="code">${
+        r.avgCpuMs==null?"":esc("cpu "+r.avgCpuMs.toFixed(2)+" ms")}${
+        r.avgLogicalReads==null?"":esc(" · "+wlUnit(r.avgLogicalReads,"count")+" reads")}</span></td>
+      <td class="mono nowrap">${r.minElapsedMs==null||r.maxElapsedMs==null?"—":esc(
+        r.minElapsedMs.toFixed(1)+" – "+r.maxElapsedMs.toLocaleString("en-US",{maximumFractionDigits:1})+" ms")}</td>
+    </tr>`).join("")}</tbody></table></div>`;
+  const folds = (q.windows||[]).map((win, i) => {
+    const inner = rankings.map((rk, j) => {
+      const rows = win.queries.filter(r => r.ranks[rk.key]).sort((a,b) => a.ranks[rk.key]-b.ranks[rk.key]);
+      if (!rows.length) return "";
+      const by = rk.label === rk.label.toUpperCase() ? rk.label : rk.label.toLowerCase();  /* "CPU" stays CPU */
+      return `<details class="fold"${j===0?" open":""}><summary>Top ${rows.length} by ${esc(by)}</summary>
+        <div class="in">${table(rows, rk.key)}</div></details>`;
+    }).join("");
+    return `<details class="fold"${i===0?" open":""}><summary>${esc(win.label)} · ${esc(wlSpan(win.seconds))} measured${
+        win.unranked?` · ${win.unranked} cached statement(s) had no earlier sample and are not ranked`:""}</summary>
+      <div class="in">${inner || '<p class="sec-note">No cached statement did any work in this window.</p>'}</div></details>`;
+  }).join("");
+  return `<details class="fold" open><summary>Top queries — which statements did the work</summary><div class="in">
+    <p class="sec-note">The plan cache's work broken down by statement (grouped by
+      <span class="mono">query_hash</span>, so one statement with many plans ranks as one). Every figure
+      is the statement's work <b>during</b> the window. Same caveat as the plan-cache table above: an
+      evicted plan takes its totals with it, so this ranks what is still cached. A statement is ranked
+      only when it has an earlier sample to subtract from, or when all its plans were cached inside the
+      window; the rest are counted, not guessed. <b>The elapsed spread is not a percentile</b> — it is
+      the fastest and slowest single execution since the plan was cached, which is all the engine
+      keeps; a max far above the per-execution average is the sign that a percentile would show a
+      tail.</p>
+    ${folds}</div></details>`;
+}
+
+/* Memory, as ranges rather than readings.
+
+   The section exists because the page had CPU, I/O, waits and workload and nothing about memory,
+   so every memory question was answered by running a DMV by hand. It is built as a range per
+   window because of what happened when one was: page life expectancy read 54 seconds, the
+   instance was called short of memory, and the same counter read 447 shortly afterwards. A cell
+   that can only show one instant makes that mistake available; one that shows the spread does
+   not. */
+const memKB = kb => {
+  if (kb == null) return "—";
+  const gb = kb / 1048576;
+  if (gb >= 10) return gb.toFixed(0) + " GB";
+  if (gb >= 1)  return gb.toFixed(1) + " GB";
+  return (kb/1024).toFixed(0) + " MB";
+};
+/* Page life expectancy is quoted in seconds by every DBA and every article about it — "PLE 54"
+   is the sentence, and rounding it to "1 min" makes the page disagree with the conversation it
+   is meant to settle. So seconds always, with the readable form added only once the number is
+   long enough to need one. */
+const memSecs = s => s == null ? "—"
+  : s >= 3600 ? Math.round(s).toLocaleString("en-US") + " s (" + (s/3600).toFixed(1) + "h)"
+  : Math.round(s).toLocaleString("en-US") + " s";
+const memValue = (v, unit) => unit === "kb" ? memKB(v)
+  : unit === "seconds" ? memSecs(v)
+  : unit === "flag" ? (v ? "YES" : "no")
+  : (v == null ? "—" : Math.round(v).toLocaleString("en-US"));
+
+function memoryBlock(m){
+  if (!m || !m.available || !(m.groups||[]).length) return "";
+  const wins = m.windows || [];
+  const head = wins.map(x=>`<th class="nowrap">${esc(x.label)}<span class="code">${
+     x.key === "now" ? "one reading" : esc(wlSpan(x.seconds)) + " · " + x.samples + " readings"
+   }</span></th>`).join("");
+
+  const cell = (row, win) => {
+    const c = (row.values||{})[win.key];
+    if (!c) return `<td class="mono muted">—</td>`;
+    /* The latest reading is the headline; the range under it is what stops the headline being
+       mistaken for the window. A single-reading column has no range to show, and one invented
+       from one sample would be a lie in the reader's favour. */
+    const headline = memValue(c.latest, row.unit);
+    if (win.key === "now" || c.count < 2 || c.min === c.max) {
+      return `<td class="mono nowrap">${esc(headline)}</td>`;
+    }
+    /* Which end is the finding differs per row, and saying so is the difference between a table
+       that can be read and one that has to be interpreted. */
+    const watched = row.watch === "min" ? memValue(c.min, row.unit)
+                  : row.watch === "max" ? memValue(c.max, row.unit) : null;
+    const label = row.watch === "min" ? "lowest " : row.watch === "max" ? "peak " : "";
+    const range = `${memValue(c.min, row.unit)} – ${memValue(c.max, row.unit)}`;
+    return `<td class="mono nowrap">${esc(headline)}<span class="code">${
+      watched ? `<b>${esc(label + watched)}</b> · range ${esc(range)}` : `range ${esc(range)}`
+    }</span></td>`;
+  };
+
+  const groups = (m.groups||[]).map(g=>
+    `<tr class="wl-group"><td colspan="${wins.length+1}">${esc(g.name)}</td></tr>`
+    + g.rows.map(r=>`<tr><td class="metric">${esc(r.label)}</td>${
+        wins.map(w=>cell(r,w)).join("")}</tr>`).join("")
+  ).join("");
+
+  const nodes = m.facts && m.facts.ple_node_count;
+  const restarted = (wins||[]).some(w=>w.restarted);
+
+  return `<details class="fold"><summary>Memory — what the pool looked like${
+      m.atTarget === true ? " · at target" : m.atTarget === false ? " · BELOW target" : ""
+    }</summary><div class="in">
+    <p class="sec-note">These are <b>gauges</b>, not counters: each one is a reading of the moment,
+      so they are summarised over the window rather than subtracted like the workload figures
+      above. The headline in each cell is the latest reading and the grey line is the spread — the
+      end that matters is named, because for page life expectancy it is the <i>lowest</i> value and
+      for pending grants it is the <i>highest</i>.</p>
+    <p class="sec-note"><b>Read this table downwards, not from the middle.</b> Page life expectancy
+      is the number everyone reaches for and the weakest evidence here: it drops whenever a large
+      scan lands and recovers on its own. The rows above it are what settle the question — if
+      nothing waited for a memory grant and the pool is holding its target, then a low page life
+      expectancy is the workload reading data, not the instance being short of memory.${
+      nodes ? ` This instance has <b>${esc(String(Math.round(nodes)))} NUMA nodes</b>, and the
+      instance-wide figure is a combination of them rather than the worst of them — so the node row
+      is the one that shows a single node under pressure.` : ""}${
+      restarted ? ` <b>A window here spans an engine restart.</b> Page life expectancy starts near
+      zero after one and climbs, so a minimum drawn across it is the restart rather than memory
+      pressure.` : ""}</p>
+    <div class="tbl-wrap"><table class="rpt">
+      <thead><tr><th>Measure</th>${head}</tr></thead><tbody>${groups}</tbody></table></div>
+    <p class="sec-note" style="margin-top:10px">Lazy writes, physical reads and PAGEIOLATCH waits
+      are in the Workload section above, not repeated here: they are cumulative counters and belong
+      with the interval arithmetic. Read together with this table they are the full picture —
+      buffer cache hit ratio is deliberately absent from both, because it counts a read-ahead page
+      as a hit and reads 99.99% on exactly the scan-heavy workload this section exists to
+      describe.</p>
     </div></details>`;
 }
 
@@ -1654,6 +1866,14 @@ async function select(slug){
        performance complaint arrives as, and it is answered by counters, not by the list of
        what is installed. */
     + workloadBlock(d.workload)
+    /* Directly under the totals they break down: the WRITELOG row and the plan-cache table above
+       say how much, these two say which database and which statement. */
+    + logBlock(d.attribution && d.attribution.log, d.workload)
+    + topQueriesBlock(d.attribution && d.attribution.queries)
+    /* Immediately after it, and never inside it: the memory gauges answer "why did it cost that"
+       for the workload above, and they are a different kind of number — a reading of the moment,
+       summarised as a range, not a counter differenced into a rate. */
+    + memoryBlock(d.workload && d.workload.memory)
     /* First of the inventory sections: it is the "what is on this server" overview that every
        section below details one aspect of. */
     + databasesBlock(d.databases)

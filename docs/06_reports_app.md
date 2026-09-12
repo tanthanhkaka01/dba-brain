@@ -134,10 +134,73 @@ stable `database-inventory.html` name the webhost serves (`--latest`), not the r
 The base URL lives in `data/reports_config.json` as `report_base_url` — host, port and mount are
 deployment facts, and a moved webhost would otherwise publish dead links. **There is no built-in
 default** (changed 2026-08-21: it used to be one estate's real report host, which handed every
-other operator links to a machine they cannot reach). Unset, the HTML pages fall back to
-relative hrefs — correct, because they are served from that same webhost — and the Telegram
-messages leave the link out entirely, because a chat client cannot follow a relative href and
-a link that 404s is worse than no link.
+other operator links to a machine they cannot reach). **Unset is now the ordinary case**, because
+the base URL is derived from `config.json`'s worker host rather than typed; with nothing derivable
+either, the HTML pages carry relative hrefs — correct, because they are served from that same
+webhost — and the Telegram messages leave the link out entirely, because a chat client cannot
+follow a relative href and a link that 404s is worse than no link.
+
+*That claim was false until 2026-09-10.* The renderer only ever linkified `http(s)://`, so with no
+base URL the cross-links came out as **relative prose, not relative hrefs**: a page built on a fresh
+node had no anchors at all. A bare sibling page name (`database-inventory.html`,
+`server-metrics.html?server=...`) is now linkified too — only when the line carries no absolute
+URL, so the two rules cannot nest an anchor inside an anchor.
+
+**Set, the HTML pages are now relative too** (changed 2026-09-10). The report *text* keeps the
+absolute URL, because half its audience reads it in Telegram; the renderer rewrites the `href` of
+any URL under `report_base_url` to the page name alone (`db_ops.lib.report_links`), so it resolves
+against whatever host served the page. A link to another host is left exactly as it is — rewriting
+that one would silently retarget a genuine external link at us. This closes the failure the old
+behaviour had: nothing re-renders a page already on disk, so when the estate moved on 2026-09-08
+every published index-usage page went on pointing "Server dashboard" and "Fleet inventory" at the
+retired worker, and it stayed that way until someone clicked one two days later. The setting itself
+still has to be corrected when the estate moves — `common.cli self-status` now compares it against
+the serving node and warns when the two disagree.
+
+### The fragmented table names the partition, and the size
+
+Changed 2026-09-10, from a page an operator was reading and could not act on
+on a production instance. It listed `Fragmented (227)` and the
+same index name fourteen times at fourteen percentages. They were **partitions** —
+`sys.dm_db_index_physical_stats` returns one row per partition, and the collector keyed them all on
+`db\table.index` — and that was the finding rather than a rendering detail: twelve partitions sat
+at 99% and the maintenance job had never touched one of them.
+
+The row now carries `db\schema.table.index`, the partition as `n/total`, index type, fragmentation,
+`page_count`, size in MB, and `STATS_DATE`. The **partition suffix (`#p7`) appears only on an index
+that has more than one**, so an unpartitioned index keeps its identity and its collected history.
+Three things were wrong and are fixed with it:
+
+- The count was of partitions and read as indexes — the heading now says both (`157 partitions
+  across 22 indexes`), and the summary row carries `distinct_indexes` and `total_mb`.
+- Nothing said how big. 99% fragmented is a different problem on 30 MB than on the 53 GB this
+  instance really had, and the size is what decides whether the rebuild fits the window. The
+  collector had measured `page_count` from the first version; the page dropped it.
+- The action **disagreed with the collector that chose it**: the page recomputed `>= 30% = REBUILD`
+  while the collector calls `>= 60%` REBUILD and the rest REORGANIZE, so every row between 30 and
+  59 rendered as the opposite. The page now reports the collector's `action=`, and only falls back
+  to recomputing — with the collector's own threshold — for rows stored before it carried one.
+
+Sorting was on the **string**, which put `100.0` below `99.9`: the worst index on an instance sorted
+to the bottom and was the first row a capped table dropped.
+
+**None of the above reached the page until 2026-09-11.** The columns were added, the collector was
+taught to measure them, and the parser between the two was never told: `MAINTENANCE_INDEX_USAGE`
+writes `k=v` pairs separated by commas and `MAINTENANCE_INDEX_FRAGMENTATION` writes them separated
+by pipes, and `_kv` split on commas only. A fragmentation message therefore came back as **one**
+field — `db`, holding the rest of the message — so Part, Type, Pages, Size MB and Stats updated
+rendered `-` on every row, and the Action column showed the page's recomputed verdict rather than
+the collector's, which is the third bullet above being silently un-fixed. Measured on
+192.0.2.250: 162 partitions across 26 indexes, all five columns blank.
+
+`_kv` now parses with each separator and keeps the richer result. It does **not** pick on "contains
+a pipe" — a usage message ends `is_unique_constraint=0 | primary key: enforces uniqueness …`, so
+that test is true of both formats and would have turned an eighteen-field usage row into two.
+
+**`record_count` and page density are deliberately not collected.** They are NULL in `LIMITED` mode
+and need a `SAMPLED` scan, which measured over two minutes against a single partitioned table on
+that instance and would turn a nightly pass into an hours-long one. The page says so where the
+columns would be, rather than leaving the absence to be guessed at.
 
 **The published page opens with a picker of the whole fleet** — one chip per server that has an
 index report, coloured by the worst thing found on it, the current server highlighted and not a link
@@ -211,6 +274,61 @@ python -m db_ops.reports.cli inventory-workflow --days 7 --beauty 1
 | --- | --- |
 | `build-inventory-health [--days N --output-dir --date]` | Build `<stamp>_database-inventory.json` health overlay from `metric_results`. |
 | `inventory-workflow [--days N --output-dir --inventory --date --dry-run --beauty 0\|1]` | Overlay → merge into the canonical `database-inventory.json` → render `<stamp>_database-inventory-summary.md`. `--beauty 1` additionally renders `<stamp>_database-inventory-report.{html,md}` from the merged inventory (KPIs, auto-derived Priority Attention, fleet/backup/config tables, per-server detail). Default `--beauty 0` = summary only (unchanged behavior). |
+
+**With no canonical inventory yet, the default location is seeded from `data/db_instances.json`.**
+The canonical file (`<runtime>/reports/database-inventory.json` once a config is loaded) is the
+fleet as the operator describes it, and the merge only ever *updates* the servers it lists. Until
+2026-09-11 the workflow refused to run without one, so a node with the command switched on logged
+`[Errno 2]` every cycle and published no page: a 404 on `/report_dba/database-inventory.html` from
+a node whose `db_instances.json` already named the server it collected from. Now:
+
+| Situation | What the run does |
+| --- | --- |
+| canonical file exists | merges into it, and **adopts every registered server it does not list** (`lib.inventory_render.adopt_new_servers`); the result says `adopted_from_db_instances: [ids]`. It still never re-seeds |
+| missing, `db_instances.json` registers instances | writes a seed (`lib.inventory_render.seed_inventory`), merges, renders; the result says `seeded_from_db_instances: N` |
+| missing, nothing registered (fresh install) | `status: NOT_CONFIGURED`, exit 0, **nothing written** — an empty file would never be re-seeded, and would list nothing after the first instance was registered |
+| `--inventory PATH` given and missing | error: an explicit path is never created, so a typo cannot start a second inventory |
+
+### Adoption: registering an instance puts it on the report
+
+The seed runs **once**, and the health overlay only ever updates servers the canonical file already
+lists. Between those two rules there was no way in for anything registered afterwards — and the gap
+is invisible from every direction that matters, because the instance is collected from, alerted on
+and given its own index-usage page while the fleet page does not mention it. Measured on
+2026-09-12 on a node whose canonical file held **1** server and whose `db_instances.json` registered
+**43**: the seed had run on the afternoon the node was stood up, when one was all there was.
+
+So every run now adopts what is missing. Three properties, and the third is what makes the first two
+safe:
+
+* **add-only.** An entry the operator enriched is never touched; only a missing `server_id` is
+  appended. Nothing is ever removed — a server dropped from `db_instances.json` keeps its page and
+  its history until a person deletes it.
+* **idempotent.** A daily workflow does not grow the file.
+* **the register decides**, through the flags db_ops already cascades —
+  `enabled` → `metrics` → `reports` → `alerts`, each defaulting to the one before
+  (`lib.target_flags`). A plain registration with no flags is collected *and* reported, which is
+  what makes "add an instance and it appears" true without a second switch to learn.
+
+That last point replaced an older rule, deliberately. Until 2026-09-12 a server deleted from the
+canonical file stayed deleted, on the reasoning that the file is the operator's. It is — but the
+cost was forty-two invisible instances, and the deliberate-removal case keeps a better route than
+deletion: `reports: {"enabled": false}` on the instance keeps it collected and off the page, and
+`enabled: false` stops both. Both are read from the register, where every other part of db_ops
+already looks.
+
+**The SLA app needed no such fix and got none.** Its population comes from
+`load_config_metric_targets(require_metrics_enabled=True)` — the register, directly — so a new
+instance reaches the SLA page as soon as it is collected, with no canonical file in the path. A
+node showing fewer SLA rows than another is showing a difference in *collection coverage*, not a
+missing registration: measured the same day, 20 of 43 registered instances had metric rows in the
+last 24 hours, and 20 is exactly what its fleet page and its SLA page could ever cover.
+
+The seed keeps identity fields only (`SEED_DATABASE_FIELDS`: engine, service, instance, port,
+version, platform, database names) and **no credential reference**, because `<runtime>/reports` is
+the webhost root and a file there is a URL. Every health block arrives from the overlay on the same
+run. An instance registered *after* the seed is not added — the merge reports its id as unknown to
+the canonical inventory; add it to the file.
 
 The styled report's HTML shell is shipped as package data at
 `db_ops/reports/templates/inventory_report.html`; the renderer (`db_ops/reports/inventory_report.py`)
@@ -316,6 +434,102 @@ the top wait beside it because *busy* and *busy waiting on WRITELOG* are differe
   six minutes. Refusing that pair blanked all six plan-cache figures because one of them lost a
   plan, so the field that fell is dropped, named on the page, and the rest are shown as what they
   always are: an undercount of unknown size.
+
+## Transaction log and Top queries — who did the work (on `server-metrics.html`)
+
+Added 2026-09-11, directly under Workload: the WRITELOG row and the plan-cache table there say *how
+much*, these two blocks say *which database* and *which statement*. Built by
+`db_ops/reports/workload_attribution.py` from `PERFORMANCE_LOG_BY_DATABASE` and
+`PERFORMANCE_TOP_QUERIES` — `metric_results` only, never a live query — over the same three windows.
+Each entity is differenced against **its own** earlier sample.
+
+**Transaction log — which database wrote it.** One table per window (the newest open), headed with
+the log volume and the WRITELOG wait for that window. Per database: log generated and its share,
+flushes and average flush size, commits that waited, write transactions and **log per write
+transaction**, **log write latency** (the log file's write stall over this window's writes) and the
+stall's share. It separates WRITELOG's two causes: a database with modest volume and high latency
+is storage; one cutting its log into a few KB per commit is a commit pattern. A database whose
+counters went backwards (restored, taken offline, `AUTO_CLOSE`) loses its interval alone.
+
+**Top queries — which statements did the work.** Per window, six rankings of 20 (CPU, duration,
+logical reads, physical reads, logical writes, executions), each row giving the statement's work
+during the window, per-execution averages, an approximate share of instance CPU (a ratio of *rates*,
+because these samples and the counter samples are 30 and 15 minutes apart) and the elapsed spread
+since cached. The rules:
+
+| Situation | What the page does |
+| --- | --- |
+| statement in both samples | ranked by the difference |
+| every plan cached inside the window | ranked by its whole total — all of it happened there (`cached inside this window`) |
+| not in the earlier sample, cached before it | **not ranked**, counted in the window's header — its since-cached total is history, not the window |
+| a plan evicted so the total fell | not ranked — unknowable, not negative |
+| no executions in the window | not listed |
+
+**Not on the page, on purpose:** P50/P95/P99 (no DMV keeps a distribution — the spread column is
+min/max per execution since cached, labelled so) and log bytes per procedure (the engine does not
+attribute log to statements — logical writes is the proxy, named as one). These codes are fetched by
+the per-server page only; the fleet overlay loads `WORKLOAD_CODES`, which does not contain them.
+
+## Memory — what the pool looked like (on `server-metrics.html`)
+
+Added 2026-09-11, immediately under Workload and never inside it. The section above answers *how
+much did this instance do*; this one answers *why did it cost that*, and it is built from a
+different kind of number — `PERFORMANCE_MEMORY_GAUGES`, summarised by
+`interval_rates.window_gauge` over the same three windows.
+
+It exists because the page had CPU, I/O, waits and workload and nothing about memory, so every
+memory question about this estate was answered by running a DMV by hand. The conclusion reached
+that way did not survive reading the same counter again: page life expectancy read **54 seconds**,
+the instance was called short of memory, and shortly afterwards the same counter read **447**, with
+its five NUMA nodes spread over 378 to 721.
+
+**Every cell is a range, not a reading**, and that is the whole design. The headline is the latest
+value; the grey line under it names the end of the range that is the finding — the *lowest* page
+life expectancy, the *highest* number of pending grants — and then the full spread. A cell that can
+only show one instant makes the mistake above available; one that shows the spread does not. The
+"latest interval" column is one reading and claims no range, because inventing one from a single
+sample would read as a measured spread that happened to be flat.
+
+**The table is ordered to be read downwards**, which is the second half of the same argument:
+
+| Group | What it answers |
+| --- | --- |
+| Did anything wait for memory | memory grants pending and outstanding, and how many memory brokers are being told to shrink. Pending zero means nothing was made to wait, **however low page life expectancy looks** |
+| Buffer pool | total vs target server memory — equal means nothing outside SQL Server is taking memory away from it — then the data / stolen / free split |
+| Page life expectancy | the instance figure, and the worst NUMA node beneath it |
+| Host memory | what the process holds, what the host has left, and the two low-memory flags |
+
+Page life expectancy is the number everyone reaches for and the weakest evidence in the section, so
+it sits **below** the rows that settle it rather than at the top. On a NUMA instance the Buffer
+Manager figure is a combination of the nodes rather than the worst of them, which is how a node at
+60 seconds reads as an instance at 141 — the node row is what shows it.
+
+- **Seconds, not minutes.** "PLE 54" is the sentence every DBA and every article uses; rounding it
+  to "1 min" would make the page disagree with the conversation it is meant to settle.
+- **A window spanning a restart is marked, not dropped.** A gauge survives a restart — it still
+  reads the current state — but page life expectancy starts near zero after one and climbs, so a
+  minimum drawn across it is the restart rather than memory pressure.
+- **It appears before the Workload rates do.** A gauge needs one collection to say something and an
+  interval needs two, so a freshly onboarded instance has its memory profile about half an hour
+  before it has a workload rate.
+- **Lazy writes, physical reads and PAGEIOLATCH waits stay in Workload.** They are cumulative
+  counters and belong with the interval arithmetic; a second copy here would be the same counter
+  with two baselines. Buffer cache hit ratio is in neither — it counts a read-ahead page as a hit
+  and reads 99.99% on exactly the scan-heavy workload these two sections exist to describe.
+
+### What it does not show, and what would be needed
+
+**Which partitions are holding the buffer pool.** Asked on 2026-09-11 after a manual
+`sys.dm_os_buffer_descriptors` scan on 192.0.2.250 found 31.88 GB of *future-dated* partitions
+cached against 6.81 GB of past and current ones — a third of the pool held by days that have not
+happened, pulled in by a join that could not eliminate partitions. Nothing in db_ops reads that
+DMV, and this section cannot answer it: it reports the pool's **size and pressure**, never its
+**contents**.
+
+That is a per-page scan of the whole pool joined to `sys.allocation_units` and `sys.partitions` —
+on a 95 GB pool, roughly 12 million rows — so it cannot become a 15-minute collector. Measured
+composition belongs in a deliberately-run command or a low-frequency job during a quiet window,
+which is a decision about production load rather than a reporting change, and is open.
 
 ## Query Store — where a slowdown can still be investigated (on `server-metrics.html`)
 

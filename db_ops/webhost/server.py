@@ -412,6 +412,12 @@ def serve(
     )
     refresher.start()
 
+    if console is not None:
+        # The console learns where the reports are from the server that serves them, so the two
+        # cannot disagree. Anything else is a second copy of one deployment fact.
+        console.reports_mount = mount
+        console.reports_root = root_path
+
     handler = make_handler(
         directory=str(served_directory),
         strip_mount=strip_mount,

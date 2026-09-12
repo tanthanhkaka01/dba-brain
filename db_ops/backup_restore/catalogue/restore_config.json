@@ -1,0 +1,15 @@
+{
+  "notes": [
+    "What this node backs up and what it restores, as two lists. Both ship EMPTY: a restore target is an estate fact, and there is no sensible default for somebody else's SMB share, credential or SQL Server instance.",
+    "The file ships anyway, empty, for the reason the missing one taught on 2026-09-11: a fresh install had no restore_config.json at all, and switching the backup/restore command on made it fail every cycle with the single word 'prod_backup_share'. The loader now reports 'nothing configured' as the state it is - but an operator who is looking for the file should find one, with the shape written down, rather than an absence they have to infer from a manifest that lists it.",
+    "'backups' runs a script against a database and prunes what it wrote. Each entry: backup_id, db_type, server_id, backup_dir, and 'jobs' - one per level (full/diff/log, database/archivelog, database/wal). Every job states 'script', 'time_window' and 'cleanup_retention'.",
+    "'restores' verifies those backups by restoring them somewhere else. An entry names a source and a target, the share the .bak files are copied from, the instance they are restored into, and the databases to carry across.",
+    "'cleanup_retention' is REQUIRED on every backup job and every restore entry, in SECONDS. It is how long that directory keeps its files: a backup job prunes what it wrote after backing up, a restore prunes what it staged after restoring. 691200 is 8 days and is the recommended value - the full backup is weekly, so an 8-day window always keeps the newest full and every incremental chained to it. 0 means NO AGE GATE, not 'keep everything': every file becomes a candidate and the chain rule alone decides (never the newest full, nor anything at or after it).",
+    "An empty list is a complete answer. The backup/restore app reports 'nothing configured' and does no work, which is a state and not a failure - it will not raise, and it will not alert.",
+    "Fill it through the bot (/spbot_* registration) or by hand; `python -m db_ops.backup_restore.cli list-backups` and `list-restores` read back what this file declares."
+  ],
+  "backup_restore": {
+    "backups": [],
+    "restores": []
+  }
+}

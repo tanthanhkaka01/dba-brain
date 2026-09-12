@@ -378,6 +378,7 @@ A collector that records a number and never judges it is the same shape as `PAGE
 | `PERFORMANCE_WORKLOAD_COUNTERS` | `sys.dm_os_performance_counters`, `sys.dm_resource_governor_resource_pools`, `sys.dm_io_virtual_file_stats` | 900 s | 27 totals: CPU ms, batch requests, transactions, compilations, page lookups, physical page reads/writes, read-ahead, checkpoint and lazy-write pages, full scans, page splits, work files/tables, lock waits and lock wait ms, deadlocks, log flushes and log bytes, and the instance-wide sum of file reads/writes, bytes and stalls |
 | `PERFORMANCE_QUERY_STATS_TOTALS` | `sys.dm_exec_query_stats` | 1800 s | CPU, elapsed, logical reads/writes, physical reads, executions — plus `cached_plans` and `cache_baseline_minutes`, which are gauges and are marked as such |
 | `PERFORMANCE_WAIT_TOTALS` | `sys.dm_os_wait_stats` | 900 s | cumulative wait ms for a **fixed** watch list, plus `lock_waits` (every `LCK_M_*` together) and `all_waits` (every non-benign wait, the denominator for a share) |
+| `PERFORMANCE_MEMORY_GAUGES` | `sys.dm_os_performance_counters`, `sys.dm_os_sys_memory`, `sys.dm_os_process_memory`, `sys.dm_os_memory_brokers` | 900 s | 16 **gauges**, not totals: total/target server memory, the data/stolen/free split, memory grants pending and outstanding, page life expectancy plus the per-NUMA-node minimum and node count, host physical and available memory, the two low-memory flags, and how many memory brokers are being told to shrink |
 
 Four things about them are load-bearing:
 
@@ -405,10 +406,75 @@ plan-cache scan open on a production instance for minutes is worse than a missin
 instance where it keeps timing out is telling you about its own plan cache (`optimize for ad hoc
 workloads`); disable it for that target through `metric_overrides` until that is fixed.
 
-All three are `report_policy.collect_only` (a counter that ticks is not an alert) **and**
+All four are `report_policy.collect_only` (a counter that ticks is not an alert) **and**
 `chart_summary_only` (a since-boot total plots as a straight ramp, on every item). What renders
 them is the Workload section of `server-metrics.html` and the workload chips on
 `database-inventory.html` — see `docs/06_reports_app.md`.
+
+#### Attribution: `PERFORMANCE_LOG_BY_DATABASE` and `PERFORMANCE_TOP_QUERIES`
+
+Added 2026-09-11, when one instance's Workload section showed WRITELOG at 36% of its waits and the
+plan cache at 2.8M executions in 15 minutes — and could say neither which database wrote the log
+nor which statements did the work. Same contract as the three counters above (raw, cumulative,
+`counters_since`, never graded, `collect_only` + `chart_summary_only`), with one difference in
+shape: **one row per entity** — per database, per `query_hash` — with the totals as `key=value`
+fields in the message, the way `PERFORMANCE_IO_LATENCY` stores one row per file.
+
+| Metric | Source | Cadence | What it carries |
+| --- | --- | --- | --- |
+| `PERFORMANCE_LOG_BY_DATABASE` | `sys.dm_os_performance_counters` (object `Databases`, per database), `sys.dm_io_virtual_file_stats` joined to the **log** files | 900 s | log bytes flushed, log flushes, log flush waits (commits that waited), transactions, write transactions; the log files' writes, bytes written and **write stall** |
+| `PERFORMANCE_TOP_QUERIES` | `sys.dm_exec_query_stats` grouped by `query_hash`, text from `sys.dm_exec_sql_text`, database from the object or `sys.dm_exec_plan_attributes` | 1800 s | per statement: executions, CPU, elapsed, logical/physical reads, logical writes, min/max elapsed per execution **since cached**, plan count, first-cached and last-execution time (UTC), database, object, a 200-character snippet |
+
+What is load-bearing:
+
+- **Per-database flush *wait time* comes from the log files, not from the perf counter.**
+  `Log Flush Wait Time` and `Log Flush Write Time (ms)` are gauges in `Databases` (the value for the
+  last second) and are not read — the `272696576` rule above. The log file's cumulative
+  `io_stall_write_ms` is the time this database's log writes took; divided by its writes over the
+  window it is the log write latency the committing sessions waited on.
+- **The top-query row set is a union of six rankings, 25 deep** (CPU, elapsed, logical reads,
+  physical reads, logical writes, executions) — at most 150 rows, usually 50–80. The page shows 20;
+  the depth is what lets the next collection find this one's rows to subtract. Same scan, cadence
+  and 60-second timeout as `PERFORMANCE_QUERY_STATS_TOTALS`, for its measured reason.
+- **The snippet is last and neutralised.** `interval_rates.message_fields` keeps the *last* value of
+  a key, so a statement reading `WHERE cpu_ms=5` would overwrite the row's own `cpu_ms`. Every `=`
+  in the statement is spaced out and the snippet is the final field, read by the report as
+  everything after `text=`. 200 characters, decided with the operator: the page is served and ad
+  hoc statements carry literal values.
+- **Two things the engine does not have, stated rather than approximated.** No DMV attributes log
+  bytes to a procedure — logical writes per query is the proxy, and the page calls it that. And no
+  DMV keeps a latency distribution, so there are no P50/P95/P99: min and max per execution since the
+  plan was cached is a spread and is labelled as one. Real percentiles need an Extended Events
+  session on each instance; that was declined on 2026-09-11 as DDL on production.
+
+#### `PERFORMANCE_MEMORY_GAUGES` is the same shape and the opposite arithmetic
+
+Added 2026-09-11, when the per-server page was asked why it had CPU, I/O, waits and workload and
+nothing about memory — so every memory question about this estate was being answered by running a
+DMV by hand.
+
+It records like the three above and grades like them (nothing), but **every value in it is a gauge**:
+a reading of the moment rather than a total since start-up. That single difference decides all of
+its handling, and it runs the other way from the rule above it:
+
+- **Nothing here is ever subtracted.** The difference between two page-life-expectancy readings is
+  a figure that looks like a rate and means nothing. The report summarises several readings into
+  latest / lowest / highest over the same windows instead — `interval_rates.window_gauge`, beside
+  `window_delta`, under a name that says which arithmetic it is.
+- **Only `cntr_type = 65792` is read** from `sys.dm_os_performance_counters` — the plain-gauge
+  family, the exact mirror of the `272696576` filter above, and for the same reason in reverse.
+- **`counters_since` is carried anyway.** A gauge survives a restart in a way a counter does not,
+  so the window is kept rather than refused — but page life expectancy starts near zero after a
+  restart and climbs, so a minimum drawn across one is the restart and the page must say so.
+- **Per-NUMA-node page life expectancy is carried separately.** On a NUMA instance the Buffer
+  Manager figure is a combination of the nodes, not the worst of them. Measured on
+  192.0.2.250: the instance read 141 with its five nodes at 298 / 265 / 170 / 60 / 168.
+- **Buffer cache hit ratio is deliberately absent.** It counts a read-ahead page as a hit, so it
+  reads 99.99% on exactly the scan-heavy workload the section exists to describe.
+
+It does not replace `SYSTEM_CPU_MEMORY` or `PAGE_LIFE_EXPECTANCY`, which grade and alert on the
+moment they ran — the same split as `PERFORMANCE_WAIT_TOTALS` beside `PERFORMANCE_WAIT_STATS`. An
+alert has no use for a series and a report cannot be built from an alert.
 
 ### Row caps are per metric
 

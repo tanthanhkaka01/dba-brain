@@ -66,7 +66,7 @@ def test_the_plain_key_flag_gets_the_same_treatment():
 def _config_with_script_restore(tmp_path):
     config = tmp_path / "restore_config.json"
     config.write_text(json.dumps({"backup_restore": {"restores": [{
-        "restore_id": "CLOUD_MSSQL_TO_CLOUD2",
+        "cleanup_retention": 691200, "restore_id": "CLOUD_MSSQL_TO_CLOUD2",
         "active": True,
         "db_type": "sqlserver",
         "server_id": "SRC",

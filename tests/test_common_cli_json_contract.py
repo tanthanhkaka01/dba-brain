@@ -37,7 +37,8 @@ ALL_COMMANDS = [
     "add-sql", "metric-toggle", "list-targets",
     "run-sql", "run-cmd", "rotate-password",
     "check-secret", "check-identifiers", "check-secret-literals",
-    "lift-example", "probe-host", "self-status", "timezone", "metric-severity", "trace-session",
+    "lift-example", "build-showcase", "instance-add",
+    "probe-host", "self-status", "timezone", "metric-severity", "trace-session",
     "inventory-summary", "restore-database", "list-backup-files",
     "pack-backup", "pull-file", "push-file",
     "restore-full", "restore-diff", "restore-log", "restore-key", "restore-metadata",
@@ -64,6 +65,15 @@ ALL_COMMANDS = [
     # `config_admin.main`, whose JSON branch rejects the payload before argparse sees the name.
 ]
 
+#: Commands whose request carries a SECRET, and which therefore take the JSON object on stdin only.
+#: Still one JSON object, still the same parser — but inline puts the secret in argv, readable by
+#: every process on the machine, and `@file` is the plaintext on disk the command exists to avoid.
+#: Listed apart rather than dropped: an exception to a contract is only safe while it is visible
+#: and has checks of its own (below), and the drift guard counts these too.
+STDIN_ONLY_COMMANDS = [
+    "secret-set",       # 2026-09-11: one secret into the encrypted store, never in clear
+]
+
 
 def test_the_command_list_matches_the_dispatcher() -> None:
     """A command added to the CLI but not to this file would otherwise skip every check.
@@ -79,7 +89,7 @@ def test_the_command_list_matches_the_dispatcher() -> None:
     # dispatcher is actually written.
     for branch in re.finditer(r'if argv\[0\] (?:==|in) (\{[^}]*\}|"[a-z0-9-]+")', source):
         dispatched |= set(re.findall(r'"([a-z0-9-]+)"', branch.group(1)))
-    missing = sorted(dispatched - set(ALL_COMMANDS))
+    missing = sorted(dispatched - set(ALL_COMMANDS) - set(STDIN_ONLY_COMMANDS))
     assert not missing, f"New common CLI command(s) not covered by the JSON contract test: {missing}"
 
 
@@ -122,7 +132,7 @@ def test_a_missing_request_file_is_reported_by_path(command: str, tmp_path, caps
     assert "Request file not found" in combined and missing.name in combined
 
 
-@pytest.mark.parametrize("command", ALL_COMMANDS)
+@pytest.mark.parametrize("command", ALL_COMMANDS + STDIN_ONLY_COMMANDS)
 def test_stdin_is_read_for_the_dash_form(command: str, stdin_holding, capsys) -> None:
     """``-`` must read stdin. An array on stdin proves the payload was read from there."""
     stdin_holding(json.dumps([1, 2]))
@@ -131,3 +141,24 @@ def test_stdin_is_read_for_the_dash_form(command: str, stdin_holding, capsys) ->
     assert "must be a JSON object" in combined, (
         f"{command} did not read its request from stdin: {combined[:200]!r}"
     )
+
+
+@pytest.mark.parametrize("command", STDIN_ONLY_COMMANDS)
+def test_a_stdin_only_command_reports_malformed_json_on_stdin(command: str, stdin_holding,
+                                                              capsys) -> None:
+    stdin_holding("{not json")
+    code = cli.main([command, "-"])
+    combined = "".join(capsys.readouterr())
+    assert code != 0 and "not valid JSON" in combined
+
+
+@pytest.mark.parametrize("command", STDIN_ONLY_COMMANDS)
+@pytest.mark.parametrize("form", ['{"ref": "X", "value": "secret"}', "@request.json"])
+def test_a_stdin_only_command_refuses_the_other_forms_and_says_why(command: str, form: str,
+                                                                  capsys) -> None:
+    """Refused before anything is parsed, with the reason — not a generic parse error, which
+    would send the caller looking for a typo in JSON that was fine."""
+    code = cli.main([command, form])
+    combined = "".join(capsys.readouterr())
+    assert code != 0
+    assert "stdin" in combined, f"{command} refused {form!r} without naming stdin: {combined[:200]!r}"

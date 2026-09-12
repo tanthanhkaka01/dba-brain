@@ -181,7 +181,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     workflow_parser.add_argument("--days", type=int, default=2, help="Only use metrics from the last N days. Default: 2.")
     workflow_parser.add_argument("--output-dir", help="Directory for the dated overlay + summary. Defaults to <runtime>/reports.")
-    workflow_parser.add_argument("--inventory", help="Path to the canonical database-inventory.json. Defaults to data/database-inventory.json.")
+    workflow_parser.add_argument(
+        "--inventory",
+        help="Path to the canonical database-inventory.json. Default: "
+             "<runtime>/reports/database-inventory.json when a config is loaded (it lives under "
+             "the mounted reports directory so it exists inside the worker container), and "
+             "data/database-inventory.json only for a run with no config. The help said data/ "
+             "unconditionally until 2026-09-10, which sent anyone following it to the wrong path.")
     workflow_parser.add_argument("--date", help="Override the YYYYMMDD_HHMMSS stamp shared by both files (for testing).")
     workflow_parser.add_argument("--dry-run", action="store_true", help="Build the overlay but do not merge or render the summary.")
     workflow_parser.add_argument("--beauty", type=int, default=0,

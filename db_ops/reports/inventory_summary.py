@@ -16,7 +16,7 @@ cleared later.
 """
 
 from __future__ import annotations
-from db_ops.common.data_sources import inventory_exclude_ip_prefixes
+from db_ops.common.data_sources import inventory_exclude_ip_prefixes, load_inventory
 from db_ops.lib.inventory_render import (  # moved to common: shared with control
     DBTYPE_LABEL,
     DEFAULT_INVENTORY,
@@ -36,6 +36,9 @@ from db_ops.lib.inventory_render import (  # moved to common: shared with contro
     _render_markdown,
     _write_inventory,
     build_inventory_summary,
+    adopt_new_servers,
+    reportable_servers,
+    seed_inventory,
 )
 
 import datetime
@@ -79,7 +82,42 @@ def build_inventory_workflow(*, sqlite_path, config=None, days=2, date=None,
         return {"status": "SUCCESS", "stamp": stamp, "health": health,
                 "merged": 0, "dry_run": True, "summary": None}
 
+    seeded = False
+    if not inv_path.exists():
+        if inventory:
+            # A path the operator named is never created. A typo there would otherwise start a
+            # second, near-empty inventory beside the real one, and every later run would merge
+            # into the wrong file without a word.
+            raise FileNotFoundError(
+                f"the canonical inventory {inv_path} named by --inventory does not exist yet, so "
+                "there is nothing to merge the health overlay into. A path given explicitly is "
+                "never created. Point --inventory at the file you keep, or leave it out: the "
+                "default location is seeded from data/db_instances.json on the first run - the "
+                "file `db-ops init` writes and instance registration fills.")
+        # The default location is seeded from what this node already knows. It used to raise
+        # instead (2026-09-10), and a node with the workflow switched on then logged `[Errno 2]`
+        # every cycle and published no page - reported 2026-09-11 as a 404 on
+        # /report_dba/database-inventory.html, from a node whose db_instances.json named the one
+        # server it was collecting from.
+        data = seed_inventory(load_inventory())
+        if not data["servers"]:
+            # Nothing registered either - a fresh install. That is "not configured", not a
+            # failure, and nothing is written: an empty file would exist, so it would never be
+            # seeded again, and the merge only updates servers already listed - the page would
+            # stay empty after the first instance was registered.
+            return {"status": "NOT_CONFIGURED", "stamp": stamp, "health": health,
+                    "merged": 0, "untouched": 0, "summary": None,
+                    "message": (f"No inventory yet: {inv_path} does not exist and "
+                                "data/db_instances.json registers no instance to seed it from. "
+                                "Register an instance and the next run builds it.")}
+        _write_inventory(inv_path, data)
+        seeded = True
     data = json.loads(inv_path.read_bytes().decode("utf-8-sig"))
+    # Every run, not just the first. The seed below only fires when the file is absent, and the
+    # merge only updates servers the file already lists - so without this an instance registered
+    # after the seed never reaches the fleet page, however much it is collected from. See
+    # `adopt_new_servers` for why adoption is add-only.
+    adopted = adopt_new_servers(data, seed_inventory(reportable_servers(load_inventory())))
     updated = _merge_overlay(overlay, data)
     _write_inventory(inv_path, data)
     untouched = len(data.get("servers", [])) - updated
@@ -87,7 +125,13 @@ def build_inventory_workflow(*, sqlite_path, config=None, days=2, date=None,
     summary = build_inventory_summary(inventory=inv_path, output_dir=out_dir, date=stamp,
                                       exclude_ip_prefixes=inventory_exclude_ip_prefixes())
     result = {"status": "SUCCESS", "stamp": stamp, "health": health,
-              "merged": updated, "untouched": untouched, "summary": summary}
+              "merged": updated, "untouched": untouched, "summary": summary,
+              # Said in the result, because the file is now the operator's to enrich and they
+              # should learn that it appeared rather than find it later.
+              "seeded_from_db_instances": len(data.get("servers", [])) if seeded else 0,
+              # Named rather than silent: the canonical inventory is the operator's file, and it
+              # has just grown. They should read that it happened, not discover it.
+              "adopted_from_db_instances": adopted}
     if int(beauty or 0):
         # Index pages FIRST. The server page only advertises a link when the target file is
         # already on disk, so building them the other way round hides the link on every run that

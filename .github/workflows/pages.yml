@@ -1,0 +1,76 @@
+# Publish `examples/showcase/` as a website, so the reports can be looked at rather than downloaded.
+#
+# **This is not a convenience, it is the only way anyone sees them.** GitHub renders an `.html` file
+# in a repository as source, and `raw.githubusercontent.com` serves it as `text/plain` — so no HTML
+# in any repository is viewable by clicking it, however self-contained. A static host is required
+# for a static site, and Pages is the one that comes with the repository.
+#
+# It also removes the second obstacle at the same time. The fleet page is one page for the whole
+# estate and fetches `server-metrics_<server>.json` as the reader picks a server; a browser refuses
+# that fetch from a `file://` page, so a downloaded copy shows `Loading…` and then says so. Served
+# over http(s) — here, or by the report web host the pages came from — it simply works.
+#
+# Nothing is published until the repository owner turns Pages on (Settings → Pages → Source:
+# GitHub Actions). Until then this workflow is inert, which is deliberate: publishing is a decision,
+# not a side effect of merging.
+name: pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "examples/showcase/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time, and a newer push wins. `cancel-in-progress: false` on purpose: a half-
+# finished deploy of a report set is worse than a slightly stale one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assemble the site
+        run: |
+          set -euo pipefail
+          mkdir -p site
+          cp -r examples/showcase/. site/
+          # The landing page carries the UTC moment it was built (20260912T0130Z_index.html), which
+          # is what makes a snapshot honest about its age - and what stops it being `index.html`,
+          # the one name a web host serves at the root. So the root is a redirect to the newest
+          # one, written here rather than committed: `examples/showcase/` holds exactly what
+          # `build-showcase` wrote and nothing a person added afterwards.
+          landing="$(ls site | grep -E '_index\.html$' | sort | tail -1)"
+          test -n "$landing"
+          printf '<!doctype html><meta charset="utf-8">' > site/index.html
+          printf '<meta http-equiv="refresh" content="0; url=%s">' "$landing" >> site/index.html
+          printf '<title>DBA Brain reports</title>' >> site/index.html
+          printf '<p>Opening <a href="%s">%s</a>.</p>\n' "$landing" "$landing" >> site/index.html
+          # Jekyll would otherwise skip files it thinks are special and rewrite the rest.
+          touch site/.nojekyll
+          echo "landing page: $landing"
+          echo "files: $(find site -type f | wc -l)"
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

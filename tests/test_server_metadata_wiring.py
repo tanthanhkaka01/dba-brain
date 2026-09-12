@@ -66,7 +66,7 @@ def test_an_entry_with_no_block_still_loads_as_inert(tmp_path):
     config.write_text(
         """
         {"backup_restore": {"restores": [{
-            "restore_id": "CLOUD_PG_DRILL", "db_type": "postgresql",
+            "cleanup_retention": 691200, "restore_id": "CLOUD_PG_DRILL", "db_type": "postgresql",
             "server_id": "CLOUD-203-0-113-188-PG-5433", "backup_dir": "/b",
             "target_container": "pg_ha-standby-1",
             "script": "assets/restore/postgresql/pg_restore_database.sh"
@@ -287,7 +287,7 @@ def _backup_job():
     return backup_module.BackupJob(
         backup_id="CLOUD_MSSQL_FULL", job="full", db_type="sqlserver", server_id=SOURCE,
         script="assets/backup/sqlserver/mssql_backup_database.sh",
-        backup_dir="/var/opt/mssql/backup/dbops", retention_days=14,
+        backup_dir="/var/opt/mssql/backup/dbops", cleanup_retention=14 * 86400,
         time_window=TimeWindow(), server_metadata=ServerMetadataPlan(enabled=True),
     )
 

@@ -54,7 +54,9 @@ QUERY_STORE_CODE = "QUERY_STORE_COVERAGE"
 # and this page's Query Store section must not decode the collector's message two ways.
 from db_ops.reports import inventory_health  # noqa: E402 - after QUERY_STORE_CODE, see above
 from db_ops.reports import workload as workload_block  # noqa: E402 - same reason
+from db_ops.reports import workload_attribution  # noqa: E402 - same reason
 from db_ops.lib.paths import DEFAULT_DATA_DIR
+from db_ops.lib import page_banner
 from db_ops.lib.timezone import format_offset, offset_minutes
 
 TEMPLATE_HTML = Path(__file__).resolve().parent / "templates" / "server_report.html"
@@ -2574,6 +2576,7 @@ def build_payload(series: list[dict], omitted: list[dict], *, now: int | None = 
     # procedures is the same fact twice, and the chip is the useless half.
     cards = sorted((entry for entry in series
                     if entry["static"] and entry["code"] != LINKED_SERVER_CODE), key=worst_first)
+    workload = workload_block.build_workload(workload_rows or [])
     return {
         "health": build_health(series, problems, now=now, freshness=freshness),
         "areas": build_areas(series, backup=backup, freshness=freshness),
@@ -2598,7 +2601,12 @@ def build_payload(series: list[dict], omitted: list[dict], *, now: int | None = 
         # collections. Built from the raw store rows, not from `series`: an interval needs
         # two samples of the same counter, and the chart pipeline reduces each metric to
         # one point per item per collection with the message — the baseline marker — gone.
-        "workload": workload_block.build_workload(workload_rows or []),
+        "workload": workload,
+        # Which database wrote the log and which statements did the work, over the same windows.
+        # From the same rows: the fetch below carries both code lists, and each builder reads its
+        # own codes and ignores the rest.
+        "attribution": workload_attribution.build_attribution(workload_rows or [],
+                                                              workload=workload),
         "jobs": build_jobs(job_rows or []),
         "series": charts,
         "omitted": omitted,
@@ -2607,12 +2615,11 @@ def build_payload(series: list[dict], omitted: list[dict], *, now: int | None = 
     }
 
 
-def render_page(*, servers: list[dict], company: str, snapshot_date: str, stamp: str,
-                days: int, inventory_href: str) -> str:
+def render_page(*, servers: list[dict], snapshot_date: str, stamp: str,
+                days: int, inventory_href: str, report_dir=None) -> str:
     """The shared page. It carries only the server index; the series are fetched per server."""
     html = TEMPLATE_HTML.read_text(encoding="utf-8")
     replacements = {
-        "__COMPANY__": company,
         "__SNAPSHOT_DATE__": snapshot_date,
         "__WINDOW_DAYS__": str(int(days)),
         "__STAMP__": stamp,
@@ -2621,6 +2628,20 @@ def render_page(*, servers: list[dict], company: str, snapshot_date: str, stamp:
         # file that gets shared, and it must say the same hour to everyone who opens it.
         "__UTC_OFFSET_MINUTES__": str(offset_minutes()),
         "__UTC_OFFSET_LABEL__": format_offset(offset_minutes()),
+        "__BANNER_CSS__": page_banner.CSS,
+        # snapshot_date is the day the numbers are for, which is what a page rebuilt
+        # for a past day must say - never today.
+        # The head used to name three pages and never the index reports - so an estate could
+        # publish one per server every night with nothing linking to any of them. `report_dir` is
+        # optional: without one there is nothing to filter against, and the three stable siblings
+        # are offered exactly as before.
+        "__PAGE_BANNER__": page_banner.render(
+            title="Server metrics", snapshot_at=snapshot_date,
+            here="server-metrics.html",
+            links=None if report_dir is None else page_banner.siblings_present(
+                lambda name: name == "server-metrics.html" or (Path(report_dir) / name).exists(),
+                index_usage=page_banner.pick_index_usage(
+                    path.name for path in Path(report_dir).glob("index-usage_*.htm*")))),
         "__INVENTORY_HREF__": inventory_href,
         "__SERVERS__": json.dumps(servers, ensure_ascii=False, separators=(",", ":")),
     }
@@ -2700,8 +2721,11 @@ def build_server_pages(*, sqlite_path: str | Path, models: list[dict], output_di
     # newest: a rate is the difference between two of them. Capped at two days regardless of the
     # report window — the widest reading the page shows is 24 hours, and a seven-day fetch of a
     # 15-minute metric would load five days of rows nothing renders.
+    # The attribution codes ride on the same fetch. They are this page's alone — the fleet overlay
+    # loads WORKLOAD_CODES for every server and renders no per-statement or per-database rows.
     workload_rows: dict[str, list[dict]] = {}
-    for row in store.fetch_health_metrics(codes=workload_block.WORKLOAD_CODES,
+    for row in store.fetch_health_metrics(codes=workload_block.WORKLOAD_CODES
+                                          + workload_attribution.ATTRIBUTION_CODES,
                                           days=min(int(days), workload_block.WORKLOAD_DAYS),
                                           as_of=as_of):
         workload_rows.setdefault(str(row.get("server_id") or ""), []).append(row)
@@ -2781,8 +2805,8 @@ def build_server_pages(*, sqlite_path: str | Path, models: list[dict], output_di
     _write(out_dir, PAGE_NAME,
            render_page(
                servers=index,
-               company=str((models[0].get("company") if models else "") or ""),
                snapshot_date=snapshot_date, stamp=stamp, days=days, inventory_href=inventory_href,
+               report_dir=out_dir,
            ),
            stamp=stamp, archive_only=archive_only)
     return links

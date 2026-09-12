@@ -7,7 +7,7 @@ effect of writing the replacement. Nothing new should call it.
 What the replacement does differently, and why each difference exists:
 
 * **The caller chooses, then deletes.** This module computes the set inside the deleting process
-  from ``copy_recent_hours`` and the clock, so "what would this remove" has no answer short of
+  from ``cleanup_retention`` and the clock, so "what would this remove" has no answer short of
   reading the code. ``list-backup-files`` lists, the caller decides, ``delete-files`` takes the
   explicit paths.
 * **Anywhere, not one UNC share.** This reaches a Windows import folder over SMB or SSH. Backups
@@ -55,7 +55,7 @@ class DeleteBackupFileResult:
 class DeleteBackupResult:
     returncode: int
     target_backup_dir: Path
-    delete_older_than_hours: int
+    cleanup_retention: int
     files_considered: int
     deleted: int
     file_results: tuple[DeleteBackupFileResult, ...]
@@ -71,7 +71,7 @@ def obsolete_only(candidates: list[tuple[Any, float, int]]) -> set[str]:
 
     Obsolete here means **a newer full exists**. This is a restore *staging* directory: files land
     in it to be restored from and are measured in hours, not weeks, so the age gate is
-    ``copy_recent_hours``. The second condition is not a second age — that would be the same
+    ``cleanup_retention``. The second condition is not a second age — that would be the same
     question asked twice — it is the chain: never delete the newest full, or anything at or after
     it, because that is what the next restore starts from. It is the same rule the backup scripts
     apply to their own directories ("older than the window AND older than the newest FULL"), which
@@ -149,7 +149,7 @@ def _split_by_obsolete(paths: list[Path], *, root: Path) -> tuple[list[Path], li
 
 def list_old_target_backup_files(config: BackupRestoreConfig | None = None, *, now: float | None = None) -> list[Path]:
     restore_config = config or load_restore_config()
-    cutoff = _cutoff_timestamp(restore_config.copy_recent_hours, now=now)
+    cutoff = _cutoff_timestamp(restore_config.cleanup_retention, now=now)
     files: dict[str, tuple[float, Path]] = {}
     for pattern in ("*.bak", "*.trn"):
         for path in restore_config.vm_import_unc.rglob(pattern):
@@ -210,7 +210,7 @@ def delete_old_target_backup_files_with_powershell(
     *,
     now: float | None = None,
 ) -> tuple[DeleteBackupFileResult, ...]:
-    cutoff = _cutoff_timestamp(config.copy_recent_hours, now=now)
+    cutoff = _cutoff_timestamp(config.cleanup_retention, now=now)
     cutoff_iso = "" if cutoff is None else dt.datetime.fromtimestamp(cutoff, tz=dt.timezone.utc).isoformat()
     script = r"""
 param(
@@ -306,7 +306,7 @@ def delete_old_target_backup_files_via_ssh(
     logger: logging.Logger | None = None,
     dry_run: bool = False,
 ) -> tuple[DeleteBackupFileResult, ...]:
-    cutoff = _cutoff_timestamp(config.copy_recent_hours, now=now)
+    cutoff = _cutoff_timestamp(config.cleanup_retention, now=now)
     linux_import = str(config.vm_import_unc).replace("\\", "/")
     results: list[DeleteBackupFileResult] = []
     _rid = f"restore_id={config.restore_id} " if config.restore_id else ""
@@ -324,7 +324,7 @@ def delete_old_target_backup_files_via_ssh(
             logger=logger,
             message=(
                 f"{_rid}delete-backup source_id={config.source_id} cleanup_scan "
-                f"root={linux_import} retention_hours={config.copy_recent_hours} scanned_files={len(lines)}"
+                f"root={linux_import} cleanup_retention={config.cleanup_retention} scanned_files={len(lines)}"
             ),
         )
         for line in lines:
@@ -436,7 +436,7 @@ def run_delete_backup(
         logger,
         (
             f"{_rid}delete-backup source_id={restore_config.source_id} start "
-            f"cleanup_root={restore_config.vm_import_unc} retention_hours={restore_config.copy_recent_hours} "
+            f"cleanup_root={restore_config.vm_import_unc} cleanup_retention={restore_config.cleanup_retention} "
             f"platform={restore_config.vm_platform}"
         ),
     )
@@ -463,7 +463,7 @@ def run_delete_backup(
     else:
         aged_files = list_old_target_backup_files(restore_config)
         selected_files, held_back = _split_by_obsolete(aged_files, root=restore_config.vm_import_unc)
-        _log_progress(logger, f"{_rid}delete-backup source_id={restore_config.source_id} cleanup_root={restore_config.vm_import_unc} retention_hours={restore_config.copy_recent_hours} aged_files={len(aged_files)} selected_files={len(selected_files)} still_needed={len(held_back)}")
+        _log_progress(logger, f"{_rid}delete-backup source_id={restore_config.source_id} cleanup_root={restore_config.vm_import_unc} cleanup_retention={restore_config.cleanup_retention} aged_files={len(aged_files)} selected_files={len(selected_files)} still_needed={len(held_back)}")
         file_results_list: list[DeleteBackupFileResult] = [
             DeleteBackupFileResult(target_file=path, status="SKIPPED", bytes=0,
                                    reason="still_needed")
@@ -498,7 +498,7 @@ def run_delete_backup(
     return DeleteBackupResult(
         returncode=1 if any(item.status == "FAILED" for item in file_results) else 0,
         target_backup_dir=restore_config.vm_import_unc,
-        delete_older_than_hours=restore_config.copy_recent_hours,
+        cleanup_retention=restore_config.cleanup_retention,
         files_considered=len(file_results),
         deleted=sum(1 for item in file_results if item.status == "DELETED"),
         file_results=file_results,
@@ -506,10 +506,17 @@ def run_delete_backup(
     )
 
 
-def _cutoff_timestamp(hours: int, *, now: float | None) -> float | None:
-    if hours <= 0:
+def _cutoff_timestamp(seconds: int, *, now: float | None) -> float | None:
+    """The instant a file must be older than to be a candidate. ``0`` removes the age gate.
+
+    Seconds, because that is the unit every interval in db_ops is stated in. It took hours until
+    2026-09-11, and the retention (in seconds) was converted with ``max(1, seconds // 3600)`` on
+    the way in - so any configured value under an hour silently became one hour, and nothing said
+    so. A setting the tool quietly replaces is worse than one it refuses.
+    """
+    if seconds <= 0:
         return None
-    return (time.time() if now is None else now) - (hours * 60 * 60)
+    return (time.time() if now is None else now) - seconds
 
 
 def _backup_timestamp(path: Path, *, fallback_mtime: float) -> float:

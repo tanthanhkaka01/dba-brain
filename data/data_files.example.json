@@ -12,14 +12,6 @@
   ],
   "data_files": [
     {
-      "file": "data_files.json",
-      "app_code": "control",
-      "kind": "manifest",
-      "transfer": "push",
-      "in_bundle": false,
-      "description": "This file: the inventory of data/ and how each file moves. Consulted before any transfer."
-    },
-    {
       "file": "app_commands.json",
       "app_code": "jobs",
       "kind": "config",
@@ -58,6 +50,14 @@
       "transfer": "push",
       "in_bundle": false,
       "description": "Which data/*.json sync into the runtime store, and how a record in each is keyed. Describes the sync rather than being synced."
+    },
+    {
+      "file": "data_files.json",
+      "app_code": "control",
+      "kind": "manifest",
+      "transfer": "push",
+      "in_bundle": false,
+      "description": "This file: the inventory of data/ and how each file moves. Consulted before any transfer."
     },
     {
       "file": "database-inventory.json",
@@ -170,6 +170,14 @@
       "transfer": "push",
       "in_bundle": false,
       "description": "How often a restore must be proven, and what counts as proof."
+    },
+    {
+      "file": "showcase.json",
+      "app_code": "common",
+      "kind": "fixture",
+      "transfer": "local",
+      "in_bundle": false,
+      "description": "The request `build-showcase` reads when refreshing examples/showcase/: where the node's pages were copied to, and the terms the page shapes cannot reach. Stays on the master - it names this estate's own databases and hosts, and nothing on a worker reads it."
     },
     {
       "file": "sla_policies.json",

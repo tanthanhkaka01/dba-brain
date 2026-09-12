@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<TerritoryHistory charset="utf-8">
+<TerritoryHistory name="viewport" content="width=device-width, initial-scale=1">
+<title>DB Ops · Reports</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; background: #0f1419; color: #e6e6e6; }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 40px 16px; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  .sub { color: #9aa4af; font-size: .85rem; margin-bottom: 28px; }
+  .hub-card { display: block; text-decoration: none; color: inherit; background: #182029; border: 1px solid #263340;
+              border-radius: 12px; padding: 20px 22px; margin-bottom: 14px; transition: border-color .15s, transform .05s; }
+  a.hub-card:hover { border-color: #3d5a73; transform: translateY(-1px); }
+  .hub-card.disabled { opacity: .55; }
+  .hub-title { font-size: 1.15rem; font-weight: 650; margin-bottom: 6px; }
+  .hub-note { color: #9aa4af; font-size: .88rem; }
+  .badge { padding: 2px 8px; border-radius: 6px; font-size: .8rem; font-weight: 600; }
+  .badge.ok { background: #123d2b; color: #7ee2a8; }
+  .badge.warn { background: #3d3312; color: #f0d97a; }
+  .badge.bad { background: #3d1620; color: #f28ba0; }
+  .badge.nodata { background: #24303d; color: #9db4c7; }
+  .muted { color: #7c8894; }
+  @media (prefers-color-scheme: light) {
+    body { background: #f5f7fa; color: #1a2029; }
+    .hub-card { background: #fff; border-color: #dbe2ea; }
+    .sub, .hub-note { color: #5a6672; }
+  }
+
+.dbo-banner{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 14px;
+  margin:0 0 18px;padding:14px 16px;border-radius:6px;
+  background:#0f2540;color:#e8eef7;font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+.dbo-banner .dbo-product{font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+  color:#7fa6d9;font-weight:700}
+.dbo-banner .dbo-title{font-size:17px;font-weight:700;color:#fff}
+.dbo-banner .dbo-scope{font-size:13px;color:#b9cbe4;font-family:ui-monospace,SFMono-Regular,
+  "Cascadia Mono",Consolas,monospace}
+.dbo-banner .dbo-stamp{font-size:12px;color:#8fb0d8;margin-left:auto;white-space:nowrap}
+.dbo-banner .dbo-links{flex-basis:100%;display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+.dbo-banner .dbo-links a{font-size:12px;color:#cfe0f5;text-decoration:none;
+  border:1px solid #2c4a70;border-radius:999px;padding:3px 11px;cursor:pointer}
+.dbo-banner .dbo-links a:hover{border-color:#7fa6d9;color:#fff}
+.dbo-banner .dbo-links a.dbo-here{background:#e8eef7;color:#0f2540;font-weight:600;
+  border-color:#e8eef7}
+@media print{.dbo-banner{background:#fff;color:#000;border:1px solid #000}
+  .dbo-banner .dbo-title,.dbo-banner .dbo-product,.dbo-banner .dbo-scope,
+  .dbo-banner .dbo-stamp{color:#000}.dbo-banner .dbo-links{display:none}}
+
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="dbo-banner"><span class="dbo-product">DBA Brain</span><span class="dbo-title">Reports</span><span class="dbo-stamp">snapshot 2026-09-12 08:30:33 +07</span><span class="dbo-links"><a href="20260912T0126Z_database-inventory.html">Fleet inventory</a><a href="20260912T0126Z_server-metrics.html">Server metrics</a><a href="20260912T0130Z_sla.html">SLA</a></span></div>
+  <div class="sub">Web host landing page</div>
+  <a class="hub-card" href="20260912T0130Z_sla.html"><div class="hub-title">📊 SLA / SLO compliance</div><div class="hub-note"><span class="badge bad">❌ FAILED</span> · 190 passed / 1 at risk / 74 failed / 40 no-data</div></a>
+  <a class="hub-card" href="20260912T0126Z_database-inventory.html"><div class="hub-title">🗄️ Database inventory report</div><div class="hub-note">Servers, storage, health triage · supports ?date=</div></a>
+</div>
+</body>
+</html>

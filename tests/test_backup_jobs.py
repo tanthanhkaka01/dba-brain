@@ -27,13 +27,13 @@ def _config(tmp_path, jobs=None, *, active=True):
                         {
                             "job": "database",
                             "script": "assets/backup/oracle/oracle_rman_database.sh",
-                            "retention_days": 14,
+                            "cleanup_retention": 1209600,
                             "time_window": {"repeat_interval": 86400, "timeout": 7200},
                         },
                         {
                             "job": "archivelog",
                             "script": "assets/backup/oracle/oracle_rman_archivelog.sh",
-                            "retention_days": 7,
+                            "cleanup_retention": 604800,
                             "time_window": {"repeat_interval": 900, "timeout": 1800},
                         },
                     ],
@@ -63,7 +63,7 @@ def _job(job="archivelog", *, repeat=900, timeout=1800, active=True, window=None
         server_id="CLOUD-ORA-1521",
         script="assets/backup/oracle/oracle_rman_archivelog.sh",
         backup_dir="/opt/oracle/backup/dbops",
-        retention_days=7,
+        cleanup_retention=604800,
         time_window=window or TimeWindow(repeat_interval=repeat, timeout=timeout),
         active=active,
     )
@@ -89,8 +89,8 @@ def test_load_backup_jobs_entry_active_false_disables_every_job(tmp_path):
 
 def test_load_backup_jobs_rejects_duplicate_job_names(tmp_path):
     duplicate = [
-        {"job": "database", "script": "a.sh", "time_window": {"repeat_interval": 60}},
-        {"job": "database", "script": "b.sh", "time_window": {"repeat_interval": 60}},
+        {"job": "database", "script": "a.sh", "cleanup_retention": 1209600, "time_window": {"repeat_interval": 60}},
+        {"job": "database", "script": "b.sh", "cleanup_retention": 1209600, "time_window": {"repeat_interval": 60}},
     ]
     with pytest.raises(ValueError, match="Duplicate backup job"):
         load_backup_jobs(_config(tmp_path, duplicate))
@@ -131,6 +131,7 @@ def test_a_config_without_backups_falls_back_to_the_canonical_file(tmp_path, mon
                             "server_id": "S1",
                             "backup_dir": "/backup",
                             "jobs": [{"job": "database", "script": "a.sh",
+                                      "cleanup_retention": 1209600,
                                       "time_window": {"repeat_interval": 60}}],
                         }
                     ]
@@ -154,7 +155,7 @@ def test_an_explicit_backups_list_is_not_replaced_by_the_fallback(tmp_path, monk
     canonical.write_text(
         json.dumps({"backup_restore": {"backups": [
             {"backup_id": "CANONICAL", "server_id": "S", "backup_dir": "/b",
-             "jobs": [{"job": "database", "script": "a.sh", "time_window": {"repeat_interval": 60}}]}
+             "jobs": [{"job": "database", "script": "a.sh", "cleanup_retention": 1209600, "time_window": {"repeat_interval": 60}}]}
         ]}}),
         encoding="utf-8",
     )
@@ -246,7 +247,7 @@ def _job_and_target(**over):
     fields = dict(
         backup_id="CLOUD_MSSQL_HA_PRIMARY", job="full", db_type="sqlserver",
         server_id="S", script="assets/backup/sqlserver/mssql_backup_database.sh",
-        backup_dir="/b", retention_days=14, time_window=TimeWindow(),
+        backup_dir="/b", cleanup_retention=14 * 86400, time_window=TimeWindow(),
     )
     fields.update(over)
     target = BackupTarget(server_id="S", host="h", username="u", container_name="c",

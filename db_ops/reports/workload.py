@@ -35,7 +35,8 @@ from db_ops.lib.coerce import as_float
 COUNTER_CODE = "PERFORMANCE_WORKLOAD_COUNTERS"
 QUERY_STATS_CODE = "PERFORMANCE_QUERY_STATS_TOTALS"
 WAIT_TOTALS_CODE = "PERFORMANCE_WAIT_TOTALS"
-WORKLOAD_CODES = [COUNTER_CODE, QUERY_STATS_CODE, WAIT_TOTALS_CODE]
+MEMORY_CODE = "PERFORMANCE_MEMORY_GAUGES"
+WORKLOAD_CODES = [COUNTER_CODE, QUERY_STATS_CODE, WAIT_TOTALS_CODE, MEMORY_CODE]
 
 #: Items that are a reading of the moment rather than a running total. Differencing one produces a
 #: number that looks like a rate and means nothing, so they are carried through as-is.
@@ -149,6 +150,49 @@ _QUERY_ROWS: list[tuple[str, str, str]] = [
 ]
 
 
+#: The Memory table: ``(key, label, unit, watch)``, in the order the question is worked through.
+#:
+#: ``watch`` names the end of the range that is the finding, and it is the whole reason this table
+#: is not a column of single readings. For page life expectancy the **lowest** value over the window
+#: is what a memory conversation is about; for pending memory grants it is the **highest**, because
+#: one query made to wait is the event and the other 95 samples of zero are not. A row with no
+#: ``watch`` is a level rather than an extreme — the pool's size is read against its target, not
+#: against its own worst minute.
+_MEMORY_ROWS: list[tuple[str, list[tuple[str, str, str, str]]]] = [
+    # First, because it is the question PLE is usually asked in place of, and its answer is
+    # almost always a flat zero that settles the matter.
+    ("Did anything wait for memory", [
+        ("memory_grants_pending", "Memory grants pending", "count", "max"),
+        ("memory_grants_outstanding", "Memory grants held", "count", "max"),
+        ("brokers_shrinking", "Memory brokers told to shrink", "count", "max"),
+    ]),
+    # Second: did the pool get what it asked for. Total == Target means nothing outside SQL Server
+    # is taking memory away from it, which rules out the operating system as the cause.
+    ("Buffer pool", [
+        ("total_server_memory_kb", "Total server memory", "kb", ""),
+        ("target_server_memory_kb", "Target server memory", "kb", ""),
+        ("database_cache_memory_kb", "…of which data pages", "kb", ""),
+        ("stolen_server_memory_kb", "…of which stolen", "kb", ""),
+        ("free_memory_kb", "…free", "kb", ""),
+    ]),
+    # Only now PLE, and never alone.
+    ("Page life expectancy", [
+        ("page_life_expectancy", "Instance", "seconds", "min"),
+        ("ple_node_min", "Worst NUMA node", "seconds", "min"),
+    ]),
+    ("Host memory", [
+        ("sql_physical_memory_in_use_kb", "Held by the SQL Server process", "kb", ""),
+        ("available_physical_kb", "Available to the host", "kb", "min"),
+        ("total_physical_kb", "Installed on the host", "kb", ""),
+        ("system_low_memory_signal", "Windows asked for memory back", "flag", "max"),
+        ("process_physical_memory_low", "Process reported low memory", "flag", "max"),
+    ]),
+]
+
+#: Carried beside the table rather than in it: a count, not a measure over time.
+_MEMORY_FACTS = ("ple_node_count",)
+
+
 def _samples(rows: list[dict], code: str) -> list[dict[str, Any]]:
     """The metric's rows pivoted into one record per collection.
 
@@ -248,6 +292,11 @@ def build_workload(rows: list[dict]) -> dict:
     counter_samples = _samples(rows, COUNTER_CODE)
     query_samples = _samples(rows, QUERY_STATS_CODE)
     wait_samples = _samples(rows, WAIT_TOTALS_CODE)
+    # Resolved before the early return below, and returned from it: a gauge needs **one**
+    # collection to say something, while an interval needs two. A freshly onboarded instance has
+    # its memory profile half an hour before it has a workload rate, and blanking the first
+    # because the second is not ready yet would be the page keeping a fact it already holds.
+    memory = _build_memory(_samples(rows, MEMORY_CODE))
 
     counter_fields = _shared_fields(counter_samples)
     counter_deltas = _deltas(counter_samples, counter_fields)
@@ -263,6 +312,7 @@ def build_workload(rows: list[dict]) -> dict:
             "available": False,
             "asOf": max((s["collected_at"] for s in counter_samples), default=""),
             "samples": len(counter_samples),
+            "memory": memory,
         }
 
     cpus = _cpu_count(counter_samples)
@@ -345,7 +395,97 @@ def build_workload(rows: list[dict]) -> dict:
         "groups": [{"name": name, "rows": groups[name]} for name in order if groups.get(name)],
         "cache": cache,
         "waits": _build_waits(wait_samples, wait_deltas),
+        "memory": memory,
         "samples": len(counter_samples),
+    }
+
+
+def _build_memory(samples: list[dict[str, Any]]) -> dict:
+    """The Memory block: gauges summarised over the same three windows, never differenced.
+
+    Written on 2026-09-11 because the page had workload, I/O, waits and CPU and no memory at all,
+    so every memory question about this estate was answered by running a DMV by hand — and the
+    conclusion drawn that way ("page life expectancy is 54 seconds, this instance is short of
+    memory") did not survive reading the same counter again.
+
+    Two things stop that happening here. Each cell states the **range** over its window rather than
+    a reading, so a value that swung by a factor of three cannot be quoted as the profile of the
+    day; and the rows that settle the question — was anything actually made to wait for memory,
+    did the pool reach its target — are **above** page life expectancy rather than below it,
+    because the order the table is read in is the order the question should be worked through.
+    """
+    if not samples:
+        return {}
+
+    present = {key for sample in samples for key in sample
+               if key not in ("collected_at", "counters_since", "cpu_count")}
+    fields = sorted(present)
+    if not fields:
+        return {}
+
+    windows: list[dict[str, Any]] = []
+    summaries: dict[str, dict[str, Any]] = {}
+    for window in WINDOWS:
+        summary = interval_rates.window_gauge(
+            samples, fields=fields, window_hours=window["hours"],
+            newest_only=bool(window.get("newest_pair")))
+        if not summary:
+            continue
+        summaries[window["key"]] = summary
+        windows.append({"key": window["key"], "label": window["label"],
+                        "seconds": summary["seconds"], "samples": summary["samples"],
+                        "restarted": bool(summary["restarted"])})
+    if not windows:
+        return {}
+
+    groups = []
+    for name, specs in _MEMORY_ROWS:
+        rows = []
+        for key, label, unit, watch in specs:
+            if key not in present:
+                continue        # not collected on this build — a non-NUMA box has no node rows
+            values = {}
+            for win_key, summary in summaries.items():
+                reading = summary["readings"].get(key)
+                if reading is None:
+                    continue
+                values[win_key] = {
+                    "latest": round(reading["latest"], 2) if reading["latest"] is not None else None,
+                    "min": round(reading["min"], 2),
+                    "max": round(reading["max"], 2),
+                    "avg": round(reading["avg"], 2),
+                    "count": reading["count"],
+                }
+            if values:
+                rows.append({"key": key, "label": label, "unit": unit,
+                             "watch": watch, "values": values})
+        if rows:
+            groups.append({"name": name, "rows": rows})
+    if not groups:
+        return {}
+
+    latest = samples[-1]
+    facts = {key: as_float(latest.get(key)) for key in _MEMORY_FACTS
+             if as_float(latest.get(key)) is not None}
+
+    # The one comparison worth making for the reader rather than leaving to the eye: a pool at its
+    # target is not being squeezed from outside, whatever page life expectancy says.
+    total = as_float(latest.get("total_server_memory_kb"))
+    target = as_float(latest.get("target_server_memory_kb"))
+    at_target = None
+    if total is not None and target:
+        # Within 1%: the two counters are updated independently and a few MB apart is the normal
+        # reading of a pool that has finished growing, not a pool being held back.
+        at_target = abs(total - target) / target <= 0.01
+
+    return {
+        "available": True,
+        "asOf": max((s["collected_at"] for s in samples), default=""),
+        "windows": windows,
+        "groups": groups,
+        "facts": facts,
+        "atTarget": at_target,
+        "samples": len(samples),
     }
 
 

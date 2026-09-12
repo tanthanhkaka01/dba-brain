@@ -128,7 +128,29 @@ python -m db_ops.telegram.cli --config config.json process-conversations --limit
 python -m db_ops.telegram.cli --config config.json send-queue
 python -m db_ops.telegram.cli --config config.json send-one --send-tlgmsg-id 1
 python -m db_ops.telegram.cli --config config.json run-workflow
+python -m db_ops.telegram.cli --config config.json bot-info
+python -m db_ops.telegram.cli --config config.json group-level --group "<title or id>" --level warning --allow-command 1
+python -m db_ops.telegram.cli --config config.json user-level --user @someone --level 100
 ```
+
+**Discovering is not deciding.** Intake records every group and every sender it sees, and records
+each one inert: a group with no `notify_level` and `allow_command: 0`, a user at `user_type: 0`. The
+two `*-level` commands are the step that decides what each is for, instead of hand-editing files the
+running intake rewrites every second. A command with `command_type` N runs in a private chat for a
+user at level N or above, and in a group only when the group's `allow_command` *and* the user are at
+N or above (`commands.can_run_command`); 0 is the public tier.
+
+- `group-level` accepts a title substring when it names exactly one group — "Errors" matching both
+  "Errors" and "SQL Errors" is refused rather than resolved to the first.
+- `user-level` (2026-09-11) accepts the numeric id or the exact username, with or without `@`, and
+  **no substring**: a level is a permission. Written after a new node answered its operator's own
+  `/spbot_self_status` with "Permission denied (user_type=0)" four times, with no command to fix it.
+
+`enabled` in `telegram_config.json` gates **alerts** to groups, not the bot: once a token is stored
+the bot answers commands whatever it says. **`init` writes it `true`** (since 2026-09-11): shipping it
+false made storing the token and turning alerts on two steps, and a node that had done only the first
+answered commands while sending no alert — which read as broken. It cannot send early: with no token
+the app skips, and with no group level nothing routes. Set it `false` to mute alerts.
 
 Validate command JSON and run focused tests:
 

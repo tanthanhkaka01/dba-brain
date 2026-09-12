@@ -150,6 +150,24 @@ def test_policy_validation_rejects_invalid_operator():
         raise AssertionError("invalid operator was accepted")
 
 
+def _configured_data_dir(tmp_path):
+    """A `data/` naming one enabled instance, so "nothing is configured" is not the answer.
+
+    Without it this test reads whichever tree it runs in: the summary of an all-STALE run is FAILED
+    on an operator's checkout and NO_DATA in the distribution, where `data/db_instances.json` does
+    not ship. The assertion is about staleness, so the inventory has to be stated.
+    """
+    import json
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(exist_ok=True)
+    (data_dir / "db_instances.json").write_text(json.dumps({"db_instances": [
+        {"server_id": "LAB-192-0-2-9", "db_type": "postgresql", "ip": "192.0.2.9",
+         "port": 5432, "service_name": "pg1", "enabled": True},
+    ]}), encoding="utf-8")
+    return data_dir
+
+
 def test_stale_required_sli_fails_rollup(tmp_path):
     store = MetricStore(tmp_path / "db.sqlite")
     store.insert_results(run_id=1, results=[_metric("1", "2026-07-10T00:00:00Z")])
@@ -159,7 +177,8 @@ def test_stale_required_sli_fails_rollup(tmp_path):
         freshness_threshold_seconds=60,
     )
     summary = validate_sla_policies(sqlite_path=tmp_path / "db.sqlite", policies=[policy],
-                                    window_end="2026-07-10T01:00:00Z")
+                                    window_end="2026-07-10T01:00:00Z",
+                                    data_dir=_configured_data_dir(tmp_path))
     assert summary.status == "FAILED"
     assert summary.results[0].status == "STALE"
 

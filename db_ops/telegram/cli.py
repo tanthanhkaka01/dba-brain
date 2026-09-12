@@ -25,7 +25,8 @@ from db_ops.telegram.command_processor import (
 from db_ops.telegram.commands import save_command_messages_from_messages
 from db_ops.telegram.metrics_reports import queue_metrics_reports
 from db_ops.telegram.send_queue import send_one_message, send_pending_messages
-from db_ops.telegram import get_updates, send_message
+from db_ops.telegram import bot_info, get_updates, send_message
+from db_ops.telegram.updates import set_group_level, set_user_level
 from db_ops.telegram.updates import fetch_and_save_updates
 from db_ops.telegram.workflow import run_bot_workflow
 from db_ops.logging_ops.runtime_stdout import patch_stdout
@@ -42,6 +43,38 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     send_parser.add_argument("--chat-id", required=True, help="Telegram chat id.")
     send_parser.add_argument("--text", required=True, help="Message text.")
     send_parser.set_defaults(telegram_function=send_message)
+
+    info_parser = subparsers.add_parser(
+        "bot-info",
+        help="Who this token belongs to (id, username) and whether privacy mode lets "
+             "the bot read a group. The two values data/bot_telegram.json asks for.")
+    info_parser.set_defaults(telegram_function=bot_info)
+
+    level_parser = subparsers.add_parser(
+        "group-level",
+        help="Give a discovered group its notify level. save-updates finds groups but "
+             "deliberately leaves them inert; this is the step that decides what each is for.")
+    level_parser.add_argument("--group", required=True,
+                              help="Group id, or its title (exact, or a substring naming one).")
+    level_parser.add_argument("--level", required=True,
+                              help="notify_level, e.g. logging|warning|error|critical|sla|"
+                                   "backup|restore|sql|control|test. Empty string clears it.")
+    level_parser.add_argument("--allow-command", type=int, default=None, dest="allow_command",
+                              help="Minimum user level allowed to run commands here. Unset leaves "
+                                   "it as it is; 0 means no commands from this group.")
+    level_parser.set_defaults(telegram_function=set_group_level)
+
+    user_level_parser = subparsers.add_parser(
+        "user-level",
+        help="Give a discovered user the level that decides which commands they may run. "
+             "Intake records every sender at 0; this is the step that clears them.")
+    user_level_parser.add_argument("--user", required=True,
+                                   help="Numeric user id, or username (with or without @). "
+                                        "No substring match: a level is a permission.")
+    user_level_parser.add_argument("--level", required=True, type=int,
+                                   help="user_type. A command with command_type N runs in a "
+                                        "private chat for a user at N or above; 0 = public only.")
+    user_level_parser.set_defaults(telegram_function=set_user_level)
 
     updates_parser = subparsers.add_parser("get-updates", help="Call Telegram getUpdates.")
     updates_parser.add_argument("--offset", type=int, default=None, help="Optional update offset.")

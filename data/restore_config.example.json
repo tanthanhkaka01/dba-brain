@@ -6,7 +6,7 @@
     "'env_secrets' maps an environment variable the backup script needs to a key in data/encrypted_secret_text.json. The value is decrypted into the child process's environment and never written to a file or an argument list - an argument is world-readable in the process table.",
     "'jobs' is one entry per backup kind, each with its own schedule and retention, so a full and a log backup of the same database are independent. 'time_window' and 'notify' are the same shared objects used everywhere else.",
     "A restore entry's 'databases' list scopes what is restored. An empty list means 'everything found', which quietly goes on restoring ageing files after a database is removed from the source plan - name them explicitly unless you want that.",
-    "'target_retention_seconds' is how long a restored copy is kept before it is dropped. A drill target is disposable by design; keeping copies indefinitely fills the target instance and turns a proof into an incident.",
+    "'cleanup_retention' is how long a restored copy is kept before it is dropped. A drill target is disposable by design; keeping copies indefinitely fills the target instance and turns a proof into an incident.",
     "A physical restore carries the SOURCE instance's logins and passwords with it. After a drill the target answers to the source's credentials, and the target's own stored credential goes stale - expect that rather than being surprised by it.",
     "Every 'time_window' hour and day bound is read in the timezone DBA Brain runs in - the 'timezone' field in config.json - on every node, whatever clock the host or container keeps. So 'from_hour': 1 is 01:00 there, not 01:00 UTC and not 01:00 on the machine. There is no per-entry timezone: one declaration decides every window in every file. Changing it moves every schedule that names an hour, so set it before the first scheduled run."
   ],
@@ -32,7 +32,7 @@
             "job": "database",
             "active": true,
             "script": "assets/backup/sqlserver/mssql_backup_database.sh",
-            "retention_days": 14,
+            "cleanup_retention": 1209600,
             "time_window": {
               "from_hour": 1, "to_hour": 5,
               "repeat_interval": 72000,
@@ -48,7 +48,7 @@
             "job": "log",
             "active": true,
             "script": "assets/backup/sqlserver/mssql_backup_log.sh",
-            "retention_days": 7,
+            "cleanup_retention": 604800,
             "_note": "A separate job because the log backup is what sets the recovery point objective. Every fifteen minutes, all day - if this schedule and backup_policy.json disagree, the report is right and one of them is wrong.",
             "time_window": {
               "from_hour": 0, "to_hour": 23,
@@ -76,7 +76,7 @@
             "job": "database",
             "active": false,
             "script": "assets/backup/postgresql/pg_basebackup_database.sh",
-            "retention_days": 21,
+            "cleanup_retention": 1814400,
             "time_window": {
               "from_hour": 1, "to_hour": 5,
               "repeat_interval": 72000,
@@ -96,7 +96,7 @@
       {
         "restore_id": "ACME_APPDB_TO_DRILL",
         "active": true,
-        "target_retention_seconds": 86400,
+        "cleanup_retention": 86400,
         "note": "The drill. It restores yesterday's backup onto a disposable instance, verifies it, and drops the copy a day later. Scoped to the databases that matter - an empty list would go on restoring whatever it found, including files nobody produces any more.",
         "source": {
           "id": "ACME-192-0-2-10",

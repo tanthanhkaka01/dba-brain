@@ -132,6 +132,10 @@ differently in two places.
 | `instance_bundle.py` | what a SQL Server instance-metadata bundle is — layout, two phases, order |
 | `ssh_errors.py` | what can go wrong reaching a host over SSH, as four names |
 | `target_flags.py` | per-target on/off flags |
+| `webhost_endpoints.py` | where this node's own pages are — parses `--port`/`--mount` out of the webhost serve `command_text`, builds the console and reports base URLs, and names the pages that exist under stable names. A per-server page stays a `{server_id}` template: a real server id in shipped code is what `check-identifiers` refuses |
+| `report_links.py` | `page_relative` / `href_for_page` — turning an absolute report URL into a relative href when it is one of our own pages. The report text stays absolute for Telegram; the rendered page gets the relative form, which resolves against whatever host served it rather than the one that rendered it |
+| `page_banner.py` | the one head banner every published page leads with — product, page title, scope, `snapshot <time>`, and relative links to the sibling pages that **exist**. Pure: the stamp is passed in already rendered, so a page rebuilt for a past day says that day. `siblings_present(exists)` takes a predicate rather than a directory, because touching the filesystem is an operation. `snapshot_stamp(markup)` reads that stamp back out, so a page copied off a node can be named after the moment it states rather than the moment it was copied. `pick_index_usage(names)` + `siblings_present(..., index_usage=)` add the per-server index report to the head - it cannot be a `SIBLING_PAGES` entry because its file name is a `server_id`, so the href is the caller's and only the label lives here |
+| `pseudonym.py` | stable fake names for a real estate's identifiers — what each real term *becomes*, given that the caller decides which strings are terms. Hashed rather than counted, so two runs agree; shaped, so a `server_id` keeps its construction and an index keeps its `PK_`; and every fake address is RFC 5737, which is exactly what `identifier_scan.ALWAYS_ALLOWED` permits. `Mapping.apply` makes **one pass** over the text - a name is matched as a token and looked up, an address as a substring, a shorthand under its own boundary - because an estate's index report names 52,000 objects and a `re.sub` per term does not finish. `add(loose=True)` rewrites a term inside a longer name too, for what an operator names by hand; `add_pair` records a replacement the caller worked out, so a shorthand lands on the same fake machine the full address did. `inventory` renders by **shape** - address, `server_id`, or host name - because `collect_identifiers` reports a whole inventory under one kind, and falling through to `generic` made every address on a page read `redacted4187`; `procedure` keeps a `usp_`/`sp_` prefix the way `index` keeps `PK_`. Deliberately not reversible |
 
 ### Reading a value that may not be what it claims
 
@@ -141,7 +145,7 @@ differently in two places.
 | `rows.py` | `row_value` / `row_text` — one column out of a store row that may not have it |
 | `json_io.py` | reading a `data/*.json` the one way the whole tool reads them |
 | `text_format.py` | one-line text helpers more than one component must agree on — the stored timestamp (`format_utc`) and the `\|`-safe log value. `format_message_time` still lives here as the name producers import, but it is now one call into `timezone.py` rather than a second implementation |
-| `timezone.py` | **the one clock db_ops shows.** Parses `config.json`'s `timezone` (an IANA name or a fixed offset), resolves it, and renders every operator-facing time as `2026-09-07 07:32:56 +07`. Also `display_now()` — what a `time_window`'s `from_hour`/`to_hour` are compared against — `display_today()`, `file_stamp()`, `label_from_file_stamp()` and `format_display_text()`. Bound once by `db_ops.config.parse_config`; see §Timezone below |
+| `timezone.py` | **the one clock db_ops shows.** Parses `config.json`'s `timezone` (an IANA name or a fixed offset), resolves it, and renders every operator-facing time as `2026-09-07 07:32:56 +07`. Also `display_now()` — what a `time_window`'s `from_hour`/`to_hour` are compared against — `display_today()`, `file_stamp()`, `label_from_file_stamp()` and `format_display_text()` - plus the two inverses a file that leaves the estate needs: `parse_display()` reads a rendered stamp back into the moment it names (refusing one with no offset rather than guessing a zone) and `utc_file_stamp()` writes `20260912T0130Z`, which says which clock it is on. Bound once by `db_ops.config.parse_config`; see §Timezone below |
 
 
 ### Timezone — one clock, bound once
@@ -183,14 +187,14 @@ verdict; none of them reads a file.
 | --- | --- |
 | `policy_engine.py` | how does one metric row classify — the per-row hot path |
 | `backup_policy.py` | is each database actually protected, per database and per backup type |
-| `backupfiles_retention.py` | which backups the retention window no longer covers |
+| `backupfiles_retention.py` | which backups the retention window no longer covers. Reasons in whole days — the seconds from `cleanup_retention` are converted by each caller at its own edge |
 | `capacity_forecast.py` | when does this run out |
 | `state_transition.py` | does a recurring check have anything *new* to say |
 | `event_policy.py` | which events matter |
 | `metric_score.py` | how a set of metric rows scores for one status — the fleet ordering rule |
 | `health_model.py` | what is true about a target *now*, shared by every page that claims to say so |
 | `notify_route.py` | how an entry's `notify` block narrows a node's route |
-| `interval_rates.py` | reading structured fields back out of a collector's message text, and differencing two stored samples of a cumulative counter into a rate |
+| `interval_rates.py` | reading structured fields back out of a collector's message text, and the two arithmetics a stored series takes: `window_delta` differences two samples of a **cumulative counter** into a rate, `window_gauge` summarises several samples of a **gauge** into latest / lowest / highest. Which one a metric takes is a property of the metric — a differenced gauge is a figure that looks like a rate and means nothing, and one reading of a gauge is an instant rather than a profile. Both mistakes were made about the same instance on 2026-09-11, which is why the two sit here under names that say which is which |
 | `record_form.py` | how one config record becomes editable fields, and how those fields become the record again |
 | `log_tail.py` | reading a log file from the end, a page at a time, and what one line means |
 | `network_policy.py` | can this host's container networks take a monitored database off the map. See below |
@@ -224,13 +228,18 @@ as data, not literals — and `db_ops.control.cli worker-status` is what runs it
 
 ### Config objects parsed once
 
-`notify.py` and `time_window.py` are the two shared config blocks described in
+`notify.py`, `time_window.py` and `cleanup_retention.py` are the shared config blocks described in
 [`13_common.md`](./13_common.md). They are parsed **once** per config load and passed around as
-objects. A per-app copy of either is a bug — the reason they are here rather than in `common` is
-exactly the class-does-not-survive-a-subprocess point above.
+values. A per-app copy of any of them is a bug — the reason they are here rather than in `common`
+is exactly the class-does-not-survive-a-subprocess point above.
 
 * `notify` — `logging_on_run` / `alert_on_error` → Telegram level → chat.
 * `time_window` — `repeat_interval`, `timeout`, allowed hours. Consulted on every daemon tick.
+* `cleanup_retention` — how long a directory of backups keeps them, in **seconds**. One name for
+  what was `retention_days` on a backup job and `target_retention_seconds` on a restore entry:
+  same idea, two costumes, and an operator asked why on 2026-09-11. Mandatory on both — an absent
+  field reads exactly like a considered one, and six of this estate's fourteen restore entries
+  were running on a default nobody had chosen. `0` means *no age gate*, not "keep everything".
 
 ### Rendering and formatting
 
@@ -240,7 +249,7 @@ exactly the class-does-not-survive-a-subprocess point above.
 | `xlsx_export.py` | dependency-free XLSX writer for a single result-set sheet |
 | `xlsx_import.py` | read one sheet out of an XLSX, build a table on any engine db_ops knows |
 | `delimited_import.py` | the same, for tab / comma / semicolon / pipe text |
-| `inventory_render.py` | merge a health overlay into the canonical inventory and render it. Hides nothing by default — see below |
+| `inventory_render.py` | merge a health overlay into the canonical inventory and render it; `seed_inventory` builds a first canonical file from `db_instances.json` servers — identity only, no credential reference (the reports app writes it under the webhost root). Hides nothing by default — see below |
 | `listing.py` | what a `/spbot_list_*` reply shows |
 | `report_archive.py` | naming and daily archiving of published reports — path in, path out |
 | `telegram_text.py` | fit a body into Telegram's limit **by splitting, never by cutting** |

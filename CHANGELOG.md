@@ -15,6 +15,132 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-09-12
+
+### Changed
+
+- **A registered instance now appears on the fleet inventory report.** The canonical
+  `database-inventory.json` is seeded once and the health overlay only updates servers it already
+  lists, so anything registered afterwards never reached the page — collected, alerted on, given its
+  own index report, and invisible on the fleet. Every run now adopts what is missing. **On upgrade:**
+  a server you deleted from that file by hand returns if it is still registered and enabled. Say it
+  with `reports: {"enabled": false}` on the instance instead — that keeps it collected and off the
+  page; `enabled: false` stops both.
+- **`examples/` ships with the release**, to the public repository and to the PyPI sdist, and now
+  contains `examples/showcase/` — real report pages from a live estate with every identifier
+  replaced. A GitHub Pages workflow publishes them, because no HTML in a repository is viewable by
+  clicking it.
+
+### Added
+
+- **The per-server index report is linked from every page's head.** It was being published nightly
+  with nothing pointing at it.
+
+### Fixed
+
+- **`build-showcase` output renders.** It now copies the data a page fetches (`server-metrics.html`
+  is one page and one `fetch` per server), never rewrites the page's own stylesheet, JSON keys or
+  template-literal expressions, and reads object names from both shapes a report writes them in —
+  so schema, table, index and stored-procedure names are scrubbed rather than shipped. Pages are
+  named after the moment they state, in UTC.
+- **`check-identifiers` no longer reads a measurement as a machine.** Its two-octet shorthand tier
+  matched `"sharePct": 0.2` and `version: 2.53.1.0`; it now requires the shorthand to touch a name.
+  A request's `allow` list applies to the address backstop as well.
+
+### Changed
+
+- **Every app command in the default schedule now ships active** — the inventory workflow, the web
+  host and backup/restore included, which shipped off. On a root where `init` has run and nothing
+  else, all of them finish `status=done` and report what is missing (no instance, no token, no
+  restore entry) instead of failing. **On upgrade:** your existing `data/app_commands.json` is not
+  touched; this changes what a new `init` writes. Set `active: false` for anything you do not want.
+- **Telegram alerts are on by default for a new install** (`enabled: true` in the
+  `telegram_config.json` that `init` writes). Storing the bot token and giving a group its level is
+  all it takes; nothing is sent before both exist. **On upgrade:** your existing file is not touched.
+- **`daemon --once` skips long-running services** (`timeout: 0`, e.g. the web host) and logs
+  `long_running_service_not_run_by_once`. It used to start the web host and then wait for it for
+  ever, which is why that command shipped off.
+
+### Added
+
+- **`db-ops telegram user-level --user @someone --level 100`** — give a Telegram user the level
+  that lets them run commands. Every sender is recorded at level 0, so until now a new node answered
+  its own operator with "Permission denied" and the only fix was editing `telegram_users.json`.
+- **`python -m db_ops.common.cli secret-set -`** — store one secret (a bot token, an API key)
+  encrypted, with no plaintext file on the way. The request is read from **stdin only**. Its answer
+  warns when a later `encrypt-secret` would drop the secret — which, on a fresh node, it would.
+- **Transaction log by database and Top queries on `server-metrics.html`**, under Workload. Two new
+  SQL Server metrics, `PERFORMANCE_LOG_BY_DATABASE` (every 15 min) and `PERFORMANCE_TOP_QUERIES`
+  (every 30 min): which database generates the log and how long its log writes take, and the top 20
+  statements by CPU, duration, logical reads, physical reads, logical writes and executions per
+  window. Read from `metric_results` only. No percentiles — the engine keeps none, and the page says
+  so rather than approximating one.
+
+### Fixed
+
+- **Backup/restore on an install with nothing configured** failed every cycle with the error text
+  `'prod_backup_share'`. It now reports "nothing configured" and finishes `done`; `init` writes an
+  empty `data/restore_config.json`; `restores: []` is accepted. A manual restore command with no
+  entry now says so instead of `IndexError`.
+- **`workflow` raised `TypeError: run_workflow() got an unexpected keyword argument
+  'delete_retention'`** on builds between the retention rename and its fix.
+- **The inventory workflow seeds its canonical inventory from `data/db_instances.json`** on a node
+  that has none, instead of failing with `[Errno 2]` and leaving `database-inventory.html` a 404. An
+  explicit `--inventory` path that does not exist is still an error.
+
+## [0.14.0] - 2026-09-09
+
+### Added
+
+- **Back, Skip and Cancel on every prompt of every Telegram conversation**, as buttons and as
+  typed words. Cancel ends the run and executes nothing; Back re-asks the previous question; Skip
+  is offered only where a step allows it. Before this, a value mistyped at step 4 of a 14-step
+  workflow could not be taken back — the only remedies were finishing a wrong run or abandoning it.
+- **Branching steps.** `"ask_when": {"parameter": "remote_auth", "equals": "secret_ref"}` asks a
+  step only when an earlier answer matches, so a command stops asking questions that do not apply.
+  A real `/spbot_create_db_docker` run had two of three credential answers as `-` for a credential
+  that had already been given.
+- A step schema that can grow: `input_type`, `options` (`{label, value}`), `allow_text_input`,
+  `allow_skip`, `skip_value`. Buttons are a reply keyboard, so tapping and typing arrive the same
+  way and nothing about update intake changed.
+- **`telegram_workflow_steps`** — one row per asked step: the prompt shown, the options offered,
+  the answer (masked for `secret` steps), how it arrived, and `status='active'` on exactly one row
+  per run. Answers given inline are recorded too, as `answer_kind='inline'`. **Store schema 3 → 4;
+  the table is created on first start and there is no migration to run.**
+- **`db-ops db use-store sqlite|postgresql`** — points a node at its own store instead of the one
+  its config bundle came from. `store_config.json` travels inside a bundle, so an import
+  faithfully aims a machine that has never run at the shared production store, and every procedure
+  that stood up a node used to end with "now edit that file by hand". The section not switched to
+  is kept, so the way back is not a retyping exercise.
+- **`db-ops control pull-node-config --from <node>/data [--merge-secrets]`** — carries back what a
+  **local** node created. The bot and console create config on whichever node runs the estate;
+  `deploy --merge` and `worker-pull-data-config` did this for the worker container over SSH, and a
+  node that is a directory on a PC had no command. Same merge rules, because it is the same
+  function underneath. `store_config.json` and `telegram_config.json` are never carried back: a
+  node's store declaration and its `getUpdates` cursor are per-node state.
+
+### Fixed
+
+- **A pasted SQL body was silently mangled.** A `consume_rest` tail was rebuilt by joining shlex
+  tokens with single spaces, so `WHERE name = 'Tan Thanh'` reached the CLI as
+  `WHERE name = Tan Thanh`, and a multi-line paste was flattened until a `--` comment swallowed the
+  rest of the statement. Both were silent: the query stayed valid, it was simply not the one
+  anybody wrote. The tail is now taken from the raw message, byte for byte.
+- **Answers are validated at the step they are given.** Validation ran only when the command
+  finally executed, so a value mistyped at step 2 of a 14-step workflow was reported after step 14.
+
+### Changed / breaking
+
+- **`/spbot_create_db_docker` parameters were renumbered** (`remote_auth` inserted at position 10).
+  Inline invocations written before this release have their later arguments shifted by one and
+  **must be retyped**. Answering the prompts is unaffected, and `command_argv` / `conditional_args`
+  are unchanged because everything reads parameters by name.
+- Every conversation prompt gains a trailing line naming the words that work
+  (`Type back / cancel at any point.`) and a keyboard. Any integration asserting the exact text of
+  a prompt will see the extra line; the question itself is unchanged.
+- An **optional** step is now asked when it declares `allow_skip: true`. Optional steps that do not
+  declare it keep the previous behaviour of never being prompted for.
+
 ## [0.12.0] - 2026-09-08
 
 ### Added

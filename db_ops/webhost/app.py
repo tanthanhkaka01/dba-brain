@@ -256,6 +256,18 @@ class WebApp:
         # ships them anywhere.
         self.log_dir = Path(log_dir) if log_dir else None
         self.settings = settings or WebSettings()
+        # Which mount the *same listener* publishes the reports under. Set by `server.serve` from
+        # the `--mount` it is actually serving, deliberately not read from a config key: a second
+        # copy of "where the reports are" is how the console ends up linking at a path nothing
+        # answers on. Empty until the server says, and an empty one shows no report links rather
+        # than guessing - not configured is a state, not a failure.
+        self.reports_mount = ""
+        #: The directory those reports are served from, so the console can offer only the pages
+        #: that actually exist. Set by `server.serve` alongside the mount. Without it the sidebar
+        #: linked all three stable pages unconditionally, and on a node that had only ever run the
+        #: index report that was **three 404s with labels on them** - measured 2026-09-10, by the
+        #: same rule this file already states two lines up.
+        self.reports_root = None
         self._now = now or (lambda: datetime.now(timezone.utc))
 
     # ------------------------------------------------------------------ #
@@ -264,6 +276,31 @@ class WebApp:
     @property
     def prefix(self) -> str:
         return f"/{self.settings.mount}"
+
+    @property
+    def reports_prefix(self) -> str:
+        """Root-relative path to the published pages, or "" when this node serves none.
+
+        Root-relative on purpose. The console and the reports are two mounts on one listener, so
+        a link between them never needs a host - which is what stops it going stale the way
+        `report_base_url` did when the estate moved (see docs/06_reports_app.md, 2026-09-10).
+        """
+        mount = str(self.reports_mount or "").strip("/")
+        return f"/{mount}" if mount else ""
+
+    @property
+    def report_links(self) -> list[tuple[str, str]]:
+        """The published pages that exist right now, as (label, root-relative href).
+
+        Checked per request rather than at startup: a page generated an hour after the console
+        started should appear, and three `stat` calls are not a cost worth caching against that.
+        """
+        prefix = self.reports_prefix
+        if not prefix:
+            return []
+        root = Path(self.reports_root) if self.reports_root else None
+        return [(label, f"{prefix}/{page}") for label, page in pages.REPORT_PAGES
+                if root is None or (root / page).exists()]
 
     def owns(self, path: str) -> bool:
         """Is this a console URL? Everything else belongs to the static report server."""
@@ -502,7 +539,8 @@ class WebApp:
         view = self._config_view(source_file,
                                  include_retired=request.first.get("retired") == "1")
         return Response.html(pages.config_file_page(
-            prefix=self.prefix, session=session, blocks=self.app_blocks(),
+            prefix=self.prefix,
+            report_links=self.report_links, session=session, blocks=self.app_blocks(),
             source_file=view["source_file"], display_name=view["display_name"],
             description=view["description"], app_code=view["app_code"],
             groups=view["groups"], document_collection=DOCUMENT_COLLECTION,
@@ -536,7 +574,8 @@ class WebApp:
 
         source = self._source_row(source_file)
         return Response.html(pages.config_record_page(
-            prefix=self.prefix, session=session, blocks=self.app_blocks(),
+            prefix=self.prefix,
+            report_links=self.report_links, session=session, blocks=self.app_blocks(),
             app_code=str(source["app_code"]) if source is not None else "",
             source_file=source_file, collection=collection,
             item_key=item_key, payload=payload, history=history,
@@ -800,6 +839,7 @@ class WebApp:
     def _get_overview(self, request: Request, session: dict[str, Any]) -> Response:
         return Response.html(pages.overview_page(
             prefix=self.prefix,
+            report_links=self.report_links,
             session=session,
             blocks=self.app_blocks(),
             can_edit=self._can(session, self.settings.min_level_edit),
@@ -818,6 +858,7 @@ class WebApp:
                                + ", ".join(item["app_code"] for item in blocks) + ".")
         return Response.html(pages.app_page(
             prefix=self.prefix,
+            report_links=self.report_links,
             session=session,
             blocks=blocks,
             block=block,

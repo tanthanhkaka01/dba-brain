@@ -77,11 +77,15 @@ Run one scan and wait for started commands to finish:
 python -m db_ops.jobs.daemon --config config.json --once
 ```
 
-**`--once` waits for the commands it started, so it does not return on an estate that schedules a
-long-running one.** `APP-WEBHOST` serves and never completes by design, so `--once` on a
-configuration that includes it blocks until something kills it. That makes `--once` a poor
-smoke test for a full estate — it is a good one for a fresh `db-ops init` tool root, where every
-command finishes. To prove a full estate, start the daemon normally and read `job_runs`.
+**`--once` waits for the jobs it started, and does not start a service.** A command with
+`timeout: 0` is a long-running service (`AppCommand.timeout_disabled`) — `APP-WEBHOST` serves and
+never completes by design — so a single pass skips it and logs
+`app.daemon.command.skip_service reason=long_running_service_not_run_by_once`. Until 2026-09-11 it
+started it and then waited for ever; that is why the web host shipped `active: false` from v0.4.0,
+a flag hiding the defect instead of fixing it. Every shipped command is active now, and on a fresh
+`db-ops init` root one `--once` pass finishes every job `status=done` in a few seconds —
+`tests/test_every_app_command_runs_on_an_unconfigured_install.py` holds it to that. A service is
+proved by starting the daemon normally, not by `--once`.
 
 Use a different data directory:
 

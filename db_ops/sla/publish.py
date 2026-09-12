@@ -11,6 +11,7 @@ import html
 from datetime import datetime, timezone
 from pathlib import Path
 
+from db_ops.lib import page_banner
 from db_ops.sla.models import SlaPolicyResult, SlaValidationSummary, state_key
 from db_ops.lib.timezone import file_stamp, format_display
 
@@ -180,7 +181,8 @@ UNMEASURABLE_QUALITY = ("NO_DATA", "COLLECTION_FAILED", "STALE", "INSUFFICIENT_D
 
 
 def render_html(summary: SlaValidationSummary, *, recent_runs: list[dict],
-                previous_state: dict[str, str] | None = None, history_limit: int = 0) -> str:
+                previous_state: dict[str, str] | None = None, history_limit: int = 0,
+                report_dir: Path | None = None) -> str:
     generated_at = format_display()
     # Sections per server, not one fleet-wide list: see _server_sections.
     rows = _server_sections(summary)
@@ -189,6 +191,13 @@ def render_html(summary: SlaValidationSummary, *, recent_runs: list[dict],
     )
     banner_emoji, banner_class = STATUS_DISPLAY.get(summary.status, ("", "nodata"))
     return _PAGE_TEMPLATE.format(
+        banner_css=page_banner.CSS,
+        page_banner=page_banner.render(
+            title="SLA / SLO compliance", snapshot_at=generated_at, here="sla.html",
+            links=None if report_dir is None else page_banner.siblings_present(
+                lambda name: name == "sla.html" or (report_dir / name).exists(),
+                index_usage=page_banner.pick_index_usage(
+                    path.name for path in report_dir.glob("index-usage_*.htm*")))),
         generated_at=html.escape(generated_at),
         status=html.escape(summary.status),
         banner_class=banner_class,
@@ -275,7 +284,7 @@ def publish_html(summary: SlaValidationSummary, *, recent_runs: list[dict], out_
     directory = Path(out_dir)
     directory.mkdir(parents=True, exist_ok=True)
     page = render_html(summary, recent_runs=recent_runs, previous_state=previous_state,
-                       history_limit=history_limit)
+                       history_limit=history_limit, report_dir=directory)
     stable_path = directory / "sla.html"
     stable_path.write_text(page, encoding="utf-8")
     # One archive per DAY, overwritten, via the shared helper — not one per run. Stamping every
@@ -317,11 +326,30 @@ def render_index_html(summary: SlaValidationSummary | None, *, directory: Path) 
         href="database-inventory.html",
         emoji="🗄️",
         title="Database inventory report",
-        note="Servers, storage, health triage · supports ?date=" if inventory_available else "not generated yet",
+        # Naming the command and what it waits for, because "not generated yet" reads as "wait and
+        # it will appear" and on a fresh install it will not until something is monitored. The
+        # command ships active since 2026-09-11 (it shipped inactive before, and this card was a
+        # standing promise on a node where the page had 404'd since install); with no instance
+        # registered it reports NOT_CONFIGURED and publishes nothing, which is correct and is
+        # exactly what this card has to say. The same run writes `server-metrics.html` and the
+        # `index-usage_*` pages, so all three are missing together and for this one reason.
+        note=("Servers, storage, health triage · supports ?date=" if inventory_available else
+              "not generated yet — produced hourly by "
+              "<code>reports inventory-workflow --beauty 1</code> once an instance is registered "
+              "in <code>data/db_instances.json</code>"),
         disabled=not inventory_available,
     )
     sla_card = _index_card(href="sla.html", emoji="📊", title="SLA / SLO compliance", note=sla_status, disabled=False)
-    return _INDEX_TEMPLATE.format(generated_at=html.escape(generated_at), sla_card=sla_card, inventory_card=inventory_card)
+    return _INDEX_TEMPLATE.format(
+        banner_css=page_banner.CSS,
+        page_banner=page_banner.render(
+            title="Reports", snapshot_at=generated_at,
+            links=page_banner.siblings_present(
+                lambda name: (directory / name).exists(),
+                index_usage=page_banner.pick_index_usage(
+                    path.name for path in directory.glob("index-usage_*.htm*")))),
+        generated_at=html.escape(generated_at),
+        sla_card=sla_card, inventory_card=inventory_card)
 
 
 def _index_card(*, href: str, emoji: str, title: str, note: str, disabled: bool) -> str:
@@ -511,12 +539,13 @@ _PAGE_TEMPLATE = """<!doctype html>
     th, td {{ border-color: #e3e9f0; }}
     .sub, .card .l, .muted {{ color: #5a6672; }}
   }}
+{banner_css}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>SLA / SLO compliance</h1>
-  <div class="sub">Computed from collected metric_results · no database connections · generated {generated_at}</div>
+  {page_banner}
+  <div class="sub">Computed from collected metric_results · no database connections</div>
   <div class="banner {banner_class}">{banner_emoji} Overall: {status} · window end {window_end}</div>
   <div class="cards">
     <div class="card"><div class="n">{serving_bad}</div><div class="l">Bad right now</div></div>
@@ -579,12 +608,13 @@ _INDEX_TEMPLATE = """<!doctype html>
     .hub-card {{ background: #fff; border-color: #dbe2ea; }}
     .sub, .hub-note {{ color: #5a6672; }}
   }}
+{banner_css}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>DB Ops · Reports</h1>
-  <div class="sub">Web host landing page · generated {generated_at}</div>
+  {page_banner}
+  <div class="sub">Web host landing page</div>
   {sla_card}
   {inventory_card}
 </div>

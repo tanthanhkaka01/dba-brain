@@ -283,8 +283,20 @@ def _top_bar(prefix: str, session: dict[str, Any], *, back: str = "") -> str:
 </header>"""
 
 
+#: The published pages, as they appear in the console sidebar. Stable file names only — the
+#: per-server pages (`index-usage_<slug>.html`) are reached from the inventory and from the index
+#: report's own fleet picker, and listing one estate's servers in shipped code is what
+#: `check-identifiers` refuses.
+REPORT_PAGES = (
+    ("Fleet inventory", "database-inventory.html"),
+    ("Server metrics", "server-metrics.html"),
+    ("SLA", "sla.html"),
+)
+
+
 def _shell(*, prefix: str, session: dict[str, Any], nav: list[dict[str, Any]],
-           active: str, detail: str, title: str) -> str:
+           active: str, detail: str, title: str,
+           report_links: list[tuple[str, str]] | tuple = ()) -> str:
     """The console layout: the app list on the left, one thing at a time on the right.
 
     It was a grid of fourteen cards. Fourteen cards is a wall — everything competing, nothing
@@ -298,18 +310,25 @@ def _shell(*, prefix: str, session: dict[str, Any], nav: list[dict[str, Any]],
     body = f"""
 {_top_bar(prefix, session)}
 <div class="shell">
-  {_sidebar(prefix, nav, active)}
+  {_sidebar(prefix, nav, active, report_links)}
   <section class="detail">{detail}</section>
 </div>
 """
     return _document(title, body)
 
 
-def _sidebar(prefix: str, nav: list[dict[str, Any]], active: str) -> str:
+def _sidebar(prefix: str, nav: list[dict[str, Any]], active: str,
+             report_links: list[tuple[str, str]] | tuple = ()) -> str:
     """The fourteen apps, top to bottom, with a dot for how each is doing.
 
     The dot carries the whole estate at a glance, which is the one thing the card grid was good
     at: without it the list would make you click fourteen times to learn nothing is broken.
+
+    Below them, the published pages. The console and the reports have always been two mounts on
+    one listener with nothing joining them: a user signed into the console could not reach the
+    inventory, the SLA page or a server's metrics without being told the URL by someone. The links
+    are root-relative, so they follow whatever host is serving - the failure that made
+    `report_base_url` point at a retired worker for two days cannot repeat here.
     """
     items = []
     for item in nav:
@@ -322,12 +341,21 @@ def _sidebar(prefix: str, nav: list[dict[str, Any]], active: str) -> str:
             f'{dot}<span class="ord">{int(item.get("ord") or 0):02d}</span>'
             f'<span class="name">{escape(item["display_name"])}</span>{count}</a>')
     overview = " active" if not active else ""
+    reports = ""
+    if report_links:
+        links = "".join(
+            f'<a class="item" href="{escape(href)}">'
+            f'<span class="dot idle"></span><span class="ord"></span>'
+            f'<span class="name">{escape(label)}</span></a>'
+            for label, href in report_links)
+        reports = f'<div class="group">Reports</div>{links}'
     return f"""
 <nav class="apps">
   <a class="item{overview}" href="{escape(prefix)}/"><span class="dot idle"></span>
      <span class="ord"></span><span class="name">Overview</span></a>
   <div class="group">Apps</div>
   {"".join(items)}
+  {reports}
 </nav>"""
 
 
@@ -361,6 +389,7 @@ def _worst_dot(commands: list[dict[str, Any]]) -> str:
 
 
 def overview_page(*, prefix: str, session: dict[str, Any], blocks: list[dict[str, Any]],
+                  report_links: list[tuple[str, str]] | tuple = (),
                   can_edit: bool, can_run: bool, generated_at: str, notice: str = "") -> str:
     """What the console opens on: how the estate is doing, and only what needs attention.
 
@@ -425,11 +454,12 @@ def overview_page(*, prefix: str, session: dict[str, Any], blocks: list[dict[str
 <div class="tiles">{tiles}</div>
 {needs}
 """
-    return _shell(prefix=prefix, session=session, nav=nav_items(blocks), active="",
+    return _shell(prefix=prefix, session=session, nav=nav_items(blocks), report_links=report_links, active="",
                   detail=detail, title="db_ops console")
 
 
 def app_page(*, prefix: str, session: dict[str, Any], blocks: list[dict[str, Any]],
+             report_links: list[tuple[str, str]] | tuple = (),
              block: dict[str, Any], can_edit: bool, can_run: bool, notice: str = "",
              logs: dict[str, Any] | None = None,
              config_inline: dict[str, Any] | None = None) -> str:
@@ -480,7 +510,7 @@ def app_page(*, prefix: str, session: dict[str, Any], blocks: list[dict[str, Any
 <h3 class="block">{escape(_config_heading(config_inline))}</h3>
 {config_html}
 """
-    return _shell(prefix=prefix, session=session, nav=nav_items(blocks),
+    return _shell(prefix=prefix, session=session, nav=nav_items(blocks), report_links=report_links,
                   active=str(block["app_code"]), detail=detail,
                   title=f"{block.get('display_name')} — db_ops")
 
@@ -749,6 +779,7 @@ def _config_sections(view: dict[str, Any], *, prefix: str, can_edit: bool,
 
 
 def config_file_page(*, prefix: str, session: dict[str, Any], blocks: list[dict[str, Any]],
+                     report_links: list[tuple[str, str]] | tuple = (),
                      source_file: str, display_name: str, description: str, app_code: str,
                      groups: dict[str, list[dict[str, Any]]], document_collection: str,
                      can_edit: bool, showing_retired: bool) -> str:
@@ -770,7 +801,7 @@ def config_file_page(*, prefix: str, session: dict[str, Any], blocks: list[dict[
    free to use again.</p>
 {sections}
 """
-    return _shell(prefix=prefix, session=session, nav=nav_items(blocks), active=app_code,
+    return _shell(prefix=prefix, session=session, nav=nav_items(blocks), report_links=report_links, active=app_code,
                   detail=detail, title=f"{display_name} — db_ops")
 
 
@@ -818,6 +849,7 @@ def _config_row(item: dict[str, Any], *, base: str, can_edit: bool) -> str:
 
 
 def config_record_page(*, prefix: str, session: dict[str, Any], blocks: list[dict[str, Any]],
+                       report_links: list[tuple[str, str]] | tuple = (),
                        source_file: str, collection: str, item_key: str | None, payload: Any,
                        history: list[dict[str, Any]], key_fields: list[str],
                        is_document: bool, can_edit: bool, app_code: str = "") -> str:
@@ -895,7 +927,7 @@ def config_record_page(*, prefix: str, session: dict[str, Any], blocks: list[dic
 
   {_history_block(history)}
 """
-    return _shell(prefix=prefix, session=session, nav=nav_items(blocks), active=app_code,
+    return _shell(prefix=prefix, session=session, nav=nav_items(blocks), report_links=report_links, active=app_code,
                   detail=detail, title=f"{item_key or 'new'} — db_ops")
 
 

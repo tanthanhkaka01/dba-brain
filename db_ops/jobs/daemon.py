@@ -117,7 +117,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--config", default=None, help="Path to config JSON. Defaults to config.jobs.json or config.json.")
     parser.add_argument("--data-dir", default=str(DEFAULT_DATA_DIR), help="Directory containing app_commands.json.")
     parser.add_argument("--delay-seconds", type=int, default=2, help="Delay between app command scans. Default: 2.")
-    parser.add_argument("--once", action="store_true", help="Run one app command scan and exit after started commands finish.")
+    parser.add_argument("--once", action="store_true",
+                        help="Run one app command scan and exit after started commands finish. "
+                             "Long-running services (timeout 0, e.g. the web host) are skipped, "
+                             "because they never finish.")
     parser.add_argument(
         "--key",
         default=None,
@@ -235,6 +238,7 @@ def main(argv: list[str]) -> int:
                     logger=logger,
                     running_commands=running_commands,
                     forwarded_key_args=forwarded_key_args,
+                    single_pass=bool(args.once),
                 )
                 # After scheduling, never before: a due app command must not wait on cleanup.
                 sweep_job_runs_history(store=store, logger=logger)
@@ -331,6 +335,7 @@ def run_scheduler_scan(
     logger: Any,
     running_commands: dict[str, RunningAppCommand],
     forwarded_key_args: ForwardedKeyArgs | None = None,
+    single_pass: bool = False,
 ) -> None:
     collect_running_commands(store=store, logger=logger, running_commands=running_commands)
     app_commands = load_app_commands(data_dir / "app_commands.json", logger=logger)
@@ -384,6 +389,20 @@ def run_scheduler_scan(
     requests = open_run_requests(store, logger=logger)
 
     for app_command in active_commands:
+        if single_pass and app_command.timeout_disabled:
+            # `--once` is one pass of every due command and then exit, and it waits for what it
+            # started. A timeout-0 command is a service that never exits, so starting one made the
+            # single pass wait for ever - which is why APP-WEBHOST shipped inactive from v0.4.0 until
+            # 2026-09-11. The flag hid the defect rather than fixing it: every command now ships
+            # active, so the pass skips services and says so instead of hanging.
+            log_app_event(
+                logger,
+                "app.daemon.command.skip_service",
+                app_command=app_command,
+                status="skipped",
+                reason="long_running_service_not_run_by_once",
+            )
+            continue
         requested = requests.get(app_command.app_command_id)
         # A request is not a schedule. It deliberately overrides the allowed-hours window and the
         # repeat interval, because "run it now" is asked at the moment somebody needs the answer —

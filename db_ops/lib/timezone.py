@@ -385,6 +385,70 @@ def label_from_file_stamp(stamp: str, zone: Any = None) -> str:
     return f"{label} {format_offset(offset_minutes(resolved, at=at_utc))}"
 
 
+#: A filename stamp that is **UTC and says so**: ``20260912T0131Z``. Deliberately not
+#: :data:`FILE_STAMP_FORMAT`, which renders the display zone for the operator who generated the
+#: file. A snapshot that travels - into a public showcase, an attachment, somebody else's
+#: repository - is read by people whose own offset is not the estate's, and ``20260912_0831``
+#: read in Berlin is simply a wrong hour with nothing to correct it against. The ``T`` and the
+#: trailing ``Z`` are what make the name self-describing rather than a second unlabelled clock.
+UTC_FILE_STAMP_FORMAT = "%Y%m%dT%H%MZ"
+
+#: ``2026-09-07 07:32:56 +07``, ``... +00``, ``... -03:30`` - what :func:`format_display` wrote.
+_DISPLAY_PATTERN = re.compile(
+    r"^(?P<date>\d{4}-\d{2}-\d{2})[ T](?P<clock>\d{2}:\d{2}(?::\d{2})?)"
+    r"\s*(?P<offset>Z|[+-]\d{1,2}(?::?\d{2})?)?$"
+)
+
+
+def parse_display(text: Any) -> datetime | None:
+    """Read a rendered ``2026-09-07 07:32:56 +07`` back into the moment it names.
+
+    The inverse of :func:`format_display`, and it lives beside it so the two are edited together -
+    a reader that drifts from its writer fails on the one format nobody tested.
+
+    A stamp with **no offset** is refused rather than guessed at: the whole reason
+    :func:`format_display` always prints one is that an unlabelled wall-clock time cannot be placed
+    on any axis, and inventing a zone for it here would put that guess back. ``None`` means "this
+    is not a rendered display stamp", which every caller has to handle anyway.
+    """
+    match = _DISPLAY_PATTERN.match(str(text or "").strip())
+    if not match:
+        return None
+    offset = match.group("offset")
+    if not offset:
+        return None
+    clock = match.group("clock")
+    if len(clock) == 5:
+        clock = f"{clock}:00"
+    if offset in {"Z", "z"}:
+        minutes = 0
+    else:
+        signed = _OFFSET_PATTERN.match(offset)
+        if not signed:
+            return None
+        try:
+            minutes = _offset_minutes_from_match(signed, context="timezone", source=offset)
+        except TimezoneError:
+            return None
+    try:
+        moment = datetime.strptime(f"{match.group('date')} {clock}", DISPLAY_FORMAT)
+    except ValueError:
+        return None
+    return moment.replace(tzinfo=timezone(timedelta(minutes=minutes)))
+
+
+def utc_file_stamp(value: datetime | None = None) -> str:
+    """``20260912T0131Z`` - the UTC filename stamp for a snapshot that leaves this estate.
+
+    A naive ``value`` is read as UTC, for the same reason :func:`to_display` does: every naive
+    datetime in this tree came out of a column that stores UTC.
+    """
+    moment = datetime.now(timezone.utc) if value is None else value
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(timezone.utc).strftime(UTC_FILE_STAMP_FORMAT)
+
+
 def format_stored(value: datetime | None = None) -> str:
     """The **stored** UTC format, restated here so a caller reaching for a timestamp finds both.
 

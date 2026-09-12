@@ -249,3 +249,130 @@ def write_json_list(path: Path, *, root_key: str, items: list[dict[str, Any]]) -
     with path.open("w", encoding="utf-8") as file:
         json.dump({root_key: items}, file, ensure_ascii=False, indent=2)
         file.write("\n")
+
+
+#: The notify levels this estate routes on. Not a closed set in the config — `notify_level` is a
+#: free string that `telegram_config.json`'s level map and each app's `notify` block agree on — but
+#: these are the ones the shipped catalogue uses, and offering them beats leaving a reader to guess
+#: which spelling the router expects.
+KNOWN_NOTIFY_LEVELS: tuple[str, ...] = (
+    "logging", "warning", "error", "critical",
+    "sla", "backup", "restore", "sql", "control", "test",
+)
+
+
+def set_group_level(
+    *,
+    group: str,
+    level: str,
+    allow_command: int | None = None,
+    groups_path: Path | None = None,
+) -> dict[str, Any]:
+    """Give a discovered group its notify level, without opening the file.
+
+    `save-updates` finds every group the bot is in and writes it with **no level and no command
+    permission** — correct, because discovering a chat is not the same as deciding what it is for.
+    But the step after it had no command at all: standing a node up on 2026-09-10 meant hand-editing
+    `telegram_groups.json` eight times, once per group, in a file whose records the toolkit also
+    rewrites. A hand-edit that races a writer is a hand-edit that gets lost.
+
+    ``group`` matches the id exactly, or the title case-insensitively; a substring is accepted only
+    when it names exactly one group, because "Errors" matching both "Errors" and "SQL Errors" and
+    silently taking the first is how the wrong chat gets the alerts.
+    """
+    path = Path(groups_path) if groups_path else GROUPS_PATH
+    records = load_json_list(path, root_key="telegram_groups")
+    if not records:
+        raise RuntimeError(
+            f"no groups in {path}. Run `save-updates` first: a group has to be discovered "
+            "before it can be given a level.")
+
+    wanted = str(group or "").strip()
+    exact = [item for item in records
+             if str(item.get("group_id", "")) == wanted
+             or str(item.get("title", "")).casefold() == wanted.casefold()]
+    matches = exact or [item for item in records
+                        if wanted.casefold() in str(item.get("title", "")).casefold()]
+    if not matches:
+        titles = ", ".join(sorted(str(item.get("title") or item.get("group_id")) for item in records))
+        raise RuntimeError(f"no group matches {wanted!r}. Known: {titles}")
+    if len(matches) > 1:
+        titles = ", ".join(sorted(str(item.get("title")) for item in matches))
+        raise RuntimeError(
+            f"{wanted!r} matches {len(matches)} groups ({titles}). Name one exactly, or use its id.")
+
+    target = matches[0]
+    before = {"notify_level": target.get("notify_level"),
+              "allow_command": target.get("allow_command")}
+    target["notify_level"] = str(level or "")
+    if allow_command is not None:
+        target["allow_command"] = int(allow_command)
+    write_json_list(path, root_key="telegram_groups", items=records)
+    return {
+        "group_id": str(target.get("group_id")),
+        "title": str(target.get("title")),
+        "before": before,
+        "after": {"notify_level": target["notify_level"],
+                  "allow_command": target.get("allow_command")},
+        "path": str(path),
+        "known_levels": list(KNOWN_NOTIFY_LEVELS),
+        "unknown_level": str(level or "") not in KNOWN_NOTIFY_LEVELS,
+    }
+
+
+def set_user_level(
+    *,
+    user: str,
+    level: int,
+    users_path: Path | None = None,
+) -> dict[str, Any]:
+    """Give a discovered Telegram user the level that decides which commands they may run.
+
+    The counterpart of :func:`set_group_level`, and missing until 2026-09-11. Intake records every
+    sender at ``user_type: 0``, so the first command anyone sends to a new node answers "Permission
+    denied (user_type=0)", and the only way past it was editing ``user_type`` in
+    ``telegram_users.json`` by hand — a file the intake itself rewrites every second on a running
+    node. Found configuring the 0.15.0 dry-run node, where the operator's own ``/spbot_self_status``
+    was refused four times.
+
+    ``user`` matches the numeric id exactly, or the username with or without ``@``,
+    case-insensitively. There is no substring match: a level is a permission, and granting it to
+    the wrong person because a fragment matched is not a mistake worth making easy.
+
+    A command with ``command_type`` N runs in a private chat for a user whose level is at least N
+    (``commands.can_run_command``); 0 is the public tier, so level 0 runs public commands only.
+    """
+    if int(level) < 0:
+        raise RuntimeError("a user level is 0 or more; 0 runs public commands only. "
+                           "To stop a user, set their status in the file instead.")
+    path = Path(users_path) if users_path else USERS_PATH
+    records = load_json_list(path, root_key="telegram_users")
+    if not records:
+        raise RuntimeError(
+            f"no users in {path}. A user is recorded when they first message the bot; send it "
+            "anything, let the intake run (the daemon does it every second), then run this again.")
+
+    wanted = str(user or "").strip()
+    name = wanted.lstrip("@").casefold()
+    matches = [item for item in records
+               if str(item.get("user_id", "")) == wanted
+               or (name and str(item.get("username", "")).casefold() == name)]
+    if not matches:
+        known = ", ".join(sorted(
+            f"{item.get('username') or item.get('first_name') or '?'} ({item.get('user_id')})"
+            for item in records))
+        raise RuntimeError(f"no user matches {wanted!r}. Known: {known}")
+    if len(matches) > 1:
+        raise RuntimeError(f"{wanted!r} matches {len(matches)} users. Use the numeric id.")
+
+    target = matches[0]
+    before = target.get("user_type")
+    target["user_type"] = int(level)
+    write_json_list(path, root_key="telegram_users", items=records)
+    return {
+        "user_id": str(target.get("user_id")),
+        "username": str(target.get("username") or ""),
+        "before": {"user_type": before},
+        "after": {"user_type": target["user_type"]},
+        "path": str(path),
+    }

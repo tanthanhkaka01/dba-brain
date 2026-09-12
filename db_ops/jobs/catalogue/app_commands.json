@@ -146,7 +146,7 @@
       "log_scope": "reports_inventory_workflow",
       "working_dir": "tools/db_ops",
       "command_text": "python -m db_ops.reports.cli inventory-workflow --days 7 --beauty 1",
-      "active": false,
+      "active": true,
       "time_window": {
         "from_year": null,
         "to_year": null,
@@ -162,7 +162,7 @@
         "retry_interval": 600,
         "timeout": 1800
       },
-      "note": "Off until configured - needs an inventory, which control inventory-health builds. "
+      "note": "On by default. The first run with an instance registered seeds runtime/reports/database-inventory.json from data/db_instances.json (identity only); every run after that merges fresh health into it and publishes database-inventory.html. With no instance registered it reports NOT_CONFIGURED, exits 0 and writes nothing."
     },
     {
       "node_role": "all",
@@ -174,7 +174,7 @@
       "log_scope": "webhost",
       "working_dir": "tools/db_ops",
       "command_text": "python -m db_ops.webhost.cli --config config.json serve --root runtime/reports --mount report_dba --port 8080",
-      "active": false,
+      "active": true,
       "time_window": {
         "from_year": null,
         "to_year": null,
@@ -190,7 +190,7 @@
         "retry_interval": 0,
         "timeout": 0
       },
-      "note": "Off until configured - a web server: it never exits, so the daemon would wait on it forever (and `--once` would never return). Start the console yourself: db-ops webhost serve. "
+      "note": "On by default: the reports and the console on port 8080. A service, not a job - repeat 0, retry 0 and timeout 0 mean start once, never kill, restart at once if it stops. It shipped off until 2026-09-11 because `daemon --once` waited on it for ever; --once now skips a timeout-0 service and says so, so switching it on no longer costs the single pass."
     },
     {
       "node_role": "all",
@@ -202,7 +202,7 @@
       "log_scope": "backup",
       "working_dir": "tools/db_ops",
       "command_text": "python -m db_ops.backup_restore.cli workflow --config config.json",
-      "active": false,
+      "active": true,
       "time_window": {
         "from_year": null,
         "to_year": null,
@@ -218,7 +218,7 @@
         "retry_interval": 300,
         "timeout": 7200
       },
-      "note": "Off until configured - needs restore_config.json with real backup shares. "
+      "note": "On by default, and idle until data/restore_config.json declares a backup or a restore: init writes that file with both lists empty, and an empty list is 'nothing configured' - status done, no work, no alert. Nothing is backed up or restored until an entry is added."
     },
     {
       "node_role": "all",
@@ -251,6 +251,6 @@
   ],
   "notes": [
     "node_role is 'all' here so a single-machine install works as copied: 'all' runs on any node. A two-node estate sets 'master' or 'worker' per command and declares each node's role with the DB_OPS_NODE_ROLE environment variable - it is deliberately not in config.json, so a config copied between nodes cannot mislabel one.",
-    "Six commands are active out of the box - the ones that work with nothing configured but one database target. Three are off: backup/restore and the inventory workflow need estate config, and the web console is a server that never exits, so scheduling it would make the daemon wait on it forever. Turn one on by setting active: true once you have configured it."
+    "Every command is active out of the box, and every one of them must finish status=done on an install where init has run and nothing else has - no inventory, no token, no restore entry, no SQL task. Missing configuration is a state the app reports and skips, never a failure: a default schedule that errors every cycle on a correct install teaches its reader to ignore the log. tests/test_every_app_command_runs_on_an_unconfigured_install.py holds every entry here to that. Set active: false to switch one off."
   ]
 }

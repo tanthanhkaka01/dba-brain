@@ -1,0 +1,36 @@
+{
+  "notes": [
+    "The request `python -m db_ops.common.cli build-showcase @data/showcase.json` reads.",
+    "",
+    "source : a folder holding the pages copied off a node that publishes them, and the data",
+    "         they fetch (server-metrics_<slug>.json). Where that node is comes from",
+    "         report_base_url - `common.cli self-status` prints it - never a typed address.",
+    "output : under runtime/, which never ships. A scrubber that fails must fail somewhere",
+    "         that cannot be published; copying the certified folder into examples/showcase/",
+    "         is a separate, deliberate move.",
+    "stamp  : name each page after the moment it states, in UTC.",
+    "",
+    "extra_terms: what neither the inventory nor the page shapes can reach - addresses the",
+    "         collectors found on the wire, this estate's own names that read as ordinary",
+    "         words, stored-procedure names. A term named here is rewritten wherever it",
+    "         appears, including inside a longer name. Read `left_as_ordinary_words` in the",
+    "         result and move anything of yours into this list.",
+    "allow  : lines carrying one of these are not counted as findings. For the hit the scrub",
+    "         cannot fix: `version: 2.53.1.0` is a build number, and the address backstop",
+    "         cannot tell it from a host."
+  ],
+  "source": "runtime/reports_capture",
+  "output": "runtime/showcase",
+  "force": true,
+  "stamp": true,
+  "allow": [
+    "version: "
+  ],
+  "extra_terms": {
+    "198.51.100.7": "address",
+    "ACME-DW01": "host",
+    "SalesLedger": "database",
+    "usp_Invoice_Rebuild": "procedure",
+    "svc_reporting": "credential"
+  }
+}

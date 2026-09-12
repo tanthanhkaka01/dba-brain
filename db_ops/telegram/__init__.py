@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from db_ops.telegram.api import DEFAULT_TELEGRAM_API_URL, call_telegram_api, get_updates, send_message
+from db_ops.telegram.api import (
+    DEFAULT_TELEGRAM_API_URL,
+    bot_info,
+    call_telegram_api,
+    get_updates,
+    send_message,
+)
 from db_ops.telegram.client import TelegramClient
 from db_ops.telegram.commands import DEFAULT_COMMAND_PREFIX, can_run_command, save_command_messages_from_messages
 from db_ops.telegram.updates import fetch_and_save_updates, save_updates
@@ -15,6 +21,7 @@ __all__ = [
     "call_telegram_api",
     "can_run_command",
     "fetch_and_save_updates",
+    "bot_info",
     "get_updates",
     "process_pending_command_messages",
     "process_one_command_message",

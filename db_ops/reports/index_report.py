@@ -24,9 +24,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from db_ops.lib import report_archive
+from db_ops.lib import page_banner, report_archive
 from db_ops.db.metric_store import MetricStore
-from db_ops.lib.timezone import display_now, format_display
+from db_ops.lib.timezone import display_now, format_display, format_display_text
 from db_ops.db import DbOpsStore
 from db_ops.reports.server_report import page_href
 
@@ -75,23 +75,55 @@ def inventory_url() -> str:
 
 
 def _kv(message: str) -> dict[str, str]:
-    """Parse the ``k=v, k=v`` message body the metric writes.
+    """Parse the ``k=v`` message body a metric writes, whichever separator it used.
 
-    The message opens with a kind prefix — ``COLD: db=APP, schema=dbo, ...`` — so a naive split on
-    "," glues that prefix onto the FIRST key (``COLD: db`` instead of ``db``). It happens to be
-    harmless today only because the first field is ``db``, which the detail path never reads; the
-    moment a field is reordered it would silently stop matching. Strip the prefix instead.
+    **Two collectors feed this page and they do not agree on the separator.**
+    ``MAINTENANCE_INDEX_USAGE`` writes ``USED: db=APP, schema=dbo, ...`` and
+    ``MAINTENANCE_INDEX_FRAGMENTATION`` writes ``db=APP | schema=dbo | ...`` — pipes, because a
+    fragmentation row carries an index type (``NONCLUSTERED INDEX``) and a size, and the author
+    wanted a separator no value could contain.
+
+    Splitting only on "," therefore returned **one** field for every fragmentation row: the key
+    ``db``, holding the entire rest of the message as its value. Measured on 192.0.2.250,
+    2026-09-11 — the collector had written
+
+        db=APPDB_Prod | schema=schedule | table=EmployeeProfileDay | index=IX_... |
+        index_type=NONCLUSTERED INDEX | partition=9/21 | page_count=3781 | size_mb=29.5 |
+        stats_updated=2026-09-11T00:46:42 | action=REBUILD
+
+    and the page rendered Part, Type, Pages, Size MB and Stats updated as ``-`` on all 162 rows,
+    while Action showed the renderer's *recomputed* verdict rather than the collector's. That is
+    the exact defect ``_fragmented_section`` was written to fix: the columns were added, the
+    collector was taught to measure them, and the parser between them was never told.
+
+    **The separator is decided by counting, not by looking for a pipe.** A usage message contains
+    one as well — it ends ``... is_unique_constraint=0 | primary key: enforces uniqueness ...`` —
+    so "has a pipe" is true of both formats and picking on it turns a 19-field usage row into two.
+    Parsing with each and keeping the richer result reads the message the way it was written,
+    whichever collector wrote it, and a new field in either format needs nothing here.
+
+    The message may open with a kind prefix — ``COLD: db=APP, ...`` — and a naive split glues it
+    onto the first key (``COLD: db`` instead of ``db``). That was harmless only because the first
+    field is ``db``, which this page never reads; reordering the fields would have made it a
+    silent miss. Strip it instead — and only when the text before the colon holds no ``=``, so a
+    timestamp inside a value (``stats_updated=2026-09-11T00:46:42``) is never mistaken for one.
     """
     text = str(message or "")
     head, sep, rest = text.partition(":")
     if sep and "=" not in head:
         text = rest
-    fields: dict[str, str] = {}
-    for part in text.split(","):
-        key, sep, value = part.partition("=")
-        if sep:
-            fields[key.strip()] = value.strip()
-    return fields
+
+    def _split(separator: str) -> dict[str, str]:
+        fields: dict[str, str] = {}
+        for part in text.split(separator):
+            key, found, value = part.partition("=")
+            if found:
+                fields[key.strip()] = value.strip()
+        return fields
+
+    by_comma = _split(",")
+    by_pipe = _split("|")
+    return by_pipe if len(by_pipe) > len(by_comma) else by_comma
 
 
 #: Uptime a usage sample needs before its "unused"/"cold"/"droppable" counts mean anything —
@@ -211,9 +243,24 @@ def collect_index_rows(store_source, *, days: int = 3,
                 continue
             message = str(row["message"] or "")
             if "action=REBUILD" in message or "action=REORGANIZE" in message:
-                entry["fragmented"].append({"item": str(row["metric_item"] or ""),
-                                            "pct": str(row["metric_value"] or ""),
-                                            "message": message})
+                # Every field the collector measured, not just the two the table used to show.
+                # A row saying "99.9%" and nothing else cannot be acted on: the cost of the fix is
+                # the size, and on a partitioned index the identity is the partition.
+                fields = _kv(message)
+                entry["fragmented"].append({
+                    "item": str(row["metric_item"] or ""),
+                    "pct": str(row["metric_value"] or ""),
+                    "message": message,
+                    "index_type": fields.get("index_type", ""),
+                    "partition": fields.get("partition", ""),
+                    "page_count": fields.get("page_count", ""),
+                    "size_mb": fields.get("size_mb", ""),
+                    "stats_updated": fields.get("stats_updated", ""),
+                    # The collector already decided this, from its own >=60 threshold. Reading it
+                    # back beats recomputing: the page used to call everything >=30% a REBUILD and
+                    # so disagreed with the tool that measured it on every row between 30 and 59.
+                    "action": fields.get("action", ""),
+                })
             continue
 
         # Index-usage rows: only from that server's newest run.
@@ -366,7 +413,7 @@ def _markdown_tables_to_html(text: str) -> str:
         elif stripped.startswith("### "):
             html.append(f"<h3>{_escape(stripped[4:])}</h3>")
         elif stripped.startswith("http://") or stripped.startswith("https://"):
-            html.append(f'<p><a href="{_escape(stripped)}">{_escape(stripped)}</a></p>')
+            html.append(f'<p><a href="{_escape(_page_href(stripped))}">{_escape(stripped)}</a></p>')
         elif stripped:
             html.append(f"<p>{_link_urls(_escape(stripped))}</p>")
     if in_table:
@@ -379,6 +426,19 @@ def _escape(text: str) -> str:
             .replace("`", ""))
 
 
+def _page_href(url: str) -> str:
+    """The href for a URL in the report text: relative when it is one of our own pages.
+
+    The text keeps the absolute URL because the same text is sent to Telegram, where a relative
+    link means nothing. In the page it becomes relative, so it resolves against whatever host
+    served the page rather than the one that rendered it. Before this, a published page outlived
+    the node that made it and kept linking at the retired host - measured 2026-09-10.
+    """
+    from db_ops.lib.report_links import href_for_page
+
+    return href_for_page(url, report_base_url())
+
+
 def _link_urls(text: str) -> str:
     """Make bare URLs clickable.
 
@@ -388,8 +448,18 @@ def _link_urls(text: str) -> str:
     """
     import re as _re
 
-    return _re.sub(r"(https?://\S+)",
-                   lambda m: '<a href="' + m.group(1) + '">' + m.group(1) + '</a>', text)
+    from db_ops.lib.report_links import linkify_bare_pages
+
+    linked = _re.sub(r"(https?://\S+)",
+                     lambda m: '<a href="' + _page_href(m.group(1)) + '">' + m.group(1) + '</a>',
+                     text)
+    if "<a href=" in linked:
+        return linked
+    # No absolute URL on this line. With `report_base_url` unset - which is now the default,
+    # because it is derived rather than typed - the text already says `database-inventory.html`,
+    # relative and correct, and only the anchor was missing. Measured 2026-09-10: a page built on
+    # a fresh node had no anchors at all while the docs claimed it fell back to relative hrefs.
+    return linkify_bare_pages(linked, lambda page: f'<a href="{page}">{page}</a>')
 
 def peer_status(entry: dict[str, Any]) -> str:
     """The worst thing found on one server, as the picker colours it.
@@ -485,7 +555,25 @@ def write_index_report_html(entry: dict[str, Any], text: str, out_dir: Path,
         "vertical-align:middle}"
         ".banner{font-size:20px;font-weight:700;line-height:1.35;margin:18px 0 6px;"
         "padding:14px 16px;border-left:6px solid #b45309;background:#fff7ed;color:#7c2d12;"
-        "border-radius:4px}</style>"
+        "border-radius:4px}"
+        + page_banner.CSS + "</style>"
+        + page_banner.render(
+            title="Index Usage",
+            scope=str(entry.get("server_id") or ""),
+            # The moment the numbers were measured, not the moment the file was written. A page
+            # rebuilt for a past day by the backfill must say that day, or the stamp is a lie that
+            # looks like a fact.
+            snapshot_at=format_display_text(entry.get("collected_at")),
+            here=html_file_name(str(entry.get("server_id") or "")),
+            # Only the pages this report root actually holds. A root whose SLA app has never run
+            # has no sla.html, and offering it produces the one thing every page rule here
+            # forbids: a link that 404s.
+            # Its own page, so the head says where the reader is rather than offering a way out
+            # of a family it does not mention. `here` marks it current; every index page carries a
+            # picker over the others.
+            links=page_banner.siblings_present(
+                lambda name: (out_dir / name).exists(),
+                index_usage=html_file_name(str(entry.get("server_id") or ""))))
         + _peer_nav_html(peers or [], str(entry["server_id"]))
         + _markdown_tables_to_html(text)
     )
@@ -532,6 +620,84 @@ def _cap(rows: list, limit: int | None) -> tuple[list, int]:
     if limit is None or len(rows) <= limit:
         return rows, 0
     return rows[:limit], len(rows) - limit
+
+
+def _float(value: Any) -> float:
+    """A percentage or a size as a number, so a table can be sorted by it.
+
+    The fragmented list used to be sorted on the **string**, which put `100.0` below `99.9`
+    because `'1' < '9'` — the single worst index on the instance landed at the bottom of a capped
+    table and was the first row dropped.
+    """
+    try:
+        return float(str(value).strip().rstrip("%"))
+    except (TypeError, ValueError):
+        return -1.0
+
+
+def _fragmented_section(fragmented: list[dict[str, Any]], limit: int | None) -> list[str]:
+    """The fragmented table, with enough on each row to decide what to do about it.
+
+    It used to be three columns — index, percentage, and an action the page recomputed with the
+    wrong threshold. Three problems, all measured on 2026-09-10 against a real timekeeping
+    instance:
+
+    * **The count was of partitions and read as indexes.** 157 rows were 22 indexes; a
+      date-partitioned table published one index name fourteen times at fourteen percentages,
+      which reads as a duplicated row and is really the finding — twelve partitions at 99% that
+      the maintenance job had never touched.
+    * **Nothing said how big.** 99% fragmented is a different problem on 30 MB than on 53 GB, and
+      the size decides whether the rebuild fits in the window at all. The collector had measured
+      `page_count` all along and the page dropped it.
+    * **The action disagreed with the tool that chose it.** The collector calls >=60% REBUILD and
+      the rest REORGANIZE; the page called everything >=30% a REBUILD, so every row between 30 and
+      59 was rendered wrong.
+
+    Rows collected before this landed carry none of the extra fields. They render as `-` rather
+    than being dropped — a store holds weeks of them, and a page that hid them would look like the
+    fragmentation had been fixed.
+    """
+    distinct = {row.get("item", "").split("#p")[0] for row in fragmented}
+    total_mb = sum(_float(row.get("size_mb")) for row in fragmented if _float(row.get("size_mb")) > 0)
+
+    heading = f"### Fragmented ({len(fragmented)})"
+    if len(distinct) < len(fragmented):
+        # Said in the heading, because "157 fragmented indexes" and "157 fragmented partitions of
+        # 22 indexes" are different findings and only the second one is true.
+        heading += f" — {len(fragmented)} partitions across {len(distinct)} indexes"
+    out = [heading, ""]
+    if total_mb > 0:
+        out += [f"Total {total_mb:,.1f} MB of index to rebuild. "
+                "Fragmentation is measured in LIMITED mode, so record count and page density are "
+                "not collected — they need a SAMPLED scan.", ""]
+
+    out += ["| Index | Part | Type | Frag | Pages | Size MB | Stats updated | Action |",
+            "| --- | ---: | --- | ---: | ---: | ---: | --- | --- |"]
+    ordered = sorted(fragmented, key=lambda r: _float(r.get("pct")), reverse=True)
+    shown, hidden = _cap(ordered, limit)
+    for row in shown:
+        pct = row.get("pct") or "?"
+        # The collector's own verdict; only fall back to recomputing it for a row stored before
+        # the collector carried one, and then with the collector's threshold, not a different one.
+        action = row.get("action") or ("REBUILD" if _float(pct) >= 60 else "REORGANIZE")
+        pages = row.get("page_count") or ""
+        out.append(
+            f"| `{row['item']}` | {row.get('partition') or '-'} "
+            f"| {_short_index_type(row.get('index_type'))} | {pct}% "
+            f"| {f'{_int(pages):,}' if pages else '-'} | {row.get('size_mb') or '-'} "
+            f"| {(row.get('stats_updated') or '-').replace('T', ' ')} | {action} |")
+    if hidden:
+        out.append(f"| _... and {hidden} more_ | | | | | | | |")
+    out.append("")
+    return out
+
+
+def _short_index_type(value: Any) -> str:
+    """`NONCLUSTERED INDEX` -> `NONCLUSTERED`. The word "INDEX" in an index table is noise."""
+    text = str(value or "").strip()
+    if not text:
+        return "-"
+    return text.removesuffix(" INDEX") or text
 
 
 def _format_oracle_index_report(entry: dict[str, Any], *, limit: int | None) -> str:
@@ -773,18 +939,7 @@ def format_index_report(entry: dict[str, Any], *, limit: int | None = DEFAULT_DE
 
     fragmented = entry.get("fragmented") or []
     if fragmented:
-        out += [f"### Fragmented ({len(fragmented)})",
-                "",
-                "| Index | Fragmentation | Recommend action |",
-                "| --- | ---: | --- |"]
-        shown, hidden = _cap(sorted(fragmented, key=lambda r: r.get("pct") or "", reverse=True), limit)
-        for row in shown:
-            pct = row.get("pct") or "?"
-            action = "REBUILD" if _int(str(pct).rstrip("%")) >= 30 else "REORGANIZE"
-            out.append(f"| `{row['item']}` | {pct}% | {action} in the maintenance window |")
-        if hidden:
-            out.append(f"| _... and {hidden} more_ | | |")
-        out.append("")
+        out += _fragmented_section(fragmented, limit)
 
     every = entry.get("indexes") or []
     if every:

@@ -290,6 +290,50 @@ def get_file_bytes(
     return data
 
 
+def bot_info(
+    *,
+    bot_token: str,
+    api_url: str = DEFAULT_TELEGRAM_API_URL,
+    timeout_seconds: int = 20,
+) -> dict[str, Any]:
+    """Who this token belongs to, and whether the bot can actually read a group.
+
+    Two facts a new install needs and had no way to get. `data/bot_telegram.json` asks for
+    `telegram_bot_id` and `telegram_bot_username`, and until this existed the only way to learn
+    them was to call `getMe` by hand with the raw token — measured on 2026-09-10, standing up a
+    node from the scaffold.
+
+    The second fact is the one that bites later. Telegram bots default to **privacy mode on**,
+    where a bot in a group sees only slash-commands aimed at it and replies to its own messages.
+    That is enough for `/spbot_*` and not enough for anything that reads ordinary chat, so a group
+    can look correctly configured and quietly deliver half of what it should. `getMe` reports it as
+    ``can_read_all_group_messages`` and nothing in this toolkit was surfacing it.
+    """
+    answer = call_telegram_api(
+        bot_token=bot_token, method_name="getMe", payload={},
+        api_url=api_url, timeout_seconds=timeout_seconds)
+    result = answer.get("result") or {}
+    reads_all = bool(result.get("can_read_all_group_messages"))
+    return {
+        "ok": bool(answer.get("ok")),
+        "telegram_bot_id": str(result.get("id") or ""),
+        "telegram_bot_username": str(result.get("username") or ""),
+        "can_join_groups": bool(result.get("can_join_groups")),
+        "can_read_all_group_messages": reads_all,
+        "privacy_mode": "off" if reads_all else "on",
+        "note": (
+            "Privacy mode is ON: in a group this bot sees only commands addressed to it and "
+            "replies to its own messages. Slash commands work; anything reading ordinary chat "
+            "does not. Turn it off with @BotFather (/setprivacy), or make the bot an admin."
+            if not reads_all else
+            "Privacy mode is OFF: this bot sees every message in the groups it belongs to."),
+        "bot_telegram_json": {
+            "telegram_bot_id": str(result.get("id") or ""),
+            "telegram_bot_username": str(result.get("username") or ""),
+        },
+    }
+
+
 def get_updates(
     *,
     bot_token: str,

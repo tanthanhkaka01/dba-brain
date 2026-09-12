@@ -44,6 +44,22 @@ def validate_sla_policies(
     no_data_count = sum(1 for result in results_tuple if result.status == "NO_DATA")
     required_failure = any(result.required and result.status in {"FAILED", "NO_DATA", "STALE", "INSUFFICIENT_DATA"} for result in results_tuple)
     status = "FAILED" if required_failure else "PASSED"
+
+    # An install with no targets has nothing to be compliant about, and saying FAILED there is the
+    # rule this project already has: "not configured" is a state, not a failure, and a default
+    # schedule that errors every cycle on a correct install teaches its reader to ignore the log.
+    #
+    # Measured on 2026-09-10, on a root that had only ever run `init`: five required policies, all
+    # NO_DATA because nothing has ever been collected, summary FAILED, `sla validate` exit 1 - and
+    # `APP-SLA-VALIDATE` is in the shipped schedule, so a new user's first day is a failing app
+    # command every cycle.
+    #
+    # The discriminator is **configured targets**, not "are all the results NO_DATA". On a running
+    # estate every result going NO_DATA means collection has stopped, which is exactly the outage
+    # this must keep reporting as FAILED. No targets at all is a different fact.
+    if _no_targets_configured(data_dir) and not any(
+            result.status in {"PASSED", "AT_RISK", "FAILED"} for result in results_tuple):
+        status = "NO_DATA"
     return SlaValidationSummary(
         status=status,
         policy_count=len(policies),
@@ -55,6 +71,22 @@ def validate_sla_policies(
         window_end=end_text,
         results=results_tuple,
     )
+
+
+def _no_targets_configured(data_dir: str | Path | None = None) -> bool:
+    """True when the inventory names no enabled target, so there is nothing to measure.
+
+    Read rather than inferred from the results: "nothing is configured" and "everything stopped
+    reporting" both produce a page of NO_DATA, and only one of them is an incident.
+    """
+    from db_ops.common import data_sources
+
+    try:
+        instances = data_sources.load_db_instances(data_dir)
+    except Exception:  # noqa: BLE001 - an unreadable inventory is not a reason to claim FAILED.
+        return False
+    return not any(record.get("enabled", True) for record in instances
+                   if isinstance(record, dict))
 
 
 def _evaluate_policy(*, store: SlaStore, policy: SlaPolicy, window_end: datetime,

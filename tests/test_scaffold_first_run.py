@@ -130,14 +130,23 @@ def test_the_starter_catalogue_loads_through_the_real_loader(root: Path) -> None
     assert {d.metric_code for d in definitions} >= {"INSTANCE_STATUS", "BACKUP_AGE"}
 
 
-def test_telegram_is_written_but_off(root: Path) -> None:
-    """Present so it can be found and edited; off so nothing is sent by a first run.
+def test_telegram_is_written_and_a_first_run_sends_nothing(root: Path) -> None:
+    """Present so it can be found and edited; and nothing is sent by a first run.
 
-    A toolkit that delivers somewhere on its first collection is one nobody can try safely.
+    A toolkit that delivers somewhere on its first collection is one nobody can try safely. Until
+    2026-09-11 that was held by shipping ``enabled: false``, and the operator reversed it: storing
+    the token and turning alerts on were two steps, and a node that had done only the first answered
+    commands and sent no alert, which read as broken. ``enabled`` now ships true, so the property is
+    held where it actually lives — a first run has **no token and no chat to route to** — and this
+    asserts that instead of the flag.
     """
     telegram = json.loads((root / "data" / "telegram_config.json").read_text(encoding="utf-8"))
+    groups = json.loads((root / "data" / "telegram_groups.json").read_text(encoding="utf-8"))
 
-    assert telegram["enabled"] is False
+    assert telegram["enabled"] is True
+    assert not telegram.get("bot_token"), "a token in the scaffold would send on the first run"
+    assert not telegram.get("level_chat_map"), "a chat in the scaffold would receive the first run"
+    assert not [g for g in groups.get("telegram_groups", []) if g.get("notify_level")]
     # The ref, not just the env var name. A send with only `bot_token_env` set fails with
     # "Telegram bot token is empty", which names the symptom and not the missing field — found by
     # sending a real message rather than by reading the config.

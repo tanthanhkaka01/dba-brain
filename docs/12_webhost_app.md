@@ -41,6 +41,25 @@ writes `sla.html` and a landing `index.html` hub, served at `http://<worker>:808
 and `/report_dba/`. Because `index.html` exists, hitting `/report_dba/` returns the hub instead of a
 directory listing; dated snapshots remain reachable by direct URL.
 
+**Serving the pages and producing them are two commands.** `database-inventory.html`,
+`server-metrics.html` and the `index-usage_*.html` pages are all written by one scheduled command —
+`reports inventory-workflow --beauty 1` — and the web host only serves them. Until 2026-09-11 both
+shipped **`active: false`**, so a node where the operator switched on only the web host served
+`sla.html` and the hub and answered **404** for the other three; and switching the workflow on too
+was not enough, because it needed a canonical `database-inventory.json` that nothing on a fresh node
+created, so it failed every cycle and the 404 stayed.
+
+Both are fixed at the root and **both ship active now**, like every command in the catalogue. The
+workflow seeds its inventory from `data/db_instances.json` on its first run (see
+[06_reports_app.md](06_reports_app.md)), and `refresh_latest` picks the new report up on its next
+pass — no web host restart. With no instance registered at all it reports `NOT_CONFIGURED` and the
+404 is the honest answer: there is nothing to list, and the hub's inventory card says what it is
+waiting for rather than "not generated yet".
+
+The web host is a **service** (`repeat_interval`, `retry_interval` and `timeout` all 0: start once,
+never kill, restart at once). `daemon --once` does not start services — see
+[03_app_command_daemon.md](03_app_command_daemon.md) — so it no longer hangs on this one.
+
 ## The web console
 
 `/db_ops/` is a signed-in view of the estate. It is implemented as a **pure request -> response
@@ -123,6 +142,25 @@ in the same place on every page — including the config pages — so the eye le
 App" is and stops reading. The sidebar dot is what the grid was actually good at, kept: it is the
 **worst** state among an app's commands, never an average, because a sidebar that averaged its
 apps would hide the broken one.
+
+Under the apps sits a **Reports** group — the fleet inventory, server metrics and the SLA page
+(added 2026-09-10). The console and the published reports had always been two mounts on one
+listener with nothing joining them: a signed-in user could not reach any of those pages without
+being told the URL by somebody who already knew it. Two properties make these links different from
+the ones `report_base_url` builds:
+
+- **Root-relative** (`/report_dba/sla.html`), never a host. They follow whatever host served the
+  console, so they cannot go stale when the estate moves — which is exactly what `report_base_url`
+  did for two days after the 2026-09-08 move.
+- **The mount comes from the server that is serving it.** `server.serve` assigns
+  `console.reports_mount = mount` from the `--mount` it was actually given; the console does not
+  read a mount of its own from `webhost_config.json`. A second copy of one deployment fact is how
+  the two disagree, and a console linking at a path nothing answers on is worse than no link.
+
+A console that has not been told (a `WebApp` built directly, in a test) shows no Reports group
+rather than guessing the default. The per-server pages (`index-usage_<slug>.html`) are not listed:
+they are reached from the inventory and from the index report's own fleet picker, and naming one
+estate's servers in shipped code is what `check-identifiers` refuses.
 
 `/db_ops/` opens on an **overview**: counts for the estate, then only what needs attention —
 failing, overdue, or queued. Deliberately not every app's detail at once, which is what made the

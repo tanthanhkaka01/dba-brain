@@ -319,8 +319,15 @@ def db_ops_uptime(runtime_dir: str | Path | None) -> dict[str, Any]:
 
 def collect(*, tool_root: Path, version: str, public_version: str | None = None,
             store: str | None = None, node_role: str | None = None,
-            runtime_dir: str | Path | None = None) -> dict[str, Any]:
-    """Everything the report needs, as data. Callers that want JSON stop here."""
+            runtime_dir: str | Path | None = None,
+            web: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Everything the report needs, as data. Callers that want JSON stop here.
+
+    ``web`` is passed in rather than looked up here: everything else in this module reads the
+    *machine* (memory, disks, uptime), which a packaged install can always answer, while the web
+    addresses come out of the data folder. Resolving config is the CLI's job — see
+    ``READS_LOCAL_CONFIG`` in ``tests/test_common_layers.py``, which caught exactly this.
+    """
     return {
         "version": version,
         "public_version": public_version,
@@ -333,6 +340,7 @@ def collect(*, tool_root: Path, version: str, public_version: str | None = None,
 
         "store": store,
         "host": host_addresses(),
+        "web": web or {},
         "cpu": cpu(),
         "memory": memory(),
         "disk": disk(tool_root),
@@ -428,4 +436,53 @@ def render(facts: dict[str, Any]) -> str:
         lines.append("db_ops up : not running  (no daemon has started in this tool root)")
     else:
         lines.append("db_ops up : unknown")
+
+    lines.extend(_web_lines(facts.get("web") or {}))
     return "\n".join(lines)
+
+
+def _web_lines(web_facts: dict[str, Any]) -> list[str]:
+    """The web block, or one line saying why there is none.
+
+    Kept to the pages that exist under stable names. A per-server page needs a slug this function
+    has no business inventing, so the server-metrics line is the page itself and the reader
+    appends `?server=<server_id>` - which is what the page's own picker does.
+    """
+    if not web_facts.get("served_here"):
+        detail = web_facts.get("error")
+        return ["", "web       : not served from this node"
+                + (f"  ({detail})" if detail else "")]
+
+    urls = web_facts.get("urls") or {}
+    if not urls:
+        return ["", "web       : no address for this node - cannot build the links"]
+
+    lines = ["", "web UI    : " + urls.get("console", "")]
+    lines.append("reports   : " + urls.get("reports", ""))
+    for label, key in (("inventory  ", "inventory"),
+                       ("server metr", "server_metrics"),
+                       ("index usage", "index_usage"),
+                       ("sla        ", "sla")):
+        if urls.get(key):
+            lines.append(f"  {label}: {urls[key]}")
+    if urls.get("server_metrics"):
+        lines.append("            (server metrics takes ?server=<server_id>; "
+                     "index usage is one page per server)")
+    if not web_facts.get("enabled", True):
+        lines.append("            NOTE: the webhost command is disabled, so nothing is listening")
+
+    source = web_facts.get("address_source")
+    if source == "published":
+        lines.append(f"            (host taken from report_base_url: in {web_facts.get('runtime')} "
+                     "this node cannot see the address it is published on)")
+    elif source == "placeholder":
+        lines.append(f"            (running in {web_facts.get('runtime')}, so this node cannot know "
+                     "its published address - fill in <host>, or set report_base_url)")
+
+    # The comparison this block exists to make visible. Two nodes have now published pages naming
+    # a host they had moved off, and nothing said so until someone opened one and clicked a link.
+    if web_facts.get("matches_published") is False:
+        lines.append(f"            WARNING: published links point at "
+                     f"{web_facts.get('published_base')} - not this node. "
+                     f"Fix report_base_url in data/reports_config.json")
+    return lines

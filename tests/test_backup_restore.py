@@ -106,6 +106,10 @@ def make_config(tmp_path: Path) -> BackupRestoreConfig:
         restore_database_name="APPDB_Prod_DR",
         restore_data_file_on_vm=Path(r"D:\MSSQL\DATA\APPDB_Prod_DR.mdf"),
         restore_log_file_on_vm=Path(r"D:\MSSQL\DATA\APPDB_Prod_DR_log.ldf"),
+        # Stated, not inherited. The delete tests below are about a 24-hour gate, and while the
+        # engine read `copy_recent_hours` they got one for free from the copy setting. They now
+        # say so, which is the same thing every real entry has to do.
+        cleanup_retention=24 * 3600,
     )
 
 
@@ -821,6 +825,7 @@ def test_build_copy_cmdkey_commands_includes_prod_and_vm_credentials(tmp_path, m
 def test_parse_restore_config_keeps_zero_copy_recent_hours(tmp_path):
     config = parse_restore_config(
         {
+            "cleanup_retention": 691200,
             "prod_backup_share": r"\\192.0.2.250\SQLBK",
             "vm_import_unc": str(tmp_path / "import_unc"),
             "vm_import_local": r"E:\SQLBK_IMPORT",
@@ -847,6 +852,7 @@ def test_parse_restore_config_keeps_zero_copy_recent_hours(tmp_path):
 def test_parse_restore_config_reads_source_certificate_api_url(tmp_path):
     config = parse_restore_config(
         {
+            "cleanup_retention": 691200,
             "source": {
                 "id": "ACME-192-0-2-250",
                 "backup_share": r"\\192.0.2.250\SQLBK",
@@ -868,6 +874,7 @@ def test_parse_restore_config_reads_source_certificate_api_url(tmp_path):
 def test_parse_restore_config_target_sql_instance_overrides_default(tmp_path):
     config = parse_restore_config(
         {
+            "cleanup_retention": 691200,
             "source": {
                 "id": "ACME-192-0-2-250",
                 "backup_share": r"\\192.0.2.250\SQLBK",
@@ -1687,7 +1694,7 @@ def test_restore_workflow_cli_accepts_defaults():
     assert args.command == "restore-workflow"
     assert args.copy_hours == 24
     # None, not 48: the flag is now an override. Unset means "use this entry's own
-    # target_retention_seconds", so one entry can keep a day and another eight without
+    # cleanup_retention", so one entry can keep a day and another eight without
     # the scheduled command having to pass anything.
     assert args.delete_hours is None
 
@@ -1718,11 +1725,11 @@ def test_restore_workflow_orchestrates_existing_steps_in_order(tmp_path, monkeyp
         return {"status": "SUCCESS"}
 
     def fake_delete(step_config, logger=None, dry_run=False):
-        calls.append(("delete-backup", step_config.copy_recent_hours))
+        calls.append(("delete-backup", step_config.cleanup_retention))
         return DeleteBackupResult(
             returncode=0,
             target_backup_dir=step_config.vm_import_unc,
-            delete_older_than_hours=step_config.copy_recent_hours,
+            cleanup_retention=step_config.cleanup_retention,
             files_considered=1,
             deleted=1,
             file_results=(),
@@ -1735,8 +1742,10 @@ def test_restore_workflow_orchestrates_existing_steps_in_order(tmp_path, monkeyp
 
     result = run_restore_workflow(restore_configs=[config], app_config=app_config)
 
-    # 192h = the 8-day default retention, resolved from the entry rather than a CLI default.
-    assert calls == [("copy-backup", 24), ("restore-latest", config.source_id), ("delete-backup", 192)]
+    # The delete step is handed the entry's own `cleanup_retention`, in seconds, untouched. It
+    # used to be handed `copy_recent_hours` after `max(1, seconds // 3600)` had rounded it.
+    assert calls == [("copy-backup", 24), ("restore-latest", config.source_id),
+                     ("delete-backup", 24 * 3600)]
     assert result["overall_workflow_status"] == "SUCCESS"
 
 
@@ -1800,6 +1809,7 @@ def test_load_restore_configs_reads_sources_array(tmp_path):
         """
 {
   "backup_restore": {
+    "cleanup_retention": 691200,
     "copy_recent_hours": 12,
     "vm_credential_target": "198.51.100.129",
     "vm_username": "198.51.100.129\\\\administrator",
@@ -1844,7 +1854,7 @@ def test_load_restore_configs_reads_active_flag_from_restores(tmp_path):
   "backup_restore": {
     "restores": [
       {
-        "restore_id": "RESTORE_ACTIVE",
+        "cleanup_retention": 691200, "restore_id": "RESTORE_ACTIVE",
         "active": true,
         "prod_backup_share": "\\\\\\\\source\\\\SQLBK",
         "vm_import_unc": "\\\\\\\\target\\\\SQLBK_IMPORT\\\\active",
@@ -1853,7 +1863,7 @@ def test_load_restore_configs_reads_active_flag_from_restores(tmp_path):
         "vm_log_local": "C:\\\\SQLBK_IMPORT\\\\active"
       },
       {
-        "restore_id": "RESTORE_INACTIVE",
+        "cleanup_retention": 691200, "restore_id": "RESTORE_INACTIVE",
         "active": false,
         "prod_backup_share": "\\\\\\\\source\\\\SQLBK",
         "vm_import_unc": "\\\\\\\\target\\\\SQLBK_IMPORT\\\\inactive",
@@ -1880,6 +1890,7 @@ def test_load_restore_configs_reads_source_target_database_pairs(tmp_path):
         """
 {
   "backup_restore": {
+    "cleanup_retention": 691200,
     "copy_recent_hours": 24,
     "target": {
       "id": "RESTORE-VM-192-168-163-128",
@@ -1934,6 +1945,7 @@ def test_load_restore_configs_keeps_common_target_when_per_source_target_fields_
         """
 {
   "backup_restore": {
+    "cleanup_retention": 691200,
     "target": {
       "id": "RESTORE-VM-192-168-163-128",
       "credential_target": "198.51.100.129",
@@ -2381,7 +2393,7 @@ def test_list_old_target_backup_files_filters_by_target_mtime(tmp_path):
 
 
 def test_list_old_target_backup_files_prefers_backup_timestamp_in_filename(tmp_path):
-    config = dataclasses.replace(make_config(tmp_path), copy_recent_hours=0)
+    config = dataclasses.replace(make_config(tmp_path), cleanup_retention=0)
     target = config.vm_import_unc
     old_by_name = target / "APPDB-DB$APPDB" / "SALESDB_Prod" / "FULL" / "APPDB-DB$APPDB_SALESDB_Prod_FULL_20260621_010000.bak"
     old_by_name.parent.mkdir(parents=True)
@@ -2560,7 +2572,7 @@ def test_restore_workflow_hands_dry_run_to_every_step(tmp_path, monkeypatch):
     def fake_delete(step_config, logger=None, dry_run=False):
         seen["delete"] = dry_run
         return DeleteBackupResult(returncode=0, target_backup_dir=tmp_path,
-                                  delete_older_than_hours=48, files_considered=0, deleted=0,
+                                  cleanup_retention=48, files_considered=0, deleted=0,
                                   file_results=())
 
     monkeypatch.setattr(cli_module, "run_copy_backup", fake_copy)
@@ -2602,7 +2614,7 @@ def test_run_delete_backup_rejects_target_overlapping_source(tmp_path):
         run_delete_backup(unsafe)
 
 
-def test_run_delete_backup_zero_hours_deletes_all_target_files(tmp_path):
+def test_a_zero_retention_deletes_every_target_file(tmp_path):
     config = make_config(tmp_path)
     delete_all_config = BackupRestoreConfig(
         prod_backup_share=config.prod_backup_share,
@@ -2617,7 +2629,7 @@ def test_run_delete_backup_zero_hours_deletes_all_target_files(tmp_path):
         vm_username="",
         vm_password_env="",
         restore_sql_instance_on_vm="localhost",
-        copy_recent_hours=0,
+        cleanup_retention=0,
     )
     old_target = delete_all_config.vm_import_unc / "APPDB_Prod" / "FULL" / "old.bak"
     recent_target = delete_all_config.vm_import_unc / "APPDB_Prod" / "FULL" / "recent.bak"
@@ -2627,7 +2639,7 @@ def test_run_delete_backup_zero_hours_deletes_all_target_files(tmp_path):
 
     result = run_delete_backup(delete_all_config)
 
-    # copy_recent_hours=0 opens the age gate on everything; the obsolete condition still holds the
+    # cleanup_retention=0 opens the age gate on everything; the obsolete condition still holds the
     # newest full back, because that is what the next restore starts from. Before that condition
     # existed this deleted both files and left the staging directory with nothing to restore from.
     assert result.deleted == 1
@@ -3124,7 +3136,7 @@ def test_restore_workflow_pitr_passes_point_in_time_to_restore(tmp_path, monkeyp
         return {"status": "SUCCESS", "overall_status": "SUCCESS", "databases_considered": 0, "per_database_restore_status": {}}
 
     def fake_delete(step_config, logger=None, dry_run=False):
-        return DeleteBackupResult(returncode=0, target_backup_dir=tmp_path, delete_older_than_hours=48, files_considered=0, deleted=0, file_results=())
+        return DeleteBackupResult(returncode=0, target_backup_dir=tmp_path, cleanup_retention=48, files_considered=0, deleted=0, file_results=())
 
     monkeypatch.setattr("db_ops.backup_restore.cli.run_copy_backup", fake_copy)
     monkeypatch.setattr("db_ops.backup_restore.cli.run_restore_all_latest", fake_restore)
@@ -3203,7 +3215,7 @@ def test_restore_workflow_emits_phase_progress_logs(tmp_path, monkeypatch):
         lambda config, logger=None, dry_run=False: DeleteBackupResult(
             returncode=0,
             target_backup_dir=config.vm_import_unc,
-            delete_older_than_hours=config.copy_recent_hours,
+            cleanup_retention=config.copy_recent_hours,
             files_considered=1,
             deleted=1,
             file_results=(),
@@ -3550,7 +3562,7 @@ def _fake_workflow_ops(monkeypatch, called_targets):
 
     def fake_delete(step_config, logger=None, dry_run=False):
         called_targets.append(("delete", step_config.target_id))
-        return DeleteBackupResult(returncode=0, target_backup_dir=step_config.vm_import_unc, delete_older_than_hours=48, files_considered=0, deleted=0, file_results=())
+        return DeleteBackupResult(returncode=0, target_backup_dir=step_config.vm_import_unc, cleanup_retention=48, files_considered=0, deleted=0, file_results=())
 
     monkeypatch.setattr("db_ops.backup_restore.cli.run_copy_backup", fake_copy)
     monkeypatch.setattr("db_ops.backup_restore.cli.run_restore_all_latest", fake_restore)
@@ -3643,7 +3655,7 @@ def test_restore_workflow_windows_then_linux_keeps_per_restore_executor(tmp_path
         lambda config, logger=None, dry_run=False: DeleteBackupResult(
             returncode=0,
             target_backup_dir=config.vm_import_unc,
-            delete_older_than_hours=config.copy_recent_hours,
+            cleanup_retention=config.copy_recent_hours,
             files_considered=0,
             deleted=0,
             file_results=(),
@@ -3765,13 +3777,13 @@ def test_cli_restore_workflow_end_event_has_per_restore_results_from_output(tmp_
             "overall_workflow_status": "SUCCESS",
             "restore_mode": "LATEST",
             "restore_count": 1,
-            "mappings": [{"restore_id": "ACME_TO_SQLSERVER_TEST", "source_id": "SRC", "target_id": "TGT-VM", "target_host": "10.0.0.1"}],
+            "mappings": [{"cleanup_retention": 691200, "restore_id": "ACME_TO_SQLSERVER_TEST", "source_id": "SRC", "target_id": "TGT-VM", "target_host": "10.0.0.1"}],
             "databases_considered": 3,
             "success": 3,
             "failed": 0,
             "skipped": 0,
             "duration_seconds": 30.0,
-            "per_restore_results": [{"restore_id": "ACME_TO_SQLSERVER_TEST", "source_id": "SRC", "target_id": "TGT-VM", "status": "SUCCESS", "databases_considered": 3, "success": 3, "failed": 0, "skipped": 0}],
+            "per_restore_results": [{"cleanup_retention": 691200, "restore_id": "ACME_TO_SQLSERVER_TEST", "source_id": "SRC", "target_id": "TGT-VM", "status": "SUCCESS", "databases_considered": 3, "success": 3, "failed": 0, "skipped": 0}],
         },
     )
 
@@ -3796,8 +3808,8 @@ def test_format_restore_workflow_telegram_start_includes_all_mappings():
         "restore_mode": "LATEST",
         "restore_count": 2,
         "mappings": [
-            {"restore_id": "RESTORE_1", "source_id": "SRC", "target_id": "TGT-1", "target_host": "10.0.0.1", "target_os_type": "windows"},
-            {"restore_id": "RESTORE_2", "source_id": "SRC", "target_id": "TGT-2", "target_host": "10.0.0.2", "target_os_type": "linux"},
+            {"cleanup_retention": 691200, "restore_id": "RESTORE_1", "source_id": "SRC", "target_id": "TGT-1", "target_host": "10.0.0.1", "target_os_type": "windows"},
+            {"cleanup_retention": 691200, "restore_id": "RESTORE_2", "source_id": "SRC", "target_id": "TGT-2", "target_host": "10.0.0.2", "target_os_type": "linux"},
         ],
     }
     text = _format_restore_workflow_telegram_message(level="logging", message="ignored", metadata=metadata)
@@ -3822,7 +3834,7 @@ def test_format_restore_workflow_telegram_start_pitr_includes_point_in_time():
         "point_in_time_original": "2026-05-30 18:00:00 +07:00",
         "point_in_time_utc": "2026-05-30T11:00:00+00:00",
         "restore_count": 1,
-        "mappings": [{"restore_id": "RESTORE_1", "source_id": "SRC", "target_id": "TGT-1"}],
+        "mappings": [{"cleanup_retention": 691200, "restore_id": "RESTORE_1", "source_id": "SRC", "target_id": "TGT-1"}],
     }
     text = _format_restore_workflow_telegram_message(level="logging", message="ignored", metadata=metadata)
     assert "restore_mode=POINT_IN_TIME" in text
@@ -3839,8 +3851,8 @@ def test_format_restore_workflow_telegram_end_includes_per_restore_results():
         "restore_mode": "LATEST",
         "restore_count": 2,
         "mappings": [
-            {"restore_id": "RESTORE_1", "source_id": "SRC", "target_id": "TGT-1", "target_host": "10.0.0.1"},
-            {"restore_id": "RESTORE_2", "source_id": "SRC", "target_id": "TGT-2", "target_host": "10.0.0.2"},
+            {"cleanup_retention": 691200, "restore_id": "RESTORE_1", "source_id": "SRC", "target_id": "TGT-1", "target_host": "10.0.0.1"},
+            {"cleanup_retention": 691200, "restore_id": "RESTORE_2", "source_id": "SRC", "target_id": "TGT-2", "target_host": "10.0.0.2"},
         ],
         "databases_considered": 10,
         "success": 10,
@@ -3848,8 +3860,8 @@ def test_format_restore_workflow_telegram_end_includes_per_restore_results():
         "skipped": 0,
         "duration_seconds": 370.314,
         "per_restore_results": [
-            {"restore_id": "RESTORE_1", "source_id": "SRC", "target_id": "TGT-1", "target_host": "10.0.0.1", "status": "SUCCESS", "databases_considered": 5, "success": 5, "failed": 0, "skipped": 0},
-            {"restore_id": "RESTORE_2", "source_id": "SRC", "target_id": "TGT-2", "target_host": "10.0.0.2", "status": "SUCCESS", "databases_considered": 5, "success": 5, "failed": 0, "skipped": 0},
+            {"cleanup_retention": 691200, "restore_id": "RESTORE_1", "source_id": "SRC", "target_id": "TGT-1", "target_host": "10.0.0.1", "status": "SUCCESS", "databases_considered": 5, "success": 5, "failed": 0, "skipped": 0},
+            {"cleanup_retention": 691200, "restore_id": "RESTORE_2", "source_id": "SRC", "target_id": "TGT-2", "target_host": "10.0.0.2", "status": "SUCCESS", "databases_considered": 5, "success": 5, "failed": 0, "skipped": 0},
         ],
         "output": {"status": "SUCCESS"},
     }
@@ -3872,7 +3884,7 @@ def test_format_restore_workflow_telegram_latest_does_not_show_point_in_time_wit
         "phase": "START",
         "restore_mode": "LATEST",
         "restore_count": 1,
-        "mappings": [{"restore_id": "RESTORE_1", "source_id": "SRC", "target_id": "TGT-1"}],
+        "mappings": [{"cleanup_retention": 691200, "restore_id": "RESTORE_1", "source_id": "SRC", "target_id": "TGT-1"}],
     }
     text = _format_restore_workflow_telegram_message(level="logging", message="ignored", metadata=metadata)
     assert "point_in_time" not in text

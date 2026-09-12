@@ -23,7 +23,7 @@ license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Trieu Tan Thanh" }]
 keywords = ["dba", "database", "sqlserver", "oracle", "postgresql", "mysql", "monitoring", "operations"]
-version = "0.14.0"
+version = "0.16.0"
 
 # Measured 2026-08-21, not guessed (D-05):
 #
@@ -183,7 +183,11 @@ namespaces = false
                 "docker_db/templates/**/*", "inventory/**/*.sql", "inventory/**/*.md"]
 "db_ops.reports" = ["templates/**/*.html", "catalogue/*.json"]
 "db_ops.webhost" = ["templates/**/*", "static/**/*", "catalogue/*.json"]
-"db_ops.backup_restore" = ["sql/**/*.sql", "**/*.ps1", "**/*.sh"]
+# catalogue/ is the empty restore_config.json `init` writes. Missing from this line on the day it was
+# added (2026-09-11), so the source tree's tests passed while an installed node's `init` skipped the
+# file in silence - found by building the wheel, which is why the test now derives its list from
+# scaffold.PACKAGED_DEFAULTS instead of naming files by hand.
+"db_ops.backup_restore" = ["sql/**/*.sql", "**/*.ps1", "**/*.sh", "catalogue/*.json"]
 "db_ops.sql_tasks" = ["**/*.sql"]
 
 

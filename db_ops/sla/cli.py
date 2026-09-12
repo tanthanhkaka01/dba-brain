@@ -122,7 +122,22 @@ def _run_validate(args: argparse.Namespace, config, logger) -> int:
         message=f"sla.validate finished: sla_run_id={sla_run_id} status={summary.status} "
         f"telegram={notified_id} web={web_path}",
     )
-    return 0 if args.allow_fail or summary.status == "PASSED" else 1
+    return exit_code_for(summary.status, allow_fail=args.allow_fail)
+
+
+#: Statuses that are not a failing run. NO_DATA is here because it means this install has no
+#: targets to be compliant about - a fresh root that has only run `init` - and `APP-SLA-VALIDATE`
+#: is in the shipped schedule, so exiting 1 there makes a correct new install log a failing app
+#: command every cycle, on its first day, with nothing wrong. A *measured* failure still exits 1,
+#: which is the signal this app exists to give.
+NON_FAILING_STATUSES: tuple[str, ...] = ("PASSED", "NO_DATA")
+
+
+def exit_code_for(status: str, *, allow_fail: bool = False) -> int:
+    """The process exit code for one validation outcome. The daemon records 1 as a failed run."""
+    if allow_fail:
+        return 0
+    return 0 if str(status or "") in NON_FAILING_STATUSES else 1
 
 
 def _maybe_notify_telegram(args, config, summary, logger, *, sla_run_id: int | None = None) -> int | None:

@@ -5455,6 +5455,180 @@
         "chart_summary_only": true
       },
       "max_rows": 100
+    },
+    {
+      "metric_id": 95,
+      "metric_code": "PERFORMANCE_MEMORY_GAUGES",
+      "db_type": "multi",
+      "category": "performance",
+      "default_importance": 1,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 900,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "name": "sqlserver_all",
+          "file": "sqlserver/075_sqlserver_memory_gauges.sql"
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_unsupported",
+          "supported": false,
+          "unsupported_reason": "Buffer pool size, memory grants and page life expectancy are SQL Server's memory manager counters. Oracle's equivalent question is answered by its own SGA/PGA advisories and has not been authored yet."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_unsupported",
+          "supported": false,
+          "unsupported_reason": "Buffer pool size, memory grants and page life expectancy are SQL Server's memory manager counters. The InnoDB equivalent has not been authored yet."
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_todo",
+          "supported": false,
+          "unsupported_reason": "Buffer pool size, memory grants and page life expectancy are SQL Server's memory manager counters. The PostgreSQL equivalent has not been authored yet."
+        }
+      ],
+      "report_policy": {
+        "_note": "Gauges, deliberately ungraded: each value is a reading of the moment, not a total, so the report summarises several of them into latest/min/max over a window rather than subtracting two (db_ops.lib.interval_rates.window_gauge). collect_only keeps them out of the warning/critical reports -- none of these has a threshold that holds on every instance, and the single-reading conclusion is the mistake the Memory section exists to prevent. chart_summary_only keeps them out of the generic chart grid. The Memory block of the server report is what renders them.",
+        "collect_only": true,
+        "chart_summary_only": true
+      },
+      "max_rows": 100,
+      "note": "Reported after an instance was called short of memory on one PLE reading. PLE is the weakest evidence in this set and the rest is what settles it: Memory Grants Pending says whether anything actually waited for memory, Total vs Target Server Memory says whether the pool got what it asked for, and the per-NUMA-node minimum says whether one node is under pressure the instance figure hides. Runs on the same 900-second cadence as PERFORMANCE_WORKLOAD_COUNTERS so the two sections describe the same intervals."
+    },
+    {
+      "metric_id": 96,
+      "metric_code": "PERFORMANCE_LOG_BY_DATABASE",
+      "db_type": "multi",
+      "category": "performance",
+      "default_importance": 1,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 900,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "name": "sqlserver_all",
+          "file": "sqlserver/076_sqlserver_log_by_database.sql"
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_unsupported",
+          "supported": false,
+          "unsupported_reason": "Per-database log flush counters and log-file write stalls are SQL Server's. Oracle's redo is per instance, not per database, and its equivalent (redo size by session, log file sync) has not been authored yet."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_unsupported",
+          "supported": false,
+          "unsupported_reason": "Per-database log flush counters and log-file write stalls are SQL Server's. InnoDB's redo log is instance-wide and has not been authored yet."
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_todo",
+          "supported": false,
+          "unsupported_reason": "Per-database log flush counters and log-file write stalls are SQL Server's. PostgreSQL's WAL is cluster-wide; pg_stat_wal and per-database xact counters have not been authored yet."
+        }
+      ],
+      "report_policy": {
+        "_note": "Raw cumulative counters, one row per database, deliberately ungraded: the report subtracts two collections per database (db_ops.lib.interval_rates). collect_only keeps them out of the warning/critical reports -- a counter that ticks is not a finding -- and chart_summary_only keeps them out of the generic chart grid. The Transaction log block under Workload on the server report is what renders them.",
+        "collect_only": true,
+        "chart_summary_only": true
+      },
+      "max_rows": 1000,
+      "note": "Asked on 2026-09-11: WRITELOG was 36% of an instance's waits and the page could only say that the instance flushed log, not which database. Same 900-second cadence as PERFORMANCE_WORKLOAD_COUNTERS and PERFORMANCE_WAIT_TOTALS, so the per-database figures describe the same intervals as the WRITELOG row they explain. One cheap read of two DMVs; the row count is the number of databases."
+    },
+    {
+      "metric_id": 97,
+      "metric_code": "PERFORMANCE_TOP_QUERIES",
+      "db_type": "multi",
+      "category": "performance",
+      "default_importance": 1,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 1800,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "name": "sqlserver_all",
+          "file": "sqlserver/077_sqlserver_top_queries.sql"
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_unsupported",
+          "supported": false,
+          "unsupported_reason": "sys.dm_exec_query_stats is a SQL Server plan-cache DMV. The Oracle equivalent (v$sqlstats) has not been authored yet."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_unsupported",
+          "supported": false,
+          "unsupported_reason": "sys.dm_exec_query_stats is a SQL Server plan-cache DMV. The MySQL equivalent (performance_schema digests) has not been authored yet."
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_todo",
+          "supported": false,
+          "unsupported_reason": "sys.dm_exec_query_stats is a SQL Server plan-cache DMV. The PostgreSQL equivalent (pg_stat_statements) has not been authored yet."
+        }
+      ],
+      "report_policy": {
+        "_note": "Raw cumulative totals per query_hash, deliberately ungraded: the report subtracts two collections per query to rank the interval's work (db_ops.lib.interval_rates). collect_only keeps them out of the warning/critical reports, and chart_summary_only keeps a row per statement out of the generic chart grid. The Top queries block under Workload on the server report is what renders them.",
+        "collect_only": true,
+        "chart_summary_only": true
+      },
+      "max_rows": 200,
+      "note": "Asked on 2026-09-11: the plan-cache totals said how much work the cached plans did (2.8M executions, 241M logical reads in 15 minutes) and not which statements did it. The union of the top 25 by CPU, elapsed, logical reads, physical reads, logical writes and executions is at most 150 rows; the extra depth beyond the 20 the page shows is what lets consecutive samples be subtracted. Same plan-cache scan, cadence and timeout as PERFORMANCE_QUERY_STATS_TOTALS and for the same measured reason. Statement text is a 200-character snippet because the page is served and ad hoc statements carry literal values."
     }
   ]
 }
