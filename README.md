@@ -174,6 +174,26 @@ python -m venv .venv
 Full instructions, including the two prerequisites that are not pip-installable and the container
 image: **[`docs/installation.md`](./docs/installation.md)**.
 
+## What it produces
+
+Before installing anything, look at the output. **[`examples/showcase/`](./examples/showcase)** holds
+the four report families a live estate publishes — fleet inventory, per-server metrics, index usage,
+SLA — captured whole, with every name that belongs to that estate replaced by a stable fake one.
+Real fleets, real fragmentation, real verdicts; nothing invented and nothing traceable.
+
+A repository cannot show you an HTML page — GitHub renders `.html` as source — so they are published
+as a site by [`.github/workflows/pages.yml`](./.github/workflows/pages.yml), or you can serve the
+folder yourself:
+
+```bash
+cd examples/showcase
+python -m http.server 8000      # then open http://localhost:8000/
+```
+
+Most of those pages open straight from disk. The fleet metrics page does not: it is one page for the
+whole estate and fetches one series file per server as you pick it, and a browser refuses that from
+a `file://` page. That is the browser's rule, not a defect in the copy.
+
 ## Five minutes
 
 A throwaway container, a least-privilege login, seven real measurements — and nothing to uninstall
@@ -213,6 +233,185 @@ but adding an instance from a host, a port and a password is not in it yet.
 **Both paths are written out step by step, with what to assert after each one, in
 [`docs/first_run.md`](./docs/first_run.md).** It is written to be followed by a program and to be
 readable by a person, because until the console lands they do the same thing.
+
+---
+
+## From nothing to a running estate
+
+Every command below is real and in this release. The long form, with what each step proves and what
+bites people, is [`examples/standing-up-a-node.md`](./examples/standing-up-a-node.md).
+
+Two things belong in every shell that runs these:
+
+```bash
+export DB_OPS_SECRET_KEY="<your passphrase>"   # or --key / --key-base64 per command
+export PYTHONIOENCODING=utf-8                  # a Windows console is cp1252 and dies on the emoji
+```
+
+### 1. Install, and write the starting files
+
+```bash
+pip install "dbabrain[postgres,mssql,ssh,winrm]"
+mkdir my-estate && cd my-estate
+db-ops guide          # writes nothing; says what the next steps are
+db-ops init           # config.json, data/*.json, secrets/secret_text.json
+```
+
+`[winrm]` is not optional if you monitor a Windows host outside a domain: without `pypsrp` the OS
+collectors fall back to a local shell that cannot authenticate, and the run looks fine while proving
+nothing.
+
+### 2. The store
+
+```bash
+python -m db_ops.db.cli --config config.json init
+python -m db_ops.db.cli --config config.json check      # tables, schema_version
+```
+
+SQLite under `runtime/` by default — nothing else to install. `data/store_config.json` is where you
+move to PostgreSQL later; `db use-store sqlite|postgres` switches it.
+
+### 3. Prove the schedule runs before configuring anything
+
+```bash
+python -m db_ops.jobs.cli --config config.json --once
+```
+
+**Every shipped command must reach `status=done` on a root where nothing is configured**, reporting
+what is missing rather than failing. The web host is skipped by `--once` on purpose — it is a
+long-running service. If something errors here, stop: it will not get better once there is data.
+
+### 4. Add a database — one command, not four hand-edits
+
+```bash
+python -m db_ops.common.cli instance-add - <<'JSON'
+{"server_id": "ACME-192-0-2-9", "db_type": "sqlserver", "ip": "192.0.2.9",
+ "port": 1433, "service_name": "MSSQLSERVER", "major_version": 16,
+ "env": "prod", "username": "dba_monitor", "password": "<the password>"}
+JSON
+```
+
+It writes the inventory record, the credential and the **encrypted** secret together; the password
+never reaches the disk in the clear. Read it from stdin (`-`) rather than passing it inline, or the
+password is in your shell history and in `argv`.
+
+Three fields fail in ways that do not name themselves:
+
+- **`service_name` is a label, not a database.** Metric collection connects to `master` on SQL
+  Server, always. Naming a database here fails every target with `Cannot open database (4060)`.
+- **`major_version` picks the query variant.** Wrong version, wrong SQL, confusing errors.
+- **`default_credential_name` is a reference**, not a password.
+
+Adding it is all there is: `enabled` defaults on and the flags cascade
+`enabled → metrics → reports → alerts`, so the instance is collected **and** appears on the fleet
+inventory, its own metrics page, the index report and SLA with no second switch. To keep one
+registered but off the reports, say `"reports": {"enabled": false}` — that keeps it collected.
+
+For an OS-only host (no database), add `cmd_access` with `method: "ssh"` or `"winrm"`, a
+`credential_name`, and `auth_type` **stated explicitly** — it defaults to `key`. `method: "local"`
+with a remote `host` reports the local machine's CPU under that host's name, and is refused.
+
+```bash
+python -m db_ops.common.cli list-targets '{}'          # what is registered
+python -m db_ops.common.cli check-secret '{}'          # can each credential actually authenticate
+python -m db_ops.metrics.cli --config config.json collect --dry-run
+python -m db_ops.metrics.cli --config config.json collect
+```
+
+### 5. Start the daemon
+
+```powershell
+Start-Process -FilePath ".venv\Scripts\db-ops.exe" `
+              -ArgumentList "daemon","--config","config.json" `
+              -WorkingDirectory (Get-Location) -WindowStyle Hidden
+```
+
+Set `timezone` in `config.json` to your own zone **before** this. It decides what a `time_window`'s
+`from_hour`/`to_hour` mean, and the default is UTC — on a `+07` estate that puts the heavy nightly
+metrics (`DATABASE_CHECKDB`, `MAINTENANCE_INDEX_*`, `OS_REBOOT_PENDING`) in the middle of the
+working day.
+
+The reports and the console come up on `http://<host>:8080/report_dba/` and `/db_ops/`.
+
+### 6. Telegram — the bot, its groups, and who may command it
+
+```bash
+# 1. the token, straight into the encrypted store - stdin only, never inline
+python -m db_ops.common.cli secret-set - <<'JSON'
+{"ref": "TELEGRAM_BOT_TOKEN", "value": "<token from BotFather>"}
+JSON
+
+# 2. who the token belongs to
+python -m db_ops.telegram.cli --config config.json bot-info
+
+# 3. add the bot to your groups as an ADMIN, post one message in each, then discover them
+python -m db_ops.telegram.cli --config config.json save-updates
+
+# 4. give each discovered group a level, and yourself the level that may run commands
+python -m db_ops.telegram.cli --config config.json group-level --group -1001234567890 --level 40
+python -m db_ops.telegram.cli --config config.json user-level  --user @you --level 100
+
+# 5. prove the routing before trusting it - `route` takes the level as a positional argument
+python -m db_ops.telegram.cli --config config.json route warning
+python -m db_ops.telegram.cli --config config.json send-message --chat-id -1001234567890 --text "hello"
+```
+
+A **non-admin bot cannot read group messages** unless privacy mode is off — that is the usual reason
+`save-updates` finds nothing. Alerts ship on; nothing can be sent before a token exists *and* a
+group has a level, so storing the token is the switch. The explicit `level_chat_map` wins over a
+group's own `notify_level`, so change both or neither.
+
+**Never type a password into a bot command line.** A command line is stored — in Telegram's history
+and in this node's tables. Answer secret prompts at the prompt (they are stored masked) or use a
+`secret_ref`.
+
+### 7. Backups
+
+Backups are declared in `data/restore_config.json` under `backups`, each with its jobs and a
+`cleanup_retention` **in seconds** — the field is required, because a backup directory nobody prunes
+fills a disk and "keep forever" should be something somebody wrote down.
+
+```bash
+python -m db_ops.backup_restore.cli --config config.json list-backups     # what is configured
+python -m db_ops.backup_restore.cli --config config.json backup           # run what is due
+python -m db_ops.backup_restore.cli --config config.json prune-backups    # apply retention
+```
+
+One backup from a self-contained spec, without configuring anything:
+
+```bash
+python -m db_ops.common.cli backup-database @request.json
+python -m db_ops.common.cli list-backup-files @request.json   # full / diff / log, per engine
+```
+
+### 8. Restore, and the drill that proves a backup is real
+
+Restores are declared beside the backups under `restores`. A restore is how you learn a backup is a
+backup rather than a file.
+
+```bash
+python -m db_ops.backup_restore.cli --config config.json restore-latest    # newest FULL, with recovery
+python -m db_ops.backup_restore.cli --config config.json restore-workflow  # copy, restore, then clean up
+python -m db_ops.common.cli restore-database @request.json                 # one configured restore, PITR where supported
+```
+
+**A physical restore carries the source's logins with it.** After a drill the target answers to the
+*source's* password, so the credential you stored for the target goes stale — re-point it or rotate
+it, and expect that the first collection after a drill fails until you do.
+
+Both halves run on the schedule as `APP-BACKUP-RESTORE`; an install with nothing configured reports
+"nothing configured" and finishes `done`.
+
+### 9. Check what you built
+
+```bash
+python -m db_ops.common.cli self-status '{}'                       # this node, and the URLs it serves
+python -m db_ops.reports.cli --config config.json inventory-workflow --days 7 --beauty 1
+python -m db_ops.sla.cli --config config.json validate
+```
+
+The fleet page should list every instance you registered, each row linking to its own metrics page
+and — for SQL Server targets, once the nightly index metric has run — its index report.
 
 ---
 
@@ -278,6 +477,7 @@ See **[`docs/architecture.md`](./docs/architecture.md)**.
 | [`docs/security.md`](./docs/security.md) | Secrets, least privilege, the audit trail, air-gapped operation |
 | [`docs/architecture.md`](./docs/architecture.md) | The components, the layers, and the rules that keep them apart |
 | [`examples/`](./examples) | Worked configurations you can copy whole |
+| [`examples/showcase/`](./examples/showcase) | The pages a real estate publishes, scrubbed — what the output actually looks like |
 
 | Component reference | |
 | --- | --- |

@@ -30,8 +30,8 @@ host it is on, and **the URLs it publishes**, which is otherwise guesswork.
 
 ```
 ✅ DBA Brain / db_ops - current state
-product   : DBA Brain (published)  [pip: dbabrain 0.15.0]
-version   : 0.15.0  (public 0.15.0)
+product   : DBA Brain (published)  [pip: dbabrain 0.16.0]
+version   : 0.16.0  (public 0.16.0)
 running   : on the OS directly, on Windows 11 (10.0.26200)
 python    : 3.14.4
 host      : DBNODE01
