@@ -245,3 +245,84 @@ def test_daemon_restart_marks_stale_running_app_before_new_run(tmp_path, monkeyp
     assert store.updated
     assert store.updated[0]["status"] in {"timeout", "stale"}
     assert len(store.inserted) == 1
+
+
+# ---------------------------------------------------------------------------------------------
+# A job that outlives its own repeat interval
+#
+# Every app command here repeats far more often than its work can take: the backup/restore
+# workflow repeats every 300s with a 7200s timeout, because most cycles find nothing to do and
+# the rare real one runs for an hour. While one daemon owns the run, `running_commands` holds it.
+# Across a daemon restart there is no such memory, and the only thing left standing between a
+# long run and a second copy of it is the store row that says `running`.
+#
+# It was not standing. `job_due` asked `repeat_due` first and returned True on it, so for every
+# repeating command the `running` branch below it could only be reached while the interval had
+# NOT elapsed - which is precisely when a duplicate cannot happen anyway. Measured 2026-09-14:
+# restarting the daemon 47 minutes into a production restore started a second
+# `backup_restore workflow` against the same database on the same target, one second after
+# logging `startup.running_within_timeout` about the row it then ignored.
+
+
+def _repeating(repeat_interval: int, timeout: int) -> daemon.AppCommand:
+    return daemon.AppCommand(
+        app_command_id="APP-BACKUP-RESTORE",
+        app_code="APP-BACKUP-RESTORE",
+        app_name="backup_restore",
+        display_name="Run backup then restore workflow",
+        log_scope="backup",
+        working_dir=".",
+        command_text="python -c pass",
+        time_window=TimeWindow(from_day=1, to_day=31, from_hour=0, to_hour=23,
+                               repeat_interval=repeat_interval, retry_interval=repeat_interval,
+                               timeout=timeout),
+        active=True,
+    )
+
+
+def _running_since(started: datetime) -> dict:
+    stamp = started.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return {"started_at": stamp, "finished_at": None, "created_at": stamp, "status": "running"}
+
+
+def test_a_run_still_going_is_not_due_again_just_because_its_interval_elapsed():
+    """The exact shape of the 2026-09-14 duplicate: 300s interval, 7200s timeout, 48 minutes in."""
+    command = _repeating(repeat_interval=300, timeout=7200)
+    started = datetime(2026, 9, 14, 7, 55, 47, tzinfo=timezone.utc)
+
+    assert daemon.app_command_is_due(
+        command, _running_since(started), now=started + timedelta(seconds=2878)) is False
+
+
+def test_the_running_row_stops_blocking_once_the_timeout_passes():
+    """Otherwise a daemon killed mid-run would leave the command wedged for ever."""
+    command = _repeating(repeat_interval=300, timeout=7200)
+    started = datetime(2026, 9, 14, 7, 55, 47, tzinfo=timezone.utc)
+
+    assert daemon.app_command_is_due(
+        command, _running_since(started), now=started + timedelta(seconds=7201)) is True
+
+
+def test_a_finished_run_is_still_due_on_its_interval():
+    """The guard must cost nothing in the ordinary case, which is every cycle that did finish."""
+    command = _repeating(repeat_interval=300, timeout=7200)
+    started = datetime(2026, 9, 14, 7, 55, 47, tzinfo=timezone.utc)
+    finished = dict(_running_since(started), status="done",
+                    finished_at=started.strftime("%Y-%m-%dT%H:%M:%SZ"))
+
+    assert daemon.app_command_is_due(command, finished, now=started + timedelta(seconds=301)) is True
+
+
+def test_the_diagnostic_and_the_rule_now_agree():
+    """`_log_command_not_due` printed `last_run + timeout_seconds` as the next attempt for a
+    running row - the rule this test file is about - while `job_due` used the interval. A reader
+    who trusted the log would have been told the right answer by a daemon doing the wrong thing."""
+    command = _repeating(repeat_interval=300, timeout=7200)
+    started = datetime(2026, 9, 14, 7, 55, 47, tzinfo=timezone.utc)
+
+    just_before = daemon.app_command_is_due(
+        command, _running_since(started), now=started + timedelta(seconds=7199))
+    just_after = daemon.app_command_is_due(
+        command, _running_since(started), now=started + timedelta(seconds=7201))
+
+    assert (just_before, just_after) == (False, True)

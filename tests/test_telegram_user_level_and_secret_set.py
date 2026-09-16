@@ -1,6 +1,6 @@
 """Two hand-edits that standing up a node's Telegram needed, turned into commands.
 
-Found on 2026-09-11 configuring the 0.15.0 dry-run node:
+Found on 2026-09-11 configuring a fresh node:
 
 * **`telegram user-level`.** Intake records every sender at ``user_type: 0``, so the operator's own
   ``/spbot_self_status`` was refused four times ("Permission denied, user_type=0"), and the only fix

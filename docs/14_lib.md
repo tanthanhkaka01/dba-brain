@@ -186,7 +186,8 @@ verdict; none of them reads a file.
 | Module | Question it answers |
 | --- | --- |
 | `policy_engine.py` | how does one metric row classify — the per-row hot path |
-| `backup_policy.py` | is each database actually protected, per database and per backup type |
+| `json_io.py` | reading and writing this project's JSON one way — including `read_json_request`, the `<json>` / `@file` / `-` contract every "one JSON object in" command takes. It is here rather than in `common/cli.py`, where it began, because an app CLI may not import `common` and needed the same three forms |
+| `backup_policy.py` | is each database actually protected, per database and per backup type — and `policy_is_configured`, because "no rule requires this" and "there is no policy" must not produce the same verdict |
 | `backupfiles_retention.py` | which backups the retention window no longer covers. Reasons in whole days — the seconds from `cleanup_retention` are converted by each caller at its own edge |
 | `capacity_forecast.py` | when does this run out |
 | `state_transition.py` | does a recurring check have anything *new* to say |

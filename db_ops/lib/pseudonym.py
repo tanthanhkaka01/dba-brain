@@ -107,8 +107,8 @@ def server_id(term: str, *, address_of=None) -> str:
             continue
         # The leading part is the organisation label, and :data:`ORG` has already replaced it.
         # This used to keep it whenever it was not purely alphabetic, which let a real prefix
-        # through the moment it carried a digit - `ORG-192-0-2-15-MSSQL25-1433` came back as
-        # `ACME-ORG-192-0-2-15-...`, the estate's own label in front of the fake one.
+        # through the moment it carried a digit - `ORG1-192-0-2-15-MSSQL25-1433` came back as
+        # `ACME-ORG1-192-0-2-15-...`, the estate's own label in front of the fake one.
         if index > 0:
             rebuilt.append(parts[index])
         index += 1
@@ -283,7 +283,7 @@ class Mapping:
         ``loose`` is for a term the **operator named by hand**, where that reasoning does not
         apply - they are naming it precisely because it is buried somewhere the shapes do not
         reach. Measured 2026-09-12: `tanthanh_dba` inside `sqlserver_113.155_MSSQLSERVER_tanthanh_
-        dba`, and the organisation label `ORG` inside every `ORG-…-MSSQLAG-1533` the page built
+        dba`, and the organisation label `ORG1` inside every `ORG1-…-MSSQLAG-1533` the page built
         for itself. Both survived a clean certification, because `_` is a word character.
         """
         text = str(term or "").strip()

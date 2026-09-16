@@ -1185,6 +1185,40 @@ port reports `open` / `refused` / `timeout` separately, because on a live host a
 service is off and a timeout means a filter — the distinction that told `.235`/`.236` apart from a
 firewalled box.
 
+### `remote-credential-add` — the OS login, and the block that names it
+
+`instance-add` registers a database. The machine it runs on needs a *second* login — the OS
+account a collector opens an SSH or WinRM session with — and until 2026-09-14 **no command wrote
+one**: 18 of this estate's 22 `remote_credentials` groups were copied between nodes by hand, and a
+host-only record registered with `instance-add` was a target nothing could log in to.
+
+```bash
+# the credential and the cmd_access block that points at it, in one call
+python -m db_ops.common.cli remote-credential-add '{"server_id": "ACME-192-0-2-50",
+  "username": "ACME\\svc_monitor", "password": "...", "method": "winrm", "platform": "windows"}'
+
+# an existing secret instead of a new one, and no block yet
+python -m db_ops.common.cli remote-credential-add '{"server_id": "ACME-192-0-2-50",
+  "username": "admin", "password_ref": "REMOTE_192_0_2_50_ADMIN"}'
+```
+
+It writes `users.json` `remote_credentials`, the encrypted secret, and — when a `method` is given
+— `cmd_access` on that `server_id`'s inventory record. `host` comes off the record when it is not
+given, so the two cannot disagree; the credential is replaced **inside** its group rather than the
+group being replaced, because a machine legitimately carries an admin account and a service
+account and adding one must not delete the other.
+
+Three refusals, and they are the reason this is a command rather than a documented hand-edit:
+
+| Refused | Because |
+| --- | --- |
+| `method: "local"` on a remote host | It runs inside the db_ops container and reports the **container's** CPU, disk and uptime under that host's name. A wrong answer, not a failure — `remote_exec.assert_local_host` catches it later, at collection time |
+| a password on `method: "ssh"` with no explicit `auth_type` | `auth_type` **defaults to `key`**, and a key-auth block resolves to *no credential at all* (deliberately — the node's own key is the login). The password would be encrypted, stored, and never read |
+| `platform` written inside `cmd_access` | It belongs on the record. `resolve_cmd_access` copies it into the resolved block, so one inside the raw block is either redundant or a second, disagreeing answer |
+
+A request with no `method` is answered honestly rather than as a success: `cmd_access_written`
+is false and `next` says nothing reaches the host yet.
+
 ### Which login a target runs as (credentials)
 
 `data_sources.find_database_credential()` is the **only** answer to "which login does this

@@ -23,7 +23,7 @@ try {
 
     # How busy the storage is, not just how full. Read from the raw perf counters and
     # differenced over one second: Get-Counter's cooked values are what failed outright on
-    # A1AAOS01 ("the data in one of the performance counter samples is not valid"), and the raw
+    # ORGAOS01 ("the data in one of the performance counter samples is not valid"), and the raw
     # class is the same data without that fragility.
     try {
         # Every physical disk instance, not just "_Total": the per-disk queue lengths are what

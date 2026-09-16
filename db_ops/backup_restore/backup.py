@@ -621,6 +621,15 @@ def run_backup(
             f"Backup {item.label} finished: {result.status}"
             + (f" (exit {result.exit_code})" if result.exit_code is not None else "")
         )
+        # The REASON goes in the message, not only in error_text. Both are written to the run row,
+        # but only the message reaches backup.log, the Telegram alert and the workflow summary - so
+        # a failure read anywhere but the store said "error (exit 1)" and nothing else. Measured
+        # 2026-09-15: a backup failing every cycle, whose cause - `pg_basebackup failed
+        # (level=INCR); partial target removed` - was sitting in job_runs.error_text and nowhere a
+        # person was looking. A script's own words are the diagnosis; the exit code is not.
+        _reason = " ".join(str(result.error_text or "").split())
+        if result.status != "done" and _reason:
+            message += f" - {_reason[:300]}"
         metadata = {
             "backup_id": item.backup_id,
             "job": item.job,

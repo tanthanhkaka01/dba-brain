@@ -29,7 +29,7 @@ import json
 import sys
 from pathlib import Path
 
-from db_ops.lib import response, secret_text
+from db_ops.lib import json_io, response, secret_text
 from db_ops.lib.timezone import display_now
 # One request parser for the whole tool. The JSON-object contract is `common`'s to define; this
 # module is a caller of it, not a second implementation — two would drift on `@file` and stdin.
@@ -60,6 +60,18 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Which backend this node writes to from now on.")
     use.add_argument("--sqlite-path", default=None,
                      help="Where the sqlite file lives (default: keep what the file already names).")
+    # Re-pointing the postgresql block, so moving a node onto a named store is this command rather
+    # than a hand-edit of store_config.json. `--schema` is the one that matters most: it is how a
+    # node gets its OWN store on a server that already holds somebody else's.
+    use.add_argument("--host", default=None, help="PostgreSQL host to write to.")
+    use.add_argument("--port", default=None, type=int, help="PostgreSQL port (default: unchanged).")
+    use.add_argument("--database", default=None, help="Database name on that server.")
+    use.add_argument("--schema", default=None,
+                     help="Schema inside that database. Its own schema is how a node shares a "
+                          "server without sharing a store.")
+    use.add_argument("--username", default=None, help="Login for that store.")
+    use.add_argument("--password-ref", "--password_ref", dest="password_ref", default=None,
+                     help="Name of the secret holding that login's password (never the password).")
     use.add_argument("--dry-run", action="store_true",
                      help="Print the declaration that would be written, and write nothing.")
     use.set_defaults(handler=_handle_use_store)
@@ -126,6 +138,9 @@ def build_parser() -> argparse.ArgumentParser:
         "timezone",
         help="Which clock each node runs on: record this one, and list the cluster.")
     _add_secret_args(tzc)
+    tzc.add_argument("--set", dest="set_timezone", metavar="ZONE",
+                     help="Write this zone into config.json - an IANA name (UTC, "
+                          "Europe/Berlin) - and report the clock it resolves to.")
     tzc.add_argument("--record", action="store_true",
                      help="Upsert this node's row in runtime_nodes.")
     tzc.add_argument("--list", dest="list_nodes", action="store_true",
@@ -225,16 +240,38 @@ def _handle_use_store(args) -> int:
     path = Path(declared)
     text = path.read_text(encoding="utf-8-sig")
     raw = json.loads(text)
+    postgres = {name: getattr(args, name, None)
+                for name in declaration.POSTGRES_TARGET_FIELDS
+                if getattr(args, name, None) is not None}
+    if postgres and args.backend == "sqlite":
+        print("ERROR: this call selects sqlite, and "
+              + ", ".join(declaration.POSTGRES_TARGET_FIELDS[name] for name in postgres)
+              + " describes a postgresql store. Nothing written.", file=sys.stderr)
+        return 2
     try:
-        updated = declaration.switch_backend(raw, args.backend, sqlite_path=args.sqlite_path)
+        updated = declaration.switch_backend(raw, args.backend, sqlite_path=args.sqlite_path,
+                                             postgres=postgres)
     except declaration.StoreDeclarationError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
 
+    # "switched postgresql -> postgresql" is not what happened when only the target moved, and a
+    # node being re-pointed from one schema to another is exactly when the operator needs to read
+    # the line and believe it.
+    moved = (declaration.redact(raw).get("postgresql")
+             != declaration.redact(updated).get("postgresql"))
+    switching = raw.get("backend") != updated.get("backend")
+    done = (f"switched {raw.get('backend')} -> {updated['backend']}" if switching
+            else f"re-pointed the {updated['backend']} store")
+    would = (f"switch {raw.get('backend')} -> {updated['backend']}" if switching
+             else f"re-point the {updated['backend']} store")
     if raw.get("backend") == updated.get("backend") and raw == updated:
         print(f"already on {updated['backend']}; nothing written.")
     elif args.dry_run:
-        print(f"--dry-run: would switch {raw.get('backend')} -> {updated['backend']} in {path}")
+        print(f"--dry-run: would {would} in {path}")
+        if moved:
+            print(f"--dry-run: postgresql target would become "
+                  f"{declaration.redact(updated)['postgresql'].get('connection_string') or ''}")
         return 0
     else:
         # The file carries long explanatory notes as keys; write it back at its own indent so the
@@ -247,7 +284,7 @@ def _handle_use_store(args) -> int:
                 break
         path.write_text(json.dumps(updated, ensure_ascii=False, indent=indent) + chr(10),
                         encoding="utf-8")
-        print(f"switched {raw.get('backend')} -> {updated['backend']} in {path}")
+        print(f"{done} in {path}")
 
     after = load_config(config_path)
     print(f"backend            : {after.store.backend}")
@@ -385,8 +422,12 @@ def _handle_create_store_database(args) -> int:
         print(f"  server: {result.server_version.splitlines()[0]}")
     if not args.dry_run:
         print(f"  connect with: {postgres.connection_string}")
-        print("  next: migrate-sqlite-to-postgres, then flip 'backend' to 'postgresql' in "
-              "data/store_config.json")
+        # Not "then edit store_config.json": that hand-edit is what `use-store` was written to
+        # remove, and this line went on prescribing it for eleven days after the command existed.
+        # It is the step where forgetting it, or doing it wrong, leaves a node writing somewhere
+        # nobody believes it is.
+        print("  next: migrate-sqlite-to-postgres, then "
+              "'db-ops db use-store postgresql' to point this node at it")
     return 0
 
 
@@ -1239,9 +1280,17 @@ def _sync_config_command(argv: list[str]) -> int:
     # still applied (one bad file must not cost the whole estate's config), but the caller has
     # to see a non-zero exit rather than a success line with a quiet "failed: 1" inside it.
     failed = [item for item in summary["files"] if item["status"] == "failed"]
+    # A catalogued file that is not on this node was counted into totals['missing'] and printed
+    # nowhere, so the only way to see one was to read data.files[] by hand. A node stood up by
+    # hand on 2026-09-13 was missing ten of them - backup_policy.json among them, which made the
+    # inventory report grade a 168-day-old log backup as compliant - and every sync it ran said
+    # "ok". Naming them in the headline is what turns that from an archaeology exercise into a
+    # line the operator reads once.
+    missing = [item["file"] for item in summary["files"] if item["status"] == "missing"]
     headline = (f"{len(summary['files'])} file(s): "
                 f"{totals['inserted']} inserted, {totals['updated']} updated, "
                 f"{totals['unchanged']} unchanged, {totals['deactivated']} deactivated"
+                + (f", {len(missing)} not on this node ({', '.join(sorted(missing))})" if missing else "")
                 + (" (dry run)" if summary["dry_run"] else ""))
     if failed:
         return response.emit(response.fail(
@@ -1498,6 +1547,28 @@ def _split_json_command(argv: list[str]) -> tuple[str, list[str]] | None:
     return None
 
 
+def _write_config_timezone(config_path: Path, zone: str) -> None:
+    """Put ``zone`` in ``config.json``, refusing a name no clock answers to.
+
+    Validated here rather than left to the first schedule that reads it: an unknown zone does not
+    fail loudly, it falls back, and a node quietly running on a different clock from the estate is
+    the one fault a `time_window` cannot distinguish from "never due".
+    """
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+    try:
+        ZoneInfo(zone)
+    except (ZoneInfoNotFoundError, ValueError, KeyError) as exc:
+        raise SystemExit(
+            f"{zone!r} is not an IANA time zone name, so nothing would read it as one: {exc}. "
+            'Use "UTC", or a name like "Europe/Berlin".') from exc
+
+    document = json_io.load_json_file(config_path)
+    document["timezone"] = zone
+    json_io.atomic_write_text(
+        config_path, json.dumps(document, ensure_ascii=False, indent=2) + chr(10))
+
+
 def _handle_timezone(args: argparse.Namespace) -> int:
     """Put which clock this node is on into the store, and read the cluster back.
 
@@ -1519,7 +1590,16 @@ def _handle_timezone(args: argparse.Namespace) -> int:
     from db_ops.db import DbOpsStore
     from db_ops.lib import timezone as timezone_lib
 
-    config = load_config(resolve_config_path("db", args.config))
+    config_path = Path(resolve_config_path("db", args.config))
+    # Written before the clock is described, so what is reported is what the node will now run on
+    # rather than what it ran on a moment ago. `timezone` in config.json is what every schedule is
+    # read against - `time_window.from_hour` is a LOCAL hour - so two nodes on different zones run
+    # the same window at different moments, and nothing in either node's config mentions the
+    # other. `init` ships "UTC", which makes the zone easy to inherit without ever stating it.
+    set_zone = str(getattr(args, "set_timezone", "") or "").strip()
+    if set_zone:
+        _write_config_timezone(config_path, set_zone)
+    config = load_config(str(config_path))
     facts = timezone_lib.describe()
     node_id = timezone_node_id(config)
     hostname = socket.gethostname()
@@ -1529,6 +1609,7 @@ def _handle_timezone(args: argparse.Namespace) -> int:
         "node_role": config.node_role,
         "hostname": hostname,
         "source": "env" if timezone_lib.declaration_from_env() else "config.json",
+        "set": set_zone or None,
         "app_version": db_ops.__version__,
         "recorded": False,
     }

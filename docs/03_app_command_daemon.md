@@ -118,6 +118,16 @@ When the daemon process is killed or crashes while a child subprocess is active,
 
 Together these two paths ensure that a crashed or long-gone subprocess never permanently blocks a scheduled command.
 
+**And the other direction — a run that is genuinely still going blocks the next one, across a
+restart.** The `running` row is tested *before* the repeat interval, which matters because almost
+every command repeats far more often than its worst case takes: `APP-BACKUP-RESTORE` repeats every
+300s with a 7200s timeout, since most cycles find nothing to do. Testing the interval first made
+the `running` branch unreachable for exactly the commands that need it, and within a single daemon
+the in-memory duplicate check hid that. Across a restart nothing hid it: on 2026-09-14 a daemon
+started 47 minutes into a restore began a second restore of the same database onto the same
+target. The order is now status first, interval second, which is what the daemon's own
+`app.daemon.command.not_due` message had always reported.
+
 ## Common Issues
 
 - A command is not starting: check `active` and `time_window.repeat_interval` plus `from_*`/`to_*` bounds.

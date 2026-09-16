@@ -148,12 +148,16 @@ def _build_backup(server) -> dict:
     the note said "LOG chain stale" — an assertion about chain continuity that no collected metric
     supports. Both now come from :mod:`db_ops.lib.backup_policy`: what each database is
     *required* to have, how many comply, and "LOG RPO violated" instead of "chain broken".
+
+    ``policyConfigured`` is the third state that column needs. Where there is no policy at all the
+    verdict is not "compliant" and not "violated" but "nobody said" - see
+    :func:`db_ops.lib.backup_policy.policy_is_configured`.
     """
     if not _primary_db(server):
         return {"cov": "—", "full": None, "diff": None, "log": None,
                 "fullAgeHours": None, "diffAgeHours": None, "logAgeHours": None,
                 "logStale": False, "compliant": None, "eligible": None, "worstDatabases": [],
-                "note": "No database on this host"}
+                "policyConfigured": True, "note": "No database on this host"}
     # Prefer the fresh metric-derived backup_evidence health block; fall back to the
     # semi-static backup.latest_by_type only when the overlay has not been merged yet.
     lbt = server.get("backup_evidence") or ((server.get("backup") or {}).get("latest_by_type")) or {}
@@ -170,7 +174,7 @@ def _build_backup(server) -> dict:
         return {"cov": "No metrics", "full": None, "diff": None, "log": None,
                 "fullAgeHours": None, "diffAgeHours": None, "logAgeHours": None,
                 "logStale": False, "compliant": None, "eligible": None, "worstDatabases": [],
-                "note": "No backup metrics in window"}
+                "policyConfigured": True, "note": "No backup metrics in window"}
 
     if summary.get("eligible"):
         cov = backup_policy.coverage_text(summary)
@@ -193,6 +197,10 @@ def _build_backup(server) -> dict:
             # Kept under the old name because the template and markdown read it; the *meaning*
             # is now "the LOG RPO this policy sets is violated", not "the chain is broken".
             "logStale": bool(log_violated),
+            # False only when evidence was collected and there is no policy to grade it by. The
+            # triage card reads this rather than the note text, because a blind spot that can only
+            # be found by reading prose is a blind spot nobody finds.
+            "policyConfigured": summary.get("configured", True),
             "note": note}
 
 
@@ -643,9 +651,22 @@ def build_models(data: dict, *, exclude_ip_prefixes=EXCLUDE_IP_PREFIXES):
 
 
 def _ip_tag(m):
-    # short tag like "2-115" from the last two IP octets, matching the template style.
-    octets = str(m["ip"]).split(".")
-    return "-".join(octets[-2:]) if len(octets) >= 2 else str(m["ip"])
+    """How an address is written on a report page: **in full, always**.
+
+    It used to be the last two octets - `0-113` for `192.0.2.113` - which read compactly and
+    cost this project a leak. An abbreviation is a string the product invents at render time, so it
+    exists in **no** configuration file, and every scanner here is built from configuration: the
+    showcase scrubber learns its terms from the inventory, `check-identifiers` searches the same
+    terms, and gitleaks looks for secrets. All three certified a published page clean while 31 of
+    these fragments sat in it, and all three were right about what they were asked.
+
+    It is also not usable: `100-108` cannot be pasted into a ping, a connection string or a ticket,
+    and two estates on different /16s produce the same fragment for different machines.
+
+    One function so there is one answer. A narrower column is not a reason to bring the fragment
+    back; `tests/test_a_report_never_abbreviates_an_address.py` says so as a test.
+    """
+    return str(m["ip"])
 
 
 #: Conditions Priority Attention already explains in its own words, with its own action. Their
@@ -778,7 +799,7 @@ def build_triage(models: list) -> list:
                               + ". On an application host this is the workload itself being down.",
                       "action": "Start the service and check why it stopped (event log, service recovery "
                                 "settings). If the name is wrong, fix OS_SERVICE_NAMES for that target.",
-                      "tags": sorted({m["ip"] for m, _ in stopped})})
+                      "tags": sorted({_ip_tag(m) for m, _ in stopped})})
 
     violated = [m for m in models if m["backup"].get("logStale")]
     if violated:
@@ -797,7 +818,29 @@ def build_triage(models: list) -> list:
                                 "confirm no database silently switched to SIMPLE. Verify LSN continuity "
                                 "before deciding a fresh FULL is required — taking one when the chain "
                                 "was intact discards a working restore path.",
-                      "tags": [m["ip"] for m in violated]})
+                      "tags": [_ip_tag(m) for m in violated]})
+
+    # Before the aging card, because a server that is not being graded cannot appear in either of
+    # the two above it, and the reader has to know that the absence is silence rather than health.
+    ungraded = [m for m in models if m["backup"].get("policyConfigured") is False]
+    if ungraded:
+        cards.append({"sev": "warn",
+                      "title": f"Backup compliance is not being graded on {len(ungraded)} server(s)",
+                      "body": "Backup evidence was collected and there is no policy to judge it "
+                              "against — data/backup_policy.json is absent on this node, or "
+                              "carries no rule: "
+                              + "; ".join(f"{m['role']} ({m['ip']}) — "
+                                          f"{m['backup'].get('eligible') or 0} database(s) unjudged"
+                                          for m in ungraded[:8])
+                              + (f" (+{len(ungraded) - 8} more server(s))" if len(ungraded) > 8 else "")
+                              + ". These read Unverified rather than Compliant, and no RPO or "
+                                "backup-age finding on them can appear anywhere on this page. "
+                                "Until 2026-09-14 they read '15/15 DB within policy' instead.",
+                      "action": "Restore data/backup_policy.json on this node — 'db-ops init' "
+                                "writes the shipped default, and a node configured from a bundle "
+                                "gets the estate's own copy. Then re-run the inventory workflow "
+                                "and read the Backup column again before trusting any 'OK' on it.",
+                      "tags": [_ip_tag(m) for m in ungraded]})
 
     aging = [m for m in models
              if str(m["backup"].get("status") or "").upper() == "WARNING" and not m["backup"].get("logStale")]
@@ -806,7 +849,7 @@ def build_triage(models: list) -> list:
                       "title": f"Backups approaching their policy limit on {len(aging)} server(s)",
                       "body": "; ".join(f"{m['role']} ({m['ip']}) — {m['backup']['note']}" for m in aging) + ".",
                       "action": "Check the schedule before the next run misses; confirm the job is enabled.",
-                      "tags": [m["ip"] for m in aging]})
+                      "tags": [_ip_tag(m) for m in aging]})
 
     idle = [m for m in models if m["status"] == "idle"]
     if idle:
@@ -833,7 +876,7 @@ def build_triage(models: list) -> list:
                               + ". Worst-case data loss is a whole FULL cycle.",
                       "action": "Confirm the recovery model is deliberately SIMPLE. If it is not, "
                                 "move the databases to FULL recovery and schedule log backups.",
-                      "tags": [m["ip"] for m in full_only]})
+                      "tags": [_ip_tag(m) for m in full_only]})
 
     # Security. A login being hammered thousands of times a day is either an attack or an
     # integration holding a dead credential; both are findings, and both were invisible here.
@@ -852,7 +895,7 @@ def build_triage(models: list) -> list:
                                 "a dead one — and the error log is being filled either way.",
                       "action": "Identify the source host of the attempts, then disable/fix the principal "
                                 "or block the source. Do not simply raise the alert threshold.",
-                      "tags": [m["ip"] for m in hammered]})
+                      "tags": [_ip_tag(m) for m in hammered]})
 
     stale_pw = [m for m in models
                 if (m.get("security") or {}).get("oldestPasswordDays")
@@ -866,7 +909,7 @@ def build_triage(models: list) -> list:
                           for m in stale_pw) + ".",
                       "action": "Rotate the service logins on a schedule; start with sa and anything with "
                                 "db_owner.",
-                      "tags": [m["ip"] for m in stale_pw]})
+                      "tags": [_ip_tag(m) for m in stale_pw]})
 
     low_ple = [m for m in models if m["ple"] and 0 < m["ple"] < PLE_WARN]
     if low_ple:
@@ -913,7 +956,7 @@ def build_triage(models: list) -> list:
                       "body": "xp_cmdshell is ON for: " + ", ".join(f"{m['role']} ({m['ip']})" for m in xpcmd)
                               + ". Often needed by legacy jobs but widens the attack surface.",
                       "action": "Confirm intentional / scope it; otherwise disable.",
-                      "tags": [m["ip"] for m in xpcmd]})
+                      "tags": [_ip_tag(m) for m in xpcmd]})
 
     standalone = [m for m in models if m["total"] and not m.get("oracle")
                   and "none_documented" in m["ha"] and "standalone" in m["ha"]]

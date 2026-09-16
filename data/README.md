@@ -97,7 +97,10 @@ App-owned config files:
 - `backup_policy.json`: what each database is required to be backed up with — required FULL/DIFF/LOG
   types (LOG keyed by recovery model) and the warn/critical age for each, with per-server and
   per-database `overrides`. The reports evaluate every eligible database against this rather than
-  taking the newest backup on the instance as the instance's answer. See `docs/06_reports_app.md`.
+  taking the newest backup on the instance as the instance's answer. **Deleting it does not make the
+  backup report quiet, it makes it refuse to grade**: every server reads *Unverified* and Priority
+  Attention names the missing file. `db-ops init` writes the shipped default, so a node should never
+  be without one. See `docs/06_reports_app.md`.
 - `restore_config.json`: backup restore source/target/database mapping.
 - `maintenance_policy.json`: timing budgets and thresholds for host maintenance operations
   (`db_ops.common.host_ops`, `db_ops.common.sqlserver_patch`): how long to wait for a host to go

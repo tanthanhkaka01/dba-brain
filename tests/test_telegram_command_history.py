@@ -99,14 +99,14 @@ def test_an_optional_answer_nobody_gave_is_not_part_of_the_line():
 def test_a_prompt_that_was_never_answered_is_not_offered_as_a_command():
     """Its arguments are incomplete. Offering half a command invites someone to run it and find
     out which half is missing."""
-    assert history.rebuild_command(_conversation("spbot_kill_spid", ["ORG"], status="waiting")) is None
-    assert history.rebuild_command(_conversation("spbot_kill_spid", ["ORG"], status="replaced")) is None
+    assert history.rebuild_command(_conversation("spbot_kill_spid", ["ORG1"], status="waiting")) is None
+    assert history.rebuild_command(_conversation("spbot_kill_spid", ["ORG1"], status="replaced")) is None
 
 
 def test_the_skipped_ones_are_counted_rather_than_quietly_dropped():
     """Hiding without accounting is indistinguishable from losing - the rule every /spbot_list_*
     reply follows."""
-    store = _Store([_conversation("spbot_kill_spid", ["ORG"], status="waiting"),
+    store = _Store([_conversation("spbot_kill_spid", ["ORG1"], status="waiting"),
                     _row()])
 
     result = history.collect(store, user_id="123456789")

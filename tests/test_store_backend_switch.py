@@ -43,6 +43,71 @@ def test_switching_keeps_the_way_back() -> None:
     assert switched["notes"] == full()["notes"], "the file's own documentation survives too"
 
 
+def test_a_node_can_be_pointed_at_another_schema_on_the_same_server() -> None:
+    """Its own schema is how a node shares a server without sharing a store — which is what R8
+    ("the soak node writes to its own store, never the shared one") needs on an estate whose only
+    PostgreSQL server is the shared one."""
+    moved = declaration.switch_backend(full(), "postgresql", postgres={"schema": "dba_brain"})
+
+    assert moved["postgresql"]["schema"] == "dba_brain"
+    assert moved["postgresql"]["database"] == "db_ops", "only what was named moves"
+
+
+def test_the_connection_string_is_rebuilt_when_the_target_moves() -> None:
+    """The trap, and the reason this is not a dict update.
+
+    `connection_string` is authoritative when non-empty — `config.py` returns it verbatim and never
+    looks at the fields beside it. So setting `schema` on a declaration that carries one would
+    change the human-readable breakdown and *nothing about where the node writes*: `store-info`
+    would report the new schema and the node would go on writing to the old one. Two nodes
+    silently sharing a store while both believe they are separate is the worst outcome this file
+    can produce.
+    """
+    raw = full()
+    raw["postgresql"]["connection_string"] = (
+        "postgresql://postgres:{password}@192.0.2.115:5433/db_ops"
+        "?sslmode=prefer&options=-csearch_path%3Ddb_ops")
+
+    moved = declaration.switch_backend(raw, "postgresql", postgres={"schema": "dba_brain"})
+
+    assert "search_path%3Ddba_brain" in moved["postgresql"]["connection_string"]
+    assert "search_path%3Ddb_ops" not in moved["postgresql"]["connection_string"]
+
+
+def test_a_declaration_with_no_connection_string_does_not_grow_one() -> None:
+    """The sibling fields are authoritative when it is blank, so building one here would move the
+    file from one shape to the other as a side effect of changing a schema."""
+    moved = declaration.switch_backend(full(), "postgresql", postgres={"schema": "dba_brain"})
+
+    assert "connection_string" not in moved["postgresql"]
+
+
+def test_every_declared_target_field_can_actually_be_set() -> None:
+    """POSTGRES_TARGET_FIELDS is what the CLI builds its flags from, so an entry it cannot apply
+    is a flag that is accepted and ignored — the failure `instance-add`'s --key-base64 had."""
+    overrides = {"host": "192.0.2.200", "port": 5555, "database": "other", "schema": "elsewhere",
+                 "username": "someone", "password_ref": "OTHER_REF"}
+    assert set(overrides) == set(declaration.POSTGRES_TARGET_FIELDS)
+
+    moved = declaration.switch_backend(full(), "postgresql", postgres=overrides)
+
+    for name, value in overrides.items():
+        assert moved["postgresql"][name] == value
+
+
+def test_re_pointing_at_what_is_already_there_changes_nothing() -> None:
+    raw = full()
+
+    assert declaration.switch_backend(raw, "postgresql", postgres={"schema": "db_ops"}) == raw
+
+
+def test_moving_to_a_target_this_build_cannot_read_is_refused() -> None:
+    """Blanking the host through the same door it can be set through must fail here, not at
+    connect time inside whichever app command touches the store first."""
+    with pytest.raises(declaration.StoreDeclarationError, match="host"):
+        declaration.switch_backend(full(), "postgresql", postgres={"host": ""})
+
+
 def test_switching_back_to_postgresql_works_from_sqlite() -> None:
     once = declaration.switch_backend(full(), "sqlite")
     twice = declaration.switch_backend(once, "postgresql")

@@ -32,6 +32,22 @@ One row per node, keyed by `node_id`, upserted by
 `python -m db_ops.db.cli --config config.json timezone --record` and by the daemon at start-up.
 (`common.cli timezone` reports the same answer but writes nothing — `common` may not import `db`.)
 
+**`timezone --set <ZONE>`** writes the zone into `config.json` and reports the clock it resolves
+to. **It does not change what is stored.** Every timestamp the store writes is UTC — see
+`POSTGRES_UTC_NOW` — and elapsed-time arithmetic (`repeat_interval`, `retry_interval`,
+stale-running) subtracts those instants in UTC, so it is offset-safe whatever this is set to.
+
+What the setting decides is the *hour* half of a `time_window`: `from_hour`, `to_hour`,
+`from_day`, `to_day`. `display_now()` is UTC converted into this zone, and that is what SQL tasks,
+backup/restore, metrics and the reports evaluate their windows against; it is also the clock
+reports and messages print in. So any zone is a correct answer, as long as the windows are written
+for the one chosen — and two nodes on different zones run the same window at different moments,
+with nothing in either config mentioning the other.
+
+`init` ships `UTC`; state the zone you mean rather than inheriting it. The name is validated before
+it is written, because an unknown zone does not fail loudly, it falls back, and a node quietly on
+the wrong clock is the one fault a `time_window` cannot be told from "never due".
+
 | Column | Holds |
 | --- | --- |
 | `timezone` | the **setting**, as declared: `Asia/Ho_Chi_Minh` or `+07:00` |
@@ -317,7 +333,10 @@ python -m db_ops.db.cli create-store-database --key-base64 "<K>"
 python -m db_ops.db.cli migrate-sqlite-to-postgres --key-base64 "<K>"
 python -m db_ops.db.cli verify-migration --key-base64 "<K>"
 
-# 4. flip data/store_config.json:  "backend": "postgresql"
+# 4. point this node at it (never a hand-edit of store_config.json - see use-store below)
+python -m db_ops.db.cli use-store postgresql --dry-run
+python -m db_ops.db.cli use-store postgresql
+
 # 5. deploy again so the worker gets the changed config, and start the daemon
 python -m db_ops.control.cli deploy --key-base64 "<K>"
 python -m db_ops.db.cli check --counts --key-base64 "<K>"
@@ -485,6 +504,13 @@ python -m db_ops.db.cli sync-config '{"apps": ["telegram"]}'
 # read it back (the read side the web UI is built on)
 python -m db_ops.db.cli config-items '{"app_code": "metrics", "payloads": false}'
 ```
+
+**A catalogued file this node does not have is named in the headline**, not only counted in
+`data.files[]`. A missing file is reported and never applied — deactivating every record of a file
+that is simply absent would empty the store on any partial install — but until 2026-09-14 the
+outcome sat in `totals["missing"]`, which nothing printed, so every sync on a node missing ten
+catalogued files still said `ok`. One of the ten was `backup_policy.json`, and its absence made the
+inventory report grade a 168-day-old log backup as compliant.
 
 **The mirror runs both ways.** `sync-config` reads the files into the store; `export-config`
 writes the store back out. The second direction is what makes an edit in the web console take
@@ -791,6 +817,35 @@ db-ops db --config config.json use-store sqlite              # this node writes 
 db-ops db --config config.json use-store sqlite --dry-run    # print the change, write nothing
 db-ops db --config config.json use-store postgresql          # and back, once it has proved itself
 ```
+
+**And which PostgreSQL store**, since 2026-09-14. The backend flag was all this could set, so
+moving a node onto a *named* store was still the hand-edit the command exists to remove:
+
+```bash
+# its own schema on the shared server - a store of its own without a server of its own
+db-ops db --config config.json use-store postgresql --schema dba_brain --dry-run
+db-ops db --config config.json use-store postgresql --schema dba_brain
+
+# or a different server entirely
+db-ops db --config config.json use-store postgresql \
+    --host 192.0.2.115 --port 5433 --database db_ops --schema db_ops \
+    --username postgres --password-ref POSTGRE_192_0_2_115_5433_POSTGRES
+```
+
+Only what is named moves; everything else in the block is left as the declaration has it, and
+`--password-ref` names a secret — a password is never written here.
+
+**`connection_string` is rebuilt when the target moves, and that is the point.** It is
+authoritative when non-empty: the reader returns it verbatim and never looks at the fields beside
+it. So setting `--schema` on a declaration that carries one would otherwise change the
+human-readable breakdown and *nothing about where the node writes* — `store-info` would report the
+new schema while the node went on writing to the old one. Two nodes silently sharing a store while
+both believe they are separate is the worst thing this file can produce, which is why the rebuild
+is not optional and why the command prints the resolved connection afterwards.
+
+A declaration that leaves `connection_string` blank keeps it blank: the sibling fields are
+authoritative there, and growing one as a side effect of a schema change would move the file from
+one shape to the other behind the operator's back.
 
 Three properties worth knowing:
 

@@ -146,3 +146,46 @@ def test_elapsed_time_is_not_affected_by_the_display_zone():
         tz.bind_display_timezone(zone)
         assert repeat_due(last_run, 300, MOMENT) is False, zone
         assert repeat_due(last_run, 100, MOMENT) is True, zone
+
+
+# ------------------------------------------------------------------- setting the node's clock
+
+def test_the_timezone_command_writes_the_zone_into_config_json(tmp_path):
+    """`init` ships "UTC", and `time_window.from_hour` is a LOCAL hour read against it.
+
+    So two nodes on different zones run the same window at different moments, and nothing in
+    either node's config mentions the other. Until 2026-09-15 the only way to change the setting
+    was to edit config.json by hand.
+    """
+    import json
+
+    from db_ops.db.cli import _write_config_timezone
+
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"app_name": "db_ops", "timezone": "Europe/Berlin",
+                                "log_dir": "logs"}), encoding="utf-8")
+
+    _write_config_timezone(path, "UTC")
+
+    document = json.loads(path.read_text(encoding="utf-8"))
+    assert document["timezone"] == "UTC"
+    assert document["app_name"] == "db_ops" and document["log_dir"] == "logs", (
+        "the rest of the config survives")
+
+
+def test_a_zone_no_clock_answers_to_is_refused(tmp_path):
+    """An unknown zone does not fail loudly, it falls back — and a node quietly on a different
+    clock from the estate is the one fault a time_window cannot tell from 'never due'."""
+    import json
+
+    import pytest
+
+    from db_ops.db.cli import _write_config_timezone
+
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"timezone": "UTC"}), encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="IANA"):
+        _write_config_timezone(path, "Asia/Atlantis")
+
+    assert json.loads(path.read_text(encoding="utf-8"))["timezone"] == "UTC"

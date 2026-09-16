@@ -175,6 +175,25 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="List configured backup IDs with their engine, level and schedule.",
     )
 
+    # The JSON-request contract, the same one `instance-add` takes: one object, inline, @file or
+    # `-`. Never flags for the payload - a backup entry is a nested object with an array of jobs
+    # inside it, and flattening that into flags is how `--job-1-cleanup-retention` gets invented.
+    backup_add = subparsers.add_parser(
+        "backup-add", parents=[config_parent],
+        help="Register one backup entry from a JSON request object (see --help).",
+    )
+    backup_add.add_argument(
+        "request", nargs="?",
+        help="A JSON object, @path/to/file.json, or - to read stdin. Omit for the full help.")
+
+    restore_add = subparsers.add_parser(
+        "restore-add", parents=[config_parent],
+        help="Register one restore entry from a JSON request object (see --help).",
+    )
+    restore_add.add_argument(
+        "request", nargs="?",
+        help="A JSON object, @path/to/file.json, or - to read stdin. Omit for the full help.")
+
     import_cert = subparsers.add_parser(
         "import-certificate",
         parents=[config_parent],
@@ -283,6 +302,49 @@ def _format_restore_list(
     if note:
         lines.extend(["", note])
     return "\n".join(lines)
+
+
+def _registration_command(args) -> int:
+    """``backup-add`` / ``restore-add`` — the CLI face of :mod:`db_ops.backup_restore.registration`.
+
+    Both take one JSON object, the way every command in the ``instance-add`` family does, and both
+    answer with the shared response envelope so a shell caller and the bot read the same shape.
+    The passphrase is already in the environment: ``main`` calls ``set_key_env`` before this runs,
+    so ``--key-base64`` given before *or* after the subcommand has the same effect.
+    """
+    from db_ops.backup_restore import registration
+    from db_ops.lib import response
+    from db_ops.lib.json_io import read_json_request
+
+    add, usage = ((registration.add_backup, registration.BACKUP_ADD_USAGE)
+                  if args.command == "backup-add"
+                  else (registration.add_restore, registration.RESTORE_ADD_USAGE))
+    source = getattr(args, "request", None)
+    if not source:
+        sys.stdout.write(usage)
+        return 2
+    try:
+        request = read_json_request(source)
+    except ValueError as exc:
+        return _emit(response.fail(args.command, str(exc)))
+    try:
+        outcome = add(request, key=os.environ.get("DB_OPS_SECRET_KEY") or None)
+    except registration.RegistrationError as exc:
+        return _emit(response.fail(args.command, str(exc)))
+    name = outcome.get("backup_id") or outcome.get("restore_id")
+    verb = "replaced" if outcome["replaced"] else "registered"
+    return _emit(response.ok(
+        args.command,
+        message=f"{verb} {name} - wrote {', '.join(outcome['files_written'])}",
+        data=outcome))
+
+
+def _emit(result: dict) -> int:
+    """The response envelope on stdout, the way ``restore-by-id`` already writes it here."""
+    from db_ops.lib import response
+
+    sys.stdout.write(json.dumps(result, ensure_ascii=False, default=str) + chr(10))
+    return response.exit_code(result)
 
 
 def _format_backup_list(jobs: list) -> str:
@@ -428,6 +490,8 @@ def main(argv: list[str]) -> int:
             sys.stdout.write(_json.dumps(result, ensure_ascii=False, default=str) + chr(10))
             return _response.exit_code(result)
 
+        if args.command in {"backup-add", "restore-add"}:
+            return _registration_command(args)
         if args.command == "list-backups":
             sys.stdout.write(_format_backup_list(load_backup_jobs(resolved_config_path)) + "\n")
             return 0

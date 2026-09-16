@@ -13,7 +13,7 @@
   ],
   "OS_INFO": [
     {"metric_item": "os_name", "metric_value": "Microsoft Windows Server 2019 Datacenter", "metric_unit": "text", "status": "OK", "message": "os_family=Windows, edition=Microsoft Windows Server 2019 Datacenter, version=10.0.17763, build=17763, architecture=64-bit"},
-    {"metric_item": "hostname", "metric_value": "ACMESQL01", "metric_unit": "text", "status": "OK", "message": "domain=REDACTEDORG.local, manufacturer=VMware, Inc., model=VMware Virtual Platform"},
+    {"metric_item": "hostname", "metric_value": "ACMESQL01", "metric_unit": "text", "status": "OK", "message": "domain=examplecorp.local, manufacturer=VMware, Inc., model=VMware Virtual Platform"},
     {"metric_item": "last_boot_time", "metric_value": "2026-06-14T12:15:22Z", "metric_unit": "timestamp", "status": "OK", "message": "uptime_seconds=2500000"}
   ],
   "OS_CPU_USAGE": [

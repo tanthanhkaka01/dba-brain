@@ -74,6 +74,7 @@ USAGE = (
     "  lift-example     Refresh a data/*.example.json from your own file, refusing identifiers\n"
     "  build-showcase   Snapshot the published pages with every real name replaced (see --help)\n"
     "  instance-add     Register one database to monitor: inventory, credential, secret (see --help)\n"
+    "  remote-credential-add  Register one host's OS login + the cmd_access naming it (see --help)\n"
     "  secret-set       Store one secret encrypted, never in clear; request on stdin (see --help)\n"
     "  probe-host       What a host listens on, and what db_ops can do with it (see --help)\n"
     "  metric-severity  Remap one metric's statuses for one server_id, e.g. WARNING -> LOGGING (see --help)\n"
@@ -376,11 +377,19 @@ def _secret_set_command(argv: list[str]) -> int:
 
 
 def _instance_add_command(argv: list[str]) -> int:
-    """``instance-add`` — the CLI face of :mod:`db_ops.common.instance_admin`."""
+    """``instance-add`` — the CLI face of :mod:`db_ops.common.instance_admin`.
+
+    Its own usage line has advertised ``--key-base64`` since the day it was written and this
+    function read only ``DB_OPS_SECRET_KEY``, so the flag was accepted and silently ignored: an
+    operator who passed it got "a password was given but no passphrase is available to encrypt
+    it" while looking straight at the passphrase they had typed. It is parsed now, the same way
+    ``run-sql`` and every other key-taking command here parses it.
+    """
     import os
 
     from db_ops.common import instance_admin
     from db_ops.lib import response
+    from db_ops.lib.secret_text import set_key_env
 
     if argv and argv[0] in {"-h", "--help"}:
         print(instance_admin.USAGE)
@@ -388,6 +397,14 @@ def _instance_add_command(argv: list[str]) -> int:
     if not argv:
         print(instance_admin.USAGE, file=sys.stderr)
         return response.emit(response.fail("instance-add", "no request given; see --help"))
+    key, key_base64, code = _read_key_flags(argv[1:], instance_admin.USAGE, "instance-add")
+    if code:
+        return code
+    try:
+        set_key_env(key, key_base64)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     request, code = _read_json_request(argv[0], instance_admin.USAGE)
     if request is None:
         return code
@@ -400,6 +417,48 @@ def _instance_add_command(argv: list[str]) -> int:
     return response.emit(response.ok(
         "instance-add",
         message=f"{verb} {outcome['server_id']} ({outcome['db_type']}) - wrote "
+                f"{', '.join(outcome['files_written'])}",
+        data=outcome))
+
+
+def _remote_credential_add_command(argv: list[str]) -> int:
+    """``remote-credential-add`` — the CLI face of :mod:`db_ops.common.remote_credential_admin`."""
+    import os
+
+    from db_ops.common import remote_credential_admin
+    from db_ops.lib import response
+    from db_ops.lib.secret_text import set_key_env
+
+    usage = remote_credential_admin.USAGE
+    if argv and argv[0] in {"-h", "--help"}:
+        print(usage)
+        return 0
+    if not argv:
+        print(usage, file=sys.stderr)
+        return response.emit(response.fail("remote-credential-add", "no request given; see --help"))
+    key, key_base64, code = _read_key_flags(argv[1:], usage, "remote-credential-add")
+    if code:
+        return code
+    try:
+        set_key_env(key, key_base64)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    request, code = _read_json_request(argv[0], usage)
+    if request is None:
+        return code
+    try:
+        outcome = remote_credential_admin.add_remote_credential(
+            request, key=os.environ.get("DB_OPS_SECRET_KEY") or None)
+    except remote_credential_admin.InstanceAdminError as exc:
+        return response.emit(response.fail("remote-credential-add", str(exc)))
+    verb = "replaced" if outcome["replaced"] else "registered"
+    tail = (f"and wired cmd_access ({outcome['method']}) on {outcome['server_id']}"
+            if outcome["cmd_access_written"]
+            else "- no cmd_access block written, so nothing reaches the host yet")
+    return response.emit(response.ok(
+        "remote-credential-add",
+        message=f"{verb} {outcome['credential_name']} for {outcome['host']} {tail} - wrote "
                 f"{', '.join(outcome['files_written'])}",
         data=outcome))
 
@@ -1362,35 +1421,43 @@ def _read_json_request(source: str, usage: str) -> tuple[dict | None, int]:
     Shared by the JSON-request commands so ``run-sql``, ``queue-telegram-message`` and
     ``rotate-password`` all accept the same three forms and report a bad payload identically.
     """
-    if source == "-":
-        # The bytes, decoded as UTF-8 by us, rather than whatever `sys.stdin` happens to be opened
-        # with. Its encoding follows the machine's ANSI code page on Windows and its errors handler
-        # is `surrogateescape`, so a byte it cannot decode becomes a lone surrogate that travels
-        # silently into a SQL statement and is refused by the driver several layers later.
-        # `db_ops.lib.common_cli.spawn` pins the writing end; this is the other half, and both are
-        # needed — one end alone just moves which side does the mis-decoding.
-        payload_text = sys.stdin.buffer.read().decode("utf-8-sig")
-    elif source.startswith("@"):
-        from pathlib import Path
+    from db_ops.lib.json_io import read_json_request
 
-        path = Path(source[1:])
-        if not path.exists():
-            print(f"Request file not found: {path}", file=sys.stderr)
-            return None, 2
-        payload_text = path.read_text(encoding="utf-8-sig")
-    else:
-        payload_text = source
+    # The three forms and their two failure shapes moved to `lib.json_io` on 2026-09-14, when the
+    # app CLIs needed the same reader and could not import this one - `common` is below them, and
+    # an app may not reach into it. What stays here is this layer's *answer* to a bad request: a
+    # missing @file is the caller's typo and goes to stderr with exit 2, a payload that is not a
+    # JSON object is the request itself and comes back as the JSON envelope every caller parses.
     try:
-        request = json.loads(payload_text)
-    except json.JSONDecodeError as exc:
-        print(json.dumps({"ok": False, "error": f"request is not valid JSON: {exc}"},
-                         ensure_ascii=False))
+        return read_json_request(source), 0
+    except FileNotFoundError as exc:
+        print(str(exc), file=sys.stderr)
+        return None, 2
+    except ValueError as exc:
+        print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
         return None, 1
-    if not isinstance(request, dict):
-        print(json.dumps({"ok": False, "error": "request must be a JSON object."},
-                         ensure_ascii=False))
-        return None, 1
-    return request, 0
+
+
+def _read_key_flags(rest: list[str], usage: str, command: str) -> tuple[str | None, str | None, int]:
+    """``--key`` / ``--key-base64`` from the tail of an argv, for the JSON-request commands.
+
+    Every command here that needs the passphrase had its own copy of this loop, and the one that
+    forgot to write it (``instance-add``) accepted the flag and ignored it. Returning the exit
+    code rather than raising keeps the callers shaped like the ones that already inline it.
+    """
+    key = key_base64 = None
+    rest = list(rest)
+    while rest:
+        flag = rest.pop(0)
+        value = rest.pop(0) if rest else ""
+        if flag == "--key":
+            key = value
+        elif flag in {"--key-base64", "--key_base64"}:
+            key_base64 = value
+        else:
+            print(f"Unknown {command} option: {flag}\n\n{usage}", file=sys.stderr)
+            return None, None, 2
+    return key, key_base64, 0
 
 
 def _rotate_password_command(argv: list[str]) -> int:
@@ -1986,9 +2053,17 @@ def _self_status_command(argv: list[str]) -> int:
         backend = getattr(store_config, "backend", None)
         if backend == "postgresql":
             postgres = getattr(store_config, "postgresql", None)
+            # The SCHEMA is part of the answer, not a detail. On PostgreSQL the database is
+            # routinely shared - this estate keeps the production store and every soak node in one
+            # `db_ops` database, told apart only by schema - so a line ending at the database name
+            # cannot answer "which store is this node on", which is the only reason to read it.
+            # Asked on 2026-09-15 by an operator looking at exactly that line, with three schemas
+            # in that database and no way to tell from here which one was live.
+            _schema = str(getattr(postgres, "schema", "") or "").strip()
             store_text = (f"postgresql {getattr(postgres, 'username', '?')}@"
                           f"{getattr(postgres, 'host', '?')}:{getattr(postgres, 'port', '?')}"
-                          f"/{getattr(postgres, 'database', '?')}")
+                          f"/{getattr(postgres, 'database', '?')}"
+                          + (f" schema={_schema}" if _schema else ""))
         elif backend:
             store_text = f"{backend} {getattr(getattr(store_config, 'sqlite', None), 'path', '')}"
     except Exception:  # noqa: BLE001 - no config is a fact about the install, not an error here.
@@ -2225,6 +2300,8 @@ def main(argv: list[str] | None = None) -> int:
         return _build_showcase_command(argv[1:])
     if argv[0] == "instance-add":
         return _instance_add_command(argv[1:])
+    if argv[0] == "remote-credential-add":
+        return _remote_credential_add_command(argv[1:])
     if argv[0] == "secret-set":
         return _secret_set_command(argv[1:])
     if argv[0] == "probe-host":

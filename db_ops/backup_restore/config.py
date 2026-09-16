@@ -428,8 +428,63 @@ def _looks_like_restore_config(raw: object) -> bool:
     return isinstance(raw, dict) and ("restores" in raw or "sources" in raw or "source" in raw or "prod_backup_share" in raw)
 
 
+#: The fields :func:`parse_restore_config` reads by subscript, and how an operator actually states
+#: each one. Both halves matter: the left is what the KeyError used to say and the right is what
+#: somebody has to go and type, and they are not the same word for a single field.
+#:
+#: On 2026-09-11 a fresh install with the backup/restore command switched on failed every cycle
+#: with the whole of its error text being ``'prod_backup_share'`` — an internal key name, naming
+#: neither the entry it belonged to, nor the file, nor anything present in the config the operator
+#: had written. That one was fixed by returning "nothing configured" for a config that declares no
+#: restores at all; this is the other half, for an entry that exists and is incomplete. Measured
+#: again on 2026-09-14 through `restore-add`: a target missing its import path answered
+#: ``'vm_import_unc'``, a key that entry had never mentioned under that name.
+REQUIRED_RESTORE_FIELDS: dict[str, str] = {
+    "prod_backup_share": "source.backup_share - the share the backups are read from",
+    "vm_import_unc": "target.vm_import_unc, or target.vm_import_linux_path on a Linux target - "
+                     "where they are staged",
+    "vm_import_local": "target.vm_import_local, or target.vm_import_linux_path - the same folder "
+                       "as the restoring instance sees it",
+    "vm_log_unc": "target.vm_log_unc, or target.vm_import_linux_log_path",
+    "vm_log_local": "target.vm_log_local",
+    "restore_data_dir_on_vm": "target.restore_data_dir - where the restored data files go",
+}
+
+
+def _optional_path(value: Any) -> Path | None:
+    """A Path, or None for an absent or blank value.
+
+    Written out because the two callers each read their key twice - once in a guard and once by
+    subscript - and a subscript in this function has to mean "required" and nothing else, or the
+    guard in ``tests/test_backup_restore_on_an_unconfigured_install.py`` cannot tell the two apart.
+    """
+    text = str(value or "").strip()
+    return Path(text) if text else None
+
+
+def _assert_restore_fields(values: dict[str, Any]) -> None:
+    """Name every missing field at once, rather than the first one as a bare ``KeyError``.
+
+    All at once because a restore entry is written by hand and half of these arrive together: a
+    parser that stops at the first missing key turns one incomplete entry into six edit-and-rerun
+    cycles. See :data:`REQUIRED_RESTORE_FIELDS` for what this cost when it was one key in quotes.
+    """
+    missing = [name for name in REQUIRED_RESTORE_FIELDS
+               if not str(values.get(name) or "").strip()]
+    if not missing:
+        return
+    label = str(values.get("restore_id") or values.get("source_id") or "?")
+    detail = "; ".join(f"{name} ({REQUIRED_RESTORE_FIELDS[name]})" for name in missing)
+    raise ValueError(
+        f"backup_restore.restores[{label}]: missing required field(s): {detail}. "
+        "data/restore_config.example.json carries a worked entry for both target platforms.")
+
+
 def parse_restore_config(raw: dict[str, Any]) -> BackupRestoreConfig:
     values = _with_legacy_keys(_with_source_target_pair(raw))
+    # Before anything is constructed: six of the fields below are read by subscript, and the first
+    # one missing would otherwise be the entire error message.
+    _assert_restore_fields(values)
     # Imported here, not at module scope: server_metadata imports common.sqlserver_instance,
     # which imports this module for TOOL_ROOT.
     from db_ops.backup_restore.server_metadata import parse_server_metadata
@@ -475,8 +530,8 @@ def parse_restore_config(raw: dict[str, Any]) -> BackupRestoreConfig:
         robocopy_path=str(values.get("robocopy_path") or "robocopy"),
         source_database_name=str(values.get("source_database_name") or ""),
         restore_database_name=str(values.get("restore_database_name") or ""),
-        restore_data_file_on_vm=Path(str(values["restore_data_file_on_vm"])) if values.get("restore_data_file_on_vm") else None,
-        restore_log_file_on_vm=Path(str(values["restore_log_file_on_vm"])) if values.get("restore_log_file_on_vm") else None,
+        restore_data_file_on_vm=_optional_path(values.get("restore_data_file_on_vm")),
+        restore_log_file_on_vm=_optional_path(values.get("restore_log_file_on_vm")),
         databases=_parse_database_mappings(values.get("databases")),
         certificate_api_url=str(values.get("certificate_api_url") or values.get("api_link_get_cer") or ""),
         certificate_api_token_ref=str(values.get("certificate_api_token_ref") or "TOKEN_192_0_2_112_VAULT"),

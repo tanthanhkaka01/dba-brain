@@ -120,7 +120,7 @@ def test_a_windows_host_can_be_reached_by_winrm():
     meant "a Windows host with an OpenSSH server", and exactly one box here has one. The other
     thirteen SQL Servers are reached by WinRM - what cmd_access.method has said all along."""
     host = parse_host({"runtime": WINDOWS, "access": "winrm", "host": "192.0.2.115",
-                       "username": r"REDACTEDORG\erpadmin", "password": "x"})
+                       "username": r"examplecorp\erpadmin", "password": "x"})
 
     assert host.is_winrm is True
     assert host.is_windows is True

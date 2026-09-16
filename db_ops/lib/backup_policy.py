@@ -19,6 +19,13 @@ prove the log chain is broken: that needs backup LSNs, recovery-fork ids and rec
 history, none of which the collectors gather. The wording stays "LOG RPO violated" until that
 evidence exists, because "chain broken" is an instruction to take a fresh FULL and a DBA who acts
 on it when the chain was in fact intact has destroyed a restore path for no reason.
+
+**And it will not grade without a policy.** ``data/backup_policy.json`` missing is not a permissive
+policy - it is no policy, and the two used to produce the same answer: every type "not required",
+every database OK, ``15/15 DB within policy`` printed over a 168-day-old LOG backup. See
+:func:`policy_is_configured`. An unconfigured verdict is ``UNKNOWN`` with ``compliant`` at zero and
+``eligible`` still counting what evidence was found, so the page reports a blind spot instead of a
+pass.
 """
 
 from __future__ import annotations
@@ -51,6 +58,13 @@ TYPE_ALIASES = {
 
 _SEVERITY_RANK = {"CRITICAL": 3, "WARNING": 2, "OK": 1, "NOT_REQUIRED": 0, "UNKNOWN": 0}
 
+#: What a summary says when there is no policy to judge against. Named so the report layer can
+#: recognise the state with ``summary["configured"] is False`` instead of matching this sentence.
+NOT_CONFIGURED_REASON = (
+    "no backup policy configured - data/backup_policy.json is absent or carries no rule, so "
+    "{count} database(s) with backup evidence are unjudged, not compliant"
+)
+
 
 
 
@@ -74,6 +88,25 @@ def _is_required(rule: dict, recovery_model: str) -> bool:
     if models is not None:
         return str(recovery_model or "").strip().upper() in {str(m).upper() for m in models}
     return bool(rule.get("required"))
+
+
+def policy_is_configured(policy: dict | None) -> bool:
+    """Does this document carry a rule at all? "Not required" and "nobody said" are not the same.
+
+    An absent ``data/backup_policy.json`` loads as ``{}``; every type then evaluates to
+    ``NOT_REQUIRED``, every database's worst state is ``OK``, and the summary reads
+    ``15/15 DB within policy`` on a server whose newest LOG backup is 168 days old. Measured on
+    2026-09-14 across two nodes holding *identical* backup evidence: the one with the policy file
+    reported nine servers in violation, the one without reported the whole estate compliant.
+
+    So the question is asked here, before any database is judged, rather than inferred afterwards
+    from "nothing came out required" - which is also what a deliberately permissive policy looks
+    like, and the two must not read the same.
+    """
+    policy = policy or {}
+    if (policy.get("defaults") or {}).get("types"):
+        return True
+    return any((override.get("types") or {}) for override in (policy.get("overrides") or []))
 
 
 
@@ -170,6 +203,8 @@ def evaluate_backup_policy(rows: list[dict], *, server_id: str = "",
     policy = policy or {}
     evidence = collect_evidence(rows, now=now)
     excluded = {str(name).lower() for name in (policy.get("exclude_databases") or [])}
+    if not policy_is_configured(policy):
+        return _unconfigured(evidence, excluded)
 
     databases: list[dict] = []
     for database in sorted(evidence):
@@ -217,7 +252,43 @@ def evaluate_backup_policy(rows: list[dict], *, server_id: str = "",
             "as_of": record["as_of"],
         })
 
-    return {"databases": databases, "summary": _summarize(databases)}
+    summary = _summarize(databases)
+    summary["configured"] = True
+    return {"databases": databases, "summary": summary}
+
+
+def _unconfigured(evidence: dict[str, dict], excluded: set[str]) -> dict:
+    """The verdict when nothing states what these databases are required to have.
+
+    Every database is ``UNKNOWN`` and ``compliant`` is zero, and that pairing is the point:
+    ``eligible`` still counts the databases evidence was found for, so the page says "we can see
+    fifteen databases here and cannot grade one of them" rather than the old "fifteen of fifteen
+    within policy". A blind spot must never be the same colour as a pass.
+    """
+    databases = [
+        {"database": name, "recovery_model": record["recovery_model"], "status": "UNKNOWN",
+         "reason": "no backup policy configured",
+         "types": {backup_type: {"state": "UNKNOWN", "required": None,
+                                 "age_hours": record["types"][backup_type]["age_hours"],
+                                 "latest_finish": record["types"][backup_type]["latest_finish"],
+                                 "warn_hours": None, "critical_hours": None}
+                   for backup_type in BACKUP_TYPES},
+         "as_of": record["as_of"]}
+        for name, record in sorted(evidence.items()) if name.lower() not in excluded
+    ]
+    summary = {
+        "status": "UNKNOWN",
+        "configured": False,
+        "compliant": 0,
+        "eligible": len(databases),
+        "reason": NOT_CONFIGURED_REASON.format(count=len(databases)) if databases else "",
+        "byType": {backup_type: {"required": 0, "compliant": 0, "state": "UNKNOWN",
+                                 "worstAgeHours": None}
+                   for backup_type in BACKUP_TYPES},
+        "collectedAt": max((record["as_of"] for record in databases), default=""),
+        "worstDatabases": [],
+    }
+    return {"databases": databases, "summary": summary}
 
 
 def _age_text(hours: float) -> str:
@@ -275,6 +346,10 @@ def coverage_text(summary: dict) -> str:
     The old string was derived from "does any evidence of this type exist anywhere on the
     instance", which reported Full+Diff+Log for a server whose DIFF covered one database of six.
     """
+    # Two different sentences, because they are two different facts: one says the policy was read
+    # and asks nothing of this server, the other says there is no policy to read.
+    if summary.get("configured") is False:
+        return "No policy configured"
     by_type = summary.get("byType") or {}
     present = [backup_type for backup_type in BACKUP_TYPES
                if (by_type.get(backup_type) or {}).get("required")]

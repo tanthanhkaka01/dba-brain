@@ -147,10 +147,13 @@ def test_telegram_is_written_and_a_first_run_sends_nothing(root: Path) -> None:
     assert not telegram.get("bot_token"), "a token in the scaffold would send on the first run"
     assert not telegram.get("level_chat_map"), "a chat in the scaffold would receive the first run"
     assert not [g for g in groups.get("telegram_groups", []) if g.get("notify_level")]
-    # The ref, not just the env var name. A send with only `bot_token_env` set fails with
-    # "Telegram bot token is empty", which names the symptom and not the missing field — found by
-    # sending a real message rather than by reading the config.
-    assert telegram["telegram_bot_token_ref"]
+    # The ref is deliberately NOT pinned here. It used to be, and a value in *this* file wins over
+    # `bot_telegram.json` — so a fresh node could not change its bot by editing the file its own
+    # notes point at, and announced one bot while sending with another's token. What the scaffold
+    # carries is the *name* of that file; `telegram use-bot` writes the ref into it.
+    assert "telegram_bot_token_ref" not in telegram, (
+        "a ref pinned here overrides bot_telegram.json, which is where use-bot writes it")
+    assert telegram["bot_config_file"]
     assert telegram["bot_token_env"]
 
 

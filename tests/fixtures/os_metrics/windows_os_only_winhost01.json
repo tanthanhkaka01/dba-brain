@@ -13,7 +13,7 @@
       "metric_value": "ERP-WINHOST01",
       "metric_unit": "text",
       "status": "OK",
-      "message": "domain=REDACTEDORG.local, manufacturer=VMware, Inc., model=VMware Virtual Platform"
+      "message": "domain=examplecorp.local, manufacturer=VMware, Inc., model=VMware Virtual Platform"
     },
     {
       "metric_item": "timezone",

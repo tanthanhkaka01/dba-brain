@@ -224,7 +224,7 @@ def secured(tmp_path):
         _row("DATABASE_USER_PERMISSIONS", r"SALESDB\salesdbadmin", "SQL_USER",
              "login=salesdbadmin | roles=[db_owner] | HIGH_PRIVILEGE"),
         _row("DATABASE_USER_PERMISSIONS", r"SALESDB\ACME\svc-SALESSF$", "WINDOWS_USER",
-             r"login=REDACTEDORG\svc-SALESSF$ | roles=[db_owner] | HIGH_PRIVILEGE"),
+             r"login=examplecorp\svc-SALESSF$ | roles=[db_owner] | HIGH_PRIVILEGE"),
         _row("DATABASE_USER_PERMISSIONS", r"SALESDB\david", "SQL_USER", "login=david | roles=[db_datareader]"),
     ]
     sqlite_path = tmp_path / "db_ops.sqlite"

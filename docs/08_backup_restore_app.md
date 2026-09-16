@@ -9,6 +9,7 @@ The Backup Restore App copies backup files, restores SQL Server FULL (and option
 - `db_ops/backup_restore/`
 - `db_ops/backup_restore/sql/sqlserver/`
 - `data/restore_config.json`
+- `data/backup_policy.json` — owned here (`app_code: backup_restore`), read by `reports`
 - the runtime store declared in `data/store_config.json` (PostgreSQL in this tree; `runtime/db_ops.sqlite` when the backend is `sqlite`)
 
 ## Runtime Tables
@@ -30,6 +31,60 @@ an absent file all load as **no entries**: the scheduled `workflow` has nothing 
 2026-09-11 they did not: `init` wrote no file at all, the loader parsed its own empty defaults as one
 malformed entry, and the only thing the operator saw was `ERROR: 'prod_backup_share'` on every cycle.
 `restores: []` was also refused outright, which would have made the shipped empty file fail too.
+
+## Registering an entry: `backup-add` / `restore-add`
+
+Both halves of `restore_config.json` were a hand-edit until 2026-09-14 — a nested object with an
+array of jobs inside it, a `time_window` and a `cleanup_retention` per job, and one field
+(`env_secrets`) that could only be filled by writing a password into `secrets/secret_text.json` in
+the clear and running `encrypt-secret`. That last step is the one deleting the file afterwards does
+not undo.
+
+```bash
+python -m db_ops.backup_restore.cli backup-add @data/new_backup.json --key-base64 "<KEY>"
+python -m db_ops.backup_restore.cli restore-add @data/new_restore.json --key-base64 "<KEY>"
+```
+
+One JSON object in — inline, `@file` or `-` — the same contract `instance-add` takes. On Windows,
+prefer `@file`: a single-quoted JSON argument does not survive the shell.
+
+* **The secret never reaches the disk in the clear.** `env_secret_values: {ENV_NAME: value}` on a
+  backup, and `password` / `sql_password` inside a restore's `source` and `target`, are encrypted
+  into the store and replaced by the derived ref (`BACKUP_<ID>_<ENV>`, `RESTORE_<ID>_<BLOCK>_<FIELD>`).
+  Give the value or the existing ref, never both.
+* **What is written is validated by this app's own loader.** The candidate document goes to a
+  temporary file, `load_backup_jobs` / `load_restore_configs` is pointed at *that*, and only a
+  document that loads is committed — so a refusal is the exact sentence the daemon would have
+  failed with at 01:00, and there is no second schema in the registration code to drift from the
+  first. A bare `KeyError` from `parse_restore_config` is turned into `missing required field:
+  <name>`; `'prod_backup_share'` as an entire error message cost a day in September 2026.
+* **Validation runs before any secret is stored.** A document the loader rejects leaves nothing
+  behind — otherwise a secret sits in the store under a ref no config mentions, invisible and
+  indistinguishable from a live one.
+* **`cleanup_retention` is required**, in seconds, on every job and every restore entry. Neither
+  command supplies a default: it was made mandatory on 2026-09-11 because six of fourteen restore
+  entries silently carried none, and an absent field reads exactly like a considered one.
+* **`time_window` is required** — on a restore entry, and on every job of a backup entry. Both go
+  through the same `schedule.is_due`, where a unit of work carrying no window gets an always-open
+  window and `DEFAULT_REPEAT_SECONDS`. Absent is therefore not "unscheduled": it is **every 300
+  seconds**. Measured 2026-09-14 on a restore entry registered without one — it restored a 183 GB
+  database for 36 minutes, finished, and started again four seconds later; the target lost about
+  5 GB of free disk per cycle and every run reported success, so nothing in the log read as wrong.
+  A nightly full is `{"from_hour": 1, "to_hour": 4, "repeat_interval": 72000,
+  "retry_interval": 1800, "timeout": 7200}`; a log backup every quarter hour is
+  `{"repeat_interval": 900, "retry_interval": 300, "timeout": 1800}`. The refusal names the job
+  that lacks one, because an entry carries several.
+* **`notify` is required too**, and for a reason that looks like the opposite of a missing
+  notification. An entry without one still notifies — `BACKUP_RESTORE_NOTIFY_DEFAULTS` turns both
+  rules on — but at the *neutral* levels, `logging` and `error`, rather than the entry's own chat.
+  So the messages are queued, delivered, and land somewhere nobody is looking: on 2026-09-15 a
+  restore reported its start and its copy phase into the Logs group while the operator watched the
+  Restore group and reported that nothing had been sent. One object on a backup entry covers all of
+  its jobs.
+* **`replace` or nothing.** An existing `backup_id`/`restore_id` is refused rather than
+  overwritten, and registering a restore leaves the backups in the same file untouched.
+
+Verify with `list-backups` / `list-restores`, then `backup --dry-run`.
 
 ## Data Flow
 
@@ -193,7 +248,17 @@ All three delete engines (local Python, SSH, PowerShell/UNC) apply it, and the v
 allow-list, because deciding inside the script would be a third copy of a rule that has to be one
 rule.
 
-Two things about it that were wrong first, and are now tests:
+**A chain is per database, not per directory.** One staging directory holds every database copied
+from a source (`<source>/<database>/<FULL|LOG>/`), so "the newest full" has to be asked once per
+database. Asked once for the directory, the newest full anywhere decided every database's fate: on
+2026-09-14 a 5 MB `Sessions` full taken 89 seconds after a 30 GB `Orders` full retired the 30 GB
+one, while the logs that restore from it were correctly kept — a chain with no anchor, which is the
+one outcome this rule exists to prevent, reported as a clean success. The key is the database
+folder's *name*, so an entry staging fulls and logs under different roots still counts as one
+chain; a database with no full staged still answers to the newest full in the directory, as every
+one did before.
+
+Three things about it that were wrong first, and are now tests:
 
 - **The chain must be judged over the whole directory, not the age-selected part.** The newest full
   is exactly what the age gate filters out, so a lone aged file was its own anchor and nothing was
@@ -201,6 +266,8 @@ Two things about it that were wrong first, and are now tests:
 - **Timestamps need a tie-break.** `vm_import_unc` is an SMB share, where mtime resolution can be
   two seconds and copies land in the same tick routinely. Compared on the timestamp alone, tied
   fulls are each "not older than the newest", every one is kept, and the share fills up.
+- **One anchor per chain, not per directory** — above. Dry-run output is what caught it, not the
+  suite: every test until then used a flat folder holding one database.
 
 ## Useful Manual Queries
 

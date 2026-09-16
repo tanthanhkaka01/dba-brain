@@ -9,7 +9,7 @@ The SQL Task Runner runs scheduled SQL task workflows against configured targets
 - `db_ops/sql_tasks/`
 - `data/sql_commands.json`
 - `data/sql_targets.json`
-- `assets/tasks/`
+- `assets/tasks/` — the SQL, and `assets/tasks/python/` for a task fed by a program
 - the runtime store declared in `data/store_config.json` (PostgreSQL in this tree; `runtime/db_ops.sqlite` when the backend is `sqlite`)
 
 ## Runtime Tables
@@ -28,7 +28,103 @@ For SQL Server targets, set `database_name` in `data/sql_targets.json` when a ta
 
 **Autocommit tasks.** By default a SQL Server task runs inside one transaction and commits at the end (atomic; a mid-script failure rolls back). Set `"autocommit": true` on the `sql_commands.json` entry to run with the connection in **autocommit mode** — no wrapping transaction, each batch commits on its own. Required for procedures that refuse to run inside an open transaction, e.g. `schedule.usp_Run_V2` raises `must not be called inside an active transaction because RUNNING logs must be committed before SQL execution`. Note two things also apply to such scripts: an EXEC parameter must be a **constant or variable**, never an inline expression (`@p = CAST(DATEADD(...) AS DATE)` fails with *Incorrect syntax near 'DATEADD'* — compute it into a `DECLARE`d variable first); and `GO` batch separators are honored (each batch runs in order).
 
-SQL files live under `assets/tasks/`. `script_type=array` runs multiple files in the configured order, `script_type=folder` runs discovered `*.sql` files sorted by filename, and execution stops at the first failed file. Folder tasks treat filenames as execution order: schema or table-structure changes that stored procedures depend on must have an earlier prefix such as `001_...`. Before running or approving a folder task, use dry-run output to inspect `file_order=[...]`, not just the file count.
+SQL files live under `assets/tasks/`, and a task fed by a program keeps that program in `assets/tasks/python/` (see `input_type` below). `script_type=array` runs multiple files in the configured order, `script_type=folder` runs discovered `*.sql` files sorted by filename, and execution stops at the first failed file. Folder tasks treat filenames as execution order: schema or table-structure changes that stored procedures depend on must have an earlier prefix such as `001_...`. Before running or approving a folder task, use dry-run output to inspect `file_order=[...]`, not just the file count.
+
+## Where the rows come from: `input_type` (2026-09-14)
+
+`script_type` says what the SQL half is. **`input_type` says where the task's rows come from**, and
+the two are separate fields on purpose:
+
+| Field | Values | Says |
+| --- | --- | --- |
+| `script_type` | `single` \| `array` \| `folder` | one SQL file, a listed order, or a discovered folder |
+| `input_type` | `none` (default) \| `python` | nothing feeds the SQL, or a program does |
+
+`none` is every task that existed before this: the SQL is the whole task and runs once per file.
+`python` runs a program first, reads **one JSON document from its stdout**, and hands the rows to
+that same SQL — as a bound parameter, in batches, through the same executor and the same credential
+as every other task.
+
+They were briefly one field (`script_type: "python"`) and that was wrong within the hour: it makes
+every combination of the two a new word, and the first thing it forced was a python task pretending
+to be an `array` — a spelling right about the files and silent about the part that matters. A fetch
+feeding a *folder* of scripts is a sentence the config can now say.
+
+```json
+{
+  "sql_id": 31, "sql_code": "SQLSERVER-031-LOAD-ATTENDANCE", "db_type": "sqlserver",
+  "script_type": "single",
+  "script_path": "assets/tasks/sqlserver/031_load_attendance.sql",
+  "input_type": "python",
+  "input": {
+    "script": "assets/tasks/python/get_attendance.py",
+    "args": ["--fromdate", "{fromdate}", "--todate", "{todate}"],
+    "rows_path": "data", "parameter": "payload", "batch_rows": 2000,
+    "timeout_seconds": 900, "accept_exit_codes": [0]
+  },
+  "parameters": [
+    {"name": "payload", "type": "nvarchar(max)"},
+    {"name": "fromdate", "type": "date"}, {"name": "todate", "type": "date"}
+  ]
+}
+```
+
+The program lives in `assets/tasks/python/` — see [that folder's README](../assets/tasks/python/README.md)
+for the contract in full. Its four rules:
+
+1. **One JSON object on stdout**, and nothing else there. A file would need a path both sides agree
+   on, cleanup nobody does, and a rule about last run's leftovers; stdout has none of that.
+2. **The rows are a list**, under `input.rows_path` (default `data`). Every other top-level key —
+   `status`, `total`, `errors` — is kept in `sql_runs.metadata.input.envelope`.
+3. **Progress goes to stderr**, which is captured (tail, 4000 chars) and never parsed.
+4. **Exit 0**, or the task fails having sent nothing. `accept_exit_codes: [0, 1]` opts into a
+   partial pull — the case this feature invites, because a fetcher that gives up on half its pages
+   and still prints what it got produces a load that looks exactly like a complete one.
+
+**Batching is not optional.** Each batch of `batch_rows` rows is one execution of the SQL, with the
+JSON array bound to the parameter named in `input.parameter` — which must also appear in
+`parameters` (type `nvarchar(max)`), because that entry is what writes the `DECLARE` the script
+reads. Ten days of one estate's attendance scans is tens of thousands of rows and megabytes of
+JSON; a single `nvarchar(max)` that size is something the driver, the network and `OPENJSON` each
+get to be slow about at once. It also bounds what a failure costs — the run stops on batch 7 of 30
+having committed 6, and the log says so.
+
+Within a batch, **every file runs before the next batch starts**: stage, merge, log, then the next
+few thousand rows. An empty pull still runs the SQL once, with `[]`, so a quiet day is a task that
+says so rather than a task that did not run.
+
+**`final_script_paths` runs once, after the last batch.** A step that rolls the loaded rows onward —
+a proc that moves them into the table the application reads, say — is not a row consumer, and per
+batch it fires once per batch: 29 times for a window that arrives in 29 batches, which is neither
+what it means nor what it costs. It is a third axis, orthogonal to both the others, and it is
+**not** handed the payload:
+
+```json
+"script_path": "assets/tasks/sqlserver/031_load.sql",
+"final_script_paths": ["assets/tasks/sqlserver/031_sync.sql"]
+```
+
+Binding the payload to a final step would be the subtlest possible way to write something that
+looks like it saw every row and saw one batch of them. A task with no `final_script_paths` plans
+exactly as it always did.
+
+The SQL is ordinary T-SQL from there:
+
+```sql
+INSERT INTO #stage (Code, TransTime)
+SELECT j.code, j.at
+FROM   OPENJSON(@payload) WITH (code nvarchar(60) '$.code', at datetime2 '$.at') AS j;
+```
+
+What the run row records, before any SQL runs: rows fetched, batch count, duration, exit code, the
+document's envelope, and the stderr tail. A fetch that fails leaves all of that too — a failure
+with nothing to look at is the one thing a scheduled task must not produce.
+
+Three refusals worth knowing, each of them a config error caught at load rather than at 01:00: an
+`input` block with `input_type: none` (nothing would read it), a `parameter` the command does not
+declare (no `DECLARE`, and the SQL fails on an undeclared variable), and an `input.script` that
+resolves outside the tool root (configuration that can name any file on the machine is
+configuration that can run any file on the machine).
 
 ## Data Flow
 

@@ -21,14 +21,14 @@ try {
         $stats[$stat.Name] = $stat
     }
     # IPv4 address per interface index. Get-NetIPAddress is not reliable in every remote
-    # runspace (it returned nothing on A1AAOS01, leaving the address empty), so the CIM
+    # runspace (it returned nothing on ORGAOS01, leaving the address empty), so the CIM
     # configuration class is the source and Get-NetIPAddress is only a fallback.
     $ipByIndex = @{}
     foreach ($config in (Get-CimInstance Win32_NetworkAdapterConfiguration | Where-Object { $_.IPEnabled })) {
         $ipv4 = @($config.IPAddress | Where-Object { $_ -match '^\d+\.\d+\.\d+\.\d+$' -and $_ -notlike '169.254.*' })
         if ($ipv4.Count -gt 0) { $ipByIndex[[int]$config.InterfaceIndex] = ($ipv4 -join ' ') }
     }
-    # Every adapter that is up, not only -Physical ones: where NICs are teamed (A1AAOS01) the
+    # Every adapter that is up, not only -Physical ones: where NICs are teamed (ORGAOS01) the
     # IP lives on the team adapter while the traffic counters live on its physical members, so
     # filtering to physical adapters reports the host as having no IP address at all.
     foreach ($adapter in (Get-NetAdapter | Where-Object { $_.Status -eq 'Up' -and $_.InterfaceType -ne 24 })) {

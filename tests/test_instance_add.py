@@ -94,7 +94,10 @@ def test_the_port_defaults_per_engine_rather_than_to_one_number(tmp_path):
         (tmp_path / db_type).mkdir(exist_ok=True)
         root = _root(tmp_path / db_type)
         instance_admin.add_instance(
-            {"server_id": f"T-{db_type}", "db_type": db_type, "ip": "192.0.2.10"},
+            # db_name only matters to postgresql/mysql, which refuse without one; the other two
+            # ignore it, so passing it everywhere keeps this test about the port.
+            {"server_id": f"T-{db_type}", "db_type": db_type, "ip": "192.0.2.10",
+             "db_name": "postgres"},
             data_dir=root, key=KEY)
         assert _instances(root)[0]["port"] == port
 
@@ -216,7 +219,8 @@ def test_a_second_target_keeps_the_first_one_s_secret(tmp_path):
          "username": "sa", "password": "one"}, data_dir=root, key=KEY)
     instance_admin.add_instance(
         {"server_id": "LAB-2", "db_type": "postgresql", "ip": "192.0.2.11",
-         "username": "postgres", "password": "two"}, data_dir=root, key=KEY)
+         "db_name": "postgres", "username": "postgres", "password": "two"},
+        data_dir=root, key=KEY)
     secrets = _secrets(root)
     assert secrets["MSSQL_LAB_1_MONITOR"] == "one"
     assert secrets["PG_LAB_2_MONITOR"] == "two"

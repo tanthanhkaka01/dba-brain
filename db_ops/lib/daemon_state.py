@@ -54,8 +54,20 @@ def record_start(runtime_dir: str | Path, *, version: str = "", node_role: str =
     return path
 
 
-def clear(runtime_dir: str | Path) -> None:
-    """Remove the file on a clean stop, so 'no file' means 'stopped on purpose'."""
+def clear(runtime_dir: str | Path, *, pid: int | None = None) -> None:
+    """Remove the file on a clean stop, so 'no file' means 'stopped on purpose'.
+
+    ``pid`` makes it remove only *this* process's record. One tool root can hold more than one
+    daemon process at a time — a ``--once`` pass run beside a long-running one is the ordinary
+    case — and they share this file. Measured 2026-09-15: a ``--once`` run exiting deleted the
+    file a daemon 15 hours old had written, and `self-status` then reported
+    ``not running (no daemon has started in this tool root)`` for a daemon that was running. That
+    line is the operator's evidence the soak clock is going.
+    """
+    if pid is not None:
+        state = read_state(runtime_dir)
+        if state is not None and state.get("pid") != pid:
+            return
     try:
         state_path(runtime_dir).unlink()
     except OSError:

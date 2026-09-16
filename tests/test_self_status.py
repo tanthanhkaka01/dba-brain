@@ -241,3 +241,97 @@ def test_self_status_answers_from_a_directory_with_no_config(tmp_path, monkeypat
     assert code == 0, out
     assert "DBA Brain / db_ops - current state" in out
     assert "db_ops up :" in out, "the line must still be there, saying what it can"
+
+
+def test_the_store_line_names_the_schema_so_two_nodes_in_one_database_differ(monkeypatch, capsys):
+    """On PostgreSQL the database is routinely shared and the schema is what tells stores apart.
+
+    This estate keeps the production store and every soak node inside one `db_ops` database,
+    separated only by schema. The line stopped at the database name, so on 2026-09-15 an operator
+    reading `postgresql postgres@...:5433/db_ops` over Telegram could not tell which of the three
+    schemas in that database the node was writing to — and only one of them was live.
+    """
+    import db_ops.config as db_ops_config
+    from db_ops.common import cli as common_cli
+
+    class _Postgres:
+        username, host, port, database, schema = "postgres", "192.0.2.10", 5433, "db_ops", "node7"
+
+    class _Store:
+        backend, postgresql, sqlite = "postgresql", _Postgres(), None
+
+    class _Config:
+        store, runtime_dir, data_dir = _Store(), None, None
+
+    monkeypatch.setattr(db_ops_config, "load_config", lambda *_a, **_kw: _Config())
+
+    assert common_cli.main(["self-status", '{"format": "txt"}']) == 0
+
+    line = next(row for row in capsys.readouterr().out.splitlines() if row.startswith("store"))
+    assert "/db_ops" in line and "schema=node7" in line
+    assert "password" not in line.lower()
+
+
+def test_a_sqlite_store_line_gains_no_empty_schema(monkeypatch, capsys):
+    """SQLite has no schema, and `schema=` with nothing after it reads as a missing value."""
+    import db_ops.config as db_ops_config
+    from db_ops.common import cli as common_cli
+
+    class _Sqlite:
+        path = "runtime/dbabrain.sqlite"
+
+    class _Store:
+        backend, postgresql, sqlite = "sqlite", None, _Sqlite()
+
+    class _Config:
+        store, runtime_dir, data_dir = _Store(), None, None
+
+    monkeypatch.setattr(db_ops_config, "load_config", lambda *_a, **_kw: _Config())
+
+    assert common_cli.main(["self-status", '{"format": "txt"}']) == 0
+
+    line = next(row for row in capsys.readouterr().out.splitlines() if row.startswith("store"))
+    assert "schema" not in line
+
+
+def test_the_node_role_reported_is_the_running_daemon_s(tmp_path):
+    """`DB_OPS_NODE_ROLE` is an environment variable, and self-status runs in its own environment
+    — a shell where nobody exported it, or a worker the daemon spawned. Reading its own env made
+    the node whose daemon came up as `worker` answer `master (default)`, on the single line anyone
+    reads to find out. The daemon records the role it started with; when one is running, that is
+    the answer.
+    """
+    import os
+
+    from db_ops.common import self_status
+    from db_ops.lib import daemon_state
+
+    daemon_state.record_start(tmp_path, version="0.17.0", node_role="worker")
+    os.environ.pop("DB_OPS_NODE_ROLE", None)
+
+    facts = self_status.collect(tool_root=tmp_path, version="0.17.0", runtime_dir=tmp_path)
+
+    assert facts["node_role"] == "worker"
+
+
+def test_with_no_daemon_running_this_process_s_environment_is_all_there_is(tmp_path, monkeypatch):
+    from db_ops.common import self_status
+
+    monkeypatch.setenv("DB_OPS_NODE_ROLE", "master")
+
+    facts = self_status.collect(tool_root=tmp_path, version="0.17.0", runtime_dir=tmp_path)
+
+    assert facts["node_role"] == "master"
+
+
+def test_an_explicit_role_still_wins(tmp_path):
+    """The caller passing one is a deliberate statement and outranks both."""
+    from db_ops.common import self_status
+    from db_ops.lib import daemon_state
+
+    daemon_state.record_start(tmp_path, version="0.17.0", node_role="worker")
+
+    facts = self_status.collect(tool_root=tmp_path, version="0.17.0", runtime_dir=tmp_path,
+                                node_role="master")
+
+    assert facts["node_role"] == "master"

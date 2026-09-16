@@ -38,6 +38,11 @@ ALL_COMMANDS = [
     "run-sql", "run-cmd", "rotate-password",
     "check-secret", "check-identifiers", "check-secret-literals",
     "lift-example", "build-showcase", "instance-add",
+    # 2026-09-14. Beside instance-add and shaped like it, including on the question of forms:
+    # `password` is one of three ways to give the login (`password_ref` and ssh key auth are the
+    # others), so the request has a perfectly ordinary shape with no secret in it and there is
+    # nothing to gain from making it stdin-only.
+    "remote-credential-add",
     "probe-host", "self-status", "timezone", "metric-severity", "trace-session",
     "inventory-summary", "restore-database", "list-backup-files",
     "pack-backup", "pull-file", "push-file",

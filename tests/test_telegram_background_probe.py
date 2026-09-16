@@ -3,6 +3,7 @@ from __future__ import annotations
 from db_ops.db import DbOpsStore
 from db_ops.jobs import JobRun
 from db_ops.telegram.command_processor import (
+    completion_verdict,
     _job_run_metadata_matches,
     _probe_completion,
     _render_completion_probe,
@@ -237,14 +238,13 @@ def test_an_unrecorded_exit_code_is_unknown_and_not_a_failure():
     read "no handle" as "exit 1".
 
     Three answers, not two: a recorded non-zero settles failure, a recorded zero settles
-    success, and *nothing recorded* is neither — a completed process with no evidence against
-    it is reported as finished rather than accused.
+    success, and *nothing recorded* is neither - a completed process that was never asked for
+    evidence is reported as finished rather than accused.
     """
     def verdict(exit_code, *, status_str="", marker=False, timed_out=False):
-        failed_outright = exit_code is not None and exit_code != 0
-        return (not failed_outright) and (
-            exit_code == 0 or status_str in ("SUCCESS", "OK") or marker or exit_code is None
-        ) and not timed_out
+        return completion_verdict(exit_code=exit_code, status_str=status_str,
+                                  marker_found=marker, timed_out=timed_out,
+                                  expects_evidence=False)
 
     assert verdict(0) is True
     assert verdict(None) is True, "unknown must not be reported as failure"
@@ -252,3 +252,27 @@ def test_an_unrecorded_exit_code_is_unknown_and_not_a_failure():
     assert verdict(3) is False
     assert verdict(None, timed_out=True) is False
     assert verdict(1, status_str="SUCCESS") is False, "a recorded failure is not overridden"
+
+
+def test_a_command_that_promised_evidence_and_left_none_is_not_done():
+    """The other half of the same rule, and the day it was missing.
+
+    On 2026-09-15 a restore was killed by a daemon restart 14 minutes into a 33 GB copy. Its
+    `completion_probe` found no terminal job run, its success marker was absent from the
+    output, and it had recorded no exit code - every channel it declares came back empty. The
+    poller read that silence as success and the chat said "Restore workflow completed" for a
+    restore that never touched the target.
+
+    A command that was asked to leave evidence and left none has not been shown to have
+    finished, so it is not reported as done.
+    """
+    def verdict(exit_code, *, status_str="", marker=False, timed_out=False):
+        return completion_verdict(exit_code=exit_code, status_str=status_str,
+                                  marker_found=marker, timed_out=timed_out,
+                                  expects_evidence=True)
+
+    assert verdict(None) is False, "silence from a command that promised evidence is not success"
+    assert verdict(0) is True, "a recorded zero still settles it"
+    assert verdict(1) is False
+    assert verdict(None, marker=True) is True, "the marker is evidence"
+    assert verdict(None, status_str="SUCCESS") is True, "so is the structured status"

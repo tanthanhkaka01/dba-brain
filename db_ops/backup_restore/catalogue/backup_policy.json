@@ -1,0 +1,37 @@
+{
+  "notes": [
+    "What every database is REQUIRED to have backed up, and how old each kind may get before it is a finding. Evaluated per database and per backup type, never per server: taking the newest backup on an instance as the instance's answer is what hides the one database that stopped being backed up three weeks ago.",
+    "This ships with real defaults rather than empty, and that is deliberate. An absent or ruleless policy makes every backup type 'not required', which makes every database 'OK', which prints '15/15 DB within policy' over a server whose newest log backup is 168 days old. Measured on 2026-09-14 on two nodes holding identical evidence: one reported nine servers in violation, the other reported the estate compliant. The reports now say 'No policy configured' instead of grading, and this file is what stops a fresh install from ever being in that state.",
+    "The defaults assume the common plan: a daily full backup, and a log backup every couple of hours on any database in full or bulk-logged recovery. If your estate backs up weekly with daily incrementals, these numbers score six days out of seven as violations - write an override rather than raising the defaults for everyone.",
+    "'overrides' ships empty because a per-server schedule is an estate fact. Each entry matches on server_id and/or database (case-insensitive, first match wins) and replaces only the type keys it names. data/backup_policy.example.json carries three worked examples: an incremental plan, a write-ahead-log plan, and a staging database deliberately not backed up.",
+    "'required': false is what makes a missing type read 'not required' instead of 'missing'. Under a daily-full-plus-frequent-log plan a differential is genuinely optional; under an incremental plan it is the only thing standing between the weekly baseline and now, and leaving it not-required would let a silently failing incremental go unreported.",
+    "'required_for_recovery_models' limits the log rule to databases where a log backup means anything. On a simple-recovery database there is nothing to back up and nothing to report.",
+    "A stale log backup proves the recovery point objective was missed. It does not prove the log chain is broken - that needs backup LSNs and recovery-fork evidence no collector gathers - so the reports say 'LOG RPO violated' and never 'chain broken'. The difference matters: 'chain broken' reads as an instruction to take a fresh full backup, and taking one when the chain was intact discards a working restore path."
+  ],
+  "backup_policy": {
+    "description": "Per-database backup requirements, evaluated one type at a time.",
+    "defaults": {
+      "types": {
+        "FULL": {
+          "required": true,
+          "warn_hours": 24,
+          "critical_hours": 48,
+          "note": "Worst-case data loss when no differential or log backup exists."
+        },
+        "DIFF": {
+          "required": false,
+          "warn_hours": 48,
+          "critical_hours": 96,
+          "note": "Optional under a daily-full plan. Absent is not a finding unless a policy says it is required."
+        },
+        "LOG": {
+          "required_for_recovery_models": ["FULL", "BULK_LOGGED"],
+          "warn_hours": 2,
+          "critical_hours": 6,
+          "note": "The recovery point objective of a full-recovery database."
+        }
+      }
+    },
+    "overrides": []
+  }
+}

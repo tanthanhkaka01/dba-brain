@@ -52,6 +52,21 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    base_url_parser = subparsers.add_parser(
+        "use-base-url",
+        help="Point THIS node at the address its published pages are reachable on - the mirror of "
+             "`db use-store` and `telegram use-bot`, for data/reports_config.json.")
+    base_url_parser.add_argument("url", nargs="?", default="",
+                                 help="Absolute URL with a scheme, e.g. "
+                                      "http://192.0.2.10:8080/report_dba/")
+    base_url_parser.add_argument("--this-node", action="store_true",
+                                 help="Work it out from this node's own ip, port and mount.")
+    base_url_parser.add_argument("--clear", action="store_true",
+                                 help="Remove it; fall back to the derived address.")
+    base_url_parser.add_argument("--dry-run", action="store_true",
+                                 help="Print what would be written, and write nothing.")
+    base_url_parser.set_defaults(report_function=_use_base_url_command)
+
     create_parser = subparsers.add_parser(
         "create-metrics-reports",
         help="Build latest metrics reports and save them into the reports table.",
@@ -230,6 +245,63 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     backfill_parser.set_defaults(report_function=backfill_dated_reports)
 
     return parser.parse_args(argv)
+
+
+def _this_node_address() -> tuple[str, str]:
+    """This node's outward ip and its runtime, for ``--this-node``.
+
+    Through the CLI, not by importing ``db_ops.common.self_status``: an app hands ``common`` a
+    JSON object and reads one back, and ``self-status`` — the installation describing itself —
+    already carries both fields in its ``data``. Only ``--this-node`` needs them, so the
+    subprocess is paid for by the one form that has a use for it.
+    """
+    from db_ops.lib import common_cli
+
+    try:
+        facts = common_cli.run("self-status", {})
+    except common_cli.CommonCliError as exc:
+        # Refused rather than guessed: writing report_base_url against an address this node
+        # could not confirm is how the pages get published under a URL nobody can reach.
+        raise ReportWorkflowError(
+            f"--this-node needs this node's own address and self-status did not answer: {exc}"
+        ) from exc
+    return (str((facts.get("host") or {}).get("ip") or ""),
+            str(facts.get("runtime") or "host"))
+
+
+def _use_base_url_command(*, config: DbOpsConfig, url: str = "", this_node: bool = False,
+                          clear: bool = False, dry_run: bool = False) -> dict[str, Any]:
+    """``use-base-url`` — see :mod:`db_ops.reports.use_base_url` for what it prevents.
+
+    The parameters are named one by one because :func:`call_report_function` binds by name out of
+    ``vars(args)``: a handler asking for ``args`` is handed nothing and fails with
+    ``missing 1 required keyword-only argument``. Found running the release run sheet, and only
+    there, because the tests called the function underneath this and never came through the CLI —
+    the same gap then let ``--this-node`` reach its address by importing ``common``. Both are
+    covered at this level now, in ``tests/test_pointing_a_node_at_its_own_report_url.py``.
+    """
+    from db_ops.lib import webhost_endpoints
+    from db_ops.lib.paths import DEFAULT_DATA_DIR
+    from db_ops.reports.use_base_url import UseBaseUrlError, use_base_url
+
+    host, runtime = _this_node_address() if this_node else ("", "host")
+    try:
+        return use_base_url(
+            url or "",
+            # `DbOpsConfig` carries `log_dir` and `runtime_dir` and no `data_dir`; the data folder
+            # is resolved from the tool root, the same way `data_sources` does it for every other
+            # reader of that folder.
+            data_dir=DEFAULT_DATA_DIR,
+            this_node=bool(this_node),
+            clear=bool(clear),
+            dry_run=bool(dry_run),
+            host=host,
+            runtime=runtime,
+            port=webhost_endpoints.DEFAULT_PORT,
+            mount=webhost_endpoints.DEFAULT_REPORTS_MOUNT,
+        )
+    except UseBaseUrlError as exc:
+        raise ReportWorkflowError(str(exc)) from exc
 
 
 def call_report_function(

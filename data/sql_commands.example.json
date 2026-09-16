@@ -6,7 +6,8 @@
     "'version_from'/'version_to' keep a script off an engine version that cannot parse it. Null means no bound.",
     "'autocommit' false (the default) wraps a whole file in one transaction. Set it true for a long backfill: the default would hold every statement open for hours and grow the transaction log without bound. The trade is that a mid-file failure leaves earlier statements committed, so only use it where re-running the same work is idempotent.",
     "'parameters' declare what a caller may supply. Values are substituted as bound parameters where the driver allows it; where a legacy tool takes no bind variables the value is substituted textually and is refused if it carries a quote, a comment marker or a semicolon.",
-    "'active' false keeps a task defined but unrunnable. Prefer it to deleting an entry: a deleted task takes its history and its explanation with it."
+    "'active' false keeps a task defined but unrunnable. Prefer it to deleting an entry: a deleted task takes its history and its explanation with it.",
+    "'input_type' is a second axis, separate from 'script_type': script_type says what the SQL half is (single | array | folder), input_type says where the task's rows come from. 'none' is the default and is every task above. 'python' runs a program first, reads ONE JSON object from its stdout, and hands the rows to the same SQL in batches - see sql_id 6 and assets/tasks/python/README.md."
   ],
   "sql_commands": [
     {
@@ -80,6 +81,51 @@
       "version_to": null,
       "active": true,
       "_note": "Two files in a fixed order: the estimate populates what the summary reads. 'array' rather than 'folder' because the order matters and is stated here rather than implied by filenames."
+    },
+    {
+      "sql_id": 6,
+      "sql_code": "SQLSERVER-006-LOAD-SCANS-FROM-API",
+      "sql_name": "Load door scans from the attendance API",
+      "db_type": "sqlserver",
+      "script_type": "single",
+      "script_path": "assets/tasks/sqlserver/006_load_scans.sql",
+      "input_type": "python",
+      "input": {
+        "script": "assets/tasks/python/get_scans.py",
+        "args": [
+          "--fromdate",
+          "{fromdate}",
+          "--todate",
+          "{todate}"
+        ],
+        "rows_path": "data",
+        "parameter": "payload",
+        "batch_rows": 2000,
+        "timeout_seconds": 900,
+        "accept_exit_codes": [
+          0
+        ],
+        "_note": "The program prints one JSON object on stdout; the rows are its 'data' key and everything else at the top level (status, total, errors) is kept on the run row. Progress goes to stderr. Exit non-zero and the task fails having sent nothing - list the code in accept_exit_codes to accept a partial pull deliberately, which is a decision somebody wrote down rather than one nobody made."
+      },
+      "parameters": [
+        {
+          "name": "payload",
+          "type": "nvarchar(max)",
+          "_note": "Each batch of rows arrives bound to @payload. This entry is what writes the DECLARE, so the task is refused without it."
+        },
+        {
+          "name": "fromdate",
+          "type": "date",
+          "required": false
+        },
+        {
+          "name": "todate",
+          "type": "date",
+          "required": false
+        }
+      ],
+      "active": false,
+      "_note": "The SQL runs once per batch, and every file runs for one batch before the next batch starts. An empty pull still runs it once, with [], so a quiet day is a task that says so rather than one that did not run. Ships inactive: it names a script and an API that are this example's, not yours."
     }
   ]
 }

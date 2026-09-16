@@ -11,7 +11,7 @@ try {
     # CPU% per process from a 1-second delta of each process's accumulated CPU time, divided
     # by the logical CPU count — the same 0-100 scale Task Manager shows.
     #
-    # Not Get-Counter '\Process(*)\% Processor Time': on A1AAOS01 it fails outright ("The data
+    # Not Get-Counter '\Process(*)\% Processor Time': on ORGAOS01 it fails outright ("The data
     # in one of the performance counter samples is not valid"), and per-process perf counters
     # are fragile across locales and stale instance names.
     # Not Get-Process.CPU on its own either: that is cumulative seconds since process start, so

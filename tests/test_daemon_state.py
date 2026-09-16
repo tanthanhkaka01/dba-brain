@@ -118,3 +118,53 @@ def test_a_caller_that_does_not_know_the_runtime_dir_gets_unknown_not_a_wrong_an
 
     assert facts["status"] == "unknown"
     assert "db_ops up : unknown" in self_status.render({"db_ops_uptime": facts})
+
+
+def test_a_second_process_does_not_clear_the_first_one_s_record(tmp_path):
+    """One tool root can hold two daemon processes — a `--once` pass beside a long-running one is
+    the ordinary case — and they share this one file.
+
+    Measured 2026-09-15: the `--once` run exited, deleted the file a daemon 15 hours old had
+    written, and `self-status` then reported `not running (no daemon has started in this tool
+    root)` for a daemon that was running. That line is the operator's evidence the soak clock is
+    going, so it is the one place this must not be wrong.
+    """
+    daemon_state.record_start(tmp_path, version="0.17.0", node_role="worker")
+    long_running_pid = daemon_state.read_state(tmp_path)["pid"]
+
+    daemon_state.clear(tmp_path, pid=long_running_pid + 1)
+
+    assert daemon_state.read_state(tmp_path) is not None, "somebody else's record is not theirs"
+    assert daemon_state.read_state(tmp_path)["pid"] == long_running_pid
+
+
+def test_a_process_clears_its_own(tmp_path):
+    daemon_state.record_start(tmp_path, version="0.17.0", node_role="worker")
+    mine = daemon_state.read_state(tmp_path)["pid"]
+
+    daemon_state.clear(tmp_path, pid=mine)
+
+    assert daemon_state.read_state(tmp_path) is None
+
+
+def test_clearing_without_a_pid_still_removes_it(tmp_path):
+    """The old signature, kept: callers that know the file is theirs need no ceremony."""
+    daemon_state.record_start(tmp_path, version="0.17.0", node_role="worker")
+
+    daemon_state.clear(tmp_path)
+
+    assert daemon_state.read_state(tmp_path) is None
+
+
+def test_a_single_pass_does_not_claim_the_file():
+    """`--once` is a command, not a daemon. Recording would overwrite a long-running daemon's
+    state in the same root, and the clear on its way out would then delete it."""
+    import inspect
+
+    from db_ops.jobs import daemon
+
+    source = inspect.getsource(daemon)
+    claim = source.index("daemon_state.record_start(")
+    guard = source.rindex('if not getattr(args, "once", False):', 0, claim)
+
+    assert claim - guard < 200, "record_start is behind the --once guard"

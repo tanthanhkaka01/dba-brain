@@ -448,3 +448,33 @@ def _restore_entries(path=shipped_config("restore_config.json")):
     return smb, scripts, active, inactive
 
 
+
+
+def test_a_failed_backup_says_why_in_the_message_not_only_in_error_text():
+    """`error_text` and `message` both reach the run row, but only `message` reaches backup.log,
+    the Telegram alert and the workflow summary.
+
+    Measured 2026-09-15: the store's own base backup failed every cycle and every place a person
+    looks said `Backup .../database finished: error (exit 1)`. The reason — `pg_basebackup failed
+    (level=INCR); partial target removed` — was in `job_runs.error_text`, which you reach by
+    writing SQL against the store you are trying to back up. An exit code is not a diagnosis.
+    """
+    import inspect
+
+    from db_ops.backup_restore import backup
+
+    source = inspect.getsource(backup.run_backup)
+
+    assert "_reason" in source and "result.error_text" in source, (
+        "the message must carry the script's own words when the job failed")
+
+
+def test_the_reason_is_only_added_to_a_failure():
+    """A successful backup has nothing to explain, and `error_text` on a `done` row is noise."""
+    import inspect
+
+    from db_ops.backup_restore import backup
+
+    source = inspect.getsource(backup.run_backup)
+
+    assert 'if result.status != "done" and _reason:' in source

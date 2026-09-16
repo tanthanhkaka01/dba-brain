@@ -118,14 +118,21 @@ def test_the_spawn_pins_its_encoding() -> None:
 
 
 def test_the_reader_pins_its_encoding() -> None:
+    """Read off `lib.json_io`, where the reader moved on 2026-09-14 so the app CLIs could take the
+    same three request forms - an app may not import `common`, so a reader private to
+    `common/cli.py` could only ever serve half the commands. `common/cli.py` now delegates, which
+    is what keeps this one assertion covering both."""
     import inspect
 
     from db_ops.common import cli
+    from db_ops.lib import json_io
 
-    source = inspect.getsource(cli._read_json_request)
+    source = inspect.getsource(json_io.read_json_request)
 
     assert "sys.stdin.buffer.read().decode(" in source
     assert "sys.stdin.read()" not in source
+    assert "read_json_request" in inspect.getsource(cli._read_json_request), (
+        "common/cli.py must delegate rather than keep a second reader")
 
 
 @pytest.mark.parametrize("text", ["plain ascii", EM_DASH, "dấu tiếng Việt", "日本語", "emoji 🚨"])

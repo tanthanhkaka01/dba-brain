@@ -328,6 +328,16 @@ def collect(*, tool_root: Path, version: str, public_version: str | None = None,
     addresses come out of the data folder. Resolving config is the CLI's job — see
     ``READS_LOCAL_CONFIG`` in ``tests/test_common_layers.py``, which caught exactly this.
     """
+    ours = db_ops_uptime(runtime_dir)
+    # The role of the DAEMON, not of this process. `DB_OPS_NODE_ROLE` is read from the environment,
+    # and self-status runs in its own — usually a shell where nobody exported it, and over Telegram
+    # in a worker the daemon spawned. So the node whose daemon was started as `worker` answered
+    # `master (default)`, which is the only line anyone reads to find out. Measured 2026-09-15.
+    # The daemon records the role it came up with, so when one is running that is the answer; with
+    # none running this process's own environment is all there is.
+    running_role = str((ours or {}).get("node_role") or "") if (ours or {}).get(
+        "status") == "running" else ""
+
     return {
         "version": version,
         "public_version": public_version,
@@ -336,7 +346,8 @@ def collect(*, tool_root: Path, version: str, public_version: str | None = None,
         "runtime": runtime(),
         "os": operating_system(),
         "tool_root": str(tool_root),
-        "node_role": node_role or os.environ.get("DB_OPS_NODE_ROLE") or "master (default)",
+        "node_role": (node_role or running_role or os.environ.get("DB_OPS_NODE_ROLE")
+                      or "master (default)"),
 
         "store": store,
         "host": host_addresses(),
@@ -345,7 +356,7 @@ def collect(*, tool_root: Path, version: str, public_version: str | None = None,
         "memory": memory(),
         "disk": disk(tool_root),
         "uptime": uptime(),
-        "db_ops_uptime": db_ops_uptime(runtime_dir),
+        "db_ops_uptime": ours,
         "pid": os.getpid(),
     }
 

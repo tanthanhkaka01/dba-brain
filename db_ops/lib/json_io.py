@@ -24,9 +24,46 @@ from __future__ import annotations
 import json
 import os
 import stat
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
+
+
+def read_json_request(source: str) -> dict[str, Any]:
+    """The one JSON-request reader: ``<json>`` inline, ``@path/to/file.json``, or ``-`` for stdin.
+
+    Every command that takes "one JSON object in" needs these three forms and needs them to fail
+    identically, and there were two readers of them — ``common/cli.py`` for the ``common`` family
+    and nothing at all for the app CLIs, which is why ``telegram route @file.json`` reads its
+    argument as a level *named* ``@file.json``. One function, in the module already named for
+    reading this project's JSON.
+
+    ``-`` decodes the **bytes** as UTF-8 rather than trusting ``sys.stdin``: its encoding follows
+    the machine's ANSI code page on Windows and its error handler is ``surrogateescape``, so a byte
+    it cannot decode becomes a lone surrogate that travels silently into a SQL statement and is
+    refused by the driver several layers later.
+
+    Raises ``FileNotFoundError`` for a missing ``@file`` and ``ValueError`` for anything that is
+    not a JSON object, so a caller can answer the two differently — a missing file is the caller's
+    typo, a bad payload is the request.
+    """
+    if source == "-":
+        payload_text = sys.stdin.buffer.read().decode("utf-8-sig")
+    elif source.startswith("@"):
+        path = Path(source[1:])
+        if not path.exists():
+            raise FileNotFoundError(f"Request file not found: {path}")
+        payload_text = path.read_text(encoding="utf-8-sig")
+    else:
+        payload_text = source
+    try:
+        request = json.loads(payload_text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"request is not valid JSON: {exc}") from exc
+    if not isinstance(request, dict):
+        raise ValueError("request must be a JSON object.")
+    return request
 
 
 def looks_like_json_request(argument: str) -> bool:

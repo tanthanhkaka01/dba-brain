@@ -2996,6 +2996,43 @@ def _probe_completion(store: Any, probe: Any, *, since_created_at: str) -> tuple
     return None
 
 
+def completion_verdict(
+    *,
+    exit_code: int | None,
+    status_str: str,
+    marker_found: bool,
+    timed_out: bool,
+    expects_evidence: bool,
+) -> bool:
+    """Did a finished detached command succeed, judged from what it left behind?
+
+    Three answers, not two: a recorded non-zero exit code settles failure, a recorded zero
+    settles success, and *nothing recorded* is neither. Which way "nothing" falls depends on
+    whether the command was asked to leave evidence - and both readings have already shipped
+    as bugs:
+
+    - Read as failure, a successful `/spbot_run_sql_task 24` was reported as `Exit code: 1`
+      on 2026-08-26; nothing had gone wrong except that the poller could no longer open the
+      finished process's handle. A command that states no completion contract still has to be
+      given the benefit of the doubt.
+    - Read as success, a restore killed by a daemon restart 14 minutes into a 33 GB copy was
+      reported as `Restore workflow completed` on 2026-09-15. It had written neither its
+      `.end` job run nor its success marker nor an exit code - the whole contract it declares
+      was silent, and silence was read as a green tick on a restore that never ran.
+
+    So: when the command declares evidence (a `completion_probe` or a `success_output_contains`
+    marker) and every channel came back empty, the run is *not* reported as done. When it
+    declares none, unknown stays "finished rather than accused".
+    """
+    if timed_out:
+        return False
+    if exit_code is not None:
+        return exit_code == 0
+    if status_str in ("SUCCESS", "OK") or marker_found:
+        return True
+    return not expects_evidence
+
+
 def check_cli_background_tasks(*, sqlite_path: str | Path) -> dict[str, int]:
     store = DbOpsStore(sqlite_path)
     tasks = store.fetch_running_telegram_background_tasks()
@@ -3058,6 +3095,7 @@ def check_cli_background_tasks(*, sqlite_path: str | Path) -> dict[str, int]:
 
         # Completion source, in order of authority: the SQLite terminal record (probe),
         # then the detached process's exit code / structured output / configured marker.
+        vanished_without_verdict = False
         if probe_result is not None:
             success = probe_result[0] == "success"
         else:
@@ -3065,18 +3103,20 @@ def check_cli_background_tasks(*, sqlite_path: str | Path) -> dict[str, int]:
                 success_output_contains and success_output_contains in stdout_text
             )
             # `exit_code is None` means the child never recorded one — killed, or the write
-            # failed. That is **unknown**, and the three sources are read in order of what they
-            # actually prove: a recorded non-zero code is a failure and settles it; otherwise
-            # any positive evidence counts; otherwise a completed process with nothing against
-            # it is reported as finished rather than accused. Reporting unknown as failure is
-            # what made every completed detached task on Windows arrive with a red cross.
-            failed_outright = exit_code is not None and exit_code != 0
-            success = (not failed_outright) and (
-                exit_code == 0
-                or status_str in ("SUCCESS", "OK")
-                or success_marker_found
-                or exit_code is None
-            ) and not timed_out
+            # failed. `completion_verdict` holds the rule and the two bugs it settles.
+            expects_evidence = bool(
+                task_data.get("completion_probe") or success_output_contains
+            )
+            success = completion_verdict(
+                exit_code=exit_code,
+                status_str=status_str,
+                marker_found=success_marker_found,
+                timed_out=timed_out,
+                expects_evidence=expects_evidence,
+            )
+            vanished_without_verdict = (
+                not success and not timed_out and exit_code is None and expects_evidence
+            )
 
         if timed_out:
             message_text = render_template(
@@ -3094,6 +3134,15 @@ def check_cli_background_tasks(*, sqlite_path: str | Path) -> dict[str, int]:
             error_detail = _extract_error_from_output(stderr_text, stdout_text)
             if probe_result is not None and probe_result[1]:
                 error_detail = probe_result[1]  # authoritative error from the SQLite job_run record
+            elif vanished_without_verdict:
+                # The stderr of a killed process holds whatever it happened to be doing, which
+                # for a restore is the config banner — reading like a run that ended tidily.
+                # Say what actually happened instead.
+                error_detail = (
+                    "the process ended without recording an outcome: no completion record, "
+                    "no exit code. It was killed or interrupted mid-run — treat the run as "
+                    "incomplete and check the target before re-running."
+                )
             message_text = render_template(
                 str(
                     task_data.get("failure_text")
@@ -3102,7 +3151,10 @@ def check_cli_background_tasks(*, sqlite_path: str | Path) -> dict[str, int]:
                 values
                 | parsed
                 | {
-                    "exit_code": exit_code if exit_code is not None else 1,
+                    # Not 1: a code nobody recorded is unknown, and printing 1 sends its reader
+                    # looking for an error the process never reported.
+                    "exit_code": exit_code if exit_code is not None
+                    else ("unknown" if vanished_without_verdict else 1),
                     "error_summary": error_detail,
                 },
             )

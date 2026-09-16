@@ -115,7 +115,7 @@ def test_the_sla_page_carries_the_same_banner(tmp_path):
 
 
 def test_no_page_leads_with_one_estate_s_company_name():
-    """The inventory template carried `ORG / TRX` as literal markup, and the server template drew
+    """The inventory template carried `ORG1 / TRX` as literal markup, and the server template drew
     its eyebrow from the estate's own `company` field. Both said an operator's organisation on a
     page whose product is DBA Brain — one of them compiled into a file that ships. The banner is
     the only branding line now, and it is the product's.
@@ -125,7 +125,7 @@ def test_no_page_leads_with_one_estate_s_company_name():
     templates = Path("db_ops/reports/templates")
     for name in ("inventory_report.html", "server_report.html"):
         markup = (templates / name).read_text(encoding="utf-8")
-        assert "ORG" not in markup, name
+        assert "ORG1" not in markup, name
         assert "TRX" not in markup, name
         assert "__COMPANY__" not in markup, name
         assert "__PAGE_BANNER__" in markup, name

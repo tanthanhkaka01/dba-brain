@@ -43,7 +43,7 @@ try {
     # A cluster has ONE set of groups, resources and quorum, and every node can see all of them.
     # Reporting them from each node duplicates every finding by the number of nodes: the first
     # version produced "Available Storage Offline" and "SQL Server PartialOnline" from both
-    # A1ASQL01 and A1ASQL02, four times an hour each, for two conditions.
+    # ORGSQL01 and ORGSQL02, four times an hour each, for two conditions.
     #
     # So cluster-wide facts are reported by ONE node - the owner of the core "Cluster Group",
     # which is a single, stable, self-selecting answer that needs no configuration. Every node

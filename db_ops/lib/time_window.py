@@ -325,10 +325,19 @@ def job_due(
             return last_run + timedelta(seconds=stale_grace) <= now
         return False
 
-    if repeat_due(last_run, repeat_interval, now, default=default_repeat):
-        return True
+    # `running` is checked BEFORE the interval, not after. The other order made the running check
+    # unreachable for every repeating command whose run outlives its own repeat interval: the
+    # interval elapses while the job is still working, `repeat_due` returns True, and a second copy
+    # starts. In-process the daemon catches that with `running_commands`, so it only shows when a
+    # daemon starts while a job is in flight - measured 2026-09-14, where a restart began a second
+    # `backup_restore workflow` 47 minutes into a restore of the same database onto the same
+    # target, having logged `startup.running_within_timeout` about that very row one second before.
+    # The daemon's own not-due diagnostic already printed `last_run + timeout` as the next attempt
+    # for a running row, so the message and the rule had disagreed since the rule was written.
     if status == "running":
         return last_run + timedelta(seconds=stale_grace) <= now
+    if repeat_due(last_run, repeat_interval, now, default=default_repeat):
+        return True
     if status in ERROR_STATUSES:
         return last_run + timedelta(seconds=retry) <= now
     return False

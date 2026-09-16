@@ -62,7 +62,21 @@ and `runtime/`. It **never overwrites**: an existing file is reported and left a
 Read what it wrote before changing any of it — `data/store_config.json` says **sqlite**, which is
 the right first store. Move to PostgreSQL later with `db-ops db use-store postgresql`.
 
-**Proves:** the tree exists and the store is this node's own file.
+Then say which clock this node's schedules are read against, before anything is scheduled or
+stamped:
+
+```powershell
+db-ops db --config config.json timezone --set Europe/Berlin    # or UTC, Asia/Singapore, ...
+db-ops db --config config.json timezone                        # read it back
+```
+
+Every `time_window.from_hour` is a **local** hour read against this setting, so it decides when the
+heavy overnight collections actually run. Stored timestamps are always UTC and this cannot move
+them. `init` ships `UTC`; state the zone you mean rather than inheriting it, because an unknown name
+does not fail — it falls back, and a node on the wrong clock is indistinguishable from one whose
+windows are simply never due.
+
+**Proves:** the tree exists, the store is this node's own file, and the clock is the one you chose.
 
 ## 3. Run everything before configuring anything
 
@@ -134,8 +148,16 @@ machine. That is why `secret-set` accepts stdin only.
 
 ```powershell
 '{"ref": "TELEGRAM_BOT_TOKEN", "value": "<bot token>"}' | db-ops common secret-set -
+db-ops telegram --config config.json use-bot --ref TELEGRAM_BOT_TOKEN
 db-ops telegram --config config.json bot-info
 ```
+
+`use-bot` is what points this node at that token. It matters most on a node built from somebody
+else's config bundle: `data/bot_telegram.json` travels inside the bundle, so an imported node
+arrives on the bot the bundle came from and says nothing about it — and two pollers on one token
+means Telegram refuses one of them, while a retry delivers the same message twice. The ref is
+checked against the secret store and the id and username are read back from Telegram rather than
+typed.
 
 `bot-info` answers with the id and username the config asks for, and with **`privacy_mode`**. `on`
 is Telegram's default and means the bot sees only commands addressed to it; `/spbot_*` still works,
@@ -209,24 +231,28 @@ mistake takes longer to debug than twenty files with one target.
 
 ## 8. OS metrics, and a target that needs a gateway
 
-Two things `instance-add` does not cover yet, both hand-edits for now:
-
-**An OS login** for CPU, disk, services and event logs over WinRM or SSH. Put a `cmd_access` block on
-the instance and the login in `data/users.json` under `remote_credentials`, then store its password:
-
-```json
-"cmd_access": {"enabled": true, "method": "winrm", "host": "192.0.2.10", "port": 5985,
-               "shell": "powershell", "credential_name": "remote_192_0_2_10_admin"}
-```
+**An OS login** for CPU, disk, services and event logs over WinRM or SSH. One command writes all
+three parts — the `remote_credentials` entry, the secret behind it, and the `cmd_access` block on
+the instance that names it:
 
 ```powershell
-'{"ref": "remote_192_0_2_10_admin", "value": "<password>"}' | db-ops common secret-set -
+'{"server_id": "ACME-192-0-2-10-SQL01", "host": "192.0.2.10",
+  "username": "svc_dbops", "password": "<password>",
+  "credential_name": "remote_192_0_2_10_admin",
+  "method": "winrm", "auth_type": "password", "port": 5985,
+  "shell": "powershell", "platform": "windows"}' | db-ops common remote-credential-add -
 ```
 
-- `auth_type` defaults to `key`. For a password, say so explicitly.
+It refuses the three ways this used to go wrong as a hand-edit, which is why it exists:
+
+- `auth_type` defaults to `key`. An ssh **password** with no explicit `auth_type` resolves to no
+  credential, so the password is never read and the failure looks like a broken host.
 - `method: "local"` runs **inside this node**, so with a remote `host` it reports this machine's CPU
   under that host's name. Use `ssh` or `winrm`.
 - `platform` belongs on the instance, not inside `cmd_access`.
+
+An `enabled: false` you set deliberately is kept: re-registering the login does not switch a
+disabled `cmd_access` back on.
 
 **A gateway** for an engine the modern driver cannot speak to (an old Oracle, for instance) is a
 `sql_access` block naming a bridge and the secret it authenticates with:
@@ -244,7 +270,39 @@ the instance and the login in `data/users.json` under `remote_credentials`, then
 `NO_TARGET`, and every collection for that target fails with *"bridge secret not found"*. Store it
 when you add the block.
 
-## 9. Watch it work
+## 9. Backups and restore drills, by command
+
+Both are entries in `data/restore_config.json`, and both are registered rather than hand-written:
+
+```powershell
+'{"backup_id": "ACME_SQL01_NIGHTLY", "server_id": "ACME-192-0-2-10-SQL01",
+  "db_type": "sqlserver", "backup_root": "\\192.0.2.30\SQLBK",
+  "cleanup_retention": 1209600,
+  "time_window": {"from_hour": 1, "to_hour": 5, "repeat_interval": 3600},
+  "notify": {"logging_on_run": {"enabled": true, "telegram_chat": "backup"},
+             "alert_on_error": {"enabled": true, "telegram_chat": "backup"}}}' |
+  db-ops backup_restore backup-add -
+
+db-ops backup_restore list-backups
+```
+
+`restore-add` takes the same shape for a drill that restores somewhere else. Three fields are
+required and each has cost somebody a real incident:
+
+- **`time_window`** — without one a job is not "unscheduled". It gets an always-open window and a
+  300-second repeat: one restore entry registered without it restored a 183 GB database, finished,
+  and started again four seconds later, all night, every run reporting success.
+- **`notify`** — without one an entry still notifies, but at the neutral `logging` and `error`
+  levels rather than its own chat. From the group you are actually watching, that reads as silence.
+- **`cleanup_retention`**, in **seconds**, on every job and every entry.
+
+**Proves:** `list-backups` and `list-restores` show the entry with the window it will actually use.
+
+> **Check the target after a restore drill.** A restore can currently report `done` on a database
+> that did not come online — the per-database outcome is written to the store, but the workflow's
+> own verdict comes from its steps returning. See the release notes.
+
+## 10. Watch it work
 
 The daemon needs no further help. Within a few minutes:
 
@@ -252,6 +310,26 @@ The daemon needs no further help. Within a few minutes:
 db-ops db --config config.json check          # tables and row counts, climbing
 db-ops db --config config.json ops-status '{}'
 ```
+
+Three things make the node usable **by a person** rather than only by its own scheduler:
+
+```powershell
+db-ops webhost --config config.json user-add --username you --level 100 --password-stdin --remember
+db-ops db --config config.json sync-config '{"actor": "you"}'
+db-ops reports --config config.json use-base-url --this-node
+```
+
+- **`user-add`** creates the console account. It lives in the **store**, not in `data/`, so a node
+  pointed at a store that already has the account is told it exists — check with `user-list` rather
+  than forcing it.
+- **`sync-config`** loads the `data/*.json` the console reads, and **names every catalogued file
+  this node does not have**. Read that list: a missing policy file is not an empty policy, and
+  before this release it was reported as `ok`.
+- **`use-base-url`** writes the address this node's pages are published on, which every cross-page
+  link and every Telegram link is built from. `--this-node` takes it from the node itself;
+  a URL sets it explicitly; `--clear` goes back to the derived answer. Without it a node built from
+  someone else's config bundle publishes links to **the machine it was cloned from** — and it is
+  refused inside a container, where the address the node can see is not one anyone else reaches.
 
 And on the pages it publishes, at `http://<this node>:8080/`:
 
@@ -269,7 +347,7 @@ it on every run after that; with no instance registered it reports `NOT_CONFIGUR
 nothing. The per-server page needs **two** collections before any rate exists, and 24-hour columns
 need a day of history — a new node fills in as it goes.
 
-## 10. What bites people, in one place
+## 11. What bites people, in one place
 
 | | |
 | --- | --- |
@@ -280,9 +358,9 @@ need a day of history — a new node fills in as it goes.
 | A group that never posted | is invisible to the bot, so alerts have nowhere to go |
 | A new bot answering old commands | a freshly tokened node works through Telegram's 24-hour backlog at once, including commands sent before it existed |
 | `metrics.enabled: false` on an instance | collection is off for that target; zero rows is the correct outcome, not a fault |
-| Timezone | `config.json` ships `"UTC"`. Set it before the first report is stamped |
+| Timezone | `config.json` ships `"UTC"`. Set it with `db timezone --set <ZONE>` before the first report is stamped — an unknown name falls back instead of failing |
 
-## 11. When something is wrong
+## 12. When something is wrong
 
 ```powershell
 Get-Content logs\errors.log                  # only a header = nothing has failed

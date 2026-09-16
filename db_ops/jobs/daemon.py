@@ -219,11 +219,15 @@ def main(argv: list[str]) -> int:
         # So something that is not this process can say how long DBA Brain has been up here.
         # `self-status` is asked that and cannot see it: it runs as a separate short-lived process
         # and deliberately opens no store. One small file in runtime/ answers it for free.
-        daemon_state.record_start(
-            config.runtime_dir,
-            version=db_ops_version,
-            node_role=os.environ.get("DB_OPS_NODE_ROLE") or "master",
-        )
+        # Only a daemon that is going to keep running claims this file. A `--once` pass is a
+        # command, not a daemon: recording here would overwrite the state of a long-running one in
+        # the same root, and the clear on its way out would then delete it.
+        if not getattr(args, "once", False):
+            daemon_state.record_start(
+                config.runtime_dir,
+                version=db_ops_version,
+                node_role=os.environ.get("DB_OPS_NODE_ROLE") or "master",
+            )
         record_node_timezone(store=store, config=config, logger=logger)
         _startup_commands = load_app_commands(data_dir / "app_commands.json", logger=logger)
         recover_stale_running_jobs(store=store, app_commands=_startup_commands, config=config, logger=logger)
@@ -260,18 +264,18 @@ def main(argv: list[str]) -> int:
                 # A single pass is a deliberate stop like any other, so it leaves no state file
                 # behind. Without this the next reader finds one whose pid is gone and reports a
                 # daemon that died, which is the opposite of what happened.
-                daemon_state.clear(config.runtime_dir)
+                daemon_state.clear(config.runtime_dir, pid=os.getpid())
                 return 0
             time.sleep(delay_seconds)
     except _DaemonStopped as stop:
-        daemon_state.clear(config.runtime_dir)
+        daemon_state.clear(config.runtime_dir, pid=os.getpid())
         close_running_on_shutdown(store=store, logger=logger,
                                   running_commands=running_commands, reason=stop.reason)
         if logger:
             log_app_event(logger, "app.daemon.stop", status="stopped", reason=stop.reason)
         return 0
     except KeyboardInterrupt:
-        daemon_state.clear(config.runtime_dir)
+        daemon_state.clear(config.runtime_dir, pid=os.getpid())
         close_running_on_shutdown(store=store, logger=logger,
                                   running_commands=running_commands, reason="keyboard_interrupt")
         if logger:

@@ -361,7 +361,13 @@ def main(argv: list[str]) -> int:
         return int(args.handler(args, config, logger))
     except Exception as exc:  # noqa: BLE001
         if logger is not None:
-            log_function_error(logger, function_name="webhost.main", error=exc)
+            # error_text, and a string. The keyword was `error=` and the value an exception, so
+            # this line - the catch-all for every webhost command - raised TypeError inside the
+            # handler and took the `print` below with it: the operator saw a traceback about
+            # logging and never the reason. Found 2026-09-15 when `user-add` reported
+            # "unexpected keyword argument 'error'" instead of "password must be at least 8
+            # characters."
+            log_function_error(logger, function_name="webhost.main", error_text=str(exc))
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
 

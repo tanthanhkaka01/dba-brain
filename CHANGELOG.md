@@ -15,6 +15,231 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.17.0] - 2026-09-16
+
+### Added
+
+- **`db timezone --set <ZONE>`: set the clock a node's schedules are read against.** Every
+  `time_window.from_hour` is a *local* hour read against `config.json`'s `timezone`, and `init`
+  ships `UTC` — so a node built beside an estate on another zone keeps a different set of hours and
+  neither file says so. Until now the only way to change it was to edit `config.json`. The name is
+  validated before it is written: an unknown zone does not fail loudly, it falls back.
+
+- **`reports use-base-url`: point a node at the address its own pages are published on.** Fixed before release: the
+  handler asked for `args` and then for a `config.data_dir`, neither of which the reports CLI
+  provides, so the command failed on every invocation until it was run through its own front door. The third
+  field of its shape, after `store_config.json` (`db use-store`, v0.14.0) and `bot_telegram.json`
+  (`telegram use-bot`). All three travel inside a config bundle, so an imported node carries the
+  source's identity and says nothing about it; this one made a node publish links to the machine it
+  was cloned from, which `self-status` reported correctly and nobody could act on. Takes a URL,
+  `--this-node`, or `--clear` to fall back to the derived answer. A URL with no scheme is refused —
+  a browser reads it as a relative path — and `--this-node` is refused in a container, where the
+  address the node can see is not the one anyone reaches it on.
+
+- **`telegram use-bot --ref <SECRET_REF>`: point a node at its own Telegram bot, the mirror of
+  `db use-store`.** `data/bot_telegram.json` travels inside a config bundle exactly as
+  `store_config.json` does, so an imported node arrives on the bot the bundle came from — the
+  estate's own — and says nothing about it. Two pollers on one token is 4,735 calls refused with
+  HTTP 409, measured in the 0.16.0 cycle. The id and username are read back from `getMe` rather
+  than typed, a ref the secret store does not hold is refused by name, and the bot that is active
+  is printed afterwards — because the mistake being prevented is *believing* the node is on the
+  other one.
+
+### Fixed
+
+- **A background command that was killed is no longer reported as having succeeded.** A restore
+  dispatched from Telegram was interrupted fourteen minutes into a 33 GB copy; it wrote no
+  completion record, no success marker and no exit code, and the chat was told *"Restore workflow
+  completed"*. Nothing had run. The poller read "the process is gone and left no evidence" as
+  success, because reading it as failure had previously reported a *successful* SQL task as
+  `Exit code: 1`. Both are wrong, and which one applies depends on the command: one that declares
+  how it reports completion — a store record to look up, or a marker in its output — and then
+  leaves nothing at all is reported as **failed**, with `unknown` where the exit code goes rather
+  than a fabricated `1`. A command that declares neither is still given the benefit of the doubt.
+
+- **A `--once` pass no longer deletes a running daemon's state file.** One tool root can hold both
+  at a time, and they shared `runtime/daemon_state.json`: the single pass recorded over it on the
+  way in and removed it on the way out, so `self-status` reported *"not running (no daemon has
+  started in this tool root)"* for a daemon that had been up 15 hours — the one line an operator
+  reads to confirm it is running. A single pass now claims nothing, and a clean stop removes
+  only the record it wrote.
+
+- **`self-status` reports the running daemon's `node_role`, not its own process's.** The role is
+  an environment variable and `self-status` runs in its own environment — a shell where nobody
+  exported it, or over Telegram in a worker the daemon spawned — so a node whose daemon came up as
+  `worker` answered `master (default)` on the one line anyone reads to find out. With no daemon
+  running, this process's environment is still all there is.
+
+- **A failing `webhost` command now says why.** Its catch-all passed the wrong keyword to the
+  logger, so the error handler for *every* webhost command raised `TypeError: log_function_error()
+  got an unexpected keyword argument 'error'` — and took the line that prints the real error with
+  it. `user-add` answered that instead of "password must be at least 8 characters."
+
+- **`remote-credential-add` no longer switches a deliberately disabled `cmd_access` back on.**
+  `enabled: false` is a decision — two Windows hosts on this estate carry it because their WinRM
+  auth fails — and re-registering the host's OS login turned it back on, putting failing collectors
+  into every scan. An existing block keeps its `enabled`; a block written for the first time still
+  defaults to on, and `enabled: true` in the request still turns one back on.
+
+- **`instance-add` refuses a PostgreSQL or MySQL target that names no database.** Every engine but
+  SQL Server connects to a named database, and a record without one falls back to `service_name`,
+  then to the `server_id` — so a *label* is handed to the server as a database. The failure then
+  quotes the label (`database "ACME-STORE" does not exist`) and reads as a missing database rather
+  than a field used for the wrong thing. The refusal names both choices: the engine's neutral
+  database to monitor the instance, or the database the target is actually about. Oracle is exempt
+  — it connects by service — and SQL Server does not take one.
+
+- **`self-status` names the PostgreSQL schema, not just the database.** On PostgreSQL the database
+  is routinely shared and the schema is what tells two stores apart — one estate can keep its
+  production store and every test node in a single database. The line stopped at the database name,
+  so the one command you read to find out which store a node is on could not answer it.
+
+- **A failed backup says why, wherever you read it.** The script's own words were written to the
+  run row's `error_text` and the logged message carried only `finished: error (exit 1)` — so
+  `backup.log`, the Telegram alert and the workflow summary all reported a failure with no cause,
+  and the cause was reachable only by writing SQL against the store. The reason is now appended to
+  the message on a failure, trimmed to 300 characters.
+
+- **`backup-add` and `restore-add` now require a `notify` object.** Without one an entry still
+  notifies — the loader defaults it on, deliberately — but to the neutral `logging` and `error`
+  levels instead of the entry's own chat. From whichever group you are watching that reads as
+  nothing having been sent: a restore posted *"Restore workflow started"* into the Logs group while
+  the operator watched the Restore group and reported silence. Both messages had been queued and
+  delivered. One `notify` on a backup entry covers all of its jobs.
+
+- **`backup-add` and `restore-add` now require a `time_window`.** Without one a unit of work is
+  not "unscheduled" — backup jobs and restore entries share one due check, which gives a job
+  carrying no window an always-open window and a 300-second repeat. A restore entry registered
+  without one restored a 183 GB database for 36 minutes, finished, and started again four seconds
+  later, costing the target about 5 GB of free disk per cycle while every run reported success.
+  The refusal prints a window that can be pasted in and names the job that lacks one.
+- **`backup-add` and `restore-add` document every field a live entry uses.** `server_metadata` and
+  a job's plain `env` on a backup, `notify` on a restore: all three were accepted and passed
+  through, and named nowhere, so the only way to find them was to read an entry somebody else had
+  hand-written.
+
+- **Staging cleanup no longer deletes one database's full backup because another database has a
+  newer one.** A restore staging directory holds every database copied from a source, and the
+  "never delete the newest full" rule was applied once across the whole directory instead of once
+  per database. On a tree holding four, a 5 MB full taken 89 seconds after a 30 GB one retired the
+  30 GB one - while the logs that restore from it were correctly kept, leaving a chain with no
+  anchor and the next restore with nothing to start from. The rule is per chain now, keyed on the
+  database folder so that fulls and logs staged under different roots still count as one. A chain
+  with no full of its own still answers to the newest full staged, as every chain did before.
+
+- **Restarting the daemon no longer starts a second copy of a job that is still running.** A
+  command's repeat interval is normally far shorter than its worst-case run - the backup/restore
+  workflow repeats every 5 minutes with a 2-hour timeout, because almost every cycle finds nothing
+  to do and the rare real one runs for an hour. The due rule tested the interval before the stored
+  status, so once the interval elapsed the `running` row below it was unreachable and the command
+  counted as due. Within one daemon that is caught in memory; across a restart nothing caught it.
+  Measured 2026-09-14: a daemon started 47 minutes into a restore began a second restore of the
+  same database onto the same target, one second after logging `startup.running_within_timeout`
+  about the row it went on to ignore. A run still inside its timeout now blocks the next one,
+  which is what the daemon's own "not due" message had been reporting all along.
+
+- **`instance-add` keeps a server's other database logins.** It replaced the whole
+  `database_credentials` group to add one, so a server carrying two — a monitor account beside a
+  DBA account, or `sys` beside an application user — lost the other. Four of this estate's servers
+  do. Visible only later, as a target resolving to the wrong login or to none. The credential is
+  replaced inside its group now, which is the rule `remote-credential-add` was written with.
+- **A node no longer reports a Telegram bot it is not authenticating as.** Three faults, and the
+  third is the dangerous one: `init` wrote a `telegram_config.json` naming `data/bot_telegram.json`
+  — a file `init` did not create; it also pre-filled `telegram_bot_token_ref`, and a value *there*
+  wins over the bot file, so a fresh node could not change its bot by editing the file its own
+  notes point at; and the id and username were still read from the bot file, so the node announced
+  one bot while using another's token. `init` names the bot file and no longer pins the ref, and
+  the identity is taken from `bot_telegram.json` only when that file also supplied the token.
+
+- **`init` writes every shipped default, including the new backup policy.** `PACKAGED_DEFAULTS`
+  said what ships and `_files()` repeated the list by hand, so adding `data/backup_policy.json` to
+  the map was not enough: the file was in the wheel, `packaged_default()` found it, and a fresh
+  root still came up without it - the exact hole this release exists to close, reproduced by the
+  release itself. `_files()` derives its list from the map now, so a new catalogue file needs one
+  entry rather than two. Found by standing a node up, not by the suite: the test that covered it
+  asserted the map and never ran `init`. It now runs `init` and reads the file off disk.
+- **`check-credentials` stops demanding a database login from a machine with no database.** A
+  `db_type: "host"` record has no database and therefore no database credential, but the skip was
+  written `if not target.db_type` - right while a host carried `null`, and silently wrong the day
+  those records were normalised to `"host"`, the spelling this release documents. Four correct
+  entries were reported as problems on the one command whose whole value is being believed.
+  `HOST_ONLY_DB_TYPE` and `is_host_only()` now live in `db_ops.lib.sql_access`, which owns the
+  `db_type` vocabulary, and accept both spellings.
+
+- **An incomplete restore entry names its missing fields.** `parse_restore_config` read six fields
+  by subscript, so the first one absent was the entire error text — `'prod_backup_share'`, an
+  internal key naming neither the entry, nor the file, nor anything the operator had written. It
+  now names every missing field at once, the entry they belong to, and the spelling each is
+  actually written in (`source.backup_share`, `target.vm_import_linux_path`). The 2026-09-11 fix
+  covered "nothing is configured"; this is the other half, for an entry that exists and is
+  incomplete.
+- **A missing backup policy no longer reads as "every database compliant".** With no
+  `data/backup_policy.json`, no backup type was required of anything, so every database graded OK
+  and the fleet page printed `15/15 DB within policy` over a server whose newest transaction-log
+  backup was 168 days old — no Priority Attention card, a green *Compliant* badge, and nothing
+  anywhere naming the missing file. Two nodes holding identical backup evidence disagreed about
+  nine servers because of it. Without a policy the reports now grade nothing: the verdict is
+  `UNKNOWN`, the coverage cell reads **No policy configured**, the badge is grey *Unverified*, and
+  Priority Attention carries a card naming the file and the databases left unjudged. **On upgrade:**
+  a node that really has no policy file will show that card and lose its (meaningless) green backup
+  column until the file is restored — which is the point. A policy that deliberately requires
+  nothing is unaffected; it is a configured policy and still grades OK.
+
+### Added
+
+- **`db-ops init` writes `data/backup_policy.json`.** It ships with the common plan already in
+  force — daily FULL, and a LOG backup every couple of hours on any database in full or bulk-logged
+  recovery — so a fresh install grades backups from its first collection instead of waiting to be
+  told how. Overrides ship empty; `data/backup_policy.example.json` has three worked ones.
+- **`sync-config` names every catalogued file the node does not have.** The count was already in
+  `totals["missing"]` and printed nowhere, so a node missing ten catalogued config files reported
+  `ok` on every sync.
+- **A SQL task can be fed by a Python program: `input_type`.** `script_type` goes on saying what
+  the SQL half is (`single`/`array`/`folder`); the new `input_type` says where the task's rows come
+  from — `none` (the default, and every task that came before) or `python`. A python task runs one
+  program from `assets/tasks/python/`, reads a single JSON document from its stdout, and hands the
+  rows to its own SQL as a bound `nvarchar(max)` parameter, in batches, through the same executor
+  and the same credential as every other task. So data that starts in an HTTP API or a vendor
+  export no longer needs a script outside db_ops holding its own copy of the connection. The
+  program's contract is four lines and they are all refusals: one JSON object on stdout, rows as a
+  list under `rows_path`, diagnostics on stderr, and exit 0 or the task fails having sent nothing
+  (`accept_exit_codes` opts into a partial pull deliberately). See
+  `assets/tasks/python/README.md` and `docs/05_sql_task_runner.md`.
+- **`final_script_paths` on a SQL task: SQL that runs once, after the last batch.** A step that
+  rolls the loaded rows onward is not a row consumer, and listed in `script_paths` it would run
+  once per batch — 29 times for a window that arrives in 29 batches. It is handed no payload, for
+  the same reason. A task without it plans exactly as before.
+- **`backup-add` and `restore-add`** register one entry in `data/restore_config.json` from a JSON
+  request object, the way `instance-add` registers a database. Both were hand-edits, and one field
+  — `env_secrets` — could previously only be filled by writing a password into
+  `secrets/secret_text.json` in the clear; give `env_secret_values` (or `password` /
+  `sql_password` inside a restore's `source`/`target`) and it is encrypted straight into the store.
+  What is written is loaded back through the app's own loader before it is committed, so a refusal
+  names the field the scheduled run would have failed on. `cleanup_retention` stays required, in
+  seconds, on every job and every restore entry.
+- **`remote-credential-add`** registers a host's OS login — the `users.json` `remote_credentials`
+  entry, the secret behind it, and the `cmd_access` block on the instance that names it. There was
+  no command for this at all, so a machine registered with `instance-add` was a target nothing
+  could log in to. It refuses the three ways the hand-edit went wrong: `method: "local"` pointed at
+  a remote host (it reports the container's own CPU under that host's name), an ssh password with
+  no explicit `auth_type` (it defaults to `key`, and a key-auth block resolves to no credential, so
+  the password is never read), and `platform` written inside `cmd_access` instead of on the record.
+- **`db use-store` can name the PostgreSQL store, not only select the backend.** `--host`,
+  `--port`, `--database`, `--schema`, `--username` and `--password-ref` re-point the node in the
+  same call, so moving one onto a store of its own — its own schema on the shared server, say — is
+  a command rather than the hand-edit of `data/store_config.json` that `use-store` exists to
+  remove. `connection_string` is rebuilt whenever the target moves: it is authoritative when
+  non-empty, so changing `schema` beside it used to alter the breakdown and nothing about where
+  the node actually wrote.
+- **`instance-add` documents `db_type: "host"`**, the machine-with-no-database record. It always
+  accepted one; its help listed only the four engines, so every host-only record in this estate had
+  been hand-edited. It also parses `--key` / `--key-base64`, which its usage line has advertised
+  since the day it was written and which were accepted and silently ignored — an operator who
+  passed one got "no passphrase is available" while looking straight at it. A database `username`
+  on a host record is now refused, naming `remote-credential-add` instead.
+
 ## [0.16.0] - 2026-09-12
 
 ### Changed

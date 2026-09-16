@@ -230,6 +230,11 @@ This is how the Telegram app runs **other apps without coupling to them**: it sp
 
 **Completion detection (`completion_probe`).** A restore into a container can finish server-side while the dispatched workflow process still lingers, so relying on "process alive + stdout marker + hard `timeout_seconds`" wrongly reported a **timeout** for restores that actually succeeded. `spbot_restore` therefore configures a `completion_probe`: on each poll cycle, `check_cli_background_tasks` looks up `job_runs` for a terminal record whose `job_code` matches the probe (`backup_restore.restore-workflow.end` = success, `.error` = failure) and whose `metadata_json` matches `match_metadata` (`restore_id`), created at/after the task start. The store is authoritative — the newest matching record wins, and if found the poller stops any lingering process and reports the real success/failure immediately, never waiting out the timeout. The timeout still applies only when no terminal record exists yet.
 
+**When the process vanishes (`completion_verdict`).** A finished process is judged from what it left behind, and *nothing at all* is a third answer beside success and failure. Which way it falls depends on whether the command declares evidence — a `completion_probe` or a `success_output_contains` marker:
+
+- **No contract declared** (`spbot_run_sql_task`): unknown is reported as finished. Reading it as failure is what reported a successful run as `Exit code: 1` on 2026-08-26, when the poller simply could not reopen the finished process's handle.
+- **A contract declared and every channel silent** (`spbot_restore`, `spbot_backup`): the run is reported as **failed**, with `exit_code` rendered as `unknown` rather than `1` and an `error_summary` saying the process ended without recording an outcome. On 2026-09-15 a restore killed by a daemon restart 14 minutes into a 33 GB copy wrote no `.end` job run, no marker and no exit code, and the chat said `Restore workflow completed` for a restore that never reached the target.
+
 Example JSON entry:
 
 ```json

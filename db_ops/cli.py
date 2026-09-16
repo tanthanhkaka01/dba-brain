@@ -93,12 +93,18 @@ def _check_credentials_command(argv: list[str]) -> int:
     if not data_dir.is_dir():
         print(f"check-credentials: no such folder: {data_dir}", file=sys.stderr)
         return 2
+    from db_ops.lib import sql_access
+
     problems: list[str] = []
     checked = 0
 
     for target in metric_targets.load_metric_targets(data_dir=data_dir):
-        # Host-only entries (no db_type) and API-bridge targets carry no DB login by design.
-        if not target.db_type:
+        # Host-only entries and API-bridge targets carry no DB login by design. Asked through
+        # `sql_access.is_host_only`, which accepts both spellings: this test read
+        # `if not target.db_type`, which was right while a host carried `null` and silently wrong
+        # the day the estate normalised those records to `"host"` - four correct entries then
+        # reported "no credential" here, on the command whose whole value is being believed.
+        if sql_access.is_host_only(target.db_type):
             continue
         if str((target.sql_access or {}).get("method") or "direct").lower() == "api":
             continue

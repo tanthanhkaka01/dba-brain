@@ -62,6 +62,30 @@ class DeleteBackupResult:
     skipped: int = 0
 
 
+#: Folder names that say what KIND of backup a file is rather than what it belongs to. A staging
+#: tree is `<source>/<database>/<type>/<file>`, so the database is one level above these.
+_BACKUP_TYPE_FOLDERS = frozenset({
+    "full", "diff", "differential", "incr", "incremental", "log", "archivelog", "arch", "redo",
+})
+
+
+def _chain_group(path: Any) -> str:
+    """Which restore chain a staged file belongs to — in practice, which database.
+
+    One staging directory holds every database copied from a source, and a chain is per database:
+    `Orders`'s full anchors `Orders`'s logs and nothing else. Keyed on the folder NAME rather
+    than its full path so a configuration that stages fulls and logs under different roots
+    (`vm_import_linux_path` / `vm_import_linux_log_path`) still resolves to one chain.
+
+    A layout with no type folder — everything loose in one directory — yields the same key for
+    every file, which is the whole directory as one chain: the behaviour before this existed.
+    """
+    parts = [part for part in re.split(r"[\\/]+", str(path).strip()) if part]
+    parts = parts[:-1]  # the file itself
+    if parts and parts[-1].lower() in _BACKUP_TYPE_FOLDERS:
+        parts = parts[:-1]
+    return parts[-1].lower() if parts else ""
+
 
 def obsolete_only(candidates: list[tuple[Any, float, int]]) -> set[str]:
     """Of files already past the age gate, the ones that are also **obsolete**.
@@ -98,15 +122,30 @@ def obsolete_only(candidates: list[tuple[Any, float, int]]) -> set[str]:
     # seconds, and copies land in the same tick routinely. Compared on the timestamp alone, tied
     # fulls are each "not older than the newest" and every one of them is kept - the cleanup stops
     # deleting anything and reports success while the share fills up.
-    anchor = max(fulls)
-    anchor_stamp = anchor[0]
+    #
+    # PER CHAIN, not per directory. One anchor for the whole staging tree meant the newest full of
+    # ANY database decided every other database's fate: measured 2026-09-14 on a tree holding four,
+    # where Sessions's 5 MB full taken 89 seconds later made Orders's 30 GB full "obsolete" while
+    # the logs that need it were kept as still_needed - a chain left with no anchor, which is the
+    # one outcome this function exists to prevent. Caught by a dry run, not by the suite.
+    anchors: dict[str, tuple[float, str]] = {}
+    for stamp, text in fulls:
+        key = _chain_group(text)
+        if key not in anchors or (stamp, text) > anchors[key]:
+            anchors[key] = (stamp, text)
+    # A chain with no full of its own falls back to the tree's newest, which is what every chain
+    # did before. Holding those files instead would be safer still and would also let a database
+    # whose full has already been cleaned accumulate logs for ever.
+    fallback = max(fulls)
+
     obsolete = set()
     for path, stamp, _size in candidates:
         text = str(path)
+        anchor = anchors.get(_chain_group(text), fallback)
         if text.lower().endswith(".trn"):
             # A log at the same instant as the newest full may belong to the chain that starts
             # there, so only a strictly older one is spared.
-            if stamp < anchor_stamp:
+            if stamp < anchor[0]:
                 obsolete.add(text)
         elif (stamp, text) < anchor:
             obsolete.add(text)

@@ -441,7 +441,10 @@ def apply_to_document(mapping: "pseudonym.Mapping", text: str) -> str:
             pieces.append(_SCRIPT_BLOCK_RE.sub(in_script, chunk))
         index = block.end()
     pieces.append(mapping.apply(text[index:]))
-    return "".join(pieces)
+    # Last, and after the mapping: the login half is already a pseudonym by now, so what is left to
+    # drop is only the domain that qualified it. Doing it first would have removed the prefix the
+    # mapping needs to recognise `DOMAIN\principal` as one value.
+    return drop_domain_prefixes("".join(pieces))
 
 
 def object_terms(text: str) -> dict[str, str]:
@@ -496,6 +499,136 @@ def object_terms(text: str) -> dict[str, str]:
     return terms
 
 
+#: JSON fields on a published page whose value is an IDENTITY - a person, an account, a database.
+#: Every value of one of these is a name, which is what makes harvesting them wholesale safe;
+#: `name`, `item` and `message` are deliberately absent, because they carry metric names and column
+#: names too and mapping those would rewrite the page's vocabulary along with its identities.
+_JSON_IDENTITY_FIELDS: dict[str, str] = {
+    "login": "credential",
+    "owner": "credential",
+    "owners": "credential",      # a list
+    "username": "credential",
+    "account": "credential",
+    "principal": "credential",
+    "database": "database",
+    "schema": "schema",
+}
+
+#: `"login": "user_prod_dw_staging"` and `"owners": ["CRED_1184", "user_payroll_prod"]`.
+_JSON_FIELD_RE = re.compile(
+    r'"(' + "|".join(_JSON_IDENTITY_FIELDS) + r')"\s*:\s*(?:"([^"]*)"|\[([^\]]*)\])')
+
+
+#: Metric codes whose ``item`` names a PRINCIPAL or a JOB rather than a measurement. `item` is
+#: always "the thing this metric is about", so for most codes it is a database, an index or a
+#: volume - already reached by `object_terms`, and for the OS ones a word like `disk_iops` that must
+#: NOT be renamed or the page stops meaning anything. These are the codes where it is a name that
+#: belongs to somebody: a login, a server principal, an Agent job.
+_IDENTITY_ITEM_CODES = frozenset({
+    "SECURITY_SERVER_PRINCIPALS",
+    "SECURITY_LOGIN_HEALTH",
+    "SECURITY_FAILED_LOGINS",
+    "DATABASE_USER_PERMISSIONS",
+    "SQL_AGENT_JOB_INVENTORY",
+    "SQL_AGENT_JOB_RUNTIME",
+})
+
+_ITEM_BY_CODE_RE = re.compile(
+    r'"code"\s*:\s*"([A-Z_]+)"[^{}]*?"item"\s*:\s*"([^"]*)"')
+
+
+def _terms_from_identity_items(text: str) -> dict[str, str]:
+    """Logins and job names, which a page states as a metric's ``item`` and nothing declares.
+
+    `SECURITY_SERVER_PRINCIPALS` answers with `host-669\\payroll_dbadmin`; `SQL_AGENT_JOB_INVENTORY`
+    with `Job_PAYROLL_DeleteCancelled`. Both are the estate's own names, produced by the servers
+    at collection time, and no configuration file has ever heard of either - so neither the mapping
+    nor `check-identifiers` could see them. Found 2026-09-16 in the published showcase.
+
+    Keyed on the metric **code**, not on the field: `item` is whatever the metric is about, and for
+    `OS_DISK_USAGE` that is `disk_iops`. Renaming a measurement's name would leave a page that is
+    scrubbed and meaningless.
+    """
+    found: dict[str, str] = {}
+    for match in _ITEM_BY_CODE_RE.finditer(str(text or "")):
+        code, item = match.group(1), str(match.group(2) or "").strip()
+        if code not in _IDENTITY_ITEM_CODES:
+            continue
+        kind = "job" if code.startswith("SQL_AGENT_JOB") else "credential"
+        if len(item) >= identifier_scan.MIN_TERM_LENGTH and item.casefold() not in KEEP:
+            found.setdefault(item, kind)
+            # `DOMAIN\login` is two names joined, and BOTH are the customer's. The login half is
+            # the one that also appears alone; the domain half turns up in Group Policy error text
+            # and in domain-controller hostnames, where nothing else would have reached it.
+            if "\\" in item:
+                found.update(_names_in_a_qualified_login(item, kind))
+    return found
+
+
+def _names_in_a_qualified_login(value: str, kind: str) -> dict[str, str]:
+    """Both halves of ``DOMAIN\\principal``, each as the kind of thing it actually is.
+
+    Found 2026-09-16: the login half was being renamed and the domain was not, so a published page
+    read ``EXAMPLECORP\\CRED_8087`` - half scrubbed, and the half that survived is the customer's
+    Active Directory name. It appears in three shapes on one page: that prefix, a UNC path in Group
+    Policy error text, and the domain controllers' own hostnames. Learning it here as a **host**
+    reaches all three, because host terms are matched inside longer names.
+    """
+    found: dict[str, str] = {}
+    domain, _, principal = str(value or "").rpartition("\\")
+    for text_value, value_kind in ((principal, kind), (domain.strip("\\"), "host")):
+        text_value = text_value.strip()
+        if (len(text_value) >= identifier_scan.MIN_TERM_LENGTH
+                and text_value.casefold() not in KEEP):
+            found.setdefault(text_value, value_kind)
+    return found
+
+
+#: ``DOMAIN\principal`` where a page states an identity. The domain is dropped rather than renamed:
+#: a fake Active Directory name tells a reader nothing the login did not already, and every one left
+#: on a page is a thing that has to be got right. Scoped to the identity fields on purpose - a
+#: Windows path is full of backslashes and `D:\MSSQL\Log\x.ldf` must survive intact.
+_QUALIFIED_LOGIN_RE = re.compile(
+    r'("(?:login|owner|owners|username|account|principal)"\s*:\s*\[?\s*"|login=)'
+    r'[A-Za-z0-9._\-]+\\\\?(?=[A-Za-z0-9._\-])')
+
+
+def drop_domain_prefixes(text: str) -> str:
+    """Leave only the principal where a page writes ``DOMAIN\\principal``."""
+    return _QUALIFIED_LOGIN_RE.sub(lambda match: match.group(1), str(text or ""))
+
+
+def _terms_from_json_fields(text: str) -> dict[str, str]:
+    """Names the PAGE states, as opposed to names the inventory states.
+
+    `_terms_from_text` already harvests `login=` and `host=` - but from the `key=value` shape a
+    collector writes into a *message*. A report page is JSON, and `"login": "a.person"` went
+    through that harvester as nothing at all. Measured 2026-09-16 on the published showcase: **910
+    `"login"` values, 348 `"owners"` lists and 110 `"owner"` values**, carrying a person's account
+    name, database logins and credential labels - none of which any configuration file names,
+    because they are what the *databases* answered when the collectors asked.
+
+    That is the whole class this misses by construction: `build_mapping` learns from
+    `db_instances.json` and `users.json`, so it can only rename what the estate declared. A page is
+    made of what the estate's servers reported. Learning the page's own identity fields is how the
+    two are closed against each other.
+    """
+    found: dict[str, str] = {}
+    for match in _JSON_FIELD_RE.finditer(str(text or "")):
+        field, single, listed = match.group(1), match.group(2), match.group(3)
+        kind = _JSON_IDENTITY_FIELDS[field]
+        values = [single] if single is not None else re.findall(r'"([^"]*)"', listed or "")
+        for value in values:
+            text_value = str(value or "").strip()
+            if "\\" in text_value:
+                found.update(_names_in_a_qualified_login(text_value, kind))
+                continue
+            if (len(text_value) >= identifier_scan.MIN_TERM_LENGTH
+                    and text_value.casefold() not in KEEP):
+                found.setdefault(text_value, kind)
+    return found
+
+
 def build_mapping(*, data_dir: str | Path | None = None, pages_text: str = "",
                   extra_terms: dict[str, str] | None = None) -> pseudonym.Mapping:
     """Every real term this estate would put on a page, mapped to its stable fake.
@@ -529,6 +662,11 @@ def build_mapping(*, data_dir: str | Path | None = None, pages_text: str = "",
     # with an explicit kind because a collector wrote them as `table=`, not because they matched.
     if pages_text:
         terms.update(object_terms(pages_text))
+        # The page's own identity fields, which no configuration names: `"login"`, `"owner"`,
+        # `"owners"`. Applied after `object_terms` so a name the page states as an object keeps
+        # that kind, and before `extra_terms` so a hand-written entry still wins.
+        terms.update(_terms_from_json_fields(pages_text))
+        terms.update(_terms_from_identity_items(pages_text))
     named_by_hand = {str(name): str(kind) for name, kind in (extra_terms or {}).items()
                      if str(name).casefold() not in KEEP}
     terms.update(named_by_hand)
@@ -539,10 +677,33 @@ def build_mapping(*, data_dir: str | Path | None = None, pages_text: str = "",
 
     # What the operator wrote into `extra_terms` is rewritten **wherever it appears**, not only as
     # a whole name. They are naming it by hand precisely because the page shapes did not reach it:
-    # `tanthanh_dba` sits inside a credential name and `ORG` inside a server_id the page builds for
+    # `tanthanh_dba` sits inside a credential name and `ORG1` inside a server_id the page builds for
     # itself, and `_` and `-` are word characters, so both survived a clean certification.
     for name, kind in named_by_hand.items():
         mapping.add(name, kind, loose=True)
+
+    # **A database name is written inside longer names, and that is the normal case, not the odd
+    # one.** `pseudonym._passes` reasoned that "nothing writes `PAYROLL_Prod` inside a longer word",
+    # and the estate writes it into every file it keeps for that database: `PAYROLL_Prod_log.ldf`,
+    # `host-669$PAYROLL_APP_Prod_FULL_20260916_010000.bak`, an SSIS project named after it. The
+    # whole-name pass could not see any of them, so 37 filenames carrying a real database name
+    # survived a clean certification - found 2026-09-16 by an operator reading the published pages.
+    #
+    # Matching is already case-insensitive (`_passes` keys on `casefold`), so `user_payroll_prod`
+    # matches `PAYROLL_Prod` too. Only the *database* kind is loosened: a schema or a column called
+    # `Shift` is a word that appears inside ordinary prose, and rewriting those would scrub the
+    # page's vocabulary along with its identities.
+    #
+    # `host` is loosened with it, for the same evidence: a SQL Server instance is written
+    # `SERVER$INSTANCE`, so the instance name sits inside `host-669$PAYROLL_APP_Prod_...trn` and
+    # inside an SSIS project named after it. The instance name is the estate's system
+    # name, which is the thing being protected.
+    # Over **every** term, not just the configured ones: an instance name is something the pages
+    # state as `host=`, and no inventory field carries it. Reading only the configured half is what
+    # left the first attempt at this fix with the same 19 filenames it started with.
+    for name, kind in list(terms.items()):
+        if kind in {"database", "host"}:
+            mapping.add(name, kind, loose=True)
 
     # And so is a **configured** value the checker matches as a substring. `identifier_scan` puts
     # an address, a `server_id` and any token carrying both a digit and a separator at `certain`
@@ -594,6 +755,22 @@ _ARCHIVE_STAMP_PATTERN = re.compile(r"^(?:\d{8}T\d{4}Z|\d{8}(?:_\d{6})?)_")
 #: has to repair.
 _HREF_PATTERN = re.compile(r'href="(?!https?:|//|/|\.\.)([^"/?#]+\.html?)(\?[^"#]*)?(?:#[^"]*)?"',
                            re.IGNORECASE)
+
+
+#: A page named as a **JSON string value** rather than an ``href``. The fleet page carries its
+#: server list as data — ``"index_usage_file":"index-usage_<server_id>.html"`` — and the browser
+#: follows that name, so it is a link in every sense except the one :data:`_HREF_PATTERN` matches.
+#:
+#: Found on 2026-09-14 by opening the published showcase on GitHub Pages: every per-server index
+#: usage link answered **404**. The pages had been renamed to their stamped form
+#: (``20260911T1801Z_index-usage_…``) and the repair below rewrote only ``href="…"``, so twelve of
+#: fourteen links pointed at files that no longer existed under that name. The two that worked did
+#: so by accident: those pages carried no banner, kept the node's own name, and that name happened
+#: to be the stable one.
+#:
+#: Matched as a quoted whole value, never as a substring: a name is repointed because it *is* the
+#: file, not because it appears inside a longer string.
+_JSON_PAGE_PATTERN = re.compile(r'"([^"/?#\\]+\.html?)"', re.IGNORECASE)
 
 
 def stable_name(name: str) -> str:
@@ -670,15 +847,24 @@ def _link_targets(from_name: str, names: dict[Path, str]) -> dict[str, str]:
 def _relink(text: str, targets: dict[str, str]) -> str:
     """Repoint every sibling link in a scrubbed page at the file that is actually in the folder.
 
+    **Both spellings of a link**: ``href="sibling.html"``, and a page named as a JSON string value
+    in the page's own data (``"index_usage_file":"index-usage_….html"``). The second is followed by
+    the browser exactly as the first is, and repairing only the first published a showcase whose
+    per-server links all returned 404 — see :data:`_JSON_PAGE_PATTERN`.
+
     The query string is dropped on purpose. ``?date=`` is answered by the web host reading its
     archive; a folder of files has no host, and a link that keeps the query would ask a static
     copy a question only a running node can answer.
     """
-    def swap(match: "re.Match[str]") -> str:
+    def swap_href(match: "re.Match[str]") -> str:
         target = targets.get(match.group(1))
         return f'href="{target}"' if target else match.group(0)
 
-    return _HREF_PATTERN.sub(swap, text)
+    def swap_json(match: "re.Match[str]") -> str:
+        target = targets.get(match.group(1))
+        return f'"{target}"' if target else match.group(0)
+
+    return _JSON_PAGE_PATTERN.sub(swap_json, _HREF_PATTERN.sub(swap_href, text))
 
 
 def build(request: dict[str, Any] | None = None, *,
@@ -715,8 +901,16 @@ def build(request: dict[str, Any] | None = None, *,
         raise ShowcaseError(
             f"{source} holds data files but no page to read them. Copy the .html as well.")
 
-    if output.exists() and any(output.iterdir()) and not payload.get("force"):
-        raise ShowcaseError(f"{output} is not empty. Pass force to overwrite it.")
+    if output.exists() and any(output.iterdir()):
+        if not payload.get("force"):
+            raise ShowcaseError(f"{output} is not empty. Pass force to overwrite it.")
+        # Cleared, not written over. `force` used to overwrite file by file, so a rebuild of a
+        # window that no longer holds Tuesday's page left Tuesday's page in the folder - and the
+        # scan then certified a folder that was partly the previous run's. Measured 2026-09-14:
+        # a rebuild produced 60 pages into a folder that ended up with 77 files, 17 of them
+        # orphans from three days earlier, including a fleet page scrubbed by the older code.
+        for item in output.iterdir():
+            shutil.rmtree(item) if item.is_dir() else item.unlink()
 
     # One pass to learn the vocabulary, a second to rewrite: an object name that appears only on
     # day three must be mapped on day one's page too, or the same table is two things across the

@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Any
 
 from db_ops.lib import sql_access
+from db_ops.sql_tasks import python_source as python_source_module
+from db_ops.sql_tasks.python_source import PythonSource, PythonSourceError, batches
 # Imported by name, not as a module: `sql_text` is also a local variable in this file
 # (the SQL itself), and a module bound to the same name shadows it silently.
 from db_ops.lib.sql_text import (DEFAULT_CONNECT_TIMEOUT_SECONDS, SqlParameterError,
@@ -112,6 +114,93 @@ class SqlCommand:
     #: Only ever sends when the target's ``logging_on_run`` is enabled; this decides how *often*
     #: to report, never *whether* the target reports at all.
     progress_per_file: bool | None = None
+    #: Where this task's rows come from: ``none`` (the SQL is the whole task) or ``python``.
+    #: Orthogonal to ``script_type``, which says what the SQL half is — see :data:`INPUT_TYPES`.
+    input_type: str = "none"
+    #: Set when ``input_type == "python"``: the script whose stdout is this task's input, and how
+    #: its rows reach the SQL. See :mod:`db_ops.sql_tasks.python_source`.
+    python_source: PythonSource | None = None
+    #: SQL that runs **once, after the last batch**, rather than once per batch. Without it a
+    #: "now roll the loaded rows onward" step would run once per batch - 29 times for a window
+    #: that arrives in 29 batches - which is neither what it means nor what it costs.
+    final_script_files: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ExecutionStep:
+    """One SQL file, run once, with the parameter values that run gets.
+
+    A plain task has one step per file and this is only bookkeeping. A ``script_type: "python"``
+    task has one step per (batch, file): the same SQL runs again for the next few thousand rows,
+    with the batch bound to its parameter. Building the whole plan first is what keeps that a
+    single loop with a single failure path, rather than a nested one where "which file failed"
+    stops being a straight answer.
+    """
+
+    file_no: int
+    total: int
+    sql_path: Path
+    configured_name: str
+    #: ``[3/30]`` for a batched task, ``""`` for every other one, so a message reads
+    #: ``[2/4] load.sql [3/30]`` only when there is a second axis to report.
+    batch_label: str
+    parameter_values: dict[str, Any]
+
+    @property
+    def label(self) -> str:
+        base = f"[{self.file_no}/{self.total}] {self.sql_path.name}"
+        return f"{base} {self.batch_label}" if self.batch_label else base
+
+
+def build_execution_plan(
+    *,
+    sql_paths: list[Path],
+    configured_names: tuple[str, ...],
+    parameter_values: dict[str, Any] | None,
+    payloads: list[str] | None = None,
+    payload_parameter: str = "",
+    final_paths: list[Path] | None = None,
+    final_names: tuple[str, ...] = (),
+) -> list[ExecutionStep]:
+    """The ordered list of SQL executions this run performs.
+
+    ``payloads`` is the batched JSON from a python source; without it the plan is what it has
+    always been, one step per file in order. With it, the *files* stay the inner loop: batch 1
+    runs every file, then batch 2 does, because a task's files are a sequence that belongs
+    together (stage, then merge, then log) and running file 1 thirty times before file 2 has ever
+    run would break every folder task's meaning of order.
+    """
+    base = dict(parameter_values or {})
+    chunks = payloads if payloads is not None else [None]
+    final_paths = list(final_paths or ())
+    total = len(sql_paths) * len(chunks) + len(final_paths)
+    steps: list[ExecutionStep] = []
+    file_no = 0
+    for batch_no, payload in enumerate(chunks, start=1):
+        for index, sql_path in enumerate(sql_paths):
+            file_no += 1
+            values = dict(base)
+            if payload is not None and payload_parameter:
+                values[payload_parameter] = payload
+            steps.append(ExecutionStep(
+                file_no=file_no, total=total, sql_path=sql_path,
+                configured_name=configured_names[index] if index < len(configured_names)
+                else str(sql_path),
+                batch_label=f"[batch {batch_no}/{len(chunks)}]" if payload is not None else "",
+                parameter_values=values,
+            ))
+    # Once, after the last batch, and **without the payload bound**: a final step is not a row
+    # consumer. Binding it anyway would hand it the last batch, which is the subtlest possible
+    # way to write a step that looks like it saw everything and saw one batch of it.
+    for index, sql_path in enumerate(final_paths):
+        file_no += 1
+        steps.append(ExecutionStep(
+            file_no=file_no, total=total, sql_path=sql_path,
+            configured_name=final_names[index] if index < len(final_names) else str(sql_path),
+            batch_label="[final]" if payloads is not None else "",
+            parameter_values=dict(base),
+        ))
+    return steps
 
 
 def _progress_summary(file_results: list[dict[str, Any]], total_files: int) -> str:
@@ -892,6 +981,7 @@ def run_one_sql_task(
         "script_type": command.script_type,
         "sql_files": [str(path) for path in sql_paths],
         "sql_file_count": len(sql_paths),
+        "final_sql_files": list(command.final_script_files),
         "database": database,
         "credential": scrub_credential(credential),
     }
@@ -963,19 +1053,40 @@ def run_one_sql_task(
             raise RuntimeError(f"Credential not found: {target.credential_name}")
         password = resolve_password(credential, secrets)
         total_row_count = 0
+        payloads = None
+        if command.python_source is not None:
+            # Before a single statement runs: a fetch that fails must cost nothing, and a task
+            # that opened a transaction and then went to an HTTP API would hold one open for the
+            # length of the fetch.
+            payloads = _run_python_source(
+                command=command, target=target, data_dir=data_dir, metadata=metadata,
+                parameter_values=parameter_values, logger=logger,
+            )
+        steps = build_execution_plan(
+            sql_paths=sql_paths,
+            configured_names=command.script_files,
+            parameter_values=parameter_values,
+            payloads=payloads,
+            payload_parameter=(command.python_source.parameter
+                               if command.python_source is not None else ""),
+            final_paths=resolve_sql_files(command.final_script_files, data_dir=data_dir),
+            final_names=command.final_script_files,
+        )
         # Automatic unless the command says otherwise: worth it for a folder of scripts, noise
         # for a single file. Resolved here because this is the only scope that knows the count.
-        total_files = len(sql_paths)
+        total_files = len(steps)
         report_progress = (total_files > 1 if command.progress_per_file is None
                            else bool(command.progress_per_file))
-        for file_no, sql_path in enumerate(sql_paths, start=1):
+        for step in steps:
+            file_no = step.file_no
+            sql_path = step.sql_path
             file_started = datetime.now(timezone.utc)
-            configured_file_name = command.script_files[file_no - 1]
             # `script_files` holds absolute paths for a folder task, so the configured name is
             # the master's full path — useless in a chat message and it leaks a build-host path.
             # The file name is what identifies the step; the full path stays in the log line.
+            configured_file_name = step.configured_name
             display_name = sql_path.name
-            failing_file = f"[{file_no}/{len(sql_paths)}] {display_name}"
+            failing_file = step.label
             log_sql_task_event(
                 logger,
                 "sql_tasks.runner.script.execute",
@@ -994,7 +1105,7 @@ def run_one_sql_task(
                 credential=credential,
                 password=password,
                 sql_text=sql_text,
-                parameter_values=parameter_values,
+                parameter_values=step.parameter_values,
                 secrets=secrets,
             )
             file_finished = datetime.now(timezone.utc)
@@ -1003,6 +1114,7 @@ def run_one_sql_task(
                 "file_no": file_no,
                 "file_name": configured_file_name,
                 "sql_file": str(sql_path),
+                "batch": step.batch_label,
                 "status": "done",
                 "duration_ms": file_duration_ms,
                 "row_count": int(result.get("row_count") or 0),
@@ -1024,8 +1136,7 @@ def run_one_sql_task(
                     target=target,
                     status="running",
                     message=(
-                        f"SQL task {command.sql_code} [{file_no}/{len(sql_paths)}] "
-                        f"{display_name} done on "
+                        f"SQL task {command.sql_code} {step.label} done on "
                         f"{target.server_id}/{target.service_name} in {file_duration_ms} ms, "
                         f"{file_result['row_count']} row(s)."
                     ),
@@ -1232,6 +1343,83 @@ def check_sql_text_is_encodable(sql_text: str, *, source: str) -> None:
             f"  context: {_surrogate_context(sql_text, index)}\n"
             f"  statement length: {len(sql_text)} characters."
         )
+
+
+def _run_python_source(
+    *,
+    command: SqlCommand,
+    target: SqlTarget,
+    data_dir: Path,
+    metadata: dict[str, Any],
+    parameter_values: dict[str, Any] | None,
+    logger: Any,
+) -> list[str]:
+    """Run the task's ``input_type: "python"`` step and return its rows, batched as JSON.
+
+    Everything it learned goes on ``metadata`` before anything is sent to the database, so a run
+    that then fails in the SQL still records what the fetch produced — how many rows, how long it
+    took, what the script said on stderr, and whatever else its document carried at the top level
+    (``status``, ``total``, ``errors`` on the estate's first one). A failed fetch that leaves no
+    trace is a task that "failed" with nothing to look at.
+
+    The tool root, not ``data_dir``: a script is addressed the way ``assets/`` is everywhere else
+    in this tree, and ``data/`` is the folder beside it rather than the root.
+    """
+    source = command.python_source
+    assert source is not None  # only called when input_type == python
+    tool_root = Path(data_dir).parent
+    log_sql_task_event(
+        logger,
+        "sql_tasks.runner.input.python.start",
+        command=command,
+        target=target,
+        sql_id=command.sql_id,
+        sql_code=command.sql_code,
+        input_type=command.input_type,
+        script=source.script_path,
+    )
+    try:
+        produced = python_source_module.run(
+            source, tool_root=tool_root, parameter_values=parameter_values)
+    except PythonSourceError as exc:
+        metadata["input"] = {"type": command.input_type, "script": source.script_path,
+                             "status": "failed", "error": str(exc)}
+        log_sql_task_event(
+            logger,
+            "sql_tasks.runner.input.python.error",
+            command=command,
+            target=target,
+            level="error",
+            error=str(exc),
+        )
+        raise RuntimeError(str(exc)) from exc
+
+    payloads = batches(produced.rows, source.batch_rows)
+    metadata["input"] = {
+        "type": command.input_type,
+        "script": source.script_path,
+        "status": "done",
+        "batches": len(payloads),
+        "batch_rows": source.batch_rows,
+        "parameter": source.parameter,
+        **produced.summary(),
+        # Kept whether or not the script failed: a fetcher that succeeds and warns is the case
+        # nobody looks at, and it is the one where a silently halved pull hides.
+        "stderr_tail": produced.stderr_tail,
+    }
+    log_sql_task_event(
+        logger,
+        "sql_tasks.runner.input.python.done",
+        command=command,
+        target=target,
+        sql_id=command.sql_id,
+        sql_code=command.sql_code,
+        rows=len(produced.rows),
+        batches=len(payloads),
+        duration_ms=produced.duration_ms,
+        exit_code=produced.exit_code,
+    )
+    return payloads
 
 
 def execute_sql(
@@ -1846,6 +2034,7 @@ def load_sql_commands(path: Path, *, logger: Any = None) -> dict[int, SqlCommand
                 sql_name=str(item.get("sql_name", "")),
                 db_type=str(item.get("db_type", "")),
                 **load_sql_script_definition(item, data_dir=path.parent),
+                **load_input_definition(item, command_name=sql_code),
                 active=bool(item.get("active", True)),
                 parameters=tuple(dict(p) for p in (item.get("parameters") or [])),
                 autocommit=bool(item.get("autocommit", False)),
@@ -1875,6 +2064,13 @@ def load_sql_script_definition(item: dict[str, Any], *, data_dir: Path) -> dict[
     if script_type not in {"single", "array", "folder"}:
         raise RuntimeError(f"SQL command {command_name} has unsupported script_type: {script_type or '<missing>'}. Expected single, array, or folder.")
 
+    # Orthogonal to script_type, like input_type: it says *when* a file runs, not what the task is.
+    raw_final = item.get("final_script_paths") or []
+    if not isinstance(raw_final, list):
+        raise RuntimeError(
+            f"SQL command {command_name} final_script_paths must be an array of file paths.")
+    final_script_files = tuple(str(value).strip() for value in raw_final if str(value).strip())
+
     has_script_path = "script_path" in item
     has_script_paths = "script_paths" in item
     raw_script_path = str(item.get("script_path", "")).strip()
@@ -1889,6 +2085,7 @@ def load_sql_script_definition(item: dict[str, Any], *, data_dir: Path) -> dict[
             "script_path": raw_script_path,
             "script_paths": (),
             "script_files": (raw_script_path,),
+            "final_script_files": final_script_files,
         }
 
     if script_type == "array":
@@ -1905,6 +2102,7 @@ def load_sql_script_definition(item: dict[str, Any], *, data_dir: Path) -> dict[
             "script_path": None,
             "script_paths": script_paths,
             "script_files": script_paths,
+            "final_script_files": final_script_files,
         }
 
     if not raw_script_path:
@@ -1920,7 +2118,49 @@ def load_sql_script_definition(item: dict[str, Any], *, data_dir: Path) -> dict[
         "script_path": raw_script_path,
         "script_paths": (),
         "script_files": script_files,
+        "final_script_files": final_script_files,
     }
+
+
+#: Where a task's row input comes from, as opposed to what its SQL is. Two axes, deliberately
+#: separate: ``script_type`` says single file / list / folder, ``input_type`` says whether anything
+#: feeds it. Folding "runs a python script" into ``script_type`` would have made every combination
+#: of the two a new word, and the first thing it forced was a python task pretending to be an
+#: ``array`` — a spelling that is right about the files and silent about the part that matters.
+INPUT_TYPES = frozenset({"none", "python"})
+
+
+def load_input_definition(item: dict[str, Any], *, command_name: str) -> dict[str, Any]:
+    """Read ``input_type`` and its block off a ``sql_commands.json`` entry.
+
+    ``none`` is the default and is every task that existed before 2026-09-14: the SQL is the whole
+    task and it runs once per file. ``python`` runs a program first and hands its rows to that same
+    SQL in batches — see :mod:`db_ops.sql_tasks.python_source`.
+    """
+    input_type = str(item.get("input_type") or "none").strip().lower()
+    if input_type not in INPUT_TYPES:
+        raise RuntimeError(
+            f"SQL command {command_name} has unsupported input_type: {input_type or '<missing>'}. "
+            f"Expected one of {sorted(INPUT_TYPES)}.")
+
+    block = item.get("input") or {}
+    if not isinstance(block, dict):
+        raise RuntimeError(f"SQL command {command_name} input must be an object.")
+    if input_type == "none":
+        if block:
+            raise RuntimeError(
+                f"SQL command {command_name} carries an input block but input_type is none, so "
+                "nothing would read it. Set input_type, or remove the block.")
+        return {"input_type": input_type, "python_source": None}
+
+    source = python_source_module.parse(block, command_name=command_name)
+    declared = {str(p.get("name") or "").strip() for p in (item.get("parameters") or [])}
+    if source.parameter not in declared:
+        raise RuntimeError(
+            f"SQL command {command_name} binds each batch to @{source.parameter}, which is not in "
+            "its parameters. Declare it there with type nvarchar(max): that entry is what writes "
+            f"the DECLARE the SQL reads. Declared: {sorted(declared) or 'none'}.")
+    return {"input_type": input_type, "python_source": source}
 
 
 def log_deprecated_time_window_warnings(logger: Any, warnings: tuple[str, ...]) -> None:

@@ -1097,3 +1097,22 @@ def test_the_inline_view_and_the_file_page_show_the_same_records(console: WebApp
     keys = lambda html: sorted(set(re.findall(
         r'/db_ops/config/app_commands.json/app_commands/([A-Z0-9-]+)', html)))
     assert keys(inline) == keys(own) and keys(inline)
+
+
+def test_a_failing_webhost_command_says_why_instead_of_raising_from_its_own_logger():
+    """`main`'s catch-all called `log_function_error(..., error=exc)`; the keyword is `error_text`
+    and it takes a string. So the handler for every error raised TypeError, and it took the
+    `print(f"ERROR: {exc}")` on the next line with it — the operator got a traceback naming the
+    logging call and never the reason.
+
+    Found 2026-09-15 standing a node up: `user-add` answered "unexpected keyword argument 'error'"
+    where the real answer was "password must be at least 8 characters."
+    """
+    import inspect
+
+    from db_ops.webhost import cli as webhost_cli
+
+    source = inspect.getsource(webhost_cli.main)
+
+    assert "error_text=" in source, "the keyword the logger actually takes"
+    assert "error=exc" not in source

@@ -29,6 +29,7 @@ from typing import Any
 
 from db_ops.common import data_sources
 from db_ops.lib import secret_text as _secret_text
+from db_ops.lib import sql_access as _sql_access
 from db_ops.lib.json_io import atomic_write_text
 
 #: Fields every target needs, whatever the engine. Anything else is optional and passed through, so
@@ -38,9 +39,28 @@ REQUIRED_FIELDS: tuple[str, ...] = ("server_id", "db_type", "ip")
 
 #: What each engine listens on when the caller does not say. Stated rather than defaulted to 1433
 #: for everything, because a wrong port fails as a timeout, which reads as "the host is down".
+#: ``host`` is absent on purpose - it has nothing to connect to, and its port stays ``None``.
 DEFAULT_PORTS: dict[str, int] = {
     "sqlserver": 1433, "oracle": 1521, "postgresql": 5432, "postgres": 5432, "mysql": 3306,
 }
+
+#: A machine with no database on it, re-exported from the module that owns the config vocabulary.
+#: It was defined here first and moved to `lib.sql_access` on 2026-09-14, when `check-credentials`
+#: turned out to be recognising a host by a different test (`if not db_type`) and reporting four
+#: correct records as broken. One name, one place, three readers.
+#:
+#: It was also left out of this command's help text, which listed the four engines, and that cost
+#: every host-only record in this estate a hand-edit: the command could always take one, and
+#: nothing said so where anybody was looking.
+HOST_ONLY_DB_TYPE = _sql_access.HOST_ONLY_DB_TYPE
+
+#: Engines whose connection takes a real database name. SQL Server is absent because collection
+#: always connects to `master` and the metric SQL does its own USE; Oracle because it connects by
+#: service and ignores the database entirely.
+_DATABASE_IS_NAMED: frozenset[str] = frozenset({"postgresql", "mysql"})
+
+#: What to name when the target is the instance rather than one database on it.
+_NEUTRAL_DATABASE: dict[str, str] = {"postgresql": "postgres", "mysql": "information_schema"}
 
 
 #: The command's help, beside the behaviour it describes.
@@ -51,9 +71,18 @@ Replaces four hand-edits (db_instances.json, users.json, secrets/secret_text.jso
 with one call, and the password never reaches the disk in the clear.
 
   server_id      required. Its name everywhere - reports, alerts, commands
-  db_type        required. sqlserver | oracle | postgresql | mysql
+  db_type        required. sqlserver | oracle | postgresql | mysql | host
   ip             required
-  port           optional. Defaults per engine (1433 / 1521 / 5432 / 3306)
+  port           optional. Defaults per engine (1433 / 1521 / 5432 / 3306); none for host
+
+db_type "host" is a machine with NO database - an application server, a hypervisor, a VM that
+only needs OS metrics. It takes no port, no username and no database credential; give it a
+platform (windows | linux) and a cmd_access block, and give it an OS login with
+
+  python -m db_ops.common.cli remote-credential-add ...
+
+which is the command that writes users.json remote_credentials. Registering a host here and
+stopping is a target that collects nothing - the record exists and nothing can log in to it.
   username       the login. With it, give exactly one of:
   password         stored straight into the ENCRYPTED store; never written in clear
   password_ref     the name of a secret that already exists
@@ -64,6 +93,12 @@ Anything else in the object is passed through to the inventory record, so major_
 service_name, env, platform, cmd_access and note all reach it unchanged.
 
 Three fields fail in ways that do not name themselves, and the same warnings apply here as in the
+  db_name        REQUIRED for postgresql and mysql - the database to connect to. Use
+                 "postgres" / "information_schema" to monitor the instance itself. Absent,
+                 the connection falls back to service_name, or to the server_id, and the
+                 server answers `database "<that>" does not exist`. SQL Server does not
+                 take one (collection connects to master); Oracle connects BY service
+
 guide: service_name is a LABEL and not a database, major_version selects the query variant, and
 default_credential_name is a reference rather than a password.
 """
@@ -142,6 +177,32 @@ def add_instance(request: dict[str, Any] | None = None, *,
             f"username {username!r} was given with no password and no password_ref, so the target "
             "would resolve to no credential. Pass password to store one, or password_ref to point "
             "at a secret that already exists.")
+    # A database login on a machine with no database is a credential nothing will ever read, and
+    # it looks configured. The OS login such a host actually needs is a different file and a
+    # different command, so say which rather than writing the wrong one.
+    if db_type == HOST_ONLY_DB_TYPE and username:
+        raise InstanceAdminError(
+            f"db_type 'host' is a machine with no database, so the database login {username!r} "
+            "would be stored where nothing reads it. Register the host without a username, then "
+            "give it an OS login with 'remote-credential-add', which writes users.json "
+            "remote_credentials and the cmd_access block that names it.")
+
+    # Every engine but SQL Server connects to a NAMED database, and when the record does not name
+    # one the target builder falls back to `service_name or instance_name or server_name or
+    # server_id` - so a label, or the record's own name, is handed to the server as a database.
+    # Measured 2026-09-15: a store registered with service_name "DBOPS-STORE" and no database
+    # failed every collection with `database "DBOPS-STORE" does not exist`, which names the label
+    # and not the mistake. Oracle is exempt: it connects BY service and ignores the database.
+    if db_type in _DATABASE_IS_NAMED and not str(
+            payload.get("database") or payload.get("db_name") or "").strip():
+        label = str(payload.get("service_name") or "").strip()
+        raise InstanceAdminError(
+            f"a {db_type} target needs the database to connect to - give db_name. Without it the "
+            f"connection falls back to " + (f"service_name ({label!r}), which is a LABEL"
+                                            if label else f"the server_id ({server_id!r})")
+            + f", and the server answers `database \"{label or server_id}\" does not exist`. "
+            f"Use db_name \"{_NEUTRAL_DATABASE[db_type]}\" to monitor the instance itself, or "
+            "name the database this target is actually about.")
 
     instances_path = data_sources.db_instances_path(root)
     instances = _read(instances_path, "db_instances")
@@ -176,16 +237,28 @@ def add_instance(request: dict[str, Any] | None = None, *,
         users_path = data_sources.users_path(root)
         users = _read(users_path, "database_credentials")
         users.setdefault("database_credentials", [])
-        group = {"server_id": server_id, "db_type": db_type, "credentials": [{
+        credential = {
             "credential_name": credential_name,
             "username": username,
             "password_ref": password_ref or credential_name,
             "role": str(payload.get("role") or "monitor"),
-        }]}
-        users["database_credentials"] = [item for item in users["database_credentials"]
-                                         if not (isinstance(item, dict)
-                                                 and str(item.get("server_id")) == server_id)]
-        users["database_credentials"].append(group)
+        }
+        # The credential is replaced INSIDE its group, never the group itself. A server
+        # legitimately carries more than one database login - a monitor account and a DBA
+        # account, or `sys` beside an application user - and four of this estate's do. Replacing
+        # the group to add one silently deleted the others, which is only visible later as a
+        # target that resolves to the wrong login or to none. Measured 2026-09-14, standing a
+        # node up one `instance-add` at a time: 38 groups on the master came back as 34.
+        group = next((item for item in users["database_credentials"]
+                      if isinstance(item, dict) and str(item.get("server_id")) == server_id), None)
+        if group is None:
+            group = {"server_id": server_id, "db_type": db_type, "credentials": []}
+            users["database_credentials"].append(group)
+        else:
+            group["db_type"] = db_type
+        group["credentials"] = [item for item in (group.get("credentials") or [])
+                                if str(item.get("credential_name") or "") != credential_name]
+        group["credentials"].append(credential)
         _write(users_path, users)
         written.append(users_path.name)
 

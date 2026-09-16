@@ -31,7 +31,7 @@ from db_ops.backup_restore import backup as backup_module
 from db_ops.backup_restore import config as config_module
 from db_ops.backup_restore import restore_script as script_module
 from db_ops.backup_restore.backup import load_backup_jobs
-from db_ops.backup_restore.config import load_restore_configs
+from db_ops.backup_restore.config import load_restore_configs, parse_restore_config
 from db_ops.backup_restore.restore_script import load_script_restores
 
 
@@ -54,6 +54,70 @@ def empty_root(tmp_path, monkeypatch):
     monkeypatch.setattr(script_module, "DEFAULT_RESTORE_CONFIG_PATH", data / "restore_config.json",
                         raising=False)
     return tmp_path
+
+
+def test_an_incomplete_entry_names_its_missing_fields_instead_of_quoting_a_dict_key():
+    """The other half of the same defect, closed 2026-09-14.
+
+    The 2026-09-11 fix covered "nothing is configured": that now returns an empty list. An entry
+    that *exists* and is incomplete still went straight into the constructor, where six fields are
+    read by subscript, and the first one missing was again the entire error text - measured through
+    the new `restore-add` as `'vm_import_unc'`, a key that entry had never mentioned under that
+    name. It is `source.backup_share` and `target.vm_import_linux_path` an operator writes.
+    """
+    with pytest.raises(ValueError) as caught:
+        parse_restore_config({"restore_id": "ACME_DRILL",
+                              "target": {"restore_data_dir": "/var/opt/mssql/data"}})
+
+    message = str(caught.value)
+    assert "ACME_DRILL" in message, "the entry has to name itself; a config has many"
+    assert "missing required field(s)" in message
+    # Both spellings: the internal name the code reads, and the field somebody has to type.
+    assert "prod_backup_share" in message and "source.backup_share" in message
+    assert "vm_import_unc" in message and "vm_import_linux_path" in message
+    assert "restore_config.example.json" in message
+
+
+def test_every_field_read_by_subscript_is_declared_required():
+    """The check and the constructor must not drift: a field added to one and not the other is a
+    bare KeyError again, and the whole point is that there is no second list to forget."""
+    import inspect
+    import re
+
+    from db_ops.backup_restore import config as config_module
+
+    source = inspect.getsource(config_module.parse_restore_config)
+    subscripted = set(re.findall(r'values\["([a-z_]+)"\]', source))
+
+    assert subscripted, "the pattern this guard reads for has changed; check it still applies"
+    undeclared = sorted(subscripted - set(config_module.REQUIRED_RESTORE_FIELDS))
+    assert not undeclared, (
+        f"{undeclared} are read by subscript but not in REQUIRED_RESTORE_FIELDS, so a missing one "
+        "raises a bare KeyError again. Add each with the field an operator actually writes.")
+
+
+def test_all_the_missing_fields_are_named_at_once_not_one_per_run():
+    """A restore entry is hand-written and half these fields arrive together. A parser that stops
+    at the first turns one incomplete entry into six edit-and-rerun cycles."""
+    with pytest.raises(ValueError) as caught:
+        parse_restore_config({"restore_id": "R"})
+
+    message = str(caught.value)
+    assert message.count(";") >= 3, message
+
+
+def test_a_complete_linux_entry_still_parses():
+    """The counterweight: the fallbacks that fill four of those six from one Linux path must keep
+    working, or the check has turned a good config into a refusal."""
+    parsed = parse_restore_config({
+        "restore_id": "R", "cleanup_retention": 86400,
+        "source": {"backup_share": "//192.0.2.10/SQLBK"},
+        "target": {"vm_platform": "linux", "vm_import_linux_path": "/opt/restore/import",
+                   "restore_data_dir": "/var/opt/mssql/data"},
+    })
+
+    assert str(parsed.vm_import_unc) == str(parsed.vm_import_local)
+    assert parsed.restore_id == "R"
 
 
 def test_no_restore_config_means_no_entries_rather_than_a_key_error(empty_root):

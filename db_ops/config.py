@@ -502,18 +502,32 @@ def parse_config(raw: dict[str, Any], *, base_dir: Path) -> DbOpsConfig:
         {str(k).lower(): str(v) for k, v in (overrides or {}).items() if str(v).strip()}
     )
 
+    # Which file actually decides the token, and therefore which file may name the bot.
+    _settings_ref = str(telegram_raw.get("telegram_bot_token_ref") or "").strip()
+    _bot_file_ref = str(bot_config.get("telegram_bot_token_ref", "") or "").strip()
+    _bot_token_ref = _settings_ref or _bot_file_ref
+    _identity_is_the_bot_file = bool(_bot_file_ref) and _bot_token_ref == _bot_file_ref
+
     telegram = TelegramConfig(
         enabled=bool(telegram_raw.get("enabled", False)),
         bot_token_env=str(telegram_raw.get("bot_token_env", "TELEGRAM_BOT_TOKEN")),
         bot_config_file=bot_config_file,
         secret_text_file=secret_text_file,
-        telegram_bot_token_ref=str(
-            telegram_raw.get("telegram_bot_token_ref") or bot_config.get("telegram_bot_token_ref", "")
-        ),
-        telegram_bot_id=str(telegram_raw.get("telegram_bot_id") or bot_config.get("telegram_bot_id", "")),
-        telegram_bot_username=str(
-            telegram_raw.get("telegram_bot_username") or bot_config.get("telegram_bot_username", "")
-        ),
+        telegram_bot_token_ref=_bot_token_ref,
+        # The identity comes from `bot_telegram.json` ONLY when that file is also what supplied
+        # the token. It used to be taken unconditionally, so a settings file naming one ref and a
+        # bot file naming another produced a node that reported the TEST bot's name while
+        # authenticating with whatever the other ref held - the one failure mode where every log
+        # line, every `bot-info` and every message says the wrong bot with complete confidence.
+        # Measured 2026-09-14 on a hand-built 0.17.0 node, where `init`'s own
+        # `telegram_config.json` pinned the ref and the operator's `bot_telegram.json` supplied
+        # the name.
+        telegram_bot_id=str(telegram_raw.get("telegram_bot_id")
+                            or (bot_config.get("telegram_bot_id", "") if _identity_is_the_bot_file
+                                else "")),
+        telegram_bot_username=str(telegram_raw.get("telegram_bot_username")
+                                  or (bot_config.get("telegram_bot_username", "")
+                                      if _identity_is_the_bot_file else "")),
         bot_token_secret_file=bot_token_secret_file,
         bot_token=str(telegram_raw.get("bot_token", "")),
         api_url=str(telegram_raw.get("api_url", "https://api.telegram.org")),

@@ -166,7 +166,7 @@ is a property of a machine, not its identity.
 | `metric_definitions.json` | **The catalogue.** Every metric the collector knows: its code, which engines and versions it applies to, which SQL or script implements it, its schedule and its timeout. The same for every operator. |
 | `metric_importance_overrides.json` | How much a metric matters **on your instances**. Kept separate from the catalogue because a metric worth waking someone for in production is noise on a sandbox. |
 | `capacity_policy.json` | When a projected exhaustion becomes a finding — "inside the time it takes to provision space" is an organisational fact, not a property of the disk. |
-| `backup_policy.json` | How old each kind of backup may be, per database. Evaluated one type at a time, so the one database that quietly stopped being backed up cannot hide behind the newest backup on the server. |
+| `backup_policy.json` | How old each kind of backup may be, per database. Evaluated one type at a time, so the one database that quietly stopped being backed up cannot hide behind the newest backup on the server. Shipped with working defaults and written by `init`: with no policy the reports report a blind spot rather than a pass, which is correct but useless, so a node is never meant to be without one. |
 | `restore_drill_policy.json` | How old a successful restore drill may be before it stops counting as evidence. |
 | `sla_policies.json` | The objectives the collected metrics are graded against, with their windows, targets and error budgets. |
 

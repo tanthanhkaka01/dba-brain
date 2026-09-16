@@ -27,6 +27,28 @@ SUPPORTED_SQL_ACCESS_METHODS = {"direct", "api", "subprocess"}
 #: read while validating config, before any driver is loaded.
 KNOWN_DB_TYPES = ("sqlserver", "mysql", "postgresql", "oracle")
 
+#: The ``db_type`` of a machine with **no database on it** - an application server, a hypervisor,
+#: a VM that only needs OS metrics. It exists so OS metrics are collected once per machine rather
+#: than once per instance, and `data/db_instances.example.json` has documented it since long
+#: before `instance-add` did.
+#:
+#: It lives here, in the module that owns the config vocabulary, because three layers need to
+#: recognise it and each of them was recognising it differently. `check-credentials` skipped a
+#: host with `if not target.db_type` - right when the spelling was `null`, and silently wrong the
+#: day the estate normalised those records to `"host"`: four correct records started reporting
+#: "no credential" on the one command that must be trusted.
+HOST_ONLY_DB_TYPE = "host"
+
+
+def is_host_only(db_type: Any) -> bool:
+    """Does this ``db_type`` mean "a machine, no database"? Blank counts: it is the older spelling.
+
+    Both are accepted on purpose. An inventory written before 2026-09-14 carries `null` and one
+    written by `instance-add` carries `"host"`, and a node runs whichever it was handed.
+    """
+    text = str(db_type or "").strip().lower()
+    return text in ("", HOST_ONLY_DB_TYPE)
+
 
 # --------------------------------------------------------------------------- #
 # Config

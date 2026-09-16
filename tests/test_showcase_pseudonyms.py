@@ -302,7 +302,7 @@ def test_everything_the_inventory_names_is_rendered_by_its_shape():
     # that made every address, host and server_id on a showcase page read `redacted4187` - and a
     # showcase whose addresses are not addresses documents nothing.
     assert pseudonym.inventory("198.51.100.86").startswith(pseudonym.DOC_NETWORKS)
-    assert pseudonym.inventory("ORG-192-0-2-15-MSSQL25-1433").startswith(pseudonym.ORG + "-")
+    assert pseudonym.inventory("ORG1-192-0-2-15-MSSQL25-1433").startswith(pseudonym.ORG + "-")
     # No digit anywhere, so it is a name rather than a server_id carrying an address.
     assert pseudonym.inventory("DB-WORKSTATION").startswith("host-")
     assert pseudonym.inventory("standalone").startswith("host-")
@@ -317,9 +317,9 @@ def test_an_address_is_the_same_machine_whether_it_arrives_alone_or_inside_a_ser
 
 def test_an_organisation_prefix_carrying_a_digit_does_not_survive_the_rewrite():
     # `parts[0].isalpha()` was the test for "this is the org label", so a label with a digit in it
-    # was kept and printed in front of the fake one: `ACME-ORG-192-0-2-15-...`.
-    fake = pseudonym.server_id("ORG-192-0-2-15-MSSQL25-1433")
-    assert "ORG" not in fake
+    # was kept and printed in front of the fake one: `ACME-ORG1-192-0-2-15-...`.
+    fake = pseudonym.server_id("ORG1-192-0-2-15-MSSQL25-1433")
+    assert "ORG1" not in fake
     assert fake.startswith(pseudonym.ORG + "-")
 
 
@@ -339,7 +339,7 @@ def test_a_shorthand_never_rewrites_the_middle_of_a_longer_address():
     mapping.add_pair("168.1", "0.113", bounded=True)
 
     assert mapping.apply("192.168.1.120") == "192.168.1.120"
-    assert mapping.apply("ORG-192-168-1-120") == "ORG-192-168-1-120"
+    assert mapping.apply("ORG1-192-168-1-120") == "ORG1-192-168-1-120"
     # Standing alone inside a credential name is exactly where it does have to fire.
     assert mapping.apply("sqlserver_168.1_MSSQL") == "sqlserver_0.113_MSSQL"
     assert mapping.apply("cred_168-1_x") == "cred_0-113_x"
@@ -382,9 +382,9 @@ def test_a_term_the_operator_named_by_hand_is_rewritten_inside_a_longer_name_too
     the scrub and the checker.
     """
     mapping = pseudonym.Mapping({"PAYROLL": "database"})
-    mapping.add("ORG", "host", loose=True)
+    mapping.add("ORG1", "host", loose=True)
 
-    assert "ORG" not in mapping.apply("ORG-192-0-2-15-MSSQLAG-1533")
+    assert "ORG1" not in mapping.apply("ORG1-192-0-2-15-MSSQLAG-1533")
     # ...while an ordinary term still only matches a whole name.
     assert mapping.apply("PAYROLL_Prod") == "PAYROLL_Prod"
 
@@ -541,3 +541,72 @@ def test_a_string_inside_a_template_hole_is_still_scrubbed():
 
     assert "ACME8-10-1-2-3" not in rewritten
     assert rewritten.startswith("const s = `host: ${label(")
+
+
+def test_a_page_named_in_json_is_relinked_like_an_href() -> None:
+    """The published showcase 404'd on every per-server link, and this is why.
+
+    Found 2026-09-14 by opening https://tanthanhkaka01.github.io/dba-brain/ and clicking through to
+    an index-usage page. The fleet page carries its server list as **data** —
+    `"index_usage_file":"index-usage_<server_id>.html"` — and the browser follows that name exactly
+    as it follows an `href`. The rename repair rewrote only `href="..."`, so twelve of fourteen
+    per-server pages had been renamed to their stamped form and nothing pointed at them any more.
+
+    The two that worked did so by accident: those pages carried no banner, so they kept the node's
+    own name, which happened to be the stable one. A showcase that certifies clean and cannot be
+    browsed is the same class of defect as the first one, which shipped HTML with no data.
+    """
+    from db_ops.common import showcase
+
+    targets = {
+        "sla.html": "20260911T1801Z_sla.html",
+        "index-usage_ACME-1-2-3.html": "20260911T1801Z_index-usage_ACME-1-2-3.html",
+    }
+    page = ('<a href="sla.html">SLA</a>'
+            '<script>const SERVERS=[{"name":"ACME-1-2-3",'
+            '"index_usage_file":"index-usage_ACME-1-2-3.html",'
+            '"file":"server-metrics_ACME-1-2-3.json"}];</script>')
+
+    rewritten = showcase._relink(page, targets)
+
+    assert 'href="20260911T1801Z_sla.html"' in rewritten
+    assert '"20260911T1801Z_index-usage_ACME-1-2-3.html"' in rewritten
+    # A data file keeps the name its page fetches it by: it is never stamped, so repointing it
+    # would be inventing a 404 rather than repairing one.
+    assert '"server-metrics_ACME-1-2-3.json"' in rewritten
+
+
+def test_relinking_leaves_a_name_nothing_captured_alone() -> None:
+    """A page that links somewhere the capture does not hold must keep saying so, not be pointed
+    at the nearest thing with a similar name."""
+    from db_ops.common import showcase
+
+    page = '{"index_usage_file":"index-usage_NOT-CAPTURED.html"}'
+
+    assert showcase._relink(page, {"sla.html": "20260911T1801Z_sla.html"}) == page
+
+
+def test_force_clears_the_output_rather_than_writing_over_it(tmp_path) -> None:
+    """A rebuild that leaves the previous run's files behind certifies a folder nothing produced.
+
+    Measured 2026-09-14: a rebuild wrote 60 pages into a folder that ended up holding 77 files —
+    17 orphans from three days earlier, among them a fleet page scrubbed by the older code, whose
+    per-server links were exactly the 404s this release fixes. `force` overwrote file by file, so
+    anything the new window did not happen to re-create survived.
+    """
+    from db_ops.common import showcase
+
+    source = tmp_path / "reports"
+    source.mkdir()
+    (source / "sla.html").write_text("<html><body>nothing to scrub</body></html>",
+                                     encoding="utf-8")
+    output = tmp_path / "showcase"
+    output.mkdir()
+    orphan = output / "yesterdays-page.html"
+    orphan.write_text("<html>stale</html>", encoding="utf-8")
+
+    showcase.build({"source": str(source), "output": str(output),
+                    "force": True, "verify": False, "stamp": False})
+
+    assert not orphan.exists(), "the previous run's page survived a forced rebuild"
+    assert {p.name for p in output.iterdir()} == {"sla.html"}

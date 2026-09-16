@@ -4,12 +4,12 @@ Paste into BotFather `/setcommands` to register the bot menu.
 
 ```
 spbot_status - Get bot status
+spbot_self_status - What this installation is: product, version, host, ip, cpu, memory, disk
 spbot_list_all_command - List every command you can run here, built from the bot's own config
 spbot_list_restore_id - List restore IDs with source and target IP
 spbot_list_backup_id - List backup IDs with engine, level and schedule
 spbot_list_sql_runs - List the 10 most recent SQL task runs and how each one ended
 spbot_list_my_commands - List your own 10 most recent commands, each as one line you can run again
-spbot_self_status - What this installation is: product, version, host, ip, cpu, memory, disk
 spbot_backup - Run one backup by backup_id, optionally forcing full/diff/log
 spbot_report_hourly_metrics - Force hourly metrics report by target IP
 spbot_report_metric_history - Report one stored metric for one server over recent hours

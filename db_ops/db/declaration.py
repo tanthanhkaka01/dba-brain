@@ -134,8 +134,49 @@ def for_path(sqlite_path: str | Path) -> dict[str, Any]:
 SWITCHABLE_BACKENDS: tuple[str, ...] = ("sqlite", "postgresql")
 
 
+#: The ``postgresql`` fields ``use-store`` may set, and the CLI flag each one takes. Anything not
+#: named here is left exactly as the declaration has it — this command re-points a node, it does
+#: not rewrite its store block.
+POSTGRES_TARGET_FIELDS: dict[str, str] = {
+    "host": "--host", "port": "--port", "database": "--database", "schema": "--schema",
+    "username": "--username", "password_ref": "--password-ref",
+}
+
+
+def _repoint_postgres(section: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
+    """Apply the given postgres fields, and rebuild ``connection_string`` if any of them moved.
+
+    **The rebuild is the whole reason this is not a dict update.** ``connection_string`` is
+    authoritative when non-empty — ``config.py`` returns it verbatim and never looks at the fields
+    beside it — so setting ``schema`` on a declaration that carries one changes the human-readable
+    breakdown and *nothing about where the node writes*. A node moved that way reports the new
+    schema in ``store-info``'s breakdown and goes on writing to the old one, which is the single
+    worst failure this file can produce: two nodes silently sharing a store while both believe
+    they are separate.
+    """
+    updated = dict(section)
+    changed = {name: value for name, value in overrides.items()
+               if value is not None and str(updated.get(name) or "") != str(value)}
+    if not changed:
+        return updated
+    updated.update(changed)
+    if str(updated.get("connection_string") or "").strip():
+        from db_ops.config import PostgresStoreConfig
+
+        updated["connection_string"] = PostgresStoreConfig(
+            host=str(updated.get("host") or ""), port=int(updated.get("port") or 5432),
+            database=str(updated.get("database") or ""), schema=str(updated.get("schema") or ""),
+            username=str(updated.get("username") or ""),
+            sslmode=str(updated.get("sslmode") or "prefer"),
+            connect_timeout_seconds=int(updated.get("connect_timeout_seconds") or 10),
+            application_name=str(updated.get("application_name") or "db_ops"),
+        ).connection_string
+    return updated
+
+
 def switch_backend(raw: dict[str, Any], backend: str, *,
-                   sqlite_path: str | Path | None = None) -> dict[str, Any]:
+                   sqlite_path: str | Path | None = None,
+                   postgres: dict[str, Any] | None = None) -> dict[str, Any]:
     """Return the declaration with ``backend`` selected, or say why it cannot be.
 
     Editing this by hand was the **only** hand-edit left in moving an estate onto a new node, and
@@ -153,6 +194,12 @@ def switch_backend(raw: dict[str, Any], backend: str, *,
     Refuses a backend whose section cannot stand on its own, because the failure it prevents is
     silent: a declaration naming ``postgresql`` with no host resolves at *connect* time, inside
     whichever app command happens to touch the store first.
+
+    ``postgres`` re-points the postgresql block at a different host, database or **schema** in the
+    same call. Until 2026-09-14 the backend flag was all this could set, so moving a node onto a
+    named store — a soak node onto its own schema on the shared server, say — was still the hand
+    edit this function was written to remove, and one with a trap in it: see
+    :func:`_repoint_postgres`.
     """
     if not isinstance(raw, dict):
         raise StoreDeclarationError("store_config.json does not hold an object.")
@@ -174,7 +221,8 @@ def switch_backend(raw: dict[str, Any], backend: str, *,
                 "sqlite.path in store_config.json.")
         updated["sqlite"] = section
     else:
-        updated["postgresql"] = dict(updated.get("postgresql") or {})
+        updated["postgresql"] = _repoint_postgres(
+            dict(updated.get("postgresql") or {}), postgres or {})
 
     updated["backend"] = wanted
     # Completeness is whatever `parse` requires, asked by calling it rather than by keeping a

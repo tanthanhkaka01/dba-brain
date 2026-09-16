@@ -43,6 +43,11 @@ COMMON_ROOT = Path(__file__).resolve().parents[1] / "db_ops" / "common"
 READS_LOCAL_CONFIG: dict[str, str] = {
     "cli.py": "the layer's CLI entry point — a composition root, and the only caller that is "
               "supposed to resolve config before handing a JSON object to the library below it.",
+    "remote_credential_admin.py": "registers one host's OS login: it reads users.json and "
+              "db_instances.json to write them, and takes the host's ip off the inventory record "
+              "so it is not retyped. The same argument as instance_admin.py beside it — a "
+              "registration command whose whole job is those files cannot take them as a "
+              "parameter, and `data_dir` is already the parameter that makes it testable.",
     "config_admin.py": "writes data/*.json (add-sql, metric-toggle). Editing the config IS the "
                        "operation, so it cannot be handed the config as a value.",
     # data_sources became a package on 2026-08-15: `metric_targets_config` and `target_resolve`

@@ -140,6 +140,31 @@ either, the HTML pages carry relative hrefs — correct, because they are served
 webhost — and the Telegram messages leave the link out entirely, because a chat client cannot
 follow a relative href and a link that 404s is worse than no link.
 
+**`reports use-base-url` sets it** (2026-09-15), and it is the third command of its shape after
+`db use-store` and `telegram use-bot`. All three exist because the file they write is *catalogued
+configuration*: it travels inside a config bundle, so `import-data` hands a machine that has never
+run the source's identity and nothing says so. A node built for a soak then publishes links to the
+machine it was cloned from — `self-status` reported exactly that on 2026-09-14, correctly and
+unactionably, because there was no command.
+
+```bash
+db-ops reports use-base-url http://192.0.2.10:8080/report_dba/   # what to publish
+db-ops reports use-base-url --this-node                          # this node's own ip, port, mount
+db-ops reports use-base-url --clear                              # back to the derived answer
+```
+
+A URL without a scheme is refused: a browser reads `192.0.2.10:8080/report_dba/` as a relative path
+and every published link 404s. `--this-node` is refused inside a container, where the address the
+node can see is on the private pool and nobody outside reaches it — v0.4.0 shipped one of those as
+a clickable link.
+
+`--this-node` learns the address by running `python -m db_ops.common.cli self-status`, whose `data`
+carries this installation's `host.ip` and `runtime` — not by importing `db_ops.common.self_status`,
+which is the rule `tests/test_app_common_imports.py` holds every app to. Only that one form pays for
+the subprocess: a URL and `--clear` need no address and do not spawn it. When `self-status` cannot
+answer, the command **refuses** rather than guessing — writing `report_base_url` against an
+unconfirmed address publishes every page under a URL nobody can reach.
+
 *That claim was false until 2026-09-10.* The renderer only ever linkified `http(s)://`, so with no
 base URL the cross-links came out as **relative prose, not relative hrefs**: a page built on a fresh
 node had no anchors at all. A bare sibling page name (`database-inventory.html`,
@@ -1002,6 +1027,18 @@ type the policy does not require reads *not required*, not *missing*. A stale LO
 reported as an **RPO violation**, never as a broken chain: chain continuity needs backup LSNs and
 recovery-fork ids that no collector gathers, and a fresh FULL taken on a false "broken" reading
 discards a working restore path.
+
+**And with no policy at all, nothing is graded.** `data/backup_policy.json` absent is not a
+permissive policy, and until 2026-09-14 the two produced the same page: with no rule, every type is
+*not required*, every database is OK, and the Backup column printed `15/15 DB within policy` over a
+server whose newest LOG backup was 168 days old. Two nodes holding identical evidence disagreed
+about nine servers and neither page said why. So `backup_policy.policy_is_configured` is asked
+first: without a policy the verdict is `UNKNOWN`, `compliant` is 0 while `eligible` still counts the
+databases evidence was found for, the coverage cell reads **No policy configured** rather than
+*No policy match*, the badge is grey *Unverified* rather than green *Compliant*, and Priority
+Attention carries a card naming the file. `init` writes the shipped default
+(`db_ops/backup_restore/catalogue/backup_policy.json`), so a fresh install grades from its first
+collection instead of waiting to be told how.
 
 ## Useful Manual Queries
 

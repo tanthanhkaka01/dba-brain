@@ -50,6 +50,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
              "the bot read a group. The two values data/bot_telegram.json asks for.")
     info_parser.set_defaults(telegram_function=bot_info)
 
+    use_bot_parser = subparsers.add_parser(
+        "use-bot",
+        help="Point THIS node at a bot, by secret ref - the mirror of `db use-store`. The id and "
+             "username are read back from Telegram, never typed.")
+    use_bot_parser.add_argument("--ref", required=True,
+                               help="Secret ref holding the bot token, e.g. "
+                                    "TOKEN_TELEGRAM_TEST_BOT.")
+    use_bot_parser.add_argument("--dry-run", action="store_true",
+                               help="Print what would be written, and write nothing.")
+
     level_parser = subparsers.add_parser(
         "group-level",
         help="Give a discovered group its notify level. save-updates finds groups but "
@@ -222,6 +232,30 @@ def main(argv: list[str]) -> int:
         #
         # A token that is *named and missing* still raises: that is a real misconfiguration, and
         # `config.resolve_bot_token` is where it belongs.
+        if args.command == "use-bot":
+            # Before `_missing_bot_token`, deliberately: this is the command you reach for when
+            # the token is missing or points at the wrong bot, and gating it on a working token
+            # would make it unusable in exactly the situation it exists for.
+            from db_ops.telegram.use_bot import UseBotError, use_bot
+
+            settings = _telegram_settings_raw(config_path)
+            try:
+                result = use_bot(
+                    args.ref,
+                    data_dir=Path(config.telegram.bot_config_file).parent
+                    if config.telegram.bot_config_file else Path(config_path).parent / "data",
+                    api_url=config.telegram.api_url,
+                    timeout_seconds=config.telegram.timeout_seconds,
+                    dry_run=bool(args.dry_run),
+                    telegram_settings=settings,
+                    settings_path=getattr(config, "telegram_config_file", "") or "",
+                )
+            except UseBotError as exc:
+                print(f"ERROR: {exc}", file=sys.stderr)
+                return 1
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
+
         missing = _missing_bot_token(config)
         if missing:
             skipped = {
@@ -245,6 +279,26 @@ def main(argv: list[str]) -> int:
 
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
+
+
+def _telegram_settings_raw(config_path: Any) -> dict:
+    """The telegram settings file as written, so `use-bot` can see a pin the parsed config hides.
+
+    `parse_config` merges `telegram_bot_token_ref` from the settings file and the bot file into one
+    value, which is exactly the thing `use-bot` has to tell apart: a ref set in the settings file
+    WINS, so writing the bot file while one is pinned changes the name and not the token.
+    """
+    from db_ops.lib.json_io import load_json_file
+
+    try:
+        raw = load_json_file(Path(config_path))
+        named = raw.get("telegram_config_file")
+        if named:
+            settings = load_json_file(Path(config_path).parent / str(named))
+            return settings.get("telegram") if isinstance(settings.get("telegram"), dict) else settings
+        return raw.get("telegram") if isinstance(raw.get("telegram"), dict) else {}
+    except Exception:  # noqa: BLE001 - a settings file we cannot read pins nothing
+        return {}
 
 
 def _missing_bot_token(config: Any) -> str:

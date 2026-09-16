@@ -200,7 +200,18 @@ TELEGRAM_CONFIG = {
     # is the one to use, and the scaffold missed it until a real send failed with "bot token is
     # empty" — a message that names the symptom and not the missing field.
     "bot_token_env": "TELEGRAM_BOT_TOKEN",
-    "telegram_bot_token_ref": "TELEGRAM_BOT_TOKEN",
+    # `bot_config_file` is named rather than left to the default, because this file's own notes
+    # tell the reader to put the token ref there and a path that is only a default is a path
+    # nobody knows to look at.
+    "bot_config_file": "data/bot_telegram.json",
+    # `telegram_bot_token_ref` is DELIBERATELY ABSENT. It used to be written here as the
+    # placeholder "TELEGRAM_BOT_TOKEN", and a value here WINS over `bot_telegram.json` - so a
+    # fresh node could not change which bot it was without editing this file too, however
+    # carefully it filled in the one the notes point at. Worse, the id and username were still
+    # read from the bot file, so the node reported a bot it was not authenticating as. Found
+    # 2026-09-14 building a 0.17.0 node one command at a time. Set it here only to deliberately
+    # override the bot file; leave it out and the bot file decides, which is what the master
+    # does and why the master works.
     "secret_text_file": "data/secret_text.json",
     "bot_token": "",
     "api_url": "https://api.telegram.org",
@@ -567,6 +578,16 @@ PACKAGED_DEFAULTS: dict[str, str] = {
     # wanted it. The loader reports "nothing configured" properly now; this gives the operator the
     # file the manifest already promised them.
     "data/restore_config.json": "backup_restore/catalogue/restore_config.json",
+    # The one file here that must NOT ship empty. An absent backup policy does not make the
+    # backup report quiet - it makes it *wrong*: with no rule, every type is "not required",
+    # every database is OK, and the fleet page prints "15/15 DB within policy" across a server
+    # whose newest LOG backup is 168 days old. Measured on 2026-09-14 on two nodes holding
+    # identical backup evidence - one with this file reported nine servers in violation, one
+    # without reported the estate compliant, and no line anywhere said which of them to believe.
+    # `db_ops.lib.backup_policy` now refuses to grade without a policy, and this entry is the
+    # other half: a fresh install starts with the common daily-full-plus-log plan already in
+    # force, so it grades from the first collection instead of waiting to be told how.
+    "data/backup_policy.json": "backup_restore/catalogue/backup_policy.json",
 }
 
 PACKAGED_CATALOGUE = Path(__file__).parent / "metrics" / "catalogue" / "metric_definitions.json"
@@ -612,16 +633,21 @@ def _files(app_name: str) -> list[tuple[str, dict]]:
         ("data/store_config.json", SQLITE_STORE),
         ("data/db_instances.json", EMPTY_INVENTORY),
         ("data/metric_definitions.json", packaged_catalogue()),
-        # The three the daemon needs and nothing else writes. Skipped rather than failed if the
-        # package did not carry one - a first run without scheduled reports still collects.
+        # Every shipped default, read from PACKAGED_DEFAULTS rather than listed again here.
+        # It WAS listed again here, and on 2026-09-14 that cost `data/backup_policy.json`: the
+        # entry was added to the map, the file shipped in the wheel, `packaged_default` found it,
+        # and `init` still did not write it, because the second list had not been touched. A
+        # fresh 0.17.0 root came up with no backup policy - the exact hole the release exists to
+        # close. One list, and a new catalogue file now needs one entry instead of two.
+        #
+        # Skipped rather than failed when the package did not carry one: a missing default should
+        # cost one config file, not the whole init.
         *(
             (name, content)
-            for name in ("data/reports_config.json", "data/telegram_support_commands.json",
-                         "data/app_commands.json", "data/config_catalog.json",
-                         "data/data_files.json", "data/emergency_operations.json",
-                         "data/webhost_config.json", "data/sla_policies.json",
-                         "data/ops_status_request.json", "data/restore_config.json")
-            if (content := packaged_default(name)) is not None
+            for name in PACKAGED_DEFAULTS
+            # handled above, because it is the one with a fallback when the package lacks it
+            if name != "data/metric_definitions.json"
+            and (content := packaged_default(name)) is not None
         ),
         ("data/users.json", EMPTY_USERS),
         ("data/telegram_config.json", TELEGRAM_CONFIG),
