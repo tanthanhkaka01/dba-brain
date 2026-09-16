@@ -134,8 +134,14 @@ def test_the_command_runs_through_its_own_cli(tmp_path, monkeypatch, capsys):
 
     monkeypatch.setattr("db_ops.lib.paths.DEFAULT_DATA_DIR", tmp_path)
     monkeypatch.setattr("db_ops.reports.cli.DEFAULT_DATA_DIR", tmp_path, raising=False)
+    # The config is WRITTEN, not borrowed from whatever directory the suite runs in. Reading
+    # `config.json` out of the working tree passes on a developer's machine and fails in the
+    # exported one, which ships no such file - the coupling `ci.yml` calls "tests read
+    # configuration the distribution does not ship", and this test was one of them.
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"app_name": "db_ops"}), encoding="utf-8")
 
-    code = reports_cli.main(["--config", "config.json", "use-base-url",
+    code = reports_cli.main(["--config", str(config), "use-base-url",
                             "http://192.0.2.10:8080/report_dba/", "--dry-run"])
 
     assert code == 0, capsys.readouterr().err

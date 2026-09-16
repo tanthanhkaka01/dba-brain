@@ -17,6 +17,8 @@ that loses its `PK_` prefix loses the one distinction that decides whether it ma
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from db_ops.lib import pseudonym
@@ -605,8 +607,24 @@ def test_force_clears_the_output_rather_than_writing_over_it(tmp_path) -> None:
     orphan = output / "yesterdays-page.html"
     orphan.write_text("<html>stale</html>", encoding="utf-8")
 
+    # The inventory is WRITTEN, not borrowed from the directory the suite runs in. `build_mapping`
+    # refuses an empty one - "a scan with no terms reports every tree as clean, which is why this
+    # refuses instead" - and the distribution ships `data/` empty, so reading whatever is there
+    # passes on a machine that happens to have an estate and fails everywhere else. That coupling
+    # is what `ci.yml` means by "tests read configuration the distribution does not ship".
+    #
+    # (The refusal's own advice, "pass extra_terms to search without an inventory", does not reach
+    # this layer: `build_mapping` calls `collect_identifiers` before extra_terms are applied. Left
+    # as it is rather than changed here - a message that over-promises is worth fixing, and not in
+    # a test whose subject is `force`.)
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / "db_instances.json").write_text(json.dumps({"db_instances": [
+        {"server_id": "ACME-192-0-2-10", "ip": "192.0.2.10", "db_type": "sqlserver"},
+    ]}), encoding="utf-8")
+
     showcase.build({"source": str(source), "output": str(output),
-                    "force": True, "verify": False, "stamp": False})
+                    "force": True, "verify": False, "stamp": False}, data_dir=data_dir)
 
     assert not orphan.exists(), "the previous run's page survived a forced rebuild"
     assert {p.name for p in output.iterdir()} == {"sla.html"}
