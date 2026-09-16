@@ -264,16 +264,46 @@ def test_the_request_is_linked_to_the_run_it_produced(estate) -> None:
 
 
 def test_a_request_does_not_start_a_second_copy_of_a_running_command(estate) -> None:
-    """The one gate a request must not override."""
-    estate["queue"].request_run(app_command_id="APP-TEST", requested_by="thanh")
-    scan(estate)
-    first = estate["running"]["APP-TEST"].process.pid
+    """The one gate a request must not override.
 
+    **The command has to still be running at the second scan**, or this test asserts nothing.
+    Every other test here uses one that prints and exits, and with that one this test was a race:
+    if the first process had already finished, the daemon starting a second was *correct* — the
+    gate blocks a second copy of a **running** job — and the failure (`assert 2844 == 2842`, two
+    pids apart) was the test's own assumption breaking. It failed on CI's Python 3.12 and passed
+    on 3.13 and 3.14, which reads as a version problem and is a timing one.
+
+    A test that fails on timing teaches its reader to re-run CI, and that habit is what hides the
+    next real failure.
+    """
+    _command_that_outlives_the_scan(estate)
     estate["queue"].request_run(app_command_id="APP-TEST", requested_by="thanh")
     scan(estate)
-    assert estate["running"]["APP-TEST"].process.pid == first
-    assert estate["queue"].pending_for("APP-TEST") is not None, (
-        "the request should still be waiting, not consumed by a run that never happened")
+    process = estate["running"]["APP-TEST"].process
+    try:
+        assert process.poll() is None, "the fixture command exited; this test would prove nothing"
+
+        estate["queue"].request_run(app_command_id="APP-TEST", requested_by="thanh")
+        scan(estate)
+        assert estate["running"]["APP-TEST"].process.pid == process.pid
+        assert estate["queue"].pending_for("APP-TEST") is not None, (
+            "the request should still be waiting, not consumed by a run that never happened")
+    finally:
+        process.kill()
+        process.wait(timeout=10)
+
+
+def _command_that_outlives_the_scan(estate) -> None:
+    """Re-declare APP-TEST as a command that is still running when the next scan looks.
+
+    Written to the same file the daemon reads on every scan, so nothing about how the command is
+    loaded changes — only how long it lives.
+    """
+    (estate["data"] / "app_commands.json").write_text(
+        json.dumps({"app_commands": [
+            {**NOT_DUE_COMMAND,
+             "command_text": f"{sys.executable} -c \"import time; time.sleep(30)\""},
+        ]}), encoding="utf-8")
 
 
 def test_a_second_scan_does_not_run_it_again(estate) -> None:
