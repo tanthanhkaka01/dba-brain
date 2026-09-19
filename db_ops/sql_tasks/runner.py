@@ -27,7 +27,14 @@ from db_ops.lib.notify import (
     parse_notify_config,
     parse_notify_rule as common_parse_notify_rule,
 )
-from db_ops.lib.task_output import FILE_OUTPUT_FORMATS, OUTPUT_FORMATS
+from db_ops.lib.task_output import (
+    FILE_OUTPUT_FORMATS,
+    MAX_INLINE_MAX_ROWS,
+    OUTPUT_FORMATS,
+    TaskOutputError,
+    merge_result_sets,
+    parse_output,
+)
 from db_ops.lib.telegram_route import telegram_groups
 from db_ops.lib.sql_text import DEFAULT_MAX_ROWS as SQL_RUN_MAX_ROWS
 from db_ops.lib import result_format
@@ -35,6 +42,8 @@ from db_ops.db.queue_message import queue_message, store_block_from
 from db_ops.config import DEFAULT_CONFIG_PATH, load_config, resolve_config_path
 from db_ops.common import data_sources
 from db_ops.lib import common_cli
+from db_ops.lib import process_liveness
+from db_ops.lib import run_claim
 from db_ops.lib.secret_text import add_key_argument, set_key_env
 # Connecting and executing are `common`'s, reached through `common.cli run-sql` — this app
 # imported nine driver-level helpers from `sql_execution` for a connection it no longer opens, and
@@ -42,10 +51,10 @@ from db_ops.lib.secret_text import add_key_argument, set_key_env
 # value: how to declare a script's parameters, how to read a credential's password, and the JSON
 # reader — all of them `lib`, importable by anything.
 from db_ops.lib.json_io import load_json_file
-from db_ops.lib.time_window import MANUAL_ONLY, TimeWindow, is_time_window_open as common_time_window_open, job_due, parse_time_window_config, repeat_due
+from db_ops.lib.time_window import MANUAL_ONLY, TimeWindow, due_from_row, is_time_window_open as common_time_window_open, parse_time_window_config, repeat_due, run_anchor
 from db_ops.lib.timezone import display_now, file_stamp
 from db_ops.db import DbOpsStore
-from db_ops.db.store import utc_now_text
+from db_ops.db.store import RunAlreadyClaimed, utc_now_text
 from db_ops.logging_ops import log_event, log_function_error, setup_app_logger
 from db_ops.logging_ops.runtime_stdout import patch_stdout
 from db_ops.lib.paths import DEFAULT_DATA_DIR, REPO_ROOT, TOOL_ROOT  # noqa: F401 - one definition, see that module
@@ -64,8 +73,7 @@ from db_ops.lib.paths import asset_candidates
 # a minute. A truly uncapped result would not "just be long" — it would 429 partway through and
 # arrive in pieces. A task that needs more than this should say so in its SQL, or export a file.
 DEFAULT_INLINE_MAX_ROWS = 1000
-#: Ceiling on what `output.max_rows` may ask for, so one config edit cannot flood a group.
-MAX_INLINE_MAX_ROWS = 5000
+# The ceiling on `output.max_rows` is MAX_INLINE_MAX_ROWS, defined once in lib/task_output.
 # Rows an `output: xlsx` target may export. The same ceiling /spbot_sql_to_xlsx uses, so an
 # ad-hoc export and a task export truncate at the same point instead of two surprising ones.
 XLSX_MAX_ROWS = SQL_RUN_MAX_ROWS
@@ -110,7 +118,8 @@ class SqlCommand:
     #: One Telegram message per finished file, on top of the start and done messages.
     #: ``None`` = automatic: on when the task has more than one file, off otherwise — a
     #: single-file task would otherwise send "started", "[1/1] done" and "finished", which is
-    #: three messages saying one thing. Set true/false in `sql_commands.json` to override.
+    #: three messages saying one thing. Off for a Python-fed task, whose steps are batches, not
+    #: files. Set true/false in `sql_commands.json` to override.
     #: Only ever sends when the target's ``logging_on_run`` is enabled; this decides how *often*
     #: to report, never *whether* the target reports at all.
     progress_per_file: bool | None = None
@@ -367,6 +376,10 @@ class SqlScanResult:
     due_count: int = 0
     success_count: int = 0
     error_count: int = 0
+    #: Tasks a **claim** turned away because another run already holds them. Neither a success nor
+    #: a failure, and counted apart from both: folding it into errors would alert on the scheduler
+    #: working correctly, and folding it into successes would say work happened that did not.
+    skipped_count: int = 0
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -723,6 +736,7 @@ def run_scheduler_scan(
                               latest_runs=latest_done_or_running_runs, latest_any_runs=latest_any_runs)
     success_count = 0
     error_count = 0
+    skipped_count = 0
     for command, target in due_pairs:
         if dry_run:
             print(
@@ -731,31 +745,45 @@ def run_scheduler_scan(
                 f"files={len(command.script_files)} file_order={format_script_file_order(command)}"
             )
             continue
-        success = run_one_sql_task(
-            # None, not a caller's values: a scheduled scan has no operator to take parameters
-            # from, so each task falls back to the defaults it declares itself (see
-            # build_parameter_prelude). This line used to read `parameter_values=parameter_values`,
-            # a name that exists only on the single-task path — so **every** scan raised NameError
-            # before running a single task. The outer handler turned that into "exit 1" once a
-            # minute, which is indistinguishable from a scheduler with nothing due: manual runs
-            # kept working and scheduled SQL tasks silently stopped for a day (last scheduled run
-            # 2026-08-12T09:22Z, found 2026-08-13).
-            parameter_values=None,
-            store=store,
-            data_dir=data_dir,
-            telegram_groups=telegram_groups,
-            command=command,
-            target=target,
-            inventory=inventory,
-            credentials=credentials.get(target.db_type.lower(), []),
-            secrets=secrets,
-            logger=logger,
-        )
+        # A refused claim is an answer, not a failure: another scan is already running this task.
+        # It is counted as neither a success nor an error, because it is neither — recording it as
+        # an error would alert on the scheduler working correctly, which teaches the reader to stop
+        # reading the alerts.
+        try:
+            success = run_one_sql_task(
+                # None, not a caller's values: a scheduled scan has no operator to take parameters
+                # from, so each task falls back to the defaults it declares itself (see
+                # build_parameter_prelude). This line used to read
+                # `parameter_values=parameter_values`, a name that exists only on the single-task
+                # path — so **every** scan raised NameError before running a single task. The outer
+                # handler turned that into "exit 1" once a minute, which is indistinguishable from a
+                # scheduler with nothing due: manual runs kept working and scheduled SQL tasks
+                # silently stopped for a day (last scheduled run 2026-08-12T09:22Z, found
+                # 2026-08-13).
+                parameter_values=None,
+                store=store,
+                data_dir=data_dir,
+                telegram_groups=telegram_groups,
+                command=command,
+                target=target,
+                inventory=inventory,
+                credentials=credentials.get(target.db_type.lower(), []),
+                secrets=secrets,
+                logger=logger,
+            )
+        except RunAlreadyClaimed as exc:
+            log_sql_task_event(
+                logger, "sql_tasks.runner.task.already_running", command=command, target=target,
+                sql_id=command.sql_id, sql_code=command.sql_code, status="skipped",
+                reason=str(exc))
+            skipped_count += 1
+            continue
         if success:
             success_count += 1
         else:
             error_count += 1
-    return SqlScanResult(due_count=len(due_pairs), success_count=success_count, error_count=error_count)
+    return SqlScanResult(due_count=len(due_pairs), success_count=success_count,
+                         error_count=error_count, skipped_count=skipped_count)
 
 
 def run_sql_id_tasks(
@@ -846,6 +874,7 @@ def mark_stale_running_sql_runs(
     failing, not runs failing silently, which is the worse of the two.
     """
     now = datetime.now(timezone.utc)
+    this_host = socket.gethostname()
     targets_by_key = {(target.sql_id, target.target_no): target for target in targets}
     for row in running_runs:
         if str(row["status"]).lower() != "running":
@@ -858,16 +887,32 @@ def mark_stale_running_sql_runs(
             continue
         target = targets_by_key.get((int(row["sql_id"]), int(row["target_no"])))
         timeout_seconds = target.timeout_seconds if target is not None else DEFAULT_SQL_TIMEOUT_SECONDS
-        if started + timedelta(seconds=timeout_seconds) > now:
+        # **A row whose process is still alive is left alone, however old it is.** The timeout used
+        # to be the whole answer, and that is the loop: a task that legitimately outran its timeout
+        # had its row closed here and the next scan started a second copy on top of the first. The
+        # `running` row is now a claim (ux_sql_runs_claim), so closing it is what releases the key —
+        # which makes this decision and "may another run start?" the same decision. A row from
+        # another host cannot be checked from here and waits for its timeout plus a long grace.
+        metadata = run_claim.row_metadata(row)
+        owner_pid, owner_host = run_claim.claim_owner(metadata)
+        verdict = run_claim.reap_verdict(
+            metadata=metadata,
+            this_host=this_host,
+            elapsed_seconds=(now - started).total_seconds(),
+            timeout_seconds=timeout_seconds,
+            pid_alive=(process_liveness.is_pid_alive(owner_pid)
+                       if owner_pid is not None and owner_host == this_host else None),
+        )
+        if not verdict.reap:
             continue
         # The two clock readings are the first thing anyone asks for: an alert that says only
         # "stale" leaves the reader to go and find out *when* the run they are being told about
         # died, and a reap can happen hours after the fact — a worker restarted at 06:13 was
         # reported at 13:05 with nothing in the text to tell the two apart.
         stale_minutes = int((now - started).total_seconds() // 60)
-        message = (f"SQL task {row['sql_code']} stale running exceeded "
-                   f"timeout_seconds={timeout_seconds}. It started at {format_message_time(started)} "
-                   f"and was still 'running' {stale_minutes} minutes later.")
+        message = (f"SQL task {row['sql_code']} stale running: {verdict.reason}. It started at "
+                   f"{format_message_time(started)} with timeout_seconds={timeout_seconds} and was "
+                   f"still 'running' {stale_minutes} minutes later.")
         store.update_sql_run(
             sql_run_id=int(row["sql_run_id"]),
             status="error",
@@ -935,19 +980,13 @@ def due_sql_tasks(
         # a failure. retry_interval defaults to the repeat interval — a failed SQL task is never
         # retried faster than its normal schedule unless the target sets retry_interval explicitly.
         recent = latest_any_runs.get(target.run_key) or latest
-        last_time = sql_run_time(recent)
-        last_status = str(recent["status"]).lower() if recent else None
-        window = target.time_window
-        retry_interval = window.retry_interval if window.retry_interval is not None else window.repeat_interval
-        if job_due(
-            last_run=last_time,
-            last_status=last_status,
-            repeat_interval=window.repeat_interval,
-            retry_interval=retry_interval,
+        if due_from_row(
+            time_window=target.time_window,
+            row=recent,
             now=now,
-            timeout=window.timeout,
+            retry_default=target.time_window.repeat_interval,
             default_repeat=300,
-        ):
+        ).due:
             due.append((command, target))
     return due
 
@@ -1074,8 +1113,12 @@ def run_one_sql_task(
         )
         # Automatic unless the command says otherwise: worth it for a folder of scripts, noise
         # for a single file. Resolved here because this is the only scope that knows the count.
+        # A batch is not a file: a Python-fed task runs one script per batch, and reporting each
+        # one sent a message per 2000 rows - 70 for one run of a ten-day load. Batched tasks
+        # report per batch only when the command asks for it.
         total_files = len(steps)
-        report_progress = (total_files > 1 if command.progress_per_file is None
+        automatic = total_files > 1 and command.python_source is None
+        report_progress = (automatic if command.progress_per_file is None
                            else bool(command.progress_per_file))
         for step in steps:
             file_no = step.file_no
@@ -1163,6 +1206,11 @@ def run_one_sql_task(
                 if document_path is None:
                     metadata["output_note"] = (
                         f"output={target.output_format} but the script returned no result set."
+                    )
+                elif (left_out := unexported_result_sets(result, target.output_format)):
+                    metadata["output_note"] = (
+                        f"output={target.output_format} holds one table; {left_out} more result "
+                        f"set(s) with other columns are not in the file - use txt, csv or json."
                     )
             except OSError as exc:
                 metadata["output_note"] = f"output={target.output_format} failed to write: {exc}"
@@ -1463,36 +1511,38 @@ def _md_cell(value: Any) -> str:
 def format_result_sets_markdown(result: dict[str, Any] | None) -> str:
     """Render a SQL task's returned rows as GitHub-style markdown table(s).
 
-    Reads the ``result_sets`` ({"columns": [...], "rows": [[...]]}) captured per file
-    by the executor. Empty result sets render as ``(0 rows)``; wide tables are clipped to
-    ``RESULT_TABLE_MAX_COLS`` columns with a note. **Every fetched row is rendered** — the
-    message is split across sends if it is long, rather than the rows being dropped. Returns ""
-    when there is nothing tabular to show.
+    Reads the ``result_sets`` ({"columns": [...], "rows": [[...]]}) captured per file by the
+    executor. Consecutive sets with the same columns are one table (``merge_result_sets``): a task
+    that runs once per batch returns a set per batch, and 69 one-row tables were 69 headers
+    around 69 rows. Wide tables are clipped to ``RESULT_TABLE_MAX_COLS`` columns
+    with a note. **Every fetched row is rendered** — the message is split across sends if it is
+    long, rather than the rows being dropped. Returns "" when there is nothing tabular to show.
     """
     if not result:
         return ""
     blocks: list[str] = []
-    set_index = 0
-    for file_result in result.get("files", []) or []:
-        for rset in file_result.get("result_sets", []) or []:
-            columns = list(rset.get("columns") or [])
-            rows = list(rset.get("rows") or [])
-            if not columns:
-                continue
-            set_index += 1
-            clipped_cols = columns[:RESULT_TABLE_MAX_COLS]
-            col_note = "" if len(columns) <= RESULT_TABLE_MAX_COLS else f" (+{len(columns) - RESULT_TABLE_MAX_COLS} cols)"
-            header = "| " + " | ".join(_md_cell(c) for c in clipped_cols) + " |"
-            sep = "| " + " | ".join("---" for _ in clipped_cols) + " |"
-            lines = [f"result set {set_index}: {len(rows)} row(s){col_note}", header, sep]
-            for row in rows:
-                cells = list(row)[:RESULT_TABLE_MAX_COLS]
-                cells += [""] * (len(clipped_cols) - len(cells))
-                lines.append("| " + " | ".join(_md_cell(c) for c in cells) + " |")
-            if not rows:
-                lines.append("(0 rows)")
-            blocks.append("\n".join(lines))
+    for set_index, rset in enumerate(merge_result_sets(all_result_sets(result)), start=1):
+        columns = list(rset.get("columns") or [])
+        rows = list(rset.get("rows") or [])
+        clipped_cols = columns[:RESULT_TABLE_MAX_COLS]
+        col_note = "" if len(columns) <= RESULT_TABLE_MAX_COLS else f" (+{len(columns) - RESULT_TABLE_MAX_COLS} cols)"
+        header = "| " + " | ".join(_md_cell(c) for c in clipped_cols) + " |"
+        sep = "| " + " | ".join("---" for _ in clipped_cols) + " |"
+        lines = [f"result set {set_index}: {len(rows)} row(s){col_note}", header, sep]
+        for row in rows:
+            cells = list(row)[:RESULT_TABLE_MAX_COLS]
+            cells += [""] * (len(clipped_cols) - len(cells))
+            lines.append("| " + " | ".join(_md_cell(c) for c in cells) + " |")
+        if not rows:
+            lines.append("(0 rows)")
+        blocks.append("\n".join(lines))
     return "\n\n".join(blocks)
+
+
+def all_result_sets(result: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Every result set of every file, in the order they ran."""
+    return [rset for file_result in (result or {}).get("files", []) or []
+            for rset in file_result.get("result_sets", []) or []]
 
 
 def trim_result_for_store(result: dict[str, Any]) -> dict[str, Any]:
@@ -1520,20 +1570,6 @@ def trim_result_for_store(result: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def first_result_set(result: dict[str, Any] | None) -> dict[str, Any] | None:
-    """The first result set that actually has columns, or ``None``.
-
-    A task script often ends with several statements; only one of them returns the rows the
-    operator wants delivered. Picking the first *non-empty* set (rather than the last statement's)
-    is what makes `USE db; GO; SELECT ...` behave the way it reads.
-    """
-    for file_result in (result or {}).get("files", []) or []:
-        for rset in file_result.get("result_sets", []) or []:
-            if rset.get("columns"):
-                return rset
-    return None
-
-
 def write_sql_task_output(
     *,
     command: SqlCommand,
@@ -1543,38 +1579,56 @@ def write_sql_task_output(
     output_dir: Path,
     output_format: str = "",
 ) -> Path | None:
-    """Write the task's first result set as its configured file, and return the path.
+    """Write the task's result sets as its configured file, and return the path.
 
     ``None`` when the script returned no result set — a task that exports nothing is not an
     error, and the caller records it as a note on the run rather than failing SQL that already
     committed.
 
+    **Every row, not the first set.** Consecutive sets with the same columns are joined
+    (``merge_result_sets``), so a task that runs once per batch exports one table. The file used
+    to hold only the first set, which for a batched load was one row of sixty-nine. When the
+    script returns sets of *different* shapes, ``txt`` and ``csv`` write each as its own section
+    and ``json`` writes a list; ``xlsx`` and ``xml`` hold one table, so they write the first and
+    the caller notes the rest (:func:`unexported_result_sets`).
+
     The rendering goes through :mod:`db_ops.lib.result_format`, the same code path
     ``run-sql --format`` uses, so a scheduled export and an ad-hoc one are the same artifact.
-    They used to be able to differ only because xlsx was the sole option; the moment csv and txt
-    existed, a second renderer here would have been a second answer to "what does this task's
-    output look like".
     """
-    rset = first_result_set(result)
-    if rset is None:
+    sets = merge_result_sets(all_result_sets(result))
+    if not sets:
         return None
     fmt = (output_format or target.output_format or "xlsx").strip().lower()
     stamp = file_stamp()
     name = f"sql_{command.sql_id:03d}_{workflow_name_from_code(command.sql_code)}_{stamp}.{fmt}"
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / name
-    rows = [list(row) for row in (rset.get("rows") or [])]
+    payloads = [{"ok": True, "columns": rset["columns"], "rows": rset["rows"],
+                 "row_count": len(rset["rows"])} for rset in sets]
+    if len(payloads) > 1 and fmt in MULTI_SET_FILE_FORMATS:
+        if fmt == "json":
+            text = json.dumps(payloads, ensure_ascii=False, default=str, indent=1)
+        else:
+            text = "\n\n".join(result_format.render_result(payload, fmt=fmt)[0]
+                               for payload in payloads)
+        path.write_text(text, encoding="utf-8")
+        return path
     # One call, no branch on format. Which formats write themselves and which hand back a string
-    # is result_format's problem, not this app's — every exporter that knew the difference grew
-    # its own `if fmt == "xlsx"`, and they did not stay identical.
-    result_format.write_result(
-        {"ok": True, "columns": list(rset.get("columns") or []), "rows": rows,
-         "row_count": len(rows)},
-        fmt=fmt,
-        path=path,
-        sheet_name=f"sql_{command.sql_id}",
-    )
+    # is result_format's problem, not this app's.
+    result_format.write_result(payloads[0], fmt=fmt, path=path, sheet_name=f"sql_{command.sql_id}")
     return path
+
+
+#: File formats that can hold result sets of different shapes in one file.
+MULTI_SET_FILE_FORMATS = ("txt", "csv", "json")
+
+
+def unexported_result_sets(result: dict[str, Any] | None, output_format: str) -> int:
+    """How many result sets a file of ``output_format`` leaves out: only ``xlsx`` / ``xml``, and
+    only when the script returned sets of more than one shape."""
+    if output_format in MULTI_SET_FILE_FORMATS:
+        return 0
+    return max(0, len(merge_result_sets(all_result_sets(result))) - 1)
 
 
 def write_sql_task_xlsx(**kwargs) -> Path | None:
@@ -2279,28 +2333,16 @@ def _target_output(item: dict[str, Any]) -> dict[str, str]:
             f"'none' sends status only). It is not inferred: a task's delivery is a decision, "
             f"and one that is not written down is one nobody can read back."
         )
-    output_format = _opt_str(raw.get("format")).lower() or "none"
-    if output_format not in OUTPUT_FORMATS:
-        raise RuntimeError(
-            f"sql_targets.sql_id={item.get('sql_id')}: output.format must be one of "
-            f"{OUTPUT_FORMATS}, got {raw.get('format')!r}."
-        )
-    # Refused rather than clamped silently: a target asking for 20000 rows in chat has
-    # misunderstood what inline output is for, and a number quietly reduced to 5000 would look
-    # like it worked until somebody counted the rows.
-    max_rows = _opt_str(raw.get("max_rows"))
-    if max_rows and (not max_rows.isdigit() or not 0 < int(max_rows) <= MAX_INLINE_MAX_ROWS):
-        raise RuntimeError(
-            f"sql_targets.sql_id={item.get('sql_id')}: output.max_rows must be a whole number "
-            f"between 1 and {MAX_INLINE_MAX_ROWS}, got {raw.get('max_rows')!r}. Rows go out as "
-            f"~30-per-Telegram-message and a group is rate-limited to about 20 messages a "
-            f"minute; export a file for more than this."
-        )
+    # One parser for the block (lib/task_output), the same one check-objects holds the file to.
+    try:
+        parsed = parse_output(raw)
+    except TaskOutputError as exc:
+        raise RuntimeError(f"sql_targets.sql_id={item.get('sql_id')}: {exc}") from exc
     return {
-        "output_format": output_format,
-        "output_chat": _opt_str(raw.get("telegram_chat")),
-        "output_chat_id": _opt_str(raw.get("chat_id")),
-        "output_max_rows": int(max_rows) if max_rows else 0,
+        "output_format": parsed["format"],
+        "output_chat": parsed["telegram_chat"],
+        "output_chat_id": parsed["chat_id"],
+        "output_max_rows": parsed["max_rows"],
     }
 
 
@@ -2381,12 +2423,15 @@ def resolve_sql_folder(folder_name: str, *, data_dir: Path) -> Path:
 
 
 def sql_run_time(row: Any | None) -> datetime | None:
-    if row is None:
-        return None
-    value = row["finished_at"] or row["started_at"]
-    if not value:
-        return None
-    return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    """When a ``sql_runs`` row **started**, as an aware UTC datetime.
+
+    ``finished_at`` came first here, and it made this app the odd one out: a target declaring
+    ``repeat_interval: 300`` whose task took 240 seconds ran every 540, and the config said 300.
+    Every other ``time_window`` consumer anchors on the start, so the same number meant two things
+    depending on which file it was written in. Changed 2026-09-19 to the shared
+    :func:`db_ops.lib.time_window.run_anchor`, which is now the only place that picks the column.
+    """
+    return run_anchor(row)
 
 
 def scrub_credential(credential: dict[str, Any] | None) -> dict[str, Any] | None:

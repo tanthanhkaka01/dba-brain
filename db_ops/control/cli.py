@@ -417,6 +417,11 @@ def parse_args(argv):
                              "worker-run --key-base64 K -- python -m db_ops.reports.cli inventory-workflow --days 7 --beauty 1")
     _add_target(wr)
     wr.add_argument("--container", default=DEFAULT_CONTAINER)
+    wr.add_argument("--on-host", dest="on_host", action="store_true",
+                    help="Run on the worker HOST, not in the container (compose, docker pull, "
+                         "bind mounts). One quoted argument is run as a shell line.")
+    wr.add_argument("--sudo", action="store_true",
+                    help="With --on-host: run under sudo, fed the SSH password.")
     wr.add_argument("cmd", nargs=argparse.REMAINDER,
                     help="The command to run in the worker container (put it after `--`).")
 
@@ -743,7 +748,8 @@ def _run(args) -> int:
                                                    key_base64=args.key_base64, key=args.key)
     elif args.command == "worker-run":
         return worker_exec_ops.run_worker_command(host=host, user=args.user, password=password, port=args.port,
-                                                  container=args.container, command=args.cmd)
+                                                  container=args.container, command=args.cmd,
+                                                  on_host=args.on_host, sudo=args.sudo)
     elif args.command == "worker-pull-data-config":
         from db_ops.control import worker_data
         files = args.files

@@ -202,14 +202,59 @@ is a property of a machine, not its identity.
 | `encrypted_secret_text.json` | The encrypted secret store. Generated, never hand-edited — see [`docs/security.md`](./security.md). |
 | `config_catalog.json` | Which of the files above are mirrored into the store for the web console to read and edit, and how a record inside each is identified. A file missing from here is invisible to the console. |
 | `sre_config.json` | How lab environments are built: hypervisor, templates, network, and per-engine install defaults. |
+| `shared_config_objects.json` | **Reference, not configuration.** Every field of the seven shared objects in §5 — required or not, range, default, and what its number is measured against. Identical on every node; read by `common.cli describe-object`, and editing it changes nothing an app does. |
 
 ---
 
-## 5. Two objects that appear everywhere
+## 5. The shared config objects
 
-They are parsed once, in the shared layer, and reused. A per-app copy of either is a bug.
+**Seven of them**, and they are the blocks that appear inside *many* `data/*.json` records rather
+than belonging to one file. They are parsed once, in `db_ops/lib`, and passed around as values; a
+per-app copy of any of them is a bug.
 
-### `time_window` — when something may run
+| # | Object | Kind | Fields | Required | Parsed in | Appears in |
+| :-: | --- | --- | :-: | :-: | --- | --- |
+| 1 | `time_window` | object | 13 | 0 | `lib/time_window.py` | `app_commands`, `sql_targets`, `metric_definitions`, `reports_config`, `restore_config` (backups + restores) |
+| 2 | `notify` | object | 2 | 0 | `lib/notify.py` | `sql_targets`, `restore_config` |
+| 3 | `notify_rule` | object | 3 | 0 | `lib/notify.py` | inside `notify`, twice |
+| 4 | `output` | object | 4 | 0 | `lib/task_output.py` | `sql_targets` |
+| 5 | `cmd_access` | object | 13 | 1 (`method`) | `lib/cmd_access.py` | `db_instances` |
+| 6 | `sql_access` | object | 4 | 0 | `lib/sql_access.py` | `db_instances` |
+| 7 | `cleanup_retention` | **field** | 1 (+2 legacy spellings) | 1 | `lib/cleanup_retention.py` | `restore_config` (backups + restores) |
+
+**The field-by-field reference is a file, not this page**:
+[`data/shared_config_objects.json`](../data/shared_config_objects.json) — for every field, what it
+does, whether it is required, what values it takes, its default, and **what its number is measured
+against**. Ask it rather than reading it:
+
+```bash
+python -m db_ops.common.cli describe-object '{}'                     # the seven, with field counts
+python -m db_ops.common.cli describe-object '{"object": "time_window"}'
+python -m db_ops.common.cli describe-object '{"object": "time_window", "field": "retry_interval"}'
+```
+
+Each field carries a `range_text` for a person **and** a `constraint` a program can evaluate, so the
+estate can be held to it:
+
+```bash
+python -m db_ops.common.cli check-objects '{}'                  # this node's data/
+python -m db_ops.common.cli check-objects '{"format": "txt"}'   # one line per finding
+```
+
+It reports three things, and exits 1 if it finds any: a **required** field missing, a **value**
+outside what the reference accepts, and a field the reference does not describe — *nothing reads it*,
+which matters because a typo in a schedule is otherwise silent: the parser ignores what it does not
+recognise and the record runs on the default while looking configured. Two more are reported and
+never failed: a `deprecated` spelling the parser still reads, and an `unlisted` value outside an open
+enum, such as a Telegram level this estate defined itself.
+
+`tests/test_shared_config_objects_reference.py` checks the file against the code *and* runs that
+check over this estate, which is the only reason a reference like this is worth having. Its first run
+found `sql_access.mode` and `sql_access.timeout_seconds` in use by 7 instances and described nowhere,
+and two declared paths pointing at `backups[]` where the schedule actually lives on
+`backups[].jobs[]`.
+
+### 5.1 `time_window` — when something may run
 
 ```json
 "time_window": {
@@ -224,17 +269,103 @@ They are parsed once, in the shared layer, and reused. A per-app copy of either 
 }
 ```
 
-- Null bounds mean no restriction.
-- `repeat_interval` is seconds, counted from the **previous run's start**. A command that takes 9
-  seconds with an interval of 10 becomes due 1 second after it exits.
+Ten **bounds** and three **intervals**, answering two different questions.
+
+- The ten bounds are a wall-clock question — *may it run at this moment?* — read in the node's
+  configured timezone. Every bound is inclusive, every one is optional, `null` means no restriction
+  on that dimension, and a pair whose `from_` exceeds its `to_` **wraps** (`from_hour: 22,
+  to_hour: 6` spans midnight). `to_hour: 23` is the idiom for "all day"; `to_hour: 0` means
+  midnight alone, which is how a schedule fires once a day by accident.
+- The three intervals are elapsed time, in seconds, always in UTC.
 - `repeat_interval: 0` means run once and leave it running — that is how a server that stays up is
   expressed. `repeat_interval: -1` means manual only: never scheduled, run on request. Use it for
   anything that writes.
 - `timeout` must stay **above the slowest thing inside the command**, not above its average. A
-  collection pass killed at its timeout loses every metric in it, not only the slow one.
+  collection pass killed at its timeout loses every metric in it, not only the slow one. It is also
+  the grace on a `running` row.
 - Something still running when its interval comes round is skipped, not started twice.
 
-### `notify` — who hears about it
+#### Every interval is measured from the previous run's START
+
+`repeat_interval: 300` means "start 300 seconds after the last **start**". A task that runs for 240
+seconds is therefore due again about 60 seconds after it finishes — 45 in fact, because a run may
+begin up to `min(interval × 5%, 30s)` early so that a scheduler sweep boundary does not cost a whole
+cycle. That grace is why an interval of 1800 is observed as ~1770.
+
+Measuring from the finish instead makes the declared number unreadable: the same `300` would mean a
+5-minute cycle for a fast task and a 9-minute one for a slow one, with nothing in the config to say
+which, and each run's duration would push the next one further out.
+
+**It is one rule, in one place, for all four schedulers.**
+`db_ops.lib.time_window.due_from_row(time_window, row, now, local_now)` is the entry point every app
+calls; `run_anchor` is the only code that picks which column the anchor is read from, and
+`explain_due` produces the verdict **and** the sentence explaining it, so a log line cannot disagree
+with the decision it describes.
+
+| App | What it schedules | Anchor | Its own defaults |
+| --- | --- | --- | --- |
+| `jobs` (daemon) | `app_commands[]` | `job_runs.started_at` | retry 60 s, timeout 300 s |
+| `sql_tasks` | `sql_targets[]` | `sql_runs.started_at` | retry = `repeat_interval`, repeat 300 s |
+| `backup_restore` | backup jobs, restore entries | `job_runs.started_at` | retry = `repeat_interval` |
+| `metrics` | one metric on one target | `metric_results.collected_at`, stamped **before** the collector runs | retry 600 s |
+| `reports` | a scheduled report | `report_send_state.last_run_at` — the start of the run that last sent | repeat 300 s |
+
+Until 2026-09-19 two of those read something else: `sql_tasks` anchored on `sql_runs.finished_at`
+and the reports app on the instant its last send *completed*, so one estate ran three different
+meanings of one field. Nothing in any config said so.
+
+**Why this is `lib` and not a `common.cli` command.** The daemon sweeps once a second and metrics
+evaluate a verdict per target per metric — thousands a pass — so the rule is imported and evaluated
+in-process. `common` is for operations that run as a subprocess, and a subprocess per due check
+would cost more than the work being scheduled. Everything that is *not* that hot path asks the same
+rule through the CLI instead:
+
+```bash
+python -m db_ops.common.cli due-check @data/due_request.json
+# -> {"due": false, "reason": "interval not elapsed: 270s/300s",
+#     "last_run": "...", "next_due_at": "..."}
+```
+
+### 5.1b The pointers between files — `check-references`
+
+`data/` is a small relational database with **no foreign keys**. A backup job names a `server_id`, a
+SQL target names a `credential_name` and a `sql_id`, an instance names the OS login that reaches its
+host — and until 2026-09-19 nothing compared either side. Every failure of that kind has the same
+shape: both files are valid, the config loads, the schedule runs, and the run dies at the moment it
+needs the thing that is not there. Observed that morning on the container worker:
+
+```
+backup_restore.backup ERROR: backup_id=A1A_DBOPS_STORE_PG_115
+A1A_DBOPS_STORE_PG_115/wal: server_id not found in db_instances.json: A1A-…-PG-5433
+```
+
+The rules are data — [`data/config_references.json`](../data/config_references.json) — and the check
+is one command:
+
+```bash
+python -m db_ops.common.cli check-references '{}'                    # this node's data/
+python -m db_ops.common.cli check-references '{"data_dir": "…"}'     # a bundle, or a worker's copy
+```
+
+Seven pointers are declared today, 207 of them present in this estate. Three things shape how it
+reports:
+
+- **Only `active` records fail.** Retiring a target by turning it off is normal; failing on it would
+  teach the reader to stop reading. Those are listed under `inactive` instead, because an entry
+  somebody re-enables is the next outage.
+- **A pointer may have more than one legitimate home.** A notify level is wired either in
+  `telegram_groups.json` or in `telegram_config.json`'s `level_chat_map`, so a rule may name several
+  targets and landing in any of them is correct. The first run of that rule reported `private` — a
+  working route — as dangling.
+- **`password_ref` is deliberately not checked here.** The secret store is one encrypted blob, so
+  "does this ref exist" needs the passphrase: that is `check-secret`, which answers it by
+  authenticating rather than by looking.
+
+**Run it on the node that runs the job.** The incident above was clean on the master — the master's
+inventory *had* the instance — and broken on the worker, whose copy predated the rename. That is also
+the shape a partial deploy leaves behind, which is why the command takes a data directory.
+
+### 5.2 `notify` — who hears about it
 
 ```json
 "notify": {
@@ -243,11 +374,50 @@ They are parsed once, in the shared layer, and reused. A per-app copy of either 
 }
 ```
 
-`logging_on_run` announces that it ran; `alert_on_error` announces that it failed. Each names a
-**routing level**, not a chat: the level is looked up in the level → chat map built from
-`telegram_groups.json` and `telegram_config.json`. A level with no chat does not send, which is
-how a stream is muted — there is no second allow-list to keep in sync. Setting `chat_id` directly
-overrides the lookup, for the rare case that needs one specific chat.
+`logging_on_run` announces that it ran; `alert_on_error` announces that it failed. Each is a
+`notify_rule` and names a **routing level**, not a chat: the level is looked up in the level → chat
+map built from `telegram_groups.json` and `telegram_config.json`. A level with no chat does not
+send, which is how a stream is muted — there is no second allow-list to keep in sync. Setting
+`chat_id` directly overrides the lookup, for the rare case that needs one specific chat. An empty
+`telegram_chat` means "follow the event's own severity", which is why adding a `notify` object
+changes nothing until a rule is actually set.
+
+### 5.2b `output` — what a SQL task does with its rows
+
+```json
+"output": {"format": "txt", "telegram_chat": "sql", "chat_id": "", "max_rows": null}
+```
+
+Required on every SQL task target. `format` is `none` (status only), `plain` (the rows pasted into
+messages, ~30 rows each) or a file: `xlsx`, `csv`, `txt`, `xml`, `json`, sent as **one** Telegram
+document. Result sets with the same columns are merged into one table first, so a task that runs
+once per batch delivers one table, not one per batch. For more than a few dozen rows, a file is
+the quiet choice: two messages per run (the run log and the document) whatever the row count.
+`telegram_chat` / `chat_id` pick the chat the rows or file go to, the same way a `notify_rule`
+does. `max_rows` (1–5000) caps what `plain` fetches; out of range is refused, not clamped.
+
+### 5.3 `cmd_access` and `sql_access` — how a host and a database are reached
+
+`cmd_access` is the OS half (13 fields, `method` required: `local` | `ssh` | `winrm`) and
+`sql_access` the database half (4 fields, all optional, absent means `direct`). Two rules in them
+cost real time when they are missed:
+
+- **`method: "local"` means *inside the db_ops container*.** With a remote `host` it does not fail —
+  it reports the container's own CPU, memory and disk under that host's name. `remote_exec` refuses
+  the combination now.
+- **`auth_type` defaults to `key`.** A host reached with a password needs it stated, or the login is
+  never attempted. And `platform` belongs on the **instance**, not inside `cmd_access`: put there it
+  is silently ignored.
+
+### 5.4 `cleanup_retention` — how long backups are kept
+
+One field, **in seconds**, required on every backup job and every restore entry. `0` is a real
+setting and means *no age gate* — every file becomes a candidate and the chain rule alone decides
+(never the newest full, nor anything at or after it). It does not mean "keep everything"; believing
+that let a staging directory reach 16.7 GB. It is required precisely because an absent field reads
+exactly like a considered one: on 2026-09-11 six of fourteen restore entries carried none and each
+was running on a default nobody had chosen. The older spellings `retention_days` (days) and
+`target_retention_seconds` (seconds) are still read, never written.
 
 ---
 

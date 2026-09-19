@@ -128,7 +128,8 @@ differently in two places.
 | `sql_access.py` | the `sql_access` vocabulary — how to reach a *database*. `secret_refs(block)` answers which secret-store entries it names (`secret_ref`, the shared secret a bridge token is signed with; `connect_ref`, a whole connect string), because nothing else in the tree knew these fields named secrets at all — `check-credentials` skipped a legacy target and `check-secret` read five config files, none of them this one, so a configured bridge secret was invisible to both while every collection for that target failed on it |
 | `target_profile.py` | what a target **is** — engine, engine version, OS version, runtime — and which tool that implies |
 | `connection_spec.py` | one database connection stated **in full**, so nothing has to be looked up |
-| `task_output.py` | what a scheduled SQL task does with its result set |
+| `task_output.py` | what a scheduled SQL task does with its result set: the format words, `parse_output` for the `output` block, and `merge_result_sets` |
+| `task_input.py` | the reserved `{target_*}` placeholders a task's `input.args` may use without declaring them — the runner fills them from the `sql_targets` entry it is running for. Here because both sides need it and neither may import the other: `common.sql_task_admin` validates the args at registration, `sql_tasks.python_source` substitutes them at run time. It was spelled out in both until `test_no_duplicate_definitions.py` found the two copies |
 | `instance_bundle.py` | what a SQL Server instance-metadata bundle is — layout, two phases, order |
 | `ssh_errors.py` | what can go wrong reaching a host over SSH, as four names |
 | `target_flags.py` | per-target on/off flags |
@@ -229,13 +230,37 @@ as data, not literals — and `db_ops.control.cli worker-status` is what runs it
 
 ### Config objects parsed once
 
-`notify.py`, `time_window.py` and `cleanup_retention.py` are the shared config blocks described in
-[`13_common.md`](./13_common.md). They are parsed **once** per config load and passed around as
-values. A per-app copy of any of them is a bug — the reason they are here rather than in `common`
-is exactly the class-does-not-survive-a-subprocess point above.
+`notify.py`, `time_window.py`, `task_output.py`, `cleanup_retention.py`, `cmd_access.py` and
+`sql_access.py` hold the seven shared config blocks — six objects and one field. They are parsed **once** per config load and
+passed around as values. A per-app copy of any of them is a bug — the reason they are here rather
+than in `common` is exactly the class-does-not-survive-a-subprocess point above.
+
+**The field-level reference for all seven is data**: `data/shared_config_objects.json`, read by
+`shared_objects.py` and answered by `python -m db_ops.common.cli describe-object`. Each field
+carries both a `range_text` for a person and a `constraint` a program can evaluate — kind, nullable,
+min, max, enum, special values — because a prose range cannot be checked and an unchecked reference
+goes stale. `shared_objects.check_data_dir` is that check: it walks every path the file declares and
+reports a required field missing, a value out of range, and **a field nothing reads** (a typo in a
+schedule is otherwise silent — the parser ignores what it does not recognise and the record runs on
+the default while looking configured). `python -m db_ops.common.cli check-objects` is its CLI face
+and `tests/test_shared_config_objects_reference.py` runs it over this estate.
+[`configuration.md` §5](./configuration.md) is the same material for a reader.
+
+`config_references.py` is the second half of that idea and a different guarantee: not *is
+this field valid* but *does this field's pointer land anywhere*.
+`data/config_references.json` declares seven pointers between config files — a backup job's
+`server_id` into `db_instances.json`, a SQL target's `credential_name` into `users.json` —
+and `check` follows them, failing only on **active** records. It was written the morning an
+active backup failed every cycle with `server_id not found in db_instances.json`: both files
+were valid, and nothing in the tree compared one against the other.
 
 * `notify` — `logging_on_run` / `alert_on_error` → Telegram level → chat.
-* `time_window` — `repeat_interval`, `timeout`, allowed hours. Consulted on every daemon tick.
+* `time_window` — ten wall-clock bounds and three intervals. Consulted on every daemon tick.
+  **Every interval is measured from the previous run's start**, and one function decides it for all
+  four schedulers: `due_from_row` (row in, verdict out), with `run_anchor` the only code that picks
+  the anchor column and `explain_due` producing the verdict and its reason together. `sql_tasks`
+  measured from `finished_at` and the reports app from its last send until 2026-09-19, which is
+  three meanings of one number in one estate.
 * `cleanup_retention` — how long a directory of backups keeps them, in **seconds**. One name for
   what was `retention_days` on a backup job and `target_retention_seconds` on a restore entry:
   same idea, two costumes, and an operator asked why on 2026-09-11. Mandatory on both — an absent
@@ -257,6 +282,10 @@ is exactly the class-does-not-survive-a-subprocess point above.
 | `telegram_command_text.py` | read a `/spbot...` message into a command and arguments, and write one back as the line that runs it |
 | `process_liveness.py` | is this PID a *running* process — the zombie trap on POSIX and the `OpenProcess` one on Windows, in one place |
 | `daemon_state.py` | the daemon's own start, left in `runtime/` so something that is not the daemon can say how long DBA Brain has been up — believed only while its pid is alive |
+| `store_outage.py` | which store failures are worth waiting out — the PostgreSQL SQLSTATEs that mean *not now* (`08xxx`, `57P01`–`57P03`, `53300`), the socket failures that carry no code, and a **bounded** backoff. A two-second restart of the store's container used to end the daemon on `FATAL 57P03`, which is what abandoned candidate 0.18.0 at hour 21.8; past the budget the error is raised exactly as before, because a daemon that waits forever schedules nothing while looking alive |
+| `restore_space.py` | the room a restore must find before it starts: `free >= bytes_to_copy x factor`, default **1.5**, **2.0** when the restored database will live on the same filesystem as the staged files. Arithmetic and vocabulary only — no filesystem, no SSH — so the rule can be read without a host to run it against. A drill copied 115 GB onto the host carrying the runtime store on 2026-09-17, `/` reached 42 MB free and the daemon died with it |
+| `run_claim.py` | who owns a run that is still `running`, and when that ownership may be taken away: a live pid on this host holds its claim **however long it has run**, a dead one frees it at once, and another host's row waits for its timeout plus an hour. Reaping a row is what releases its key, so this and “may another run start?” are the same question — and answering it on age alone is how a task that outran its timeout got a second copy started on top of it |
+| `run_mode.py` | whether the daemon waits for an app command to finish before starting it again: `sync` (the default, and what every command did before the field existed) or `async` with a `max_parallel` cap. An `async` command **must** refuse its own duplicate work, because the daemon will not — which is safe only because each unit of work claims a `running` row the store's unique index will not issue twice |
 | `telegram_severity.py` | the severity emoji, applied once at the send layer |
 | `powershell.py` | quoting, encoding, and the `Invoke-Command` wrapper |
 | `sql_text.py` | SQL text and result limits — the parts of running a query that are not the running |

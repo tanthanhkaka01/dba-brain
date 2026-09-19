@@ -1,4 +1,5 @@
 import json
+import socket
 from io import StringIO
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -8,6 +9,16 @@ import pytest
 
 from conftest import shipped_config
 from db_ops.jobs import daemon
+
+
+def commands_running(running: dict) -> set[str]:
+    """Which app commands the daemon currently has processes for.
+
+    `running_commands` is keyed per *process* since run_mode was added - an `async` command may
+    have several at once, and a dict cannot hold two values under one key. The tests care which
+    commands are running, not which slots.
+    """
+    return {value.app_command.app_command_id for value in running.values()}
 
 
 class FakeTelegram:
@@ -107,8 +118,9 @@ def write_app_commands(data_dir, commands):
     (data_dir / "app_commands.json").write_text(json.dumps({"app_commands": commands}), encoding="utf-8")
 
 
-def app_command(app_command_id, *, repeat_interval=1, timeout=60, active=True, command_text=None):
-    return {
+def app_command(app_command_id, *, repeat_interval=1, timeout=60, active=True, command_text=None,
+                run_mode=None, max_parallel=None):
+    record = {
         "app_command_id": app_command_id,
         "app_name": app_command_id.lower(),
         "display_name": app_command_id,
@@ -131,6 +143,11 @@ def app_command(app_command_id, *, repeat_interval=1, timeout=60, active=True, c
         },
         "active": active,
     }
+    if run_mode:
+        record["run_mode"] = run_mode
+    if max_parallel is not None:
+        record["max_parallel"] = max_parallel
+    return record
 
 
 def test_daemon_accepts_key_base64_argument():
@@ -338,7 +355,7 @@ def test_due_app_commands_start_independently(tmp_path, monkeypatch):
     running = {}
     daemon.run_scheduler_scan(config=FakeConfig(tmp_path / "logs"), store=FakeStore(), data_dir=data_dir, logger=None, running_commands=running)
 
-    assert set(running) == {"APP-METRICS", "APP-TELEGRAM"}
+    assert commands_running(running) == {"APP-METRICS", "APP-TELEGRAM"}
     assert len(started) == 2
 
 
@@ -363,7 +380,7 @@ def test_long_running_app_does_not_block_another_due_app(tmp_path, monkeypatch):
 
     daemon.run_scheduler_scan(config=FakeConfig(tmp_path / "logs"), store=FakeStore(), data_dir=data_dir, logger=None, running_commands=running)
 
-    assert set(running) == {"APP-METRICS", "APP-TELEGRAM"}
+    assert commands_running(running) == {"APP-METRICS", "APP-TELEGRAM"}
     assert len(started) == 1
 
 
@@ -387,7 +404,7 @@ def test_duplicate_app_command_is_skipped_while_running(tmp_path, monkeypatch):
 
     daemon.run_scheduler_scan(config=FakeConfig(tmp_path / "logs"), store=FakeStore(), data_dir=data_dir, logger=None, running_commands=running)
 
-    assert set(running) == {"APP-METRICS"}
+    assert commands_running(running) == {"APP-METRICS"}
 
 
 def test_repeat_interval_is_measured_from_started_at(tmp_path):
@@ -600,21 +617,42 @@ def test_recover_stale_running_jobs_marks_timeout_and_logs(tmp_path):
     assert "stale" in update["error_text"].lower()
 
 
-def test_recover_stale_running_jobs_skips_within_timeout():
+def test_recover_stale_running_jobs_keeps_a_row_whose_process_is_still_alive(monkeypatch):
+    """A child can outlive the daemon that started it, and its row must survive the restart:
+    closing it would let the new daemon start a second copy beside a process that is working.
+
+    This replaced an "is it within its timeout?" test on 2026-09-19. Age was the wrong question in
+    both directions - it kept rows whose process had been gone for an hour (APP-SQL_TASKS blocked
+    for 30 minutes and APP-METRICS for 40 after one restart) and it would have closed this one.
+    """
     cmd = _make_app_command(timeout=7200)
-    app_commands = {cmd.app_command_id: cmd}
-    # Started only 1 hour ago — within timeout.
     row = _make_row("running", started_seconds_ago=3600, log_id=10)
+    row["host_name"] = socket.gethostname()
+    row["metadata_json"] = json.dumps({"pid": 4242})
+    monkeypatch.setattr(daemon.process_liveness, "is_pid_alive", lambda pid: pid == 4242)
     store = FakeStore(latest={cmd.app_command_id: row})
 
     daemon.recover_stale_running_jobs(
-        store=store,
-        app_commands=app_commands,
-        config=FakeConfig(),
-        logger=None,
-    )
+        store=store, app_commands={cmd.app_command_id: cmd}, config=FakeConfig(), logger=None)
 
     assert store.updated == []
+
+
+def test_recover_stale_running_jobs_frees_a_row_whose_process_is_gone(monkeypatch):
+    """The other half, and the one that was measured: well inside its 7200s timeout, but the
+    process that owned it is not there. Waiting would block the command for the rest of it."""
+    cmd = _make_app_command(timeout=7200)
+    row = _make_row("running", started_seconds_ago=60, log_id=10)
+    row["host_name"] = socket.gethostname()
+    row["metadata_json"] = json.dumps({"pid": 4242})
+    monkeypatch.setattr(daemon.process_liveness, "is_pid_alive", lambda pid: False)
+    store = FakeStore(latest={cmd.app_command_id: row})
+
+    daemon.recover_stale_running_jobs(
+        store=store, app_commands={cmd.app_command_id: cmd}, config=FakeConfig(), logger=None)
+
+    assert [update["log_id"] for update in store.updated] == [10]
+    assert store.updated[0]["status"] == "timeout"
 
 
 def test_recover_stale_running_jobs_sends_telegram_when_enabled(tmp_path, monkeypatch):
@@ -992,3 +1030,108 @@ def test_an_inherited_key_is_left_alone_when_no_flag_was_given(tmp_path, monkeyp
     )
 
     assert started[0] == "from-the-environment"
+
+
+# --------------------------------------------------------------------------- #
+# Does the daemon actually call the app the way its run_mode says?
+# --------------------------------------------------------------------------- #
+#
+# These run the scan itself, with a run already in flight in the store, because that is the only
+# level at which the question is answered. The unit tests around `run_mode.may_start` and
+# `app_command_due` both passed on 2026-09-19 while `async` did nothing at all: the in-memory gate
+# had been changed and the **store-side due check** still answered "running within timeout", so the
+# daemon never reached the gate. It took two probe tasks on a live node to see it.
+#
+# A running row in `latest` is how the store says "a run of this command is in flight".
+def _in_flight(app_command_id: str):
+    """A live run of `app_command_id`, as `running_commands` holds one.
+
+    Enough of the shape for `collect_running_commands` to look at it and leave it alone: a process
+    that has not exited, and a command that is nowhere near its timeout.
+    """
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        app_command=SimpleNamespace(app_command_id=app_command_id, timeout_disabled=False,
+                                    timeout_seconds=3600),
+        process=SimpleNamespace(poll=lambda: None),
+        started_at=datetime.now(timezone.utc))
+
+
+def _running_row(seconds_ago: int = 5) -> dict:
+    started = datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)
+    return {"status": "running", "started_at": started.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "finished_at": None, "created_at": started.strftime("%Y-%m-%dT%H:%M:%SZ")}
+
+
+def _scan(tmp_path, monkeypatch, commands, *, latest=None, running=None):
+    data_dir = tmp_path / "data"
+    write_app_commands(data_dir, commands)
+    started = []
+    monkeypatch.setattr(daemon.subprocess, "Popen",
+                        lambda *args, **kwargs: started.append(kwargs) or FakeProcess(returncode=None))
+    daemon.run_scheduler_scan(config=FakeConfig(tmp_path / "logs"),
+                              store=FakeStore(latest=latest or {}), data_dir=data_dir, logger=None,
+                              running_commands=running if running is not None else {})
+    return started
+
+
+def test_a_sync_command_is_not_called_while_its_own_run_is_in_flight(tmp_path, monkeypatch):
+    """The behaviour every command had before `run_mode` existed, and must still have."""
+    started = _scan(tmp_path, monkeypatch, [app_command("APP-SYNC", repeat_interval=1)],
+                    latest={"APP-SYNC": _running_row()})
+
+    assert started == []
+
+
+def test_an_async_command_is_called_again_while_its_own_run_is_in_flight(tmp_path, monkeypatch):
+    """The whole point of the field, and the thing that silently did not happen."""
+    started = _scan(tmp_path, monkeypatch,
+                    [app_command("APP-ASYNC", repeat_interval=1, run_mode="async", max_parallel=4)],
+                    latest={"APP-ASYNC": _running_row()})
+
+    assert len(started) == 1
+
+
+def test_an_async_command_stops_at_its_cap(tmp_path, monkeypatch):
+    """`max_parallel` is a brake, not a knob: a command due every second would otherwise start a
+    process every second for as long as the first one runs."""
+    running = {daemon.running_slot_key("APP-ASYNC", pid): _in_flight("APP-ASYNC")
+               for pid in (101, 102)}
+
+    started = _scan(tmp_path, monkeypatch,
+                    [app_command("APP-ASYNC", repeat_interval=1, run_mode="async", max_parallel=2)],
+                    latest={"APP-ASYNC": _running_row()}, running=running)
+
+    assert started == []
+
+
+def test_an_async_command_below_its_cap_is_still_called(tmp_path, monkeypatch):
+    running = {daemon.running_slot_key("APP-ASYNC", 101): _in_flight("APP-ASYNC")}
+
+    started = _scan(tmp_path, monkeypatch,
+                    [app_command("APP-ASYNC", repeat_interval=1, run_mode="async", max_parallel=2)],
+                    latest={"APP-ASYNC": _running_row()}, running=running)
+
+    assert len(started) == 1
+
+
+def test_an_async_command_still_waits_for_its_own_interval(tmp_path, monkeypatch):
+    """Async says "do not wait for the run to finish". It does not say "ignore the schedule"."""
+    started = _scan(tmp_path, monkeypatch,
+                    [app_command("APP-ASYNC", repeat_interval=3600, timeout=7200,
+                                 run_mode="async")],
+                    latest={"APP-ASYNC": _running_row(seconds_ago=60)})
+
+    assert started == []
+
+
+def test_two_commands_one_of_each_mode_are_called_correctly_in_one_scan(tmp_path, monkeypatch):
+    """Both rules at once, which is what a real scan does."""
+    started = _scan(
+        tmp_path, monkeypatch,
+        [app_command("APP-SYNC", repeat_interval=1),
+         app_command("APP-ASYNC", repeat_interval=1, run_mode="async", max_parallel=4)],
+        latest={"APP-SYNC": _running_row(), "APP-ASYNC": _running_row()})
+
+    assert len(started) == 1, "the async one only"

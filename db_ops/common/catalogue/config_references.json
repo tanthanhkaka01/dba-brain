@@ -1,0 +1,157 @@
+{
+    "schema_version": 1,
+    "notes": [
+        "The pointers BETWEEN config files, as data. data/ is a small relational database with no foreign keys: a backup job names a server_id, a SQL target names a credential_name, an instance names the OS login that reaches its host - and until 2026-09-19 nothing compared either side, so the first report of a broken pointer was the run that needed it.",
+        "Read by db_ops/lib/config_references.py and checked by 'python -m db_ops.common.cli check-references'. Each rule says where the pointer is ('from': file, path, field, and the field that marks the record active) and what it must land in ('to': file, path, field). Paths use the same notation as shared_config_objects.json: a dotted path where [] means 'each item of this list'.",
+        "ONLY ACTIVE RECORDS FAIL. An inactive entry pointing at something that is gone is how an estate retires a target; failing it would teach the reader to ignore the report. Those are listed under 'inactive' instead, because an entry somebody re-enables is the next outage.",
+        "A password_ref is deliberately NOT a rule here. The secret store is one encrypted blob, so 'does this ref exist' needs the passphrase: that is 'python -m db_ops.common.cli check-secret', which answers it by authenticating rather than by looking. A check that pretended to verify a secret without the key would be worse than no check at all.",
+        "Adding a pointer: add the rule here, and add a test to tests/test_config_references.py only if the rule needs a shape the checker does not yet walk. The point of the file is that a new pointer is a data change.",
+        "THREE COPIES, identical bytes: db_ops/common/catalogue/ (the seed init writes from), data/ (this node's) and data/*.example.json (what the public tree ships)."
+    ],
+    "config_references": [
+        {
+            "name": "backup job -> instance",
+            "from": {
+                "file": "restore_config.json",
+                "path": "backup_restore.backups[]",
+                "field": "server_id",
+                "active_field": "active"
+            },
+            "to": {
+                "file": "db_instances.json",
+                "path": "db_instances[]",
+                "field": "server_id"
+            },
+            "why": "The rule this file was written for. On 2026-09-19 an ACTIVE backup ran every cycle and every cycle failed with 'server_id not found in db_instances.json: A1A-...-PG-5433' - the instance had been renamed and the backup entry still named the old id. Nothing compared the two, so the first report was the outage."
+        },
+        {
+            "name": "sql target -> instance",
+            "from": {
+                "file": "sql_targets.json",
+                "path": "sql_targets[]",
+                "field": "server_id",
+                "active_field": "active"
+            },
+            "to": {
+                "file": "db_instances.json",
+                "path": "db_instances[]",
+                "field": "server_id"
+            },
+            "why": "A task whose server_id resolves to nothing fails at connect time, on its own schedule, in whatever chat its notify block names."
+        },
+        {
+            "name": "sql target -> sql command",
+            "from": {
+                "file": "sql_targets.json",
+                "path": "sql_targets[]",
+                "field": "sql_id",
+                "active_field": "active"
+            },
+            "to": {
+                "file": "sql_commands.json",
+                "path": "sql_commands[]",
+                "field": "sql_id"
+            },
+            "why": "A target names WHAT it runs by sql_id. With no command of that id the scan skips the pair silently - the task simply never runs, which reads as a schedule that has not come round yet."
+        },
+        {
+            "name": "sql target -> database credential",
+            "from": {
+                "file": "sql_targets.json",
+                "path": "sql_targets[]",
+                "field": "credential_name",
+                "active_field": "active"
+            },
+            "to": {
+                "file": "users.json",
+                "path": "database_credentials[].credentials[]",
+                "field": "credential_name"
+            },
+            "why": "The login the task connects with. A name that matches no credential is a task that cannot authenticate, and the message it fails with names the database rather than the missing credential."
+        },
+        {
+            "name": "instance -> its default database credential",
+            "from": {
+                "file": "db_instances.json",
+                "path": "db_instances[]",
+                "field": "default_credential_name",
+                "active_field": "enabled"
+            },
+            "to": {
+                "file": "users.json",
+                "path": "database_credentials[].credentials[]",
+                "field": "credential_name"
+            },
+            "why": "What metric collection logs in with when a metric names no credential of its own. Dangling, every collection for that target fails on a credential the inventory says is configured."
+        },
+        {
+            "name": "instance cmd_access -> OS credential",
+            "from": {
+                "file": "db_instances.json",
+                "path": "db_instances[]",
+                "field": "cmd_access.credential_name",
+                "active_field": "enabled"
+            },
+            "to": {
+                "file": "users.json",
+                "path": "remote_credentials[].credentials[]",
+                "field": "credential_name"
+            },
+            "why": "The OS login that reaches the host. cmd_access.credential_name is required for winrm and for ssh with auth_type password, and a name pointing at nothing raises 'Remote credential not found' the first time a host metric or a restart is tried - which for OS metrics is every scan."
+        },
+        {
+            "name": "sql target notify (progress) -> a routing level that exists",
+            "from": {
+                "file": "sql_targets.json",
+                "path": "sql_targets[]",
+                "field": "notify.logging_on_run.telegram_chat",
+                "active_field": "active"
+            },
+            "to": [
+                {
+                    "file": "telegram_groups.json",
+                    "path": "telegram_groups[]",
+                    "field": "notify_level"
+                },
+                {
+                    "file": "telegram_groups.json",
+                    "path": "telegram_groups[]",
+                    "field": "source_notify_level"
+                },
+                {
+                    "file": "telegram_config.json",
+                    "path": "level_chat_map",
+                    "field": "[key]"
+                }
+            ],
+            "why": "The same pointer on the progress stream. Muting progress is routine, so a finding here is read as 'check this was meant' rather than as a fault."
+        },
+        {
+            "name": "sql target notify (failure) -> a routing level that exists",
+            "from": {
+                "file": "sql_targets.json",
+                "path": "sql_targets[]",
+                "field": "notify.alert_on_error.telegram_chat",
+                "active_field": "active"
+            },
+            "to": [
+                {
+                    "file": "telegram_groups.json",
+                    "path": "telegram_groups[]",
+                    "field": "notify_level"
+                },
+                {
+                    "file": "telegram_groups.json",
+                    "path": "telegram_groups[]",
+                    "field": "source_notify_level"
+                },
+                {
+                    "file": "telegram_config.json",
+                    "path": "level_chat_map",
+                    "field": "[key]"
+                }
+            ],
+            "why": "A level with no chat does not send - which is the documented way to MUTE a stream, so this is reported rather than guessed at. It is here because the other reading is just as common: a level renamed in telegram_groups.json and not in the targets, which silently stops the failure alert nobody notices is missing until they need it. THREE homes, because a level is wired in either file: 'private' lives in telegram_config.json's level_chat_map, and the first run of this rule reported it as dangling - a checker whose first finding is a false positive does not get a second reading."
+        }
+    ]
+}

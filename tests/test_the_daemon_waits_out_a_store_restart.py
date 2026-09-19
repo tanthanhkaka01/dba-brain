@@ -1,0 +1,172 @@
+"""A store that is coming back is not the daemon's failure, and it used to be treated as one.
+
+On 2026-09-18 the container holding the runtime store was restarted. It answered again two seconds
+later. The daemon did not: the scan raised ``FATAL 57P03`` — *the database system is starting up* —
+the loop let it out, ``main`` logged one line and returned 1, and nothing restarted the process.
+Nineteen hours of silence followed and candidate 0.18.0 was abandoned at hour 21.8.
+
+The rule now lives in :mod:`db_ops.lib.store_outage`: a failure the store itself classifies as
+transient is waited out, on a bounded budget, and everything else leaves the loop exactly as before.
+These tests are that distinction — the codes, the budget, and the two things that must not change:
+a real error still reaches a person, and an outage longer than the budget still ends the process.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from db_ops.lib import store_outage
+
+
+class FakePgError(Exception):
+    """pg8000 raises its errors carrying the server's response fields as a mapping."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__({"S": "FATAL", "C": code, "M": message})
+
+
+# --------------------------------------------------------------------------- #
+# Reading the store's own classification
+# --------------------------------------------------------------------------- #
+def test_the_code_that_ended_0_18_0_is_read_out_of_the_error():
+    error = FakePgError("57P03", "the database system is starting up")
+
+    assert store_outage.sqlstate(error) == "57P03"
+    assert store_outage.is_transient(error)
+
+
+def test_an_attribute_is_preferred_to_the_argument_mapping():
+    """A driver that grows a `sqlstate` attribute should be read through it, not by shape."""
+
+    class Driverish(Exception):
+        sqlstate = "08006"
+
+    assert store_outage.sqlstate(Driverish("connection failure")) == "08006"
+
+
+@pytest.mark.parametrize("code", ["08000", "08003", "08006", "57P01", "57P02", "57P03", "53300"])
+def test_every_connection_and_shutdown_code_is_waited_out(code):
+    assert store_outage.is_transient(FakePgError(code, "…"))
+
+
+@pytest.mark.parametrize("code", ["42P01", "42703", "23505", "28P01", "3D000"])
+def test_a_definite_answer_is_never_retried(code):
+    """A missing table, a wrong column, a duplicate key, a rejected password, a missing database.
+    Retrying any of these only delays the report by the whole budget."""
+    assert not store_outage.is_transient(FakePgError(code, "…"))
+
+
+def test_a_code_outside_the_set_is_trusted_over_the_words_in_its_message():
+    """The message of a permission error may still say 'connection'. The server sent a code, and
+    the code is the answer — otherwise the text match quietly widens what gets retried."""
+    assert not store_outage.is_transient(FakePgError("42501", "permission denied for connection"))
+
+
+def test_a_socket_failure_carries_no_code_and_is_read_from_its_text():
+    """A connection lost at the socket never reaches the server, so nothing sends a code back."""
+    assert store_outage.is_transient(ConnectionResetError("connection reset by peer"))
+    assert store_outage.is_transient(OSError("network error"))
+
+
+def test_an_ordinary_bug_is_not_mistaken_for_an_outage():
+    assert not store_outage.is_transient(KeyError("server_id"))
+    assert not store_outage.is_transient(ValueError("expected an int"))
+
+
+# --------------------------------------------------------------------------- #
+# The budget
+# --------------------------------------------------------------------------- #
+def test_the_first_wait_is_short_because_the_outage_was_two_seconds_long():
+    waiter = store_outage.OutageWaiter()
+
+    assert waiter.wait_for(FakePgError("57P03", "starting up")) == 2
+
+
+def test_the_waits_grow_and_are_capped():
+    waiter = store_outage.OutageWaiter()
+    error = FakePgError("57P03", "starting up")
+
+    waits = [waiter.wait_for(error) for _ in range(6)]
+
+    assert waits == [2, 4, 8, 16, 30, 30]
+
+
+def test_a_definite_error_gives_no_wait_at_all():
+    waiter = store_outage.OutageWaiter()
+
+    assert waiter.wait_for(FakePgError("42P01", "relation does not exist")) is None
+
+
+def test_an_outage_longer_than_the_budget_ends_the_process():
+    """Retrying forever turns a store that has really gone away into a daemon that looks alive and
+    schedules nothing — the same silence this module exists to prevent, one level up."""
+    waiter = store_outage.OutageWaiter(budget_seconds=20)
+    error = FakePgError("57P03", "starting up")
+
+    waits = []
+    while (wait := waiter.wait_for(error)) is not None:
+        waits.append(wait)
+
+    assert sum(waits) == 20
+    assert waiter.wait_for(error) is None
+
+
+def test_the_budget_is_per_outage_and_a_good_pass_restores_it():
+    """Otherwise a daemon up for a month would give up on its first hiccup, having spent its
+    budget one second at a time over weeks."""
+    waiter = store_outage.OutageWaiter()
+    error = FakePgError("57P03", "starting up")
+    for _ in range(4):
+        waiter.wait_for(error)
+
+    waiter.recovered()
+
+    assert waiter.waited_seconds == 0
+    assert waiter.wait_for(error) == 2
+
+
+# --------------------------------------------------------------------------- #
+# The daemon's half: the wait is logged, because a silent wait reads as a stopped daemon
+# --------------------------------------------------------------------------- #
+def test_the_daemon_logs_every_wait_with_the_code_and_the_budget_left(capsys):
+    from db_ops.jobs.daemon import wait_out_store_outage
+
+    logged: list[dict] = []
+
+    class Logger:
+        pass
+
+    waiter = store_outage.OutageWaiter()
+    wait = wait_out_store_outage(
+        FakePgError("57P03", "the database system is starting up"),
+        waiter=waiter, logger=None)
+
+    assert wait == 2
+    warning = capsys.readouterr().err
+    assert "57P03" in warning
+    assert "retry 1 in 2s" in warning
+    assert "598s of budget left" in warning
+    assert logged == []
+
+
+def test_the_daemon_lets_a_real_error_out_untouched():
+    from db_ops.jobs.daemon import wait_out_store_outage
+
+    assert wait_out_store_outage(
+        FakePgError("42P01", 'relation "job_runs" does not exist'),
+        waiter=store_outage.OutageWaiter(), logger=None) is None
+
+
+def test_the_scan_loop_consults_the_waiter_and_reraises_what_it_will_not_wait_for():
+    """The wiring itself: a loop that classified the error and then raised anyway would pass every
+    test above while changing nothing."""
+    import inspect
+
+    from db_ops.jobs import daemon
+
+    source = inspect.getsource(daemon.main)
+
+    assert "store_waiter = store_outage.OutageWaiter()" in source
+    assert "wait = wait_out_store_outage(exc, waiter=store_waiter, logger=logger)" in source
+    assert "if wait is None:\n                    raise" in source
+    assert "store_waiter.recovered()" in source

@@ -92,12 +92,13 @@ def spawn(command: str, request: dict[str, Any], *, module: str = DEFAULT_MODULE
     try:
         completed = subprocess.run(
             [sys.executable, "-m", module, command, "-"],
-            input=payload, capture_output=True, text=True, timeout=timeout_seconds,
-            # **Pinned, and it was not.** `text=True` alone encodes through
+            input=payload.encode("utf-8"), capture_output=True, timeout=timeout_seconds,
+            # **Bytes, and pinned to UTF-8 below.** `text=True` encodes through
             # `locale.getpreferredencoding()`, which on Windows is the machine's ANSI code page.
             # One program talking to itself over a pipe then depends on the console it happened to
             # be started from — and the two ends do not always agree, because the child's
-            # `sys.stdin` is opened with `errors="surrogateescape"`.
+            # `sys.stdin` is opened with `errors="surrogateescape"`. The pipe carries bytes here so
+            # that each direction can state its own error handling; see below for why they differ.
             #
             # The failure that found it: a task's SQL held an em dash. The parent wrote it as
             # cp1252 0x97; the child read UTF-8 and recovered the undecodable byte as the lone
@@ -105,11 +106,22 @@ def spawn(command: str, request: dict[str, Any], *, module: str = DEFAULT_MODULE
             # position 350 of a script whose own bytes hold no 0x97 anywhere. It reproduced under
             # the daemon and never from an Administrator console, because those two had different
             # code pages, which is what "depends on the console" costs.
-            encoding="utf-8",
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return None, f"{command} could not run: {exc}"
-    return completed, ""
+    # **Written and read in different directions on purpose.** The request goes out as strict
+    # UTF-8: a payload that cannot be encoded is a caller's bug and must not be delivered with a
+    # character silently swapped. What comes back is decoded with `errors="replace"`, because the
+    # child's stdout is not only the JSON answer — a native tool it shells out to writes there too,
+    # in whatever code page the machine has. One cp1252 byte (0x97, an em dash from a Windows
+    # console) used to kill the reader and the answer never arrived: the gate had run, exited 0 and
+    # printed valid JSON, and the caller was told "authorize exited 0 without a JSON response".
+    # A replaced byte costs one character of an error message; a raised decode costs the answer.
+    return subprocess.CompletedProcess(
+        completed.args, completed.returncode,
+        (completed.stdout or b"").decode("utf-8", errors="replace"),
+        (completed.stderr or b"").decode("utf-8", errors="replace"),
+    ), ""
 
 
 

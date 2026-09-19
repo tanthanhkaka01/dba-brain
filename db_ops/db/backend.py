@@ -744,8 +744,36 @@ class StoreTarget:
         return self.store.connection_string
 
 
+#: SQLSTATE for a unique-constraint violation. PostgreSQL sends it with the error; SQLite has no
+#: such code and is recognised by its message instead.
+UNIQUE_VIOLATION_SQLSTATE = "23505"
+
+
+def is_unique_violation(error: BaseException) -> bool:
+    """Did this statement lose a race for a unique key, rather than fail?
+
+    A claim is made by **inserting** a row that a unique index will refuse if somebody already
+    holds the key, so "the insert failed" and "somebody else is already running it" arrive as the
+    same exception and have to be told apart here. Read by shape and by code rather than by driver
+    class, because this module is the only place that knows both backends and neither import
+    belongs anywhere else.
+    """
+    if isinstance(error, sqlite3.IntegrityError):
+        return "unique" in str(error).lower()
+    # pg8000 carries the server's response fields as a mapping, where 'C' is the SQLSTATE.
+    code = getattr(error, "sqlstate", None) or getattr(error, "pgcode", None)
+    if isinstance(code, str) and code.strip() == UNIQUE_VIOLATION_SQLSTATE:
+        return True
+    for arg in getattr(error, "args", ()) or ():
+        if isinstance(arg, dict) and str(arg.get("C") or "").strip() == UNIQUE_VIOLATION_SQLSTATE:
+            return True
+    return False
+
+
 __all__ = [
     "POSTGRES_UTC_NOW",
+    "UNIQUE_VIOLATION_SQLSTATE",
+    "is_unique_violation",
     "StoreTarget",
     "PostgresConnection",
     "PostgresCursor",

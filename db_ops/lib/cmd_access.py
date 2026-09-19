@@ -30,7 +30,32 @@ SUPPORTED_PLATFORMS = {PLATFORM_WINDOWS, PLATFORM_LINUX}
 #: ``remote_exec.assert_local_host`` refuses the combination — see ``docs/04_metrics_engine.md``.
 SUPPORTED_CMD_ACCESS_METHODS = {"local", "ssh", "winrm"}
 
+#: Every key a ``cmd_access`` block may carry, declared rather than scattered across the two
+#: resolvers below — the shared-object reference (``data/shared_config_objects.json``) is checked
+#: against this tuple, so a field added to one and not the other fails the suite instead of
+#: becoming a setting the docs do not mention.
+#:
+#: ``platform`` is deliberately **not** here. It is read from the *instance* and written into the
+#: resolved block by :func:`resolve_cmd_access`; inside ``cmd_access`` it is ignored, which is worth
+#: stating because putting it there looks like it works.
+CMD_ACCESS_FIELDS: tuple[str, ...] = (
+    "enabled",
+    "method",
+    "host",
+    "port",
+    "shell",
+    "auth_type",
+    "key_file",
+    "ssl",
+    "credential_name",
+    "username",
+    "password",
+    "password_ref",
+    "passphrase",
+)
+
 __all__ = [
+    "CMD_ACCESS_FIELDS",
     "PLATFORM_LINUX",
     "PLATFORM_WINDOWS",
     "SUPPORTED_CMD_ACCESS_METHODS",

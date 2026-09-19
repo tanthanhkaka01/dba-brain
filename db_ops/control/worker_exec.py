@@ -9,6 +9,10 @@ The command (and its args) is passed through verbatim — nothing is hard-coded 
 Host/user/SSH-password come from ``config.json`` + the secret store (same ``--key`` as the
 other control commands). The command runs as ``docker exec <container> <command...>`` with
 each token shell-quoted, so flags like ``--days 7`` reach the in-container command intact.
+
+``--on-host`` runs the command on the worker HOST instead - the compose file, ``docker pull`` and
+the bind-mounted folders live there, not in the container. ``--sudo`` runs it with ``sudo``, fed
+the same SSH password, so an upgrade needs no interactive ssh session and no stored host key.
 """
 
 from __future__ import annotations
@@ -20,7 +24,8 @@ from db_ops.control._support import DEFAULT_CONTAINER, ssh_connect, ssh_run
 
 
 def run_worker_command(*, host: str, user: str, password: str | None, port: int = 22,
-                       container: str = DEFAULT_CONTAINER, command: list[str]) -> int:
+                       container: str = DEFAULT_CONTAINER, command: list[str],
+                       on_host: bool = False, sudo: bool = False) -> int:
     # argparse REMAINDER may keep a leading "--" separator — drop it.
     cmd = list(command or [])
     if cmd and cmd[0] == "--":
@@ -31,10 +36,18 @@ def run_worker_command(*, host: str, user: str, password: str | None, port: int 
               file=sys.stderr)
         return 2
 
-    remote = "docker exec " + shlex.quote(container) + " " + " ".join(shlex.quote(t) for t in cmd)
+    quoted = " ".join(shlex.quote(t) for t in cmd)
+    if on_host:
+        # One token is a whole shell line (`cd /opt/dbabrain && docker compose ps`); several are
+        # one command and its arguments, quoted as they came.
+        line = cmd[0] if len(cmd) == 1 else quoted
+        remote = f"sudo -S -p '' sh -c {shlex.quote(line)}" if sudo else line
+    else:
+        remote = "docker exec " + shlex.quote(container) + " " + quoted
     client = ssh_connect(host, user, password, port)
     try:
-        print(f"# worker {user}@{host}", flush=True)
-        return ssh_run(client, remote, check=False)
+        print(f"# worker {user}@{host}{' (host)' if on_host else ''}", flush=True)
+        return ssh_run(client, remote, check=False,
+                       sudo_password=password if (on_host and sudo) else None)
     finally:
         client.close()

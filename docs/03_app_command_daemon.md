@@ -44,7 +44,7 @@ See [01_runtime_store.md](01_runtime_store.md) for the table and
 
 `data/app_commands.json` is the source of truth. Important fields are `app_command_id`, `app_code`, `app_name`, `display_name`, `log_scope`, `working_dir`, `command_text`, `time_window`, and `active`.
 
-`time_window.repeat_interval` and `time_window.timeout` are in seconds by default. `repeat_interval` is measured from the previous run's `started_at`, not from `finished_at`. For example, if an app has `repeat_interval: 10` and the previous run started at `00:00:00` then finished at `00:00:09`, the app becomes due again at `00:00:10`. If that same `app_command_id` is still running when it becomes due, the daemon skips it until the running process exits or times out. Date/time bounds use `from_*` and `to_*` names, for example `from_day`, `to_day`, `from_hour`, and `to_hour`.
+`time_window.repeat_interval` and `time_window.timeout` are in seconds by default. `repeat_interval` is measured from the previous run's `started_at`, not from `finished_at` — and that is true of **every** app that carries a `time_window`, not only this one: the rule, the anchor column and the explanation all live in `db_ops/lib/time_window.py` (`due_from_row`, `run_anchor`, `explain_due`), and [`configuration.md` §5](./configuration.md) is the field reference. For example, if an app has `repeat_interval: 10` and the previous run started at `00:00:00` then finished at `00:00:09`, the app becomes due again at `00:00:10` — at `00:00:09.5` in fact, because a run may start up to `min(interval × 5%, 30s)` early so a scan boundary does not cost a whole cycle. If that same `app_command_id` is still running when it becomes due, the daemon skips it until the running process exits or times out. Date/time bounds use `from_*` and `to_*` names, for example `from_day`, `to_day`, `from_hour`, and `to_hour`.
 
 **Special `0` values (shared convention).** `repeat_interval`, `retry_interval`, and `timeout` accept `0`, which is interpreted consistently everywhere a `time_window` drives scheduling — app commands (`job_due`), SQL tasks, metrics, and reports (all via `db_ops/lib/time_window.py`):
 
@@ -127,6 +127,39 @@ GROUP BY job_code
 ORDER BY latest_seen DESC;
 ```
 
+## One at a time, or several: `run_mode`
+
+An app command declares how the daemon calls it:
+
+```json
+{"app_command_id": "APP-SQL_TASKS", "run_mode": "async", "max_parallel": 4}
+```
+
+| `run_mode` | The daemon | The app |
+| --- | --- | --- |
+| `sync` (default, and what every command did before this field) | starts it only when no run of it is in flight | may assume it is alone |
+| `async` | **starts it whenever it is due, in flight or not**, up to `max_parallel` | **must refuse its own duplicate work** |
+
+**Why the field exists.** `APP-SQL_TASKS` is one app command that works through its due list in
+order, so one slow task is a stopped queue rather than a busy one: on 2026-09-19 a 22-minute SQL
+task held every other SQL task for 22 minutes, and a leftover `running` row held the same queue for
+30 minutes earlier that day. `APP-BACKUP-RESTORE` has the same shape. Both ship `async`.
+
+**Why it is safe, and what makes it unsafe.** Running an app twice at once is only acceptable
+because each *unit of work* takes an exclusive claim: a `running` row that a unique index will not
+issue twice (`ux_sql_runs_claim` per task-and-target, `ux_job_runs_claim` per backup job, restore,
+or `sync` app command). The second process is told the work is taken and moves to the next item. An
+`async` app that does **not** claim its work runs the same thing twice — which is the 2026-09-08
+duplicate production SQL runs and the 2026-09-14 second restore, both of which were guarded only by
+a SELECT taken before the decision.
+
+**`max_parallel` is a brake, not a tuning knob.** `APP-SQL_TASKS` is due every second; uncapped,
+`async` would start a process per second for as long as the first one runs.
+
+A `sync` command still claims its own id, so a second daemon on the host — or a child that outlived
+its daemon — cannot start a duplicate either. An `async` command claims nothing, because being
+called again while one is running is the whole point of it.
+
 ## Stale RUNNING Job Recovery
 
 When the daemon process is killed or crashes while a child subprocess is active, the corresponding `job_runs` row can be left in `status = 'running'` indefinitely. The daemon handles this in two ways:
@@ -136,6 +169,22 @@ When the daemon process is killed or crashes while a child subprocess is active,
 **Per-scan detection** — `app_command_is_due` also handles stale RUNNING rows. If the latest row for a command has `status = 'running'` and `started_at + timeout_seconds <= now`, the command is treated as due (not blocked by a live run). The daemon will start a new subprocess and insert a fresh `job_runs` row; the stale row remains in the table as historical evidence.
 
 Together these two paths ensure that a crashed or long-gone subprocess never permanently blocks a scheduled command.
+
+**A row whose process is still alive is no longer reaped on age.** The timeout used to be the whole
+answer, and that is a loop: a task that legitimately outran its timeout had its row closed, and the
+next scan started a second copy on top of the first. Every `running` row now records the pid and
+host that own it, and the reaper asks whether that process is still there
+(`db_ops/lib/run_claim.py`):
+
+| The row | Answer |
+| --- | --- |
+| this host, pid alive | **held**, however old it is |
+| this host, pid gone | **freed at once** — a dead process will not come back |
+| another host | **freed only after its timeout plus an hour**, because this host cannot check that one's processes |
+| no pid recorded (written by an older build) | age alone, exactly as before |
+
+Closing the row is what releases its claim, so "is it stale?" and "may another run start?" are the
+same question and are now answered in one place.
 
 **And the other direction — a run that is genuinely still going blocks the next one, across a
 restart.** The `running` row is tested *before* the repeat interval, which matters because almost
@@ -152,8 +201,10 @@ target. The order is now status first, interval second, which is what the daemon
 - A command is not starting: check `active` and `time_window.repeat_interval` plus `from_*`/`to_*` bounds.
 - A command is skipped as already running: the daemon keeps one live subprocess per `app_command_id`.
 - A command starts again soon after finishing: `repeat_interval` is counted from the last `started_at`. A run that lasts most of its interval may be due shortly after it exits.
+- A command is not starting and nothing says why: the `app.daemon.command.not_due` log line carries `reason=` and `next_retry_at=`, both taken from the verdict that made the decision. The same answer without the daemon is `python -m db_ops.common.cli due-check '<json>'`.
 - A command exits with `error`: inspect `metadata_json`, `error_text`, and the matching `{log_scope}_runtime.log`.
 - A command times out: increase `time_window.timeout` only after checking whether the child app is stuck.
+- **The store goes away for a moment**: a failure the store classifies as transient — the PostgreSQL SQLSTATEs `08xxx` (connection), `57P01`–`57P03` (shutting down / starting up) and `53300` (too many connections), plus a socket that never reached the server — is waited out rather than raised, 2 s then 4, 8, 16 and 30, for at most **10 minutes per outage**. Every wait is logged as `app.daemon.store_outage` with the code and the budget left, so the gap in `job_runs` carries its own explanation. Past the budget, or for any other error, the daemon exits as it always did. Before this, a two-second restart of the store's container ended the process on `FATAL 57P03` and nothing restarted it — nineteen hours of silence, and candidate 0.18.0 abandoned at hour 21.8. The rule is `db_ops/lib/store_outage.py`; SQLite's `database is locked` keeps its own older backoff beside it.
 - A command appears stuck in `running` after a daemon restart: `recover_stale_running_jobs` should resolve this at next startup. If the row is still `running` after restart, check that the daemon started without error.
 - **The daemon starts and runs nothing at all**, logging `app.daemon.nothing_scheduled`: every command is declared for a `node_role` this process does not have. A process that was not told otherwise is `master`, and an estate exported from a worker declares `worker` on all of them. Set `DB_OPS_NODE_ROLE=worker` on the process, or `node_role: "all"` in `data/app_commands.json`. This is the first thing to check on a machine that has just imported an estate — see [`docs/configuration.md` §9](./configuration.md#9-moving-a-whole-estate-to-another-machine).
 

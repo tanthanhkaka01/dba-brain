@@ -39,6 +39,14 @@ from db_ops.db.run_requests import (
 )
 from db_ops.jobs import daemon
 
+
+def only_running(estate) -> object:
+    """The single live run the estate has. `running_commands` is keyed per process since run_mode
+    was added, so the key is no longer the app command's id."""
+    values = list(estate["running"].values())
+    assert len(values) == 1, f"expected exactly one running command, got {len(values)}"
+    return values[0]
+
 #: An hour range that is closed *now*, wherever and whenever this runs.
 #:
 #: The window used to be a literal 03:00-04:00, which made "not due" a claim about the clock on the
@@ -207,7 +215,7 @@ def test_a_request_runs_a_command_that_the_schedule_would_not_have(estate) -> No
     """It overrides both gates on purpose: the interval and the allowed-hours window."""
     estate["queue"].request_run(app_command_id="APP-TEST", requested_by="thanh")
     scan(estate)
-    assert "APP-TEST" in estate["running"]
+    assert only_running(estate).app_command.app_command_id == "APP-TEST"
 
 
 def test_the_run_records_who_asked_for_it(estate) -> None:
@@ -231,7 +239,7 @@ def test_the_requester_survives_the_run_finishing(estate) -> None:
     """
     estate["queue"].request_run(app_command_id="APP-TEST", requested_by="thanh")
     scan(estate)
-    estate["running"]["APP-TEST"].process.wait(timeout=30)
+    only_running(estate).process.wait(timeout=30)
     scan(estate)  # reaps it
 
     run = estate["store"].fetch_latest_job_runs_by_job_code()["APP-TEST"]
@@ -279,13 +287,13 @@ def test_a_request_does_not_start_a_second_copy_of_a_running_command(estate) -> 
     _command_that_outlives_the_scan(estate)
     estate["queue"].request_run(app_command_id="APP-TEST", requested_by="thanh")
     scan(estate)
-    process = estate["running"]["APP-TEST"].process
+    process = only_running(estate).process
     try:
         assert process.poll() is None, "the fixture command exited; this test would prove nothing"
 
         estate["queue"].request_run(app_command_id="APP-TEST", requested_by="thanh")
         scan(estate)
-        assert estate["running"]["APP-TEST"].process.pid == process.pid
+        assert only_running(estate).process.pid == process.pid
         assert estate["queue"].pending_for("APP-TEST") is not None, (
             "the request should still be waiting, not consumed by a run that never happened")
     finally:

@@ -616,6 +616,11 @@ PACKAGED_DEFAULTS: dict[str, str] = {
     # public tree's suite: the confirmation tests pass where the file exists and fail where it
     # does not, which is the difference between the two trees.
     "data/emergency_operations.json": "common/catalogue/emergency_operations.json",
+    # Reference rather than configuration, and seeded for exactly that reason: without it a
+    # node answers "what does retry_interval mean" with nothing, and the console has no
+    # field help to draw. Identical on every node - see db_ops/lib/shared_objects.py.
+    "data/shared_config_objects.json": "common/catalogue/shared_config_objects.json",
+    "data/config_references.json": "common/catalogue/config_references.json",
     # Ships **empty**, and that is the content rather than a placeholder: a restore target is an
     # estate fact with no sensible default. What it carries is the shape and the word "empty".
     #

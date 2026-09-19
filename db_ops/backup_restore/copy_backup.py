@@ -1,5 +1,5 @@
 from __future__ import annotations
-from db_ops.backup_restore.shell_quoting import _BACKUP_TIMESTAMP_RE, _log_progress, _write_temp_powershell_script  # noqa: F401 - one definition
+from db_ops.backup_restore.shell_quoting import _BACKUP_TIMESTAMP_RE, backup_time_from_name, _log_progress, _write_temp_powershell_script  # noqa: F401 - one definition
 
 import dataclasses
 import datetime as dt
@@ -779,14 +779,8 @@ def _selected_remote_backups(
 
 
 def _backup_time_from_name(name: str) -> float | None:
-    """Parse the backup time encoded in a file name (..._YYYYMMDD_HHMMSS.bak/.trn)."""
-    match = _BACKUP_TIMESTAMP_RE.search(name)
-    if not match:
-        return None
-    try:
-        return dt.datetime.strptime(match.group(1) + match.group(2), "%Y%m%d%H%M%S").timestamp()
-    except ValueError:
-        return None
+    """Parse the backup time encoded in a file name (..._YYYYMMDD_HHMMSS[Z].bak/.trn)."""
+    return backup_time_from_name(name)
 
 
 def _format_copy_window(config: BackupRestoreConfig) -> str:

@@ -104,6 +104,10 @@ USAGE = (
     "  relay-file       Copy one file from one host straight to another, hash-verified\n"
     "  host-facts       Read one host's state: uptime, disks, services, pending reboot (see --help)\n"
     "  self-status      What THIS installation is: version, host, ip, cpu, memory, disk\n"
+    "  describe-object  What a shared config object's fields mean: time_window, notify, ... (see --help)\n"
+    "  due-check        Would this time_window run now, and if not why not (see --help)\n"
+    "  check-objects    Does this node's config obey the shared-object reference (see --help)\n"
+    "  check-references  Which config pointer lands nowhere: server_id, credential_name (see --help)\n"
     "  timezone         Which clock this node shows, and record it in the store (see --help)\n"
     "  host-service     Start/stop/restart services on a host and wait for the end state (see --help)\n"
     "  host-restart     Restart a host and prove it came back (see --help)\n"
@@ -2466,6 +2470,10 @@ def main(argv: list[str] | None = None) -> int:
         from db_ops.common import cli_restorestep
 
         return cli_restorestep.run(argv[0], argv[1:], read_request=_read_json_request)
+    if argv[0] in {"describe-object", "due-check", "check-objects", "check-references"}:
+        from db_ops.common import cli_config_objects
+
+        return cli_config_objects.run(argv[0], argv[1:], read_request=_read_json_request)
     if argv[0] in {"pack-backup", "pull-file", "push-file"}:
         from db_ops.common import cli_filetransfer
 

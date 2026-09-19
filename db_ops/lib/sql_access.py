@@ -18,6 +18,20 @@ from typing import Any
 #: What ``sql_access.method`` may say. ``direct`` is not handled here — it means "not legacy".
 SUPPORTED_SQL_ACCESS_METHODS = {"direct", "api", "subprocess"}
 
+#: Every key a ``sql_access`` block may carry. Declared for the same reason as
+#: ``cmd_access.CMD_ACCESS_FIELDS``: ``mode`` and ``timeout_seconds`` are read by
+#: ``common.oracle_bridge`` and ``metrics.executor`` and were in no list at all, so the shared-object
+#: reference described four fields while the estate was using six. The guard that compares the two
+#: is ``tests/test_shared_config_objects_reference.py``.
+SQL_ACCESS_FIELDS: tuple[str, ...] = (
+    "method",
+    "bridge_url",
+    "mode",
+    "timeout_seconds",
+    "secret_ref",
+    "connect_ref",
+)
+
 #: The engines a **configured target** may declare, canonically spelled. Distinct from
 #: ``db_connect.SUPPORTED_DB_TYPES`` (which engines a *driver* can open) and from
 #: ``metrics.definitions.SUPPORTED_DB_TYPES`` (which engines a *metric* may be written for): those

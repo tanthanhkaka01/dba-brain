@@ -17,6 +17,7 @@ from db_ops.backup_restore.backup import (
     run_backup,
 )
 from db_ops.lib import common_cli
+from db_ops.lib import sql_instance
 from db_ops.backup_restore.restore_script import load_script_restores
 from db_ops.lib.listing import active_only, hidden_note
 from db_ops.backup_restore.workflow import run_workflow
@@ -1418,8 +1419,25 @@ def _verify_request(config: Any, secrets: dict[str, str]) -> dict[str, Any] | No
     password = secrets.get(password_ref)
     if not password:
         return None
+    # **The port comes from the entry, and did not until 2026-09-19.** It was 1433 unconditionally,
+    # while the restore writes wherever `sql_instance` says. On this estate that entry restores into
+    # `localhost,1453` - the container MSSQL_192_0_2_115_1453 - and the check asked
+    # 192.0.2.115:1433, which is a different container with thirteen unrelated databases. Port
+    # 1453 held the three the drill restores, one of them stuck in RESTORING: the exact state this
+    # verification exists to catch, invisible to it, while all three were reported ABSENT.
+    #
+    # The *host* stays this node's own route to the machine. `sql_instance` commonly reads
+    # `localhost`, which is localhost on the target and not where this process is.
+    address = sql_instance.parse(getattr(config, "restore_sql_instance_on_vm", ""))
+    if not address.has_port:
+        # A named instance is resolved by the SQL Server Browser at connect time and has no port to
+        # hand a driver. Substituting the default would ask a different server and report its answer
+        # as this drill's verdict, which is the failure above wearing different numbers. Skipped
+        # with a reason, the way every other "cannot check this" is.
+        return None
     return {"db_type": "sqlserver", "databases": databases,
-            "target": {"host": host, "port": 1433, "username": username, "password": password}}
+            "target": {"host": host, "port": address.port,
+                       "username": username, "password": password}}
 
 
 #: A per-database outcome that is not a failure. `SKIPPED` is here because a database the run had

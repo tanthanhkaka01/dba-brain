@@ -123,6 +123,21 @@ def test_pieces_come_back_in_stamp_order(tmp_path):
                      "mssql_ha_db_DIFF_20260805_050521.bak"]
 
 
+def test_names_with_and_without_the_utc_marker_form_one_chain(tmp_path):
+    """0.20.0 writes `..._HHMMSSZ.bak`; every backup taken before it has no Z. A folder holds both
+    after the upgrade, and the newest must still be picked by its stamp, not by the marker."""
+    _layout(tmp_path, "appdb", "FULL", [
+        "appdb_FULL_20260919_010000.bak",
+        "appdb_FULL_20260920_010000Z.bak",
+        "appdb_FULL_20260918_010000.bak",
+    ])
+
+    found = _run_pieces(tmp_path, "appdb", "FULL", "bak")
+
+    assert found == ["appdb_FULL_20260918_010000.bak", "appdb_FULL_20260919_010000.bak",
+                     "appdb_FULL_20260920_010000Z.bak"]
+
+
 def test_an_empty_level_folder_yields_nothing_rather_than_failing(tmp_path):
     """A database with no DIFF at all is normal - the caller then restores FULL + LOGs."""
     _layout(tmp_path, "mssql_ha_db", "FULL", ["mssql_ha_db_FULL_20260805_085205.bak"])

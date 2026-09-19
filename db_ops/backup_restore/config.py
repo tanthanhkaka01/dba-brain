@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 from dataclasses import dataclass, field
 import datetime as dt
@@ -14,7 +15,7 @@ from db_ops.lib.notify import (
     NotifyRule,
     parse_notify_config,
 )
-from db_ops.lib import cleanup_retention
+from db_ops.lib import cleanup_retention, restore_space
 from db_ops.lib.time_window import TimeWindow, parse_time_window_config
 from db_ops.config import DEFAULT_CONFIG_PATH
 
@@ -170,6 +171,11 @@ class BackupRestoreConfig:
     # Seconds of staged backup kept on the target after a restore (0 = no age gate; see
     # parse_cleanup_retention).
     cleanup_retention: int = DEFAULT_CLEANUP_RETENTION
+    # Does the incoming copy fit, with room to spare? Defaults to on at x1.5 - a check that has to
+    # be switched on protects only the entries somebody remembered. See lib/restore_space.py for
+    # the run that made it non-optional.
+    space_check: restore_space.SpaceCheck = dataclasses.field(
+        default_factory=restore_space.SpaceCheck)
     full_backup_subdir: str = "FULL"
     sqlcmd_path: str = "sqlcmd"
     robocopy_path: str = "robocopy"
@@ -511,6 +517,7 @@ def parse_restore_config(raw: dict[str, Any]) -> BackupRestoreConfig:
         copy_file_patterns=_parse_patterns(values.get("copy_file_patterns")),
         copy_recent_hours=_parse_int(values.get("copy_recent_hours"), default=24),
         cleanup_retention=parse_cleanup_retention(values, context="backup_restore"),
+        space_check=restore_space.parse_space_check(values),
         prod_smb_credential_target=str(values.get("prod_smb_credential_target") or ""),
         prod_smb_username=str(values.get("prod_smb_username") or ""),
         prod_smb_password_env=str(values.get("prod_smb_password_env") or ""),

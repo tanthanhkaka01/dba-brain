@@ -19,6 +19,7 @@ from typing import Any
 from db_ops.lib.restore.plan import ENGINE, SCRIPT
 from db_ops.lib.restore.spec import RestoreSpecError, parse_restore_spec
 from db_ops.lib.paths import resolve_tool_path
+from db_ops.lib.timezone import display_now
 
 
 def _secret(ref: str, secrets: dict[str, str], *, where: str) -> str:
@@ -49,6 +50,10 @@ def backup_request_from_job(
     one-off against a machine in no inventory at all.
     """
     env: dict[str, str] = {"BACKUP_DIR": job.backup_dir}
+    # The weekly-full rule in the PostgreSQL and Oracle scripts ("Sunday") is a day in THIS node's
+    # configured timezone. Left to the script it read the host's clock, which may be UTC - a
+    # Sunday that began seven hours late on a +07 node. Set before job.env so a job can pin it.
+    env["DB_OPS_WEEKDAY"] = str(display_now().isoweekday())
     if target.container_name:
         # Omitted rather than sent empty on a host with no container: the spec refuses an empty
         # env value, because an empty value is how a missing secret arrives. A Windows SQL Server

@@ -19,8 +19,9 @@ from datetime import datetime, timezone
 from typing import Any
 
 from db_ops.lib.coerce import as_utc_datetime
-from db_ops.lib.time_window import TimeWindow, is_time_window_open, job_due
+from db_ops.lib.time_window import TimeWindow, due_from_row, is_time_window_open, run_anchor
 from db_ops.lib.timezone import display_now
+from db_ops.lib import process_liveness, run_claim
 from db_ops.db.job_runs import JobRun
 from db_ops.db.store import DbOpsStore, utc_now_text
 
@@ -56,21 +57,17 @@ def is_due(
     local_now = local_now or display_now()
     if not is_time_window_open(time_window, local_now):
         return False
-    latest = latest_runs.get(job_code)
-    # A run still marked RUNNING is either in flight or died mid-way; job_due's stale handling
-    # recovers it after the timeout rather than starting a second copy against the same database.
-    retry_interval = (
-        time_window.retry_interval if time_window.retry_interval is not None else time_window.repeat_interval
-    )
-    return job_due(
-        last_run=run_time(latest),
-        last_status=str(latest["status"]).lower() if latest else None,
-        repeat_interval=time_window.repeat_interval,
-        retry_interval=retry_interval,
+    # A run still marked RUNNING is either in flight or died mid-way; the shared rule's stale
+    # handling recovers it after the timeout rather than starting a second copy against the same
+    # database. `retry_default` is the repeat interval: a failed drill is not retried faster than
+    # its normal schedule unless the entry asks for it.
+    return due_from_row(
+        time_window=time_window,
+        row=latest_runs.get(job_code),
         now=now,
-        timeout=time_window.timeout,
+        retry_default=time_window.repeat_interval,
         default_repeat=DEFAULT_REPEAT_SECONDS,
-    )
+    ).due
 
 
 def is_running(job_code: str, latest_runs: dict[str, Any]) -> bool:
@@ -91,18 +88,9 @@ def is_running(job_code: str, latest_runs: dict[str, Any]) -> bool:
 
 
 def run_time(row: Any) -> datetime | None:
-    """When a ``job_runs`` row started, as an aware UTC datetime."""
-    if row is None:
-        return None
-    for column in ("started_at", "created_at"):
-        try:
-            value = row[column]
-        except (KeyError, IndexError, TypeError):
-            continue
-        parsed = as_utc_datetime(value)
-        if parsed is not None:
-            return parsed
-    return None
+    """When a ``job_runs`` row started — :func:`db_ops.lib.time_window.run_anchor` under this
+    module's own name, kept because the stale-run reaper below reads well with it."""
+    return run_anchor(row)
 
 
 # `_parse_utc` is `db_ops.lib.coerce.as_utc_datetime` since 2026-08-16 — the same nine lines
@@ -116,6 +104,10 @@ def start_run(*, store: DbOpsStore, job_code: str, message: str, metadata: dict[
     log_id = store.insert_job_run(
         JobRun(
             job_code=job_code,
+            # A backup job and a restore are single units of work: one at a time on one host,
+            # always, whatever mode the app command around them runs in. The store's unique index
+            # is what enforces it, so two scans overlapping cannot both start this job.
+            claim_key=job_code,
             level="logging",
             status="RUNNING",
             message=message,
@@ -168,12 +160,29 @@ def reap_stale_runs(
             if started is None:
                 continue
             elapsed = int((now - started).total_seconds())
-            if elapsed < int(timeout):
+            metadata = _row_metadata(row)
+            # **Is anybody still running it?** Until now the timeout was the whole answer, and a
+            # backup or restore that legitimately outran it had its row closed here — which, now
+            # that the RUNNING row is a claim (ux_job_runs_claim), is exactly what would let the
+            # next scan start a second one on top of it. That is the shape of 2026-09-14, when a
+            # second restore began 47 minutes into the first. A live pid on this host holds its
+            # claim whatever the clock says; another host's row waits for a long grace, because
+            # this host cannot see that host's processes.
+            owner_pid, owner_host = run_claim.claim_owner(metadata)
+            this_host = socket.gethostname()
+            verdict = run_claim.reap_verdict(
+                metadata=metadata,
+                this_host=this_host,
+                elapsed_seconds=elapsed,
+                timeout_seconds=int(timeout),
+                pid_alive=(process_liveness.is_pid_alive(owner_pid)
+                           if owner_pid is not None and owner_host == this_host else None),
+            )
+            if not verdict.reap:
                 continue
 
-            metadata = _row_metadata(row)
             message = (
-                f"{_run_label(job_code)} timed out: no completion recorded after {elapsed}s "
+                f"{_run_label(job_code)} timed out: {verdict.reason}, after {elapsed}s "
                 f"(timeout={int(timeout)}s). The run died without reporting — process killed, "
                 f"container restarted, or host rebooted."
             )

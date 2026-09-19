@@ -47,6 +47,7 @@ from db_ops.common.config_admin import (
     slugify,
 )
 from db_ops.lib import task_output
+from db_ops.lib.task_input import TARGET_PLACEHOLDERS
 from db_ops.lib.task_output import TaskOutputError
 
 __all__ = [
@@ -61,12 +62,6 @@ __all__ = [
 class SqlTaskAdminError(ValueError):
     """Anything refused here. Carries the reason a person can act on, never a traceback."""
 
-
-#: The reserved names ``input.args`` may use without declaring them as parameters: the runner
-#: fills them from the target it is running for. Kept literal rather than imported from
-#: ``db_ops.sql_tasks.python_source`` — ``common`` is the API layer and does not import an app
-#: (ORD 13), the same reason ``config_admin`` spells out the collector types it knows.
-TARGET_PLACEHOLDERS = ("target_server_id", "target_database")
 
 SCRIPT_TYPES = ("single", "array", "folder")
 INPUT_TYPES = ("none", "python")
@@ -121,8 +116,8 @@ Registers WHERE a SQL task runs, in data/sql_targets.json. One call per server.
                    "repeat_interval": 60, "timeout": 600},
    "manual_only": false,                            // shortcut for repeat_interval -1
    "active": true,
-   "output": "none",                                // none|plain|xlsx|csv|txt|xml|json
-   "output_chat": "sql", "output_chat_id": "",
+   "output": {"format": "txt", "telegram_chat": "sql"},  // the shared object; or the flat form:
+   // "output": "none|plain|xlsx|csv|txt|xml|json", "output_chat": "sql", "output_max_rows": 200
    "logging_on_run": false, "alert_on_error": true, // a 60-second task must not log every run
    "logging_chat": "sql", "error_chat": "sql",
    "note": "what makes this target different from the others",
@@ -411,13 +406,9 @@ def add_sql_target(request: dict[str, Any], *,
     window = normalize_time_window(request.get("time_window"))
     if request.get("manual_only"):
         window["repeat_interval"] = MANUAL_ONLY
-    try:
-        output_format = task_output.normalize_output(request.get("output") or "none")
-    except TaskOutputError as exc:
-        raise SqlTaskAdminError(str(exc)) from exc
-
     logging_chat = str(request.get("logging_chat") or SQL_TASK_NOTIFY_CHAT)
     error_chat = str(request.get("error_chat") or SQL_TASK_NOTIFY_CHAT)
+    output = _output_block(request, default_chat=logging_chat)
     entry: dict[str, Any] = {
         "sql_id": sql_id,
         "target_no": target_no,
@@ -437,11 +428,7 @@ def add_sql_target(request: dict[str, Any], *,
                 enabled=bool(request.get("alert_on_error", True)),
                 telegram_chat=error_chat, chat_id=request.get("error_chat_id")),
         },
-        "output": {
-            "format": output_format,
-            "telegram_chat": str(request.get("output_chat") or logging_chat),
-            "chat_id": request.get("output_chat_id") or "",
-        },
+        "output": output,
     }
     note = str(request.get("note") or "").strip()
     if note:
@@ -464,7 +451,7 @@ def add_sql_target(request: dict[str, Any], *,
         "active": entry["active"],
         "manual_only": window["repeat_interval"] == MANUAL_ONLY,
         "repeat_interval": window["repeat_interval"],
-        "output": output_format,
+        "output": output["format"],
         "files_written": ["sql_targets.json"],
         "next": [f"db-ops sql_tasks list-tasks --sql-id {sql_id}"],
     }
@@ -473,3 +460,33 @@ def add_sql_target(request: dict[str, Any], *,
 def _describe(outcome: dict[str, Any]) -> str:
     """One line for the CLI, so a caller reading stdout sees what changed without the JSON."""
     return json.dumps(outcome, ensure_ascii=False)
+
+
+def _output_block(request: dict[str, Any], *, default_chat: str) -> dict[str, Any]:
+    """The target's ``output`` block, through the one parser the runner uses.
+
+    Accepts the block itself (``"output": {"format": "txt", ...}``, the shape the file holds) or
+    the older flat spelling (``"output": "txt"`` with ``output_chat`` / ``output_chat_id`` /
+    ``output_max_rows``). Either way it is validated here, so a value the runner would refuse
+    never reaches the file.
+    """
+    raw = request.get("output")
+    if isinstance(raw, dict):
+        block = dict(raw)
+    else:
+        try:
+            fmt = task_output.normalize_output(raw or "none")
+        except TaskOutputError as exc:
+            raise SqlTaskAdminError(str(exc)) from exc
+        block = {"format": fmt, "telegram_chat": request.get("output_chat"),
+                 "chat_id": request.get("output_chat_id"), "max_rows": request.get("output_max_rows")}
+    try:
+        parsed = task_output.parse_output(block)
+    except TaskOutputError as exc:
+        raise SqlTaskAdminError(str(exc)) from exc
+    output: dict[str, Any] = {"format": parsed["format"],
+                              "telegram_chat": parsed["telegram_chat"] or default_chat,
+                              "chat_id": parsed["chat_id"]}
+    if parsed["max_rows"]:
+        output["max_rows"] = parsed["max_rows"]
+    return output

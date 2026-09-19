@@ -74,6 +74,24 @@ App-owned config files:
   `database-inventory.json` are deliberately absent. Adding a new config file to this folder means
   adding it here too (or to the `NOT_SYNCED` list in `tests/test_config_sync.py`, with the reason).
   See "Config Mirror" in `docs/01_runtime_store.md`.
+- `shared_config_objects.json`: **reference, not configuration.** The field-level description of
+  the six blocks that appear inside many of the files here — `time_window`, `notify`,
+  `notify_rule`, `cmd_access`, `sql_access` and the field `cleanup_retention` — with each field's
+  type, whether it is required, its range, its default, and what its number is measured against.
+  It is identical on every node, nothing an app decides reads it, and editing it changes nothing.
+  It is here rather than only in `docs/` so a program can ask: `python -m db_ops.common.cli
+  describe-object '{"object": "time_window", "field": "retry_interval"}'` — which is how the
+  console and the bot answer a field question. `tests/test_shared_config_objects_reference.py`
+  checks it against the code, so it cannot quietly go stale; that guard is the only thing that
+  makes a file nothing acts on worth keeping here.
+- `config_references.json`: **also reference.** Which field in which file must point at
+  which field in another - `backups[].server_id` into `db_instances.json`,
+  `sql_targets[].credential_name` into `users.json`, and five more. `python -m
+  db_ops.common.cli check-references '{}'` follows all of them and reports the ones that
+  land nowhere; only **active** records fail, and an inactive one is listed rather than
+  ignored. It exists because of a run on 2026-09-19: an active backup named a `server_id`
+  the worker's inventory did not have, both files were valid, and the first report of it was
+  the outage.
 - `webhost_config.json`: the web console's own settings and the app blocks its dashboard draws.
   The `web` block holds the session and permission rules — `session_days` (the cookie and the
   stored session carry the same lifetime, which is why closing the browser does not sign anyone

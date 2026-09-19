@@ -11,6 +11,8 @@
       "working_dir": "tools/db_ops",
       "command_text": "python -m db_ops.sql_tasks.runner --config config.json",
       "active": true,
+      "run_mode": "async",
+      "max_parallel": 4,
       "time_window": {
         "from_year": null,
         "to_year": null,
@@ -201,6 +203,8 @@
       "working_dir": "tools/db_ops",
       "command_text": "python -m db_ops.backup_restore.cli workflow --config config.json",
       "active": true,
+      "run_mode": "async",
+      "max_parallel": 4,
       "time_window": {
         "from_year": null,
         "to_year": null,

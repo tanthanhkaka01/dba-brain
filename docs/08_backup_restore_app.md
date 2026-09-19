@@ -4,6 +4,45 @@
 
 The Backup Restore App copies backup files, restores SQL Server FULL (and optionally DIFF + LOG) backups into a DR database, verifies restore health, and records restore history. Point-in-time restore (PITR) is supported when transaction log backups are available.
 
+## Before a restore copies anything: does it fit?
+
+The restore preflight now asks one question first, on every platform, before a share is prepared or
+a byte is moved:
+
+```
+free >= bytes_to_copy x factor
+```
+
+`bytes_to_copy` is the same file selection `copy-backup` will make — same window, same patterns — and
+`free` is read where the files will land (a UNC share or local path with `disk_usage`; a Linux target
+with `df -Pk` over the SSH session the copy itself uses). The rule is `db_ops/lib/restore_space.py`;
+the measuring is `db_ops/backup_restore/space.py`.
+
+Per entry, in `restore_config.json`:
+
+```json
+"space_check": {"enabled": true, "factor": 2.0, "on_unknown": "refuse"}
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `true` | **On for an entry that says nothing.** A check that has to be switched on protects only the entries somebody remembered |
+| `factor` | `1.5` | Must be >= 1.0. Use **2.0** when the restored database will live on the same filesystem as the staged backup files — the shape that emptied the disk |
+| `on_unknown` | `refuse` | What to do when a number could not be read. `proceed` is allowed and says so in the log on every run |
+
+A refusal names both numbers and what can be changed, and nothing has been copied when it fires:
+
+```
+restore_id=DRILL will not fit: 115.0 GiB to copy, x1.5 = 172.5 GiB needed, 92.0 GiB free
+  - SHORT BY 80.5 GiB. Free 80.5 GiB on //target/import, lower space_check.factor (now 1.5),
+  or restore somewhere else. Nothing was copied.
+```
+
+**Why it refuses rather than warns.** A warning in a scheduled run is read after the outage, when it
+is evidence and not a brake. On 2026-09-17 a drill copied about 115 GB onto the host that also
+carries the runtime store: `/` reached 42 MB free, PostgreSQL could not write, and the daemon went
+with it 26 minutes into a soak that then had to be abandoned.
+
 ## Package / Files
 
 - `db_ops/backup_restore/`
@@ -74,6 +113,13 @@ prefer `@file`: a single-quoted JSON argument does not survive the shell.
   "retry_interval": 1800, "timeout": 7200}`; a log backup every quarter hour is
   `{"repeat_interval": 900, "retry_interval": 300, "timeout": 1800}`. The refusal names the job
   that lacks one, because an entry carries several.
+* **The app's own interval is a floor under every job in it.** A job's `time_window` is read when
+  `APP-BACKUP-RESTORE` runs, and that app runs every `app_commands.json` `repeat_interval`. With the
+  app at 300 s, a log backup declared at 900 s waited up to 300 s more for the app's next pass and
+  ran every ~1,200 s (measured 2026-09-19). Keep the app's interval short against the shortest job:
+  this estate runs it at 30 s. The app exits at once when nothing is due, so a short interval costs
+  a process start, not a backup. It is the same rule as the SQL task app ([05](05_sql_task_runner.md),
+  *The three clocks*).
 * **`notify` is required too**, and for a reason that looks like the opposite of a missing
   notification. An entry without one still notifies — `BACKUP_RESTORE_NOTIFY_DEFAULTS` turns both
   rules on — but at the *neutral* levels, `logging` and `error`, rather than the entry's own chat.
@@ -357,7 +403,9 @@ read a Windows UNC share directly, so the copy step reads the source with
   filtering happens locally afterward (`copy_file_patterns`).
 - When `databases[]` is configured, only those `<db>` subdirectories are fetched.
 - `smbclient` does not preserve file mtimes, so each backup's real time is
-  recovered from its filename (`..._YYYYMMDD_HHMMSS`). The log-chain selection
+  recovered from its filename (`..._YYYYMMDD_HHMMSS[Z]`). A trailing `Z` (what db_ops' own
+  backup scripts write since 0.20.0) means UTC; a name without it, as other tools on the source
+  server write, is read in local time as before (`shell_quoting.backup_time_from_name`). The log-chain selection
   filters logs by time relative to the FULL backup; without this the restore would
   apply pre-FULL logs and fail with `Msg 4326` (the log "is too early to apply").
 - The staged files are then sent to the Linux SQL Server target over SFTP, which

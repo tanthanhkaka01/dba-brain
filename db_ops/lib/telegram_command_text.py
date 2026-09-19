@@ -160,3 +160,38 @@ def _read_token(text: str, index: int) -> tuple[str, int]:
         end += 1
     return text[index:end], end
 
+
+#: An argument longer than this is shown as a summary in a command listing, not verbatim.
+LONG_ARGUMENT_CHARS = 120
+
+#: Base64 as an upload arrives: one unbroken run of the alphabet, padded to a multiple of four.
+_BASE64_RE = re.compile(r"[A-Za-z0-9+/]+={0,2}")
+
+
+def display_argument(value: str, *, file_name: str = "") -> str:
+    """An argument as a listing should show it: itself, or a short summary when it is long.
+
+    A command that takes a file receives the upload as a base64 argument - tens of kilobytes for
+    one small xlsx - and a history that printed it verbatim ran to 111 messages. That argument
+    cannot be repeated by copying the line anyway (the file has to be uploaded again), so it is
+    shown as its name and size. Any other long argument keeps its start, so the reader still
+    recognises it. ``file_name`` is the name recorded when the file arrived; a text file's
+    content is summarised the same way when it has one.
+    """
+    text = str(value)
+    if file_name:
+        size = len(text) * 3 / 4 if _looks_base64(text) else len(text.encode("utf-8"))
+        return f"<uploaded file: {file_name}, {_size_text(size)}>"
+    if len(text) <= LONG_ARGUMENT_CHARS:
+        return text
+    if _looks_base64(text):
+        return f"<uploaded file, {_size_text(len(text) * 3 / 4)}>"
+    return f"{text[:60]}... (+{len(text) - 60} chars)"
+
+
+def _looks_base64(text: str) -> bool:
+    return len(text) % 4 == 0 and bool(_BASE64_RE.fullmatch(text))
+
+
+def _size_text(size_bytes: float) -> str:
+    return f"{int(size_bytes)} B" if size_bytes < 1024 else f"{size_bytes / 1024:.1f} KB"

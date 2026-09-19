@@ -36,6 +36,7 @@ from db_ops.lib.listing import DEFAULT_LISTING_LIMIT
 from db_ops.lib.timezone import format_display_text
 from db_ops.lib.telegram_command_text import (
     command_key_from_message,
+    display_argument,
     parse_command_message,
     render_command_line,
 )
@@ -135,7 +136,8 @@ def rebuild_command(row: Any) -> dict[str, Any] | None:
     return {
         "command_text": command_text,
         "args": args,
-        "line": render_command_line(command_text, args),
+        # An uploaded file arrives as a base64 argument; shown verbatim it filled 111 messages.
+        "line": render_command_line(command_text, [display_argument(arg) for arg in args]),
         "sent_at": str(row["created_at"] or ""),
         "chat_id": str(row["chat_id"] or ""),
         "failed": status == "error",
@@ -151,7 +153,12 @@ def _conversation_args(state_json: Any) -> list[str]:
         return []
     if not isinstance(state, dict):
         return []
-    return [str(value) for value in (state.get("args") or []) if value is not None]
+    # An uploaded file's argument is its content; the name recorded beside it is what a person
+    # recognises. Older states have no name and still get display_argument's size summary.
+    files = state.get("arg_files") if isinstance(state.get("arg_files"), dict) else {}
+    return [display_argument(str(value), file_name=str(files.get(str(position)) or ""))
+            for position, value in enumerate(state.get("args") or [], start=1)
+            if value is not None]
 
 
 def _inline_args(text: str) -> list[str]:

@@ -15,6 +15,86 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-09-20
+
+### Fixed
+
+- **The restore verification asked the wrong SQL Server**, connecting on port 1433 whatever the
+  entry said. The port now comes from the entry's own `sql_instance`; a named instance is skipped
+  with a reason rather than guessed at. Oracle and PostgreSQL are likewise told which instance and
+  which cluster to look at.
+- **A verification that reached nothing no longer reports a healthy state.** A PostgreSQL check that
+  could not run was labelled `ACCEPTING`; it now reads `NO ANSWER`, and both engines report the
+  error they were given rather than an empty line.
+- **A slow SQL task or backup no longer holds up every other one.** `APP-SQL_TASKS` and
+  `APP-BACKUP-RESTORE` now declare `"run_mode": "async"`, so the daemon starts them when they are
+  due instead of waiting for the run in flight to finish. A 22-minute task used to stop every other
+  SQL task for 22 minutes. `"max_parallel"` caps how many run at once (4 by default); a command that
+  says nothing keeps the old behaviour of one at a time.
+- **The same unit of work can no longer be started twice.** One `running` row per task-and-target,
+  per backup job and per restore is now enforced by the store itself, so two overlapping runs cannot
+  both decide the work is free — the second is told it is taken and moves on. This is what makes
+  running an app twice at once safe, and it also closes a way two nodes could double a production
+  SQL task or start a second restore into a database mid-restore.
+- **A run whose process is still alive is no longer timed out and restarted.** Every run records the
+  process that owns it; a task that legitimately outruns its timeout keeps its place instead of
+  having a second copy started on top of it. A run whose process is gone is released at once.
+- **A restore checks that the files fit before it copies them.** The preflight adds up the backup
+  files it is about to move, reads the free space where they are going, and refuses unless
+  `free >= size x 1.5`. Per entry, `"space_check": {"factor": 2.0}` asks for more room — use it when
+  the restored database will live on the same filesystem as the staged files — and
+  `{"enabled": false}` turns the check off. A restore whose numbers cannot be read is refused too,
+  and says which number was missing. Before this, a drill could fill the disk it was restoring onto
+  and take everything else on that host with it.
+- **The daemon survives a store restart.** A failure the store reports as transient — a connection
+  lost, a server starting up or shutting down, too many connections — is now waited out with a
+  backoff for up to ten minutes per outage instead of ending the process. A two-second restart of
+  the database holding the runtime store used to stop scheduling entirely, with nothing to restart
+  it and no sign but the absence of rows. Any other error, and an outage longer than the budget,
+  still exit as before.
+- **A command's answer is no longer lost to one byte of noise.** When a child process printed a
+  character the machine's code page produced but UTF-8 cannot read, the reply was discarded and the
+  caller was told the command *"exited 0 without a JSON response"* — while the command had in fact
+  succeeded. Output is now read tolerantly; requests are still written strictly.
+
+- **SQL tasks and reports measured `repeat_interval` from the wrong instant.** A SQL target with
+  `repeat_interval: 300` whose task took 240 s ran every 540 s. Every scheduler now measures from
+  the previous run's start.
+- **A SQL task file export carries every row, not the first result set.** Result sets with the same
+  columns are merged into one table; `txt`, `csv` and `json` also keep sets of different shapes.
+- **`plain` output shows one table per shape, not one per batch.**
+- **A batched SQL task no longer sends a progress message per batch.** It reports start and finish;
+  `"progress_per_file": true` on the command restores per-batch messages.
+- **`/spbot_list_my_commands` shows an uploaded file by name**, not its base64 content, and
+  shortens any other very long argument.
+- **SQL Server backup names mark their UTC stamp** (`..._20260919_072256Z.bak`). Restores accept
+  names with and without the `Z`.
+- **The PostgreSQL and Oracle weekly full follows the node's configured timezone**, not the host's
+  clock.
+
+### Added
+
+- **`describe-object`, `due-check`, `check-objects`, `check-references`** — what a shared
+  configuration block means, whether a job is due and why, whether a node's configuration obeys the
+  reference, and whether its pointers land anywhere.
+- **`data/shared_config_objects.json` and `data/config_references.json`**, written by `init`.
+- **`run_mode` on an app command** — `sync` (the default) or `async` with a `max_parallel` cap, so
+  a long job no longer holds up the rest. `APP-SQL_TASKS` and `APP-BACKUP-RESTORE` ship `async`.
+- **`space_check` on a restore entry** — `{"factor": 2.0}` asks for double the room; on at 1.5 when
+  the entry says nothing.
+- **`worker-run --on-host` and `--sudo`** — run a command on the worker host rather than in the
+  container, with the same login.
+
+### Changed
+
+- **`output` is a shared configuration object.** `sql-target-add` accepts the block itself as well
+  as the flat `output` / `output_chat` form.
+- **A SQL target may run slightly more often**, because its interval no longer includes the task's
+  own duration.
+- **The runtime store gained two columns and two unique indexes**, so a unit of work is claimed
+  rather than checked. The first start upgrades it and reconciles any key already holding two
+  `running` rows — the newest stays, older ones are closed as `timeout`, nothing is deleted.
+
 ## [0.19.0] - 2026-09-19
 
 ### Fixed

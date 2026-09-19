@@ -34,6 +34,24 @@ def verify(request: dict[str, Any]) -> dict[str, Any]:
     raise VerifyError(f"db_type must be sqlserver, oracle or postgresql; got {db_type!r}.")
 
 
+def _detail(result: dict[str, Any], text: str) -> str:
+    """What to tell the reader, including when the command produced nothing.
+
+    A check that cannot reach the database has to say **why**, and the why is often only on stderr:
+    ``docker exec`` writing "No such container", ``sudo`` asking for a terminal, ssh refusing. The
+    PostgreSQL command redirects ``2>&1`` into its own output and Oracle's does not, so on
+    2026-09-19 pointing the check at a container with no Oracle in it, and then at a container that
+    does not exist, both answered ``ok=False`` with an **empty detail** — correct, and useless to
+    whoever has to fix it.
+    """
+    if text:
+        return text[:200]
+    stderr = " ".join(str(result.get("stderr") or "").split())
+    if stderr:
+        return stderr[:200]
+    return f"exit code {result.get('exit_code')}, no output"
+
+
 def _verdict(rows: list[dict[str, Any]]) -> dict[str, Any]:
     ok = bool(rows) and all(r.get("ok") for r in rows)
     return {"ok": ok, "databases": rows,
@@ -96,7 +114,15 @@ _ORACLE_SQL = ("set heading off feedback off pagesize 0\n"
 
 def _oracle(request: dict[str, Any]) -> dict[str, Any]:
     host = parse_host(request.get("host"))
-    result = run(host, "printf %s " + shlex.quote(_ORACLE_SQL) + " | sqlplus -s -L / as sysdba",
+    # **Which instance.** `sqlplus / as sysdba` connects to whatever ORACLE_SID the login shell
+    # happens to carry. One container with one instance is the common shape and it is right by
+    # accident; a host with two SIDs is not, and the check would then answer for an instance nobody
+    # restored while labelling the row with the one they did. The restore step has always been told
+    # the SID (`restore_by_id` passes `oracle_sid`); this one was not, until 2026-09-19.
+    sid = str(request.get("oracle_sid") or "").strip()
+    prefix = f"ORACLE_SID={shlex.quote(sid)} " if sid else ""
+    result = run(host,
+                 "printf %s " + shlex.quote(_ORACLE_SQL) + f" | {prefix}sqlplus -s -L / as sysdba",
                  timeout=int(request.get("timeout_seconds") or 300))
     text = " ".join(result["stdout"].split())
     open_mode = "UNKNOWN"
@@ -106,8 +132,9 @@ def _oracle(request: dict[str, Any]) -> dict[str, Any]:
             break
     # Mounted is exactly the trap: RMAN finished, the instance is up, and the database is not open.
     answered = open_mode in {"READ WRITE", "READ ONLY"} and "ORA-" not in text
-    return _verdict([{"database": str(request.get("database") or "instance"),
-                      "state": open_mode, "ok": answered, "detail": text[:200]}])
+    return _verdict([{"database": str(request.get("database") or sid or "instance"),
+                      "state": open_mode, "ok": answered,
+                      "detail": _detail(result, text)}])
 
 
 def _postgresql(request: dict[str, Any]) -> dict[str, Any]:
@@ -116,14 +143,33 @@ def _postgresql(request: dict[str, Any]) -> dict[str, Any]:
     # check failed with `FATAL: role "root" does not exist` against a cluster that was perfectly
     # healthy - a verification that reports the verifier's own login problem as the database's.
     user = str(request.get("username") or "postgres").strip()
-    command = (f"psql -U {shlex.quote(user)} -tAX "
+    # **Which cluster.** With no `-p`, psql takes the default port, which is right for the one
+    # cluster inside a container and wrong the moment a host runs two. Stated when the caller knows
+    # it, left alone when it does not - the same reasoning as the SQL Server port, found the same
+    # day and for the same reason.
+    port = str(request.get("port") or "").strip()
+    port_option = f"-p {shlex.quote(port)} " if port else ""
+    command = (f"psql -U {shlex.quote(user)} {port_option}-tAX "
                "-c 'select pg_is_in_recovery()' -c 'select count(*) from pg_database' 2>&1")
     result = run(host, command, timeout=int(request.get("timeout_seconds") or 300))
     text = " ".join(result["stdout"].split())
-    in_recovery = text.lower().startswith("t")
-    answered = result["exit_code"] == 0 and not in_recovery
+    reached = result["exit_code"] == 0
+    in_recovery = reached and text.lower().startswith("t")
+    answered = reached and not in_recovery
+    # **A state is only claimed when something answered.** This read
+    # `"IN RECOVERY" if in_recovery else "ACCEPTING"`, which has no branch for "the question was
+    # never asked": `psql` missing from the container, a role that does not exist, a `sudo` that
+    # wanted a terminal — every one of them came back labelled **ACCEPTING**, because the output did
+    # not begin with `t`. The verdict was right (`ok: False`) and the word beside it was the
+    # opposite of the truth, and the word is what a reader scans. Measured on 2026-09-19 against the
+    # store on 192.0.2.115, three ways.
+    if not reached:
+        state = "NO ANSWER"
+    elif in_recovery:
+        # Still in recovery is the PostgreSQL version of "restored but not usable": the server is up
+        # and refuses writes, and nothing said so.
+        state = "IN RECOVERY"
+    else:
+        state = "ACCEPTING"
     return _verdict([{"database": str(request.get("database") or "cluster"),
-                      # Still in recovery is the PostgreSQL version of "restored but not usable":
-                      # the server is up and refuses writes, and nothing said so.
-                      "state": "IN RECOVERY" if in_recovery else "ACCEPTING",
-                      "ok": answered, "detail": text[:200]}])
+                      "state": state, "ok": answered, "detail": _detail(result, text)}])

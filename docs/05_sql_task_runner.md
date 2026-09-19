@@ -540,6 +540,12 @@ The outer two are 1 second so that neither of them is ever the answer to "why di
 a scan reads one JSON file and compares timestamps, and the app exits immediately when nothing is
 due. An outer interval longer than a task's own rounds that task up to it.
 
+**The innermost one is counted from `sql_runs.started_at`.** A target with `repeat_interval: 300`
+whose task takes 240 seconds runs again about 60 seconds after it finishes, not 300. Until
+2026-09-19 this app measured from `finished_at` — so that same target ran every 540 seconds
+while its config said 300, and it was the only app in the estate that did. The anchor is now
+the shared `db_ops.lib.time_window.run_anchor`; see [`configuration.md` §5](./configuration.md).
+
 ### `list-tasks` — what tasks exist, as JSON
 
 ```bash
@@ -619,8 +625,27 @@ What a finished run does with its rows is a property of the **target**:
 
 | `format` | What the run delivers |
 | --- | --- |
-| `xlsx` `csv` `txt` `xml` | The first non-empty result set is written to `runtime/output/sql_tasks/sql_<NNN>_<task>_<stamp>.<format>` and queued as **its own Telegram document** message. The inline table is suppressed — it would only repeat the attachment. |
+| `xlsx` `csv` `txt` `xml` `json` | The result sets are written to `runtime/output/sql_tasks/sql_<NNN>_<task>_<stamp>.<format>` and queued as **one Telegram document** message. The inline table is suppressed — it would only repeat the attachment. `txt`, `csv` and `json` hold every shape the script returned; `xlsx` and `xml` hold one table, and the run notes any set left out. |
 | `plain` | The rows are rendered as a markdown table inside the run message. **Every fetched row is shown** — a body past Telegram's 4096-char limit is split across messages by `db_ops.lib.telegram_text.split_telegram_message` rather than clipped, because the rows that used to fall off the end were the ones somebody ran the task to see. Still clipped to 8 columns × 24 characters per cell, so a row stays on one phone-width line. How many rows are fetched is `output.max_rows` — see below. |
+
+**Result sets with the same columns are one table.** A task that runs its SQL once per batch
+returns one small set per batch — 69 one-row sets for one run of a ten-day load. Consecutive sets
+with identical columns are merged (`lib.task_output.merge_result_sets`) before they are rendered or
+written, so `plain` shows one table and a file holds every batch. Before 0.20.0 a file held only the
+first set, and `plain` printed one table per batch.
+
+**One progress message per file, not per batch.** With `logging_on_run` on, a task of several
+files reports each one as it finishes (`[2/6] done`). The steps of a Python-fed task are batches,
+not files, and reporting each sent one message per 2,000 rows — 70 for one run of a ten-day load.
+Batched tasks no longer report per batch; `"progress_per_file": true` on the command turns it back
+on, and `false` turns it off for any task.
+
+**For a long result, use a file.** `plain` costs ~one message per 30 rows plus a header per table;
+`txt` costs two messages per run — the run log and the document — whatever the row count.
+
+`output` is one of the shared config objects (`data/shared_config_objects.json`), parsed by
+`lib.task_output.parse_output`: the runner, `sql-target-add` and `check-objects` hold it to the
+same rule.
 
 ### `output.max_rows` — how much of an answer reaches the chat
 

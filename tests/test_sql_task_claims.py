@@ -252,7 +252,10 @@ def test_stale_running_sql_run_is_marked_error_before_retry():
     assert store.updated[0]["sql_run_id"] == 77
     assert store.updated[0]["status"] == "error"
     assert store.updated[0]["finished_at"]
-    assert "stale running exceeded timeout_seconds=1" in store.updated[0]["error_text"]
+    # The reason is part of the message now: a reap says *why* it took the claim, because the
+    # answer ("the process is gone" vs "it was never claimed") decides what the reader does next.
+    assert "stale running: no claim recorded and" in store.updated[0]["error_text"]
+    assert "timeout_seconds=1" in store.updated[0]["error_text"]
 
 
 def test_a_run_that_a_later_run_replaced_is_still_reaped(tmp_path):
@@ -266,6 +269,14 @@ def test_a_run_that_a_later_run_replaced_is_still_reaped(tmp_path):
     store.initialize()
     run_key = "9|1|server|sqlserver|svc|inst|APPDB"
     abandoned = insert_running_sql(store, started_at="2026-01-01T00:00:00Z")
+    # Two running rows for one key is exactly what `ux_sql_runs_claim` now refuses, so the state
+    # this incident left behind can no longer be *created* - the index is the fix. It can still be
+    # *found*: in a store written before the claim (the upgrade closes those), and on another host.
+    # The reaper still has to see every running row rather than the latest per key, which is what
+    # this test is about, so the state is built here the way that store held it.
+    with store.connect() as conn:
+        conn.execute("DROP INDEX IF EXISTS ux_sql_runs_claim;")
+        conn.commit()
     # The run that took its place and finished normally - which is what hid the row above.
     replacement = insert_running_sql(store, started_at="2026-01-01T00:05:00Z")
     store.update_sql_run(sql_run_id=replacement, status="done", level="logging",
@@ -295,7 +306,8 @@ def test_a_reaped_run_alerts_the_error_chat_like_any_other_failure():
 
     assert len(store.messages) == 1
     assert store.messages[0]["tlgchat_id"] == "chat-7"
-    assert "stale running exceeded timeout_seconds=1" in store.messages[0]["message_text"]
+    assert "stale running: no claim recorded and" in store.messages[0]["message_text"]
+    assert "timeout_seconds=1" in store.messages[0]["message_text"]
     # The lesson of 2026-09-03: the row is closed but the server may not be.
     assert "may still be" in store.messages[0]["message_text"]
 

@@ -39,7 +39,10 @@ if [ -n "$level_override" ]; then
         0|1) level="$level_override" ;;
         *) die "BACKUP_LEVEL must be 0 or 1: '${level_override}'." ;;
     esac
-elif [ "$(date +%u)" = "7" ]; then
+# "Sunday" is a day in the node's configured timezone: db_ops passes it as $DB_OPS_WEEKDAY (ISO 1-7).
+# The host clock is only the fallback for a run that did not come from db_ops - a host on UTC would
+# otherwise start the weekly level 0 seven hours into a +07 Sunday.
+elif [ "${DB_OPS_WEEKDAY:-$(date +%u)}" = "7" ]; then
     level=0
 else
     level=1

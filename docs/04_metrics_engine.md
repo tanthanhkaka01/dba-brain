@@ -1128,8 +1128,9 @@ python -m db_ops.metrics.cli --config config.json latest --limit 10
 
 Each metric's `time_window` drives when it is due, the same way `app_commands.json` does:
 
-- **`repeat_interval`** — after a **successful** collection, the metric is due again this many seconds later (unchanged behavior).
-- **`retry_interval`** (default **600s**) — after a **failed** collection (the most recent attempt produced only errors, or the metric never succeeded), the metric is due again after this shorter/longer back-off instead of repeat_interval. This stops a broken metric from retrying on every collector scan.
+- **`repeat_interval`** — after a **successful** collection, the metric is due again this many seconds later, counted from `metric_results.collected_at`, which is stamped **before** the collector runs. So it is the previous collection's *start*, the same anchor every other app uses — see [`configuration.md` §5](./configuration.md).
+- **`retry_interval`** (default **600s**) — after a **failed** collection (the most recent attempt produced only errors, or the metric never succeeded), the metric may be due again **sooner** than `repeat_interval`: set it lower to retry a failure faster than the normal schedule.
+  **It cannot make a failure wait longer**, which this page claimed until 2026-09-19. The shared rule checks "still running", then "`repeat_interval` elapsed", then "failed" ([`lib/time_window.py` `explain_due`](../db_ops/lib/time_window.py)), so a failed metric is due the moment its repeat interval elapses whatever `retry_interval` says — and the 600s default therefore does nothing at all for the many metrics whose interval is shorter than 600s. `tests/test_repeat_interval_is_measured_from_start.py` pins both directions.
 
 Both are per-metric and optional in `data/metric_definitions.json`'s `time_window`; omit `retry_interval` to use the 600s default. "Failed" is judged from `metric_results`: the last collection is a failure when the newest row is newer than the last non-error row for that `(target, metric_code)`.
 

@@ -46,7 +46,7 @@ from db_ops.lib.task_output import (  # noqa: F401 - one definition, see that mo
     OUTPUT_FORMATS,
     TaskOutputError,
 )
-from db_ops.lib.time_window import MANUAL_ONLY
+from db_ops.lib.time_window import MANUAL_ONLY, NEW_FIELDS as _TIME_WINDOW_FIELDS
 from db_ops.lib.paths import DEFAULT_DATA_DIR, TOOL_ROOT  # noqa: F401 - one definition, see that module
 
 # The notify shape (levels, rule form, validation) is owned by db_ops.lib.notify — this
@@ -57,15 +57,21 @@ def _notify_rule_dict(*, enabled: bool, telegram_chat: str, chat_id: str | None)
     except NotifyConfigError as exc:
         raise ConfigAdminError(str(exc)) from exc
 
-# time_window keys we accept for a new target (mirrors sql_targets.json / common.time_window).
-_TIME_WINDOW_KEYS = (
-    "from_year", "to_year", "from_month", "to_month", "from_day", "to_day",
-    "from_hour", "to_hour", "from_minute", "to_minute", "repeat_interval", "timeout",
-)
+# The time_window keys a new target may set. **Taken from the runtime's own list, not spelled
+# again**: this was a copy of it, and the copy had drifted - it was missing `retry_interval`, a
+# field `lib/time_window.py` reads, `data/shared_config_objects.json` documents and this estate's
+# own `sql_targets.json` carries. The cost was found on 2026-09-19 moving a task between nodes:
+# `sql-target-add` refused to register a target read straight out of the file it writes, with
+# "Unknown time_window field: retry_interval". A registrar that cannot read back what it wrote is
+# worse than one that rejects too much, because the refusal only appears when someone moves work.
+_TIME_WINDOW_KEYS = _TIME_WINDOW_FIELDS
 _DEFAULT_TIME_WINDOW = {
     "from_year": None, "to_year": None, "from_month": None, "to_month": None,
     "from_day": 1, "to_day": 31, "from_hour": 0, "to_hour": 23,
-    "from_minute": None, "to_minute": None, "repeat_interval": 300, "timeout": 1800,
+    "from_minute": None, "to_minute": None,
+    # `None` and not a number: unset means "the app's own default", which differs per app, and
+    # writing one app's default into every target would freeze it for all of them.
+    "repeat_interval": 300, "retry_interval": None, "timeout": 1800,
 }
 
 

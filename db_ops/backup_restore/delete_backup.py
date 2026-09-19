@@ -20,7 +20,7 @@ What the replacement does differently, and why each difference exists:
 """
 
 from __future__ import annotations
-from db_ops.backup_restore.shell_quoting import _BACKUP_TIMESTAMP_RE, _log_progress, _write_temp_powershell_script  # noqa: F401 - one definition
+from db_ops.backup_restore.shell_quoting import _BACKUP_TIMESTAMP_RE, backup_time_from_name, _log_progress, _write_temp_powershell_script  # noqa: F401 - one definition
 
 import dataclasses
 import datetime as dt
@@ -559,13 +559,8 @@ def _cutoff_timestamp(seconds: int, *, now: float | None) -> float | None:
 
 
 def _backup_timestamp(path: Path, *, fallback_mtime: float) -> float:
-    match = _BACKUP_TIMESTAMP_RE.search(path.name)
-    if not match:
-        return fallback_mtime
-    try:
-        return dt.datetime.strptime(match.group(1) + match.group(2), "%Y%m%d%H%M%S").timestamp()
-    except ValueError:
-        return fallback_mtime
+    stamped = backup_time_from_name(path.name)
+    return fallback_mtime if stamped is None else stamped
 
 
 def _format_ts(value: float) -> str:

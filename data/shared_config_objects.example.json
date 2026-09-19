@@ -1,0 +1,956 @@
+{
+    "schema_version": 2,
+    "notes": [
+        "The shared configuration objects: the blocks that appear inside MANY data/*.json records and are parsed once, in db_ops/lib, rather than by each app. This file is the field-level reference for them - what each field does, whether it is required, what values it accepts, and what its number is measured against.",
+        "Seven entries: six objects (time_window, notify, notify_rule, output, cmd_access, sql_access) and one shared FIELD (cleanup_retention). 'field_count' and 'required_field_count' are stated per entry so a reader can see the shape before reading it.",
+        "Every field carries BOTH 'range_text' (for a person) and 'constraint' (for a program): kind, nullable, min, max, enum, special_values. Prose cannot be checked, and the reason this is data rather than more docs is that a program holds the estate to it: 'python -m db_ops.common.cli check-objects' reads every record at every path in 'used_in' and reports three things - a required field missing, a value out of range, and a field the reference does not describe.",
+        "'open_enum': true means an unlisted value is REPORTED, not refused, because the estate may legitimately define its own (a Telegram level, a shell). 'forbidden_in_config': true is the opposite - a field that is valid in an ad-hoc request and must never appear in a config file, because configuration names a secret and does not hold one. 'legacy_fields' are older spellings the parser still reads: present in a file they are reported as deprecated rather than unknown.",
+        "It describes; it does not decide. No parser, scheduler or validator reads it, and editing it changes nothing an app does. What earns it its place in data/ is that it cannot go stale: tests/test_shared_config_objects_reference.py checks it against the code AND runs check-objects over this estate's own files, so a field added to lib and not here fails the suite.",
+        "EVERY interval in every one of these objects is measured from the previous run's START, never from when it finished. repeat_interval: 300 on a task that runs for 240 seconds starts again about 60 seconds after it ends (45, with the early-start grace). That was not true before 2026-09-19: sql_tasks measured from sql_runs.finished_at and the reports app from the moment its last send completed, so one estate ran three meanings of one field. There is now one entry point, db_ops.lib.time_window.due_from_row, and one place that picks the column, db_ops.lib.time_window.run_anchor.",
+        "Wall-clock bounds (from_hour, to_day, ...) are read in the node's configured timezone (config.json -> timezone), and elapsed-time arithmetic is always UTC. The two are different questions and the split is deliberate: see docs/configuration.md section 5.",
+        "'why is this not running' is answered by the same rule the schedulers use, without guessing: python -m db_ops.common.cli due-check @data/<request>.json",
+        "THREE COPIES, identical bytes: db_ops/common/catalogue/ (the seed init writes from), data/ (this node's), and data/*.example.json (what the public tree ships). Edit one and copy it over the other two; the suite fails if they differ, because reference that differs per node is not reference."
+    ],
+    "shared_config_objects": [
+        {
+            "object": "time_window",
+            "kind": "object",
+            "required": false,
+            "one_line": "When something may run, how often, and how long it may take.",
+            "parsed_in": "db_ops/lib/time_window.py",
+            "shared_entry_point": "db_ops.lib.time_window.due_from_row",
+            "used_in": [
+                {
+                    "file": "app_commands.json",
+                    "path": "app_commands[]"
+                },
+                {
+                    "file": "sql_targets.json",
+                    "path": "sql_targets[]"
+                },
+                {
+                    "file": "metric_definitions.json",
+                    "path": "metrics[]"
+                },
+                {
+                    "file": "reports_config.json",
+                    "path": "reports[]"
+                },
+                {
+                    "file": "restore_config.json",
+                    "path": "backup_restore.backups[].jobs[]",
+                    "note": "on the JOB, not on the entry: one backup id can have a full and a log job with different schedules and retentions"
+                },
+                {
+                    "file": "restore_config.json",
+                    "path": "backup_restore.restores[]"
+                }
+            ],
+            "legacy_fields": {
+                "day_from": "from_day",
+                "day_to": "to_day",
+                "hour_from": "from_hour",
+                "hour_to": "to_hour"
+            },
+            "field_count": 13,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "from_year",
+                    "type": "integer|null",
+                    "required": false,
+                    "default": "null",
+                    "range_text": "1970-9999, or null",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 1970,
+                        "max": 9999
+                    },
+                    "measured_against": "wall clock in the node's configured timezone (config.json -> timezone)",
+                    "rule": "inclusive; null = no restriction on this dimension; from_ > to_ wraps (22 -> 6 spans midnight)",
+                    "purpose": "First calendar year the schedule is allowed in."
+                },
+                {
+                    "field": "to_year",
+                    "type": "integer|null",
+                    "required": false,
+                    "default": "null",
+                    "range_text": "1970-9999, or null",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 1970,
+                        "max": 9999
+                    },
+                    "measured_against": "wall clock in the node's configured timezone (config.json -> timezone)",
+                    "rule": "inclusive; null = no restriction on this dimension; from_ > to_ wraps (22 -> 6 spans midnight)",
+                    "purpose": "Last calendar year. Retires a one-off without deleting the record that explains it."
+                },
+                {
+                    "field": "from_month",
+                    "type": "integer|null",
+                    "required": false,
+                    "default": "null",
+                    "range_text": "1-12, or null",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 1,
+                        "max": 12
+                    },
+                    "measured_against": "wall clock in the node's configured timezone (config.json -> timezone)",
+                    "rule": "inclusive; null = no restriction on this dimension; from_ > to_ wraps (22 -> 6 spans midnight)",
+                    "purpose": "First month of the year the schedule is allowed in."
+                },
+                {
+                    "field": "to_month",
+                    "type": "integer|null",
+                    "required": false,
+                    "default": "null",
+                    "range_text": "1-12, or null",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 1,
+                        "max": 12
+                    },
+                    "measured_against": "wall clock in the node's configured timezone (config.json -> timezone)",
+                    "rule": "inclusive; null = no restriction on this dimension; from_ > to_ wraps (22 -> 6 spans midnight)",
+                    "purpose": "Last month. from 11 to 2 is the winter."
+                },
+                {
+                    "field": "from_day",
+                    "type": "integer|null",
+                    "required": false,
+                    "default": "null",
+                    "range_text": "1-31, or null",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 1,
+                        "max": 31
+                    },
+                    "measured_against": "wall clock in the node's configured timezone (config.json -> timezone)",
+                    "rule": "inclusive; null = no restriction on this dimension; from_ > to_ wraps (22 -> 6 spans midnight)",
+                    "purpose": "First day OF THE MONTH. There is no weekday dimension: 'weekends only' cannot be said here."
+                },
+                {
+                    "field": "to_day",
+                    "type": "integer|null",
+                    "required": false,
+                    "default": "null",
+                    "range_text": "1-31, or null",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 1,
+                        "max": 31
+                    },
+                    "measured_against": "wall clock in the node's configured timezone (config.json -> timezone)",
+                    "rule": "inclusive; null = no restriction on this dimension; from_ > to_ wraps (22 -> 6 spans midnight)",
+                    "purpose": "Last day of the month."
+                },
+                {
+                    "field": "from_hour",
+                    "type": "integer|null",
+                    "required": false,
+                    "default": "null",
+                    "range_text": "0-23, or null",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0,
+                        "max": 23
+                    },
+                    "measured_against": "wall clock in the node's configured timezone (config.json -> timezone)",
+                    "rule": "inclusive; null = no restriction on this dimension; from_ > to_ wraps (22 -> 6 spans midnight)",
+                    "purpose": "First hour of the day. The field the estate actually schedules by, and the one whose meaning moves with the node's timezone."
+                },
+                {
+                    "field": "to_hour",
+                    "type": "integer|null",
+                    "required": false,
+                    "default": "null",
+                    "range_text": "0-23, or null",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0,
+                        "max": 23
+                    },
+                    "measured_against": "wall clock in the node's configured timezone (config.json -> timezone)",
+                    "rule": "inclusive; null = no restriction on this dimension; from_ > to_ wraps (22 -> 6 spans midnight)",
+                    "purpose": "Last hour. 23 is the idiom for 'all day'; 0 means midnight alone, which is how a schedule fires once a day by accident."
+                },
+                {
+                    "field": "from_minute",
+                    "type": "integer|null",
+                    "required": false,
+                    "default": "null",
+                    "range_text": "0-59, or null",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0,
+                        "max": 59
+                    },
+                    "measured_against": "wall clock in the node's configured timezone (config.json -> timezone)",
+                    "rule": "inclusive; null = no restriction on this dimension; from_ > to_ wraps (22 -> 6 spans midnight)",
+                    "purpose": "First minute of the hour. Narrows an hour window; it does not pin a run to a minute, because due-ness is still repeat_interval elapsed and the scheduler only looks on its own sweep."
+                },
+                {
+                    "field": "to_minute",
+                    "type": "integer|null",
+                    "required": false,
+                    "default": "null",
+                    "range_text": "0-59, or null",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0,
+                        "max": 59
+                    },
+                    "measured_against": "wall clock in the node's configured timezone (config.json -> timezone)",
+                    "rule": "inclusive; null = no restriction on this dimension; from_ > to_ wraps (22 -> 6 spans midnight)",
+                    "purpose": "Last minute of the hour."
+                },
+                {
+                    "field": "repeat_interval",
+                    "type": "integer|null",
+                    "required": false,
+                    "default": "null = the app's own default (sql_tasks and reports 300, backup_restore its DEFAULT_REPEAT_SECONDS)",
+                    "range_text": "-1, 0, or 1 and up (seconds), or null. Below -1 is refused",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": -1,
+                        "special_values": {
+                            "-1": "manual only: never scheduled, forced runs only",
+                            "0": "run once and never repeat"
+                        }
+                    },
+                    "measured_against": "the previous run's START (job_runs.started_at / sql_runs.started_at)",
+                    "rule": "a run may start up to min(interval*0.05, 30) seconds early so a sweep boundary does not cost a whole cycle, which is why 1800 is observed as ~1770",
+                    "purpose": "Seconds between STARTS after a run that did not fail. 300 with a task that takes 240 means the next start is about 60 seconds after it finishes - 45 in fact, because of the grace in the rule above."
+                },
+                {
+                    "field": "retry_interval",
+                    "type": "integer|null",
+                    "required": false,
+                    "default": "null = the app's own default: daemon 60, metrics 600, sql_tasks and backup_restore fall back to repeat_interval",
+                    "range_text": "0 and up (seconds), or null. 0 = retry on the next sweep",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0,
+                        "special_values": {
+                            "0": "retry on the next sweep"
+                        }
+                    },
+                    "measured_against": "the previous run's START (job_runs.started_at / sql_runs.started_at)",
+                    "rule": "it can only bring a retry FORWARD, never postpone one: the rule checks 'still running', then 'repeat_interval elapsed', then 'failed', so a failed run is due the moment repeat_interval elapses whatever this says - and a retry_interval LARGER than repeat_interval therefore does nothing at all",
+                    "purpose": "Seconds between starts after a run that ended in error/timeout/fail/failed/failure. Set it BELOW repeat_interval to retry a failure sooner than the normal schedule."
+                },
+                {
+                    "field": "timeout",
+                    "type": "integer|null",
+                    "required": false,
+                    "default": "null = the app's own default (daemon 300)",
+                    "range_text": "0 and up (seconds), or null. 0 = never killed",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0,
+                        "special_values": {
+                            "0": "never killed, for something meant to stay up"
+                        }
+                    },
+                    "measured_against": "the previous run's START (job_runs.started_at / sql_runs.started_at)",
+                    "rule": "also the grace on a 'running' row: a row still open after timeout is reaped instead of a second copy being started",
+                    "purpose": "Seconds a run may take before it is killed. Set it above the SLOWEST thing inside the command and below repeat_interval."
+                }
+            ]
+        },
+        {
+            "object": "notify",
+            "kind": "object",
+            "required": false,
+            "one_line": "Who hears that something ran, and who hears that it failed.",
+            "parsed_in": "db_ops/lib/notify.py",
+            "shared_entry_point": "db_ops.lib.notify.parse_notify_config",
+            "used_in": [
+                {
+                    "file": "sql_targets.json",
+                    "path": "sql_targets[]"
+                },
+                {
+                    "file": "restore_config.json",
+                    "path": "backup_restore.backups[].jobs[]",
+                    "note": "on the JOB, not on the entry: one backup id can have a full and a log job with different schedules and retentions"
+                },
+                {
+                    "file": "restore_config.json",
+                    "path": "backup_restore.restores[]"
+                }
+            ],
+            "legacy_fields": {},
+            "field_count": 2,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "logging_on_run",
+                    "type": "notify_rule",
+                    "required": false,
+                    "default": "{enabled: true} - routine progress notifies by default",
+                    "range_text": "a notify_rule object, or true|false (the accepted legacy form)",
+                    "constraint": {
+                        "kind": "object",
+                        "object": "notify_rule",
+                        "nullable": true,
+                        "also_accepts": [
+                            "boolean"
+                        ],
+                        "also_accepts_reason": "the legacy form: true means {enabled: true}"
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "governs every message below warning",
+                    "purpose": "Announces that the thing ran."
+                },
+                {
+                    "field": "alert_on_error",
+                    "type": "notify_rule",
+                    "required": false,
+                    "default": "{enabled: true}",
+                    "range_text": "a notify_rule object, or true|false (the accepted legacy form)",
+                    "constraint": {
+                        "kind": "object",
+                        "object": "notify_rule",
+                        "nullable": true,
+                        "also_accepts": [
+                            "boolean"
+                        ],
+                        "also_accepts_reason": "the legacy form: true means {enabled: true}"
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "governs warning, error and critical - apps emit by severity, and the mapping from severity to rule is made once in lib/notify.py",
+                    "purpose": "Announces that the thing failed."
+                }
+            ]
+        },
+        {
+            "object": "notify_rule",
+            "kind": "object",
+            "required": false,
+            "one_line": "One notification switch: notify or not, at which level, optionally to which chat.",
+            "parsed_in": "db_ops/lib/notify.py",
+            "shared_entry_point": "db_ops.lib.notify.parse_notify_rule",
+            "used_in": [
+                {
+                    "file": "",
+                    "path": "notify.logging_on_run",
+                    "note": "reached through notify, so check-objects does not walk it on its own"
+                },
+                {
+                    "file": "",
+                    "path": "notify.alert_on_error",
+                    "note": "reached through notify, so check-objects does not walk it on its own"
+                }
+            ],
+            "legacy_fields": {},
+            "field_count": 3,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "enabled",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "false",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": false
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "a disabled rule resolves to no chat at all, so callers ask one question instead of checking enabled and then resolving",
+                    "purpose": "Whether this stream notifies."
+                },
+                {
+                    "field": "telegram_chat",
+                    "type": "string",
+                    "required": false,
+                    "default": "\"\" (empty)",
+                    "range_text": "logging | warning | critical | error | test | private, or \"\", or any extra level this estate's telegram_groups.json defines",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true,
+                        "enum": [
+                            "logging",
+                            "warning",
+                            "critical",
+                            "error",
+                            "test",
+                            "private"
+                        ],
+                        "case_insensitive": true,
+                        "open_enum": true,
+                        "open_enum_reason": "an estate may define its own levels in telegram_groups.json, so an unlisted value is reported, not refused"
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "empty = follow the event's own severity, which is what makes adding a notify object change nothing until a rule is actually set",
+                    "purpose": "The routing LEVEL this stream sends at - not a chat id. The level is looked up in the level -> chat map; a level with no chat does not send, which is how a stream is muted."
+                },
+                {
+                    "field": "chat_id",
+                    "type": "string",
+                    "required": false,
+                    "default": "\"\" (empty)",
+                    "range_text": "a Telegram chat id, or \"\"",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "wins over the level lookup",
+                    "purpose": "One specific chat, for the rare case that needs one. Prefer telegram_chat."
+                }
+            ]
+        },
+        {
+            "object": "output",
+            "kind": "object",
+            "required": true,
+            "one_line": "What a scheduled SQL task does with its result set: nothing, rows in the chat, or a file.",
+            "parsed_in": "db_ops/lib/task_output.py",
+            "shared_entry_point": "db_ops.lib.task_output.parse_output",
+            "used_in": [
+                {
+                    "file": "sql_targets.json",
+                    "path": "sql_targets[]"
+                }
+            ],
+            "legacy_fields": {},
+            "field_count": 4,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "format",
+                    "type": "string",
+                    "required": false,
+                    "default": "none",
+                    "range_text": "none | plain | xlsx | csv | txt | xml | json",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true,
+                        "enum": [
+                            "none",
+                            "plain",
+                            "xlsx",
+                            "csv",
+                            "txt",
+                            "xml",
+                            "json"
+                        ],
+                        "case_insensitive": true
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "result sets with the same columns are merged into one table first, so a task that runs once per batch delivers one table. xlsx and xml hold one table; txt, csv and json hold every shape",
+                    "purpose": "none = status only. plain = the rows pasted into messages (~30 rows each). The rest = ONE file sent as one Telegram document - the quiet choice for a result longer than a few dozen rows."
+                },
+                {
+                    "field": "telegram_chat",
+                    "type": "string",
+                    "required": false,
+                    "default": "\"\" (empty)",
+                    "range_text": "a routing level such as sql, logging, warning, or \"\"",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "looked up in the level -> chat map, like notify_rule.telegram_chat",
+                    "purpose": "Which chat receives the rows or the file. Separate from notify: the run log and the deliverable may go to different chats."
+                },
+                {
+                    "field": "chat_id",
+                    "type": "string",
+                    "required": false,
+                    "default": "\"\" (empty)",
+                    "range_text": "a Telegram chat id, or \"\"",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "wins over the level lookup",
+                    "purpose": "One specific chat, for the rare case that needs one. Prefer telegram_chat."
+                },
+                {
+                    "field": "max_rows",
+                    "type": "integer|null",
+                    "required": false,
+                    "default": "null = 1000",
+                    "range_text": "1 to 5000, or null",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 1,
+                        "max": 5000
+                    },
+                    "measured_against": "rows, not time",
+                    "rule": "out of range is refused, never clamped",
+                    "purpose": "How many rows plain output fetches and pastes. A file format is not limited by it."
+                }
+            ]
+        },
+        {
+            "object": "cmd_access",
+            "kind": "object",
+            "required": false,
+            "one_line": "How to reach a HOST's operating system - the block metrics and host_ops read.",
+            "parsed_in": "db_ops/lib/cmd_access.py",
+            "shared_entry_point": "db_ops.lib.cmd_access.resolve_cmd_access",
+            "used_in": [
+                {
+                    "file": "db_instances.json",
+                    "path": "db_instances[]"
+                }
+            ],
+            "legacy_fields": {},
+            "field_count": 13,
+            "required_field_count": 1,
+            "not_a_field": {
+                "platform": "Read from the INSTANCE (or inferred from its os text) and written into the resolved block. Inside cmd_access it is ignored, which is worth stating because putting it there looks like it works."
+            },
+            "fields": [
+                {
+                    "field": "enabled",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "true",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": false
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "a disabled block needs no credential and is never validated",
+                    "purpose": "Whether db_ops may reach this host's OS at all."
+                },
+                {
+                    "field": "method",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - required when enabled",
+                    "range_text": "local | ssh | winrm",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false,
+                        "enum": [
+                            "local",
+                            "ssh",
+                            "winrm"
+                        ],
+                        "case_insensitive": true
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "local means INSIDE the db_ops container. With a remote host it reports the container's own CPU and disk under that host's name, so remote_exec refuses the combination",
+                    "purpose": "How a command reaches the host."
+                },
+                {
+                    "field": "host",
+                    "type": "string",
+                    "required": false,
+                    "default": "the instance's own ip",
+                    "range_text": "a hostname or ip, or \"\"",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "",
+                    "purpose": "Where to connect."
+                },
+                {
+                    "field": "port",
+                    "type": "integer",
+                    "required": false,
+                    "default": "22 for ssh, 5985 for winrm",
+                    "range_text": "1-65535",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 1,
+                        "max": 65535
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "the port the METHOD implies, not the session's",
+                    "purpose": "Which port to connect to."
+                },
+                {
+                    "field": "shell",
+                    "type": "string",
+                    "required": false,
+                    "default": "\"\" (the host's default)",
+                    "range_text": "bash | sh | powershell | cmd, or \"\"",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true,
+                        "enum": [
+                            "bash",
+                            "sh",
+                            "powershell",
+                            "cmd"
+                        ],
+                        "case_insensitive": true,
+                        "open_enum": true,
+                        "open_enum_reason": "the value is passed to the host, which may have a shell this list does not know"
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "",
+                    "purpose": "Which shell the command text is written for."
+                },
+                {
+                    "field": "auth_type",
+                    "type": "string",
+                    "required": false,
+                    "default": "key",
+                    "range_text": "key | password",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true,
+                        "enum": [
+                            "key",
+                            "password"
+                        ],
+                        "case_insensitive": true
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "ssh only, and the default is the trap: a host reached with a password needs this stated or the login is never attempted",
+                    "purpose": "How the SSH session authenticates."
+                },
+                {
+                    "field": "key_file",
+                    "type": "string",
+                    "required": false,
+                    "default": "\"\" (the node's key)",
+                    "range_text": "a path on the node, or \"\"",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "ssh with auth_type key only",
+                    "purpose": "A private key other than the node's own."
+                },
+                {
+                    "field": "ssl",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "false",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "winrm only",
+                    "purpose": "Whether WinRM is spoken over HTTPS."
+                },
+                {
+                    "field": "credential_name",
+                    "type": "string",
+                    "required": false,
+                    "default": "\"\" - but required for winrm, and for ssh with auth_type password",
+                    "range_text": "a credential_name in data/remote_credentials.json, or \"\"",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "naming an entry wins over any login stated inline: it is asking for THAT entry",
+                    "purpose": "Which stored OS login to use."
+                },
+                {
+                    "field": "username",
+                    "type": "string",
+                    "required": false,
+                    "default": "\"\" (empty)",
+                    "range_text": "an OS account, or \"\"",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "with password or password_ref it makes the block self-contained, which is what lets run-cmd reach a host in no inventory",
+                    "purpose": "An inline OS login, instead of a stored one."
+                },
+                {
+                    "field": "password",
+                    "type": "string",
+                    "required": false,
+                    "default": "\"\" (empty)",
+                    "range_text": "the password itself - and NEVER in a data/*.json",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true,
+                        "forbidden_in_config": true,
+                        "forbidden_reason": "configuration names a secret, it does not hold one; this field is for a request object handed to run-cmd"
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "check-objects reports it as a violation when it appears in a config file",
+                    "purpose": "An inline password, for an ad-hoc request."
+                },
+                {
+                    "field": "password_ref",
+                    "type": "string",
+                    "required": false,
+                    "default": "\"\" (empty)",
+                    "range_text": "a name in the encrypted secret store, or \"\"",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "resolved from the environment first, then data/encrypted_secret_text.json",
+                    "purpose": "The secret this login's password is stored under."
+                },
+                {
+                    "field": "passphrase",
+                    "type": "string",
+                    "required": false,
+                    "default": "\"\" (empty)",
+                    "range_text": "the key's passphrase - and NEVER in a data/*.json",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true,
+                        "forbidden_in_config": true,
+                        "forbidden_reason": "same rule as password: a request field, not a config field"
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "",
+                    "purpose": "Unlocks an encrypted private key."
+                }
+            ]
+        },
+        {
+            "object": "sql_access",
+            "kind": "object",
+            "required": false,
+            "one_line": "How to reach a DATABASE when a normal driver cannot - the legacy transports.",
+            "parsed_in": "db_ops/lib/sql_access.py",
+            "shared_entry_point": "db_ops.lib.sql_access.normalize_sql_access",
+            "used_in": [
+                {
+                    "file": "db_instances.json",
+                    "path": "db_instances[]"
+                }
+            ],
+            "legacy_fields": {},
+            "field_count": 6,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "method",
+                    "type": "string",
+                    "required": false,
+                    "default": "direct",
+                    "range_text": "direct | api | subprocess",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true,
+                        "enum": [
+                            "direct",
+                            "api",
+                            "subprocess"
+                        ],
+                        "case_insensitive": true
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "api and subprocess both mean 'this target's SQL cannot go through a normal driver' (the Oracle 8i bridge); an absent or empty block IS direct, which is what the overwhelming majority of targets say",
+                    "purpose": "How SQL reaches this database."
+                },
+                {
+                    "field": "bridge_url",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - required when method is api",
+                    "range_text": "an http(s) url, or \"\"",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true,
+                        "required_when": {
+                            "field": "method",
+                            "equals": "api"
+                        }
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "refused at load time when method is api and this is blank",
+                    "purpose": "Where the legacy bridge listens."
+                },
+                {
+                    "field": "mode",
+                    "type": "string",
+                    "required": false,
+                    "default": "\"\" (the credential decides)",
+                    "range_text": "normal | sysdba, or \"\"",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true,
+                        "enum": [
+                            "normal",
+                            "sysdba"
+                        ],
+                        "case_insensitive": true
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "wins over the credential's own declaration; empty means the credential decides (common.oracle_bridge.connect_mode)",
+                    "purpose": "Which Oracle connect mode the legacy bridge logs in with."
+                },
+                {
+                    "field": "timeout_seconds",
+                    "type": "integer",
+                    "required": false,
+                    "default": "30",
+                    "range_text": "1 and up (seconds)",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 1
+                    },
+                    "measured_against": "the statement's own run time",
+                    "rule": "this is the STATEMENT timeout for a legacy target, unrelated to time_window.timeout, which bounds the whole run",
+                    "purpose": "How long one statement may take through the bridge or the subprocess tool."
+                },
+                {
+                    "field": "secret_ref",
+                    "type": "string",
+                    "required": false,
+                    "default": "\"\" (empty)",
+                    "range_text": "a name in the encrypted secret store, or \"\"",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "check-credentials and check-secret read this, which they did not until it was written down: a bridge token an estate had configured was invisible to both",
+                    "purpose": "The shared secret the bridge token is signed with."
+                },
+                {
+                    "field": "connect_ref",
+                    "type": "string",
+                    "required": false,
+                    "default": "\"\" (empty)",
+                    "range_text": "a name in the encrypted secret store, or \"\"",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "",
+                    "purpose": "A whole user/password@host/service connect string, stored as one secret."
+                }
+            ]
+        },
+        {
+            "object": "cleanup_retention",
+            "kind": "field",
+            "required": true,
+            "one_line": "How long a directory of backups keeps them, in SECONDS, spelled one way.",
+            "parsed_in": "db_ops/lib/cleanup_retention.py",
+            "shared_entry_point": "db_ops.lib.cleanup_retention.parse",
+            "used_in": [
+                {
+                    "file": "restore_config.json",
+                    "path": "backup_restore.backups[].jobs[]",
+                    "note": "on the JOB, not on the entry: one backup id can have a full and a log job with different schedules and retentions"
+                },
+                {
+                    "file": "restore_config.json",
+                    "path": "backup_restore.restores[]"
+                }
+            ],
+            "legacy_fields": {
+                "target_retention_seconds": "cleanup_retention",
+                "retention_days": "cleanup_retention"
+            },
+            "field_count": 3,
+            "required_field_count": 1,
+            "fields": [
+                {
+                    "field": "cleanup_retention",
+                    "type": "integer",
+                    "required": true,
+                    "default": "none - stating it IS the point. 691200 (8 days) is the recommended value",
+                    "range_text": "0 and up, in SECONDS",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 0,
+                        "special_values": {
+                            "0": "no age gate"
+                        },
+                        "satisfied_by": [
+                            "target_retention_seconds",
+                            "retention_days"
+                        ]
+                    },
+                    "measured_against": "each backup file's own age",
+                    "rule": "0 = no age gate, which is NOT 'keep everything': every file becomes a candidate and the chain rule alone decides (never the newest full, nor anything at or after it). Believing the opposite let a staging directory reach 16.7 GB",
+                    "purpose": "How long a directory of backups keeps them. A backup job prunes its own output; a restore entry prunes the copies it staged."
+                },
+                {
+                    "field": "target_retention_seconds",
+                    "type": "integer",
+                    "required": false,
+                    "default": "none",
+                    "range_text": "0 and up (seconds)",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0,
+                        "legacy_for": "cleanup_retention"
+                    },
+                    "measured_against": "each backup file's own age",
+                    "rule": "LEGACY spelling, read but never written. Use cleanup_retention",
+                    "purpose": "What a restore entry used to call cleanup_retention."
+                },
+                {
+                    "field": "retention_days",
+                    "type": "integer",
+                    "required": false,
+                    "default": "none",
+                    "range_text": "0 and up, in DAYS (converted, not guessed at)",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0,
+                        "legacy_for": "cleanup_retention"
+                    },
+                    "measured_against": "each backup file's own age",
+                    "rule": "LEGACY spelling, read but never written. Use cleanup_retention",
+                    "purpose": "What a backup job used to call cleanup_retention."
+                }
+            ]
+        }
+    ]
+}

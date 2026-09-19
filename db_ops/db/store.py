@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import getpass
 import socket
@@ -11,6 +12,7 @@ from pathlib import Path
 from db_ops.config import StoreConfig
 from db_ops.db.job_runs import JobRun
 from db_ops.lib.rows import row_value
+from db_ops.lib import run_claim
 from db_ops.db import backend as backend_mod
 from db_ops.db.backend import StoreTarget
 
@@ -22,7 +24,31 @@ from db_ops.db.backend import StoreTarget
 #: 4 — added telegram_workflow_steps: what the operator was asked, what came back, and which step
 #:     of a conversation is live. The conversation state row says only what a run is waiting for,
 #:     and Back needs the history it was throwing away.
-SCHEMA_VERSION = 4
+def _claim_pid(metadata: dict) -> int:
+    """Whose process owns this run.
+
+    ``metadata["pid"]`` when the row already names one — the daemon records the **child** it just
+    started, and the child is what is doing the work, so a daemon that is restarted while its child
+    survives must not be able to take the claim back and start a second one. Otherwise this
+    process, which is the one running the work.
+    """
+    raw = (metadata or {}).get("pid")
+    try:
+        return int(raw) if raw is not None else os.getpid()
+    except (TypeError, ValueError):
+        return os.getpid()
+
+
+class RunAlreadyClaimed(RuntimeError):
+    """Someone else already holds the ``running`` row for this key.
+
+    Raised where a claim is refused by ``ux_sql_runs_claim`` / ``ux_job_runs_claim``. It is not a
+    failure and must never be reported as one: it is the answer "that task is already running",
+    arriving from the only place that can answer it without a race.
+    """
+
+
+SCHEMA_VERSION = 5
 
 #: Columns copied verbatim when a job_runs row ages into job_runs_history. Listed rather than
 #: `SELECT *` so a future column added to job_runs fails loudly here instead of silently
@@ -127,6 +153,9 @@ class DbOpsStore:
         self.target.prepare()
         with self.connect() as conn:
             backend_mod.acquire_schema_lock(conn)
+            # Before the schema script, because the script creates the claim indexes and they
+            # cannot be built over a table that is missing a column or already holds duplicates.
+            prepare_run_claims(conn)
             conn.executescript(SCHEMA_SQL)
             migrate_telegram_command_messages_table(conn)
             migrate_telegram_send_messages_table(conn)
@@ -214,43 +243,66 @@ class DbOpsStore:
         return self.target.connect()
 
     def insert_job_run(self, item: JobRun) -> int:
+        """Append a run row. A ``RUNNING`` row is a **claim** and may be refused.
+
+        Raises :class:`RunAlreadyClaimed` when ``ux_job_runs_claim`` says this job_code is already
+        running on this host. That is an answer, not a failure: a second restore started 47 minutes
+        into the first on 2026-09-14 because the only thing standing between them was a SELECT.
+        """
         self.initialize()
         created_at = utc_now_text()
-        metadata_json = json.dumps(item.metadata or {}, ensure_ascii=False, sort_keys=True)
-        with self.connect() as conn:
-            cursor = conn.execute(
-                """
-                INSERT INTO job_runs
-                (
-                    created_at,
-                    started_at,
-                    finished_at,
-                    job_code,
-                    level,
-                    status,
-                    message,
-                    duration_ms,
-                    error_text,
-                    host_name,
-                    metadata_json
+        # A row claims its key only when it says which key, and only while it is running. An
+        # `async` app command deliberately passes none: the daemon is meant to start it again
+        # while the first is still going, and what must not run twice is the work inside it.
+        claim_key = (item.claim_key or "").strip() or None
+        running = str(item.status or "").strip().lower() == "running" and claim_key is not None
+        metadata = dict(item.metadata or {})
+        host_name = item.host_name or socket.gethostname()
+        if running:
+            metadata.update(run_claim.claim_fields(pid=_claim_pid(metadata), host=host_name))
+        metadata_json = json.dumps(metadata, ensure_ascii=False, sort_keys=True)
+        try:
+            with self.connect() as conn:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO job_runs
+                    (
+                        created_at,
+                        started_at,
+                        finished_at,
+                        job_code,
+                        level,
+                        status,
+                        message,
+                        duration_ms,
+                        error_text,
+                        host_name,
+                        claim_key,
+                        metadata_json
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    """,
+                    (
+                        created_at,
+                        item.started_at,
+                        item.finished_at,
+                        item.job_code,
+                        item.level,
+                        item.status,
+                        item.message,
+                        item.duration_ms,
+                        item.error_text,
+                        host_name,
+                        claim_key,
+                        metadata_json,
+                    ),
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-                """,
-                (
-                    created_at,
-                    item.started_at,
-                    item.finished_at,
-                    item.job_code,
-                    item.level,
-                    item.status,
-                    item.message,
-                    item.duration_ms,
-                    item.error_text,
-                    item.host_name,
-                    metadata_json,
-                ),
-            )
-            return int(cursor.lastrowid)
+                return int(cursor.lastrowid)
+        except Exception as exc:  # noqa: BLE001 - re-raised unless the claim index refused it.
+            if running and backend_mod.is_unique_violation(exc):
+                raise RunAlreadyClaimed(
+                    f"{item.job_code} is already running on {host_name}") from None
+            raise
 
     def fetch_recent_job_runs(self, limit: int = 20) -> list[sqlite3.Row]:
         self.initialize()
@@ -1435,11 +1487,20 @@ class DbOpsStore:
         *,
         report_code: str,
         channel: str,
-        last_run_at: str,
+        last_run_at: str | None = None,
         last_status: str,
         last_skipped_reason: str = "",
         last_sent_at: str | None = None,
     ) -> None:
+        """Record what the last evaluation of one report+channel did.
+
+        ``last_run_at`` is **when the run that last produced a report started**, and it is the
+        anchor the schedule counts ``repeat_interval`` from — so it is written only by a run that
+        actually sent, and ``None`` (the default) leaves the stored one alone. It used to be
+        written on every evaluation, skips included, which made it "when the scheduler last
+        looked": a number that moves every sweep and can anchor nothing. The skip still records
+        itself in ``last_status`` / ``last_skipped_reason``.
+        """
         self.initialize()
         with self.connect() as conn:
             conn.execute(
@@ -1457,7 +1518,7 @@ class DbOpsStore:
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(report_code, channel) DO UPDATE SET
                     last_sent_at = COALESCE(excluded.last_sent_at, report_send_state.last_sent_at),
-                    last_run_at = excluded.last_run_at,
+                    last_run_at = COALESCE(excluded.last_run_at, report_send_state.last_run_at),
                     last_status = excluded.last_status,
                     last_skipped_reason = excluded.last_skipped_reason,
                     updated_at = excluded.updated_at;
@@ -1829,49 +1890,66 @@ class DbOpsStore:
         metadata: dict | None = None,
     ) -> int:
         self.initialize()
-        metadata_json = json.dumps(metadata or {}, ensure_ascii=False, sort_keys=True)
-        with self.connect() as conn:
-            cursor = conn.execute(
-                """
-                INSERT INTO sql_runs
-                (
-                    run_key,
-                    sql_id,
-                    sql_code,
-                    target_no,
-                    server_id,
-                    db_type,
-                    service_name,
-                    instance_name,
-                    database_name,
-                    credential_name,
-                    status,
-                    level,
-                    message,
-                    started_at,
-                    metadata_json
+        running = str(status or "").strip().lower() == "running"
+        metadata = dict(metadata or {})
+        host_name = str(metadata.get("host_name") or socket.gethostname())
+        if running:
+            # The claim is the row: whoever this INSERT accepts owns the run. The pid and host go
+            # in beside it so the next scan can ask whether the owner is still alive instead of
+            # reaping the row on age and starting a second copy on top of it.
+            metadata.update(run_claim.claim_fields(pid=_claim_pid(metadata), host=host_name))
+        metadata_json = json.dumps(metadata, ensure_ascii=False, sort_keys=True)
+        try:
+            with self.connect() as conn:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO sql_runs
+                    (
+                        run_key,
+                        sql_id,
+                        sql_code,
+                        target_no,
+                        server_id,
+                        db_type,
+                        service_name,
+                        instance_name,
+                        database_name,
+                        credential_name,
+                        status,
+                        level,
+                        message,
+                        started_at,
+                        host_name,
+                        metadata_json
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    """,
+                    (
+                        run_key,
+                        sql_id,
+                        sql_code,
+                        target_no,
+                        server_id,
+                        db_type,
+                        service_name,
+                        instance_name,
+                        database_name,
+                        credential_name,
+                        status,
+                        level,
+                        message,
+                        started_at,
+                        host_name,
+                        metadata_json,
+                    ),
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-                """,
-                (
-                    run_key,
-                    sql_id,
-                    sql_code,
-                    target_no,
-                    server_id,
-                    db_type,
-                    service_name,
-                    instance_name,
-                    database_name,
-                    credential_name,
-                    status,
-                    level,
-                    message,
-                    started_at,
-                    metadata_json,
-                ),
-            )
-            return int(cursor.lastrowid)
+                return int(cursor.lastrowid)
+        except Exception as exc:  # noqa: BLE001 - re-raised unless the claim index refused it.
+            if running and backend_mod.is_unique_violation(exc):
+                raise RunAlreadyClaimed(
+                    f"{run_key} is already running on {host_name}") from None
+            raise
+
 
     def update_sql_run(
         self,
@@ -2171,6 +2249,11 @@ CREATE TABLE IF NOT EXISTS job_runs
     duration_ms INTEGER NULL CHECK (duration_ms IS NULL OR duration_ms >= 0),
     error_text TEXT NULL,
     host_name TEXT NULL,
+    -- The unit of work this row claims exclusively, or NULL for a row that claims nothing.
+    -- A backup job, a restore and a `sync` app command set it to their own code; an `async` app
+    -- command leaves it NULL, because the daemon is meant to call it while another copy is still
+    -- running and the duplicates it must avoid are the *tasks inside it*, not itself.
+    claim_key TEXT NULL,
     metadata_json TEXT NOT NULL DEFAULT '{}',
     CHECK (json_valid(metadata_json))
 );
@@ -2180,6 +2263,13 @@ CREATE INDEX IF NOT EXISTS ix_job_runs_created_at
 
 CREATE INDEX IF NOT EXISTS ix_job_runs_job_code_created_at
     ON job_runs (job_code, created_at DESC);
+
+-- The same claim for app commands, backup jobs and restores. A second restore started 47 minutes
+-- into the first on 2026-09-14 because the check that should have stopped it was a read taken
+-- before the decision rather than the decision itself.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_job_runs_claim
+    ON job_runs (claim_key, COALESCE(host_name, ''))
+    WHERE claim_key IS NOT NULL AND lower(status) = 'running';
 
 CREATE INDEX IF NOT EXISTS ix_job_runs_level_created_at
     ON job_runs (level, created_at DESC);
@@ -2239,6 +2329,9 @@ CREATE TABLE IF NOT EXISTS sql_runs
     row_count INTEGER NULL,
     result_json TEXT NOT NULL DEFAULT '{}',
     error_text TEXT NULL,
+    -- Which machine is running this. `job_runs` has carried it from the start; `sql_runs` did not,
+    -- and a claim cannot be keyed on a value that lives inside metadata_json.
+    host_name TEXT NULL,
     metadata_json TEXT NOT NULL DEFAULT '{}',
     CHECK (json_valid(result_json)),
     CHECK (json_valid(metadata_json))
@@ -2246,6 +2339,21 @@ CREATE TABLE IF NOT EXISTS sql_runs
 
 CREATE INDEX IF NOT EXISTS ix_sql_runs_run_key_created_at
     ON sql_runs (run_key, created_at DESC);
+
+-- **The claim.** At most one running row per (task+target, host). A scheduler takes its turn by
+-- INSERTing this row: whoever the index accepts owns the run, and whoever it refuses skips the
+-- task. Before this, "is it already running?" was a SELECT followed by an INSERT, which is safe
+-- only while exactly one scan process exists - and the moment a scan is allowed to overlap another
+-- (a long task, a scan past its app-command timeout), both read "not running" and both start.
+-- Eight duplicate production SQL runs on 2026-09-08 are what that costs.
+--
+-- Keyed WITH the host: two nodes sharing one schema are governed by node_role and R9, not by this
+-- index, and a crashed node must not be able to block a healthy one forever The predicate is
+-- lower(status) because this store holds both spellings - the daemon writes 'running' and
+-- backup_restore writes 'RUNNING' - and an index that saw only one of them would guard only half
+-- the rows while looking complete.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_sql_runs_claim
+    ON sql_runs (run_key, COALESCE(host_name, '')) WHERE lower(status) = 'running';
 
 CREATE INDEX IF NOT EXISTS ix_sql_runs_sql_code_created_at
     ON sql_runs (sql_code, created_at DESC);
@@ -2509,6 +2617,79 @@ CREATE INDEX IF NOT EXISTS ix_reports_type_level_created
 CREATE INDEX IF NOT EXISTS ix_reports_code_created
     ON reports (report_code, created_at DESC);
 """
+
+
+def prepare_run_claims(conn) -> dict[str, int]:
+    """Make an existing store fit to carry the claim indexes. Runs **before** the schema script.
+
+    Two things have to be true before ``ux_sql_runs_claim`` and ``ux_job_runs_claim`` can be
+    created, and neither is true of a store that has been running:
+
+    * ``sql_runs`` needs its ``host_name`` column. ``CREATE TABLE IF NOT EXISTS`` will not add a
+      column to a table that already exists, and the index names it.
+    * There must be no key already holding **two** ``running`` rows. Every node that was killed
+      mid-run left one behind, and this estate's shared schema has them from three soak cycles;
+      a unique index over that data does not fail loudly at the right person, it fails at whoever
+      next runs ``init``.
+
+    The duplicates are closed, not deleted — the newest row of each key keeps running and the older
+    ones become ``timeout``, which is what they always were in fact. Returns what it closed, so the
+    upgrade can say so rather than doing it silently.
+    """
+    closed = {"sql_runs": 0, "job_runs": 0}
+    if _table_columns(conn, "sql_runs"):
+        ensure_sqlite_column(conn, table_name="sql_runs", column_name="host_name",
+                             column_sql="host_name TEXT NULL")
+        closed["sql_runs"] = _close_duplicate_running(
+            conn, table="sql_runs", id_column="sql_run_id", key_column="run_key")
+    if _table_columns(conn, "job_runs"):
+        ensure_sqlite_column(conn, table_name="job_runs", column_name="claim_key",
+                             column_sql="claim_key TEXT NULL")
+        closed["job_runs"] = _close_duplicate_running(
+            conn, table="job_runs", id_column="log_id", key_column="claim_key")
+    return closed
+
+
+def _table_columns(conn, table_name: str) -> set[str]:
+    """The table's columns, or an empty set when it does not exist yet (a fresh store)."""
+    try:
+        return {row["name"] for row in conn.execute(f"PRAGMA table_info({table_name});")}
+    except Exception:  # noqa: BLE001 - "no such table" differs per backend and means the same here.
+        return set()
+
+
+def _close_duplicate_running(conn, *, table: str, id_column: str, key_column: str) -> int:
+    """Leave the newest ``running`` row per (key, host) and close the rest."""
+    rows = conn.execute(
+        f"""
+        SELECT {id_column} AS row_id, {key_column} AS claim_key,
+               COALESCE(host_name, '') AS claim_host
+          FROM {table}
+         WHERE lower(status) = 'running' AND {key_column} IS NOT NULL
+         ORDER BY {id_column} DESC;
+        """
+    ).fetchall()
+    seen: set[tuple[str, str]] = set()
+    stale: list[int] = []
+    for row in rows:
+        key = (str(row["claim_key"]), str(row["claim_host"]))
+        if key in seen:
+            stale.append(int(row["row_id"]))
+            continue
+        seen.add(key)
+    for row_id in stale:
+        conn.execute(
+            f"""
+            UPDATE {table}
+               SET status = 'timeout',
+                   finished_at = ?,
+                   error_text = COALESCE(error_text, '')
+                       || 'closed by the schema 5 upgrade: a second running row for the same key'
+             WHERE {id_column} = ?;
+            """,
+            (utc_now_text(), row_id),
+        )
+    return len(stale)
 
 
 def ensure_sqlite_column(

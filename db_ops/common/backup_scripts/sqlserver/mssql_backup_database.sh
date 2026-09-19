@@ -12,9 +12,9 @@
 # `docker exec`s into $DOCKER_CONTAINER, mirroring the Oracle and PostgreSQL jobs.
 #
 # Layout, one file per backup:
-#   $BACKUP_DIR/<DB>/FULL/<DB>_FULL_<UTC timestamp>.bak
-#   $BACKUP_DIR/<DB>/DIFF/<DB>_DIFF_<UTC timestamp>.bak
-#   $BACKUP_DIR/<DB>/LOG/<DB>_LOG_<UTC timestamp>.trn
+#   $BACKUP_DIR/<DB>/FULL/<DB>_FULL_<YYYYMMDD_HHMMSS>Z.bak   the stamp is UTC, and the Z says so
+#   $BACKUP_DIR/<DB>/DIFF/<DB>_DIFF_<YYYYMMDD_HHMMSS>Z.bak
+#   $BACKUP_DIR/<DB>/LOG/<DB>_LOG_<YYYYMMDD_HHMMSS>Z.trn
 #   $BACKUP_DIR/_cert/<CERT_NAME>.cer + .pvk        the encryption certificate, exported once
 #
 # ENCRYPTION. With $BACKUP_ENCRYPTION_PASSWORD set, every backup is written
@@ -164,7 +164,8 @@ fi
 # --------------------------------------------------------------------------- #
 # Back up.
 # --------------------------------------------------------------------------- #
-stamp="$(date -u +%Y%m%d_%H%M%S)"
+# UTC, and marked: without the Z the name read as local time on a node that runs on +07.
+stamp="$(date -u +%Y%m%d_%H%M%SZ)"
 failed=0
 for db in $databases; do
     esc_db="$(sql_escape "$db")"

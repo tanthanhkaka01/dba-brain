@@ -107,6 +107,12 @@ def test_the_spawn_pins_its_encoding() -> None:
 
     A test that only exercises a round trip would keep passing on a machine whose code page
     happens to be UTF-8 — which is most CI, and none of the estate's Windows hosts.
+
+    It used to assert the literal ``encoding="utf-8"`` on the `subprocess.run` call. That spelling
+    went on 2026-09-19, when the pipe started carrying bytes so each direction could state its own
+    error handling — strict out, replacing back, after one cp1252 byte on a child's stdout cost a
+    command its answer. The **intent** is unchanged and is asserted more strictly here: nothing is
+    left to the locale, in either direction.
     """
     import inspect
 
@@ -114,7 +120,10 @@ def test_the_spawn_pins_its_encoding() -> None:
 
     source = inspect.getsource(common_cli.spawn)
 
-    assert 'encoding="utf-8"' in source, "spawn must not inherit the machine's code page"
+    assert "input=payload.encode(\"utf-8\")" in source, (
+        "the request goes out as bytes this module encoded, not through the machine's code page")
+    assert 'decode("utf-8", errors="replace")' in source, (
+        "the answer is decoded by this module, naming its encoding")
 
 
 def test_the_reader_pins_its_encoding() -> None:

@@ -1,5 +1,5 @@
 from __future__ import annotations
-from db_ops.backup_restore.shell_quoting import _BACKUP_TIMESTAMP_RE, _build_sqlcmd_auth_args, _escape_identifier, _escape_sql_string, _ps_array, _ps_quote  # noqa: F401 - one definition
+from db_ops.backup_restore.shell_quoting import _BACKUP_TIMESTAMP_RE, backup_time_from_name, _build_sqlcmd_auth_args, _escape_identifier, _escape_sql_string, _ps_array, _ps_quote  # noqa: F401 - one definition
 
 import datetime
 import shlex
@@ -155,13 +155,8 @@ def vm_unc_to_local_path(path: str | Path, config: BackupRestoreConfig) -> Path:
 
 
 def _backup_sort_timestamp(path: Path, *, fallback_mtime: float) -> float:
-    match = _BACKUP_TIMESTAMP_RE.search(path.name)
-    if not match:
-        return fallback_mtime
-    try:
-        return datetime.datetime.strptime(match.group(1) + match.group(2), "%Y%m%d%H%M%S").timestamp()
-    except ValueError:
-        return fallback_mtime
+    stamped = backup_time_from_name(path.name)
+    return fallback_mtime if stamped is None else stamped
 
 
 def find_latest_full_backups(config: BackupRestoreConfig | None = None, *, now: float | None = None) -> list[Path]:

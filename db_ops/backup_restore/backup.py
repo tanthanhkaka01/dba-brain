@@ -46,7 +46,7 @@ from db_ops.lib import cleanup_retention
 from db_ops.lib.time_window import TimeWindow, is_time_window_open, job_due, parse_time_window_config
 from db_ops.config import DbOpsConfig
 from db_ops.db.job_runs import JobRun
-from db_ops.db.store import DbOpsStore, utc_now_text
+from db_ops.db.store import DbOpsStore, RunAlreadyClaimed, utc_now_text
 from db_ops.lib.paths import TOOL_ROOT  # noqa: F401 - one definition, see that module
 from db_ops.lib.paths import resolve_tool_path
 
@@ -567,19 +567,32 @@ def run_backup(
         if dry_run:
             summary["jobs"].append({"job": item.label, "status": "dry-run"})
             continue
-        summary["ran"] += 1
         started_at = utc_now_text()
-        log_id = store.insert_job_run(
-            JobRun(
-                job_code=item.job_code,
-                level="logging",
-                status="RUNNING",
-                message=f"Backup {item.label} started.",
-                started_at=started_at,
-                host_name=socket.gethostname(),
-                metadata={"backup_id": item.backup_id, "job": item.job, "server_id": item.server_id},
+        try:
+            log_id = store.insert_job_run(
+                JobRun(
+                    job_code=item.job_code,
+                    # One backup job runs at a time on one host, whatever calls it. The store's
+                    # unique index is what says so, so two overlapping scans cannot both start it
+                    # and write to the same target directory.
+                    claim_key=item.job_code,
+                    level="logging",
+                    status="RUNNING",
+                    message=f"Backup {item.label} started.",
+                    started_at=started_at,
+                    host_name=socket.gethostname(),
+                    metadata={"backup_id": item.backup_id, "job": item.job,
+                              "server_id": item.server_id},
+                )
             )
-        )
+        except RunAlreadyClaimed as exc:
+            # Already running. Skipped rather than failed: the scheduler is working, and an alert
+            # here would be an alert about nothing going wrong.
+            summary["skipped"] += 1
+            summary.setdefault("already_running", []).append(
+                {"backup_id": item.backup_id, "job": item.job, "detail": str(exc)})
+            continue
+        summary["ran"] += 1
         emit_backup_restore_event(
             app_config=app_config, command="backup", phase="START", level="logging",
             message=f"{item.label} started.", logger=logger, started_at=started_at,

@@ -734,12 +734,15 @@ def _run_one_scheduled_report(
     _migrate_legacy_report_send_state(store=store, report_code=report_code, channel=channel)
     state = store.fetch_report_send_state(report_code=report_code, channel=channel)
     last_sent_at = str(state["last_sent_at"] or "") if state else ""
-    skipped_reason = _schedule_skip_reason(report_config=report_config, evaluated_at=evaluated_at, last_sent_at=last_sent_at)
+    last_run_at = str(state["last_run_at"] or "") if state else ""
+    skipped_reason = _schedule_skip_reason(report_config=report_config, evaluated_at=evaluated_at,
+                                           last_sent_at=last_sent_at, last_run_at=last_run_at)
     if skipped_reason:
+        # No `last_run_at`: a skip is not a run, and overwriting the anchor with the moment the
+        # scheduler looked is what made `repeat_interval` unanchorable in the first place.
         store.upsert_report_send_state(
             report_code=report_code,
             channel=channel,
-            last_run_at=report_schedule_evaluated_at,
             last_status="skipped",
             last_skipped_reason=skipped_reason,
         )
@@ -772,7 +775,6 @@ def _run_one_scheduled_report(
         store.upsert_report_send_state(
             report_code=report_code,
             channel=channel,
-            last_run_at=report_schedule_evaluated_at,
             last_status="skipped",
             last_skipped_reason=reason,
         )
@@ -807,6 +809,8 @@ def _run_one_scheduled_report(
         store.upsert_report_send_state(
             report_code=report_code,
             channel=channel,
+            # The anchor: when this run STARTED. `repeat_interval` counts from here, so the
+            # build and the send are inside the cycle they belong to instead of pushing it out.
             last_run_at=report_schedule_evaluated_at,
             last_status="queued",
             last_skipped_reason="",
@@ -818,8 +822,11 @@ def _run_one_scheduled_report(
         store.upsert_report_send_state(
             report_code=report_code,
             channel=channel,
-            last_run_at=report_schedule_evaluated_at,
             last_status="skipped",
+            # `skipped_reason`, not `reason`: the only `reason` in this function belongs to the
+            # branch above, which returns, so reaching here with that name raised
+            # UnboundLocalError. It fired on every node that had built a report and had nowhere to
+            # send it - which is every fresh install, where no Telegram group is configured yet.
             last_skipped_reason=skipped_reason,
         )
 
@@ -876,7 +883,29 @@ def _create_scheduled_report(
     return {"created": 0, "report_ids": [], "skipped": [{"reason": f"unknown report_code {report_code}"}]}
 
 
-def _schedule_skip_reason(*, report_config: dict[str, Any], evaluated_at: datetime, last_sent_at: str) -> str:
+def _schedule_anchor(*, last_run_at: str, last_sent_at: str) -> datetime | None:
+    """The instant ``repeat_interval`` is counted from: the **start** of the run that last sent.
+
+    ``last_run_at`` is that start and ``last_sent_at`` is when the send finished, so the honest
+    anchor is the former — a report that takes 40 seconds to build and send must not push its own
+    next cycle 40 seconds out, which is what anchoring on the finish did until 2026-09-19.
+
+    A store written by an older build holds "when the scheduler last looked" in ``last_run_at``,
+    which is *after* the last send and would delay the next report by up to a whole interval. Hence
+    the ordering test rather than a plain preference: a ``last_run_at`` later than ``last_sent_at``
+    is the old meaning and is ignored, and the row corrects itself the first time this build sends.
+    """
+    last_run = _parse_utc(last_run_at)
+    last_sent = _parse_utc(last_sent_at)
+    if last_run is None:
+        return last_sent
+    if last_sent is None or last_run <= last_sent:
+        return last_run
+    return last_sent
+
+
+def _schedule_skip_reason(*, report_config: dict[str, Any], evaluated_at: datetime,
+                          last_sent_at: str, last_run_at: str = "") -> str:
     if not bool(report_config.get("active", True)):
         return "inactive"
     local_now = to_display(evaluated_at)
@@ -885,11 +914,11 @@ def _schedule_skip_reason(*, report_config: dict[str, Any], evaluated_at: dateti
     if closed_reason:
         return closed_reason
     # Shared run-once convention: repeat_interval=0 => send once (never repeat after sent).
-    last_sent = _parse_utc(last_sent_at)
-    if last_sent is not None and not repeat_due(last_sent, time_window.repeat_interval, evaluated_at, default=300):
+    anchor = _schedule_anchor(last_run_at=last_run_at, last_sent_at=last_sent_at)
+    if anchor is not None and not repeat_due(anchor, time_window.repeat_interval, evaluated_at, default=300):
         if time_window.repeat_interval == 0:
             return "run-once: already sent"
-        elapsed = int((evaluated_at - last_sent).total_seconds())
+        elapsed = int((evaluated_at - anchor).total_seconds())
         repeat_interval = int(time_window.repeat_interval or 300)
         return f"repeat interval not elapsed: {elapsed}s/{repeat_interval}s"
     return ""

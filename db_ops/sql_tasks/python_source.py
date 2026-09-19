@@ -67,6 +67,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+# The two places that need these names cannot import each other (`common` does not
+# import an app; an app runs `common` as a CLI), so the vocabulary lives in `lib`,
+# which both may import. It was spelled out twice until 2026-09-19.
+from db_ops.lib.task_input import TARGET_PLACEHOLDERS
+
 #: How many rows go into one execution of the SQL. Not one big parameter: the estate's first user
 #: of this pulls ten days of attendance scans - tens of thousands of rows, megabytes of JSON - and
 #: an ``nvarchar(max)`` that size is a parameter the driver, the network and ``OPENJSON`` each get
@@ -199,12 +204,6 @@ def resolve_script(script_path: str, *, tool_root: Path) -> Path:
         raise PythonSourceError(f"input.script not found: {resolved}")
     return resolved
 
-
-#: Placeholders the RUNNER fills from the sql_targets entry the task is running on, next to the
-#: task's own parameters: its ``server_id`` and ``database_name``, as configured. A script that
-#: must reach the target itself takes it from here, so one command runs on every tier it has a
-#: target for.
-TARGET_PLACEHOLDERS = ("target_server_id", "target_database")
 
 
 def substitute(args: tuple[str, ...], values: dict[str, Any]) -> list[str]:

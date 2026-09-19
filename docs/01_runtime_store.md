@@ -370,6 +370,8 @@ The config mirror initializes `config_sources`, `config_collections`, `config_it
 
 `python -m db_ops.db.cli init` runs all seven against the active backend, which is the easiest way to create a store from scratch.
 
+**Before the schema script, `prepare_run_claims` makes an existing store fit to carry the two claim indexes.** `CREATE TABLE IF NOT EXISTS` will not add a column to a table that already exists, and a unique index cannot be built over data that already violates it: every node killed mid-run left a key holding two `running` rows. So the columns are added, the duplicates are **closed rather than deleted** — the newest row of each key keeps running and the older ones become `timeout`, which is what they always were in fact — and the count is returned so the upgrade can say what it did. On a fresh store it finds no tables and does nothing.
+
 On SQLite the store enables WAL mode, `synchronous=NORMAL`, foreign keys and a busy timeout on each connection; on PostgreSQL those pragmas are skipped and `search_path` is set to the configured schema instead. Schema migrations add missing columns and rebuild selected Telegram/report tables when older shapes are found — these are additive and idempotent, and they work on both backends because `PRAGMA table_info` is translated rather than skipped.
 
 Each store class takes either a path or a config:
@@ -462,6 +464,8 @@ High-use indexes include:
 - `ux_web_users_active` — **partial**, over `username WHERE is_active = 1`. Same rule as config: disabling an account keeps its row and frees the username.
 - `uq_web_sessions_token`, `ix_web_sessions_user`, `ix_web_sessions_expires`, `ix_web_login_attempts_user`, `ix_web_login_attempts_username`
 - `ux_app_command_requests_pending` — **partial**, over `app_command_id WHERE status = 'pending'`. One queued run per app: an impatient double-click is told it is already queued instead of running the app twice.
+- `ux_sql_runs_claim` — **partial and unique**, over `(run_key, COALESCE(host_name, '')) WHERE lower(status) = 'running'`. **A running row is a claim, not a note.** A scheduler takes its turn by inserting it: whoever the index accepts owns the run, whoever it refuses is told the task is already running and moves on. Before this, "is it already running?" was a SELECT followed by an INSERT, which is safe only while exactly one scan process can exist — and the moment two overlap, both read *not running* and both start.
+- `ux_job_runs_claim` — **partial and unique**, over `(claim_key, COALESCE(host_name, '')) WHERE claim_key IS NOT NULL AND lower(status) = 'running'`. The same claim for backup jobs, restores and `sync` app commands. `claim_key` is what a row holds exclusively, or `NULL` for a row that holds nothing: an `async` app command leaves it unset on purpose, because being called again while one is running is what that mode is for, and what must not double is the work inside it. The predicate is `lower(status)` because this store holds both spellings — the daemon writes `running`, backup_restore writes `RUNNING`.
 
 ## Config Mirror (`config_*` tables)
 

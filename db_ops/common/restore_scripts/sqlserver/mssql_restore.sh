@@ -119,7 +119,9 @@ in_t() { $DOCKER exec "$target_container" bash -lc "$1" </dev/null; }
 
 # pieces <db> <FULL|DIFF|LOG> <bak|trn> -> that database's own pieces at that level, sorted.
 #
-# Only names the backup job itself writes, <db>_<LEVEL>_<YYYYMMDD>_<HHMMSS>.<ext>, are eligible.
+# Only names the backup job itself writes, <db>_<LEVEL>_<YYYYMMDD>_<HHMMSS>[Z].<ext>, are eligible.
+# The Z (the stamp is UTC) arrived in 0.20.0. Backups written before it carry none and still
+# restore; the stamp is compared without it, and the digits sort the two forms together correctly.
 # Everything downstream orders the chain by the stamp in the name, so a file that carries no
 # stamp cannot be placed in it - and both ways of getting that wrong were live on the CLOUD
 # lab at once. A stray test_db_01_FULL_01.bak dropped into mssql_ha_db/FULL sorted after every
@@ -130,7 +132,7 @@ in_t() { $DOCKER exec "$target_container" bash -lc "$1" </dev/null; }
 # LOG died with "the log in this backup set terminates at LSN ..., which is too early".
 pieces() {
     in_t "ls -1 '${backup_dir}/$1/$2' 2>/dev/null" | tr -d '\r' \
-        | grep -E "^$1_$2_[0-9]{8}_[0-9]{6}\.$3\$" \
+        | grep -E "^$1_$2_[0-9]{8}_[0-9]{6}Z?\.$3\$" \
         | sed "s|^|${backup_dir}/$1/$2/|" | sort
 }
 
@@ -179,17 +181,17 @@ for db in $databases; do
     [ -n "$full" ] || die "no FULL backup for ${db} under ${backup_dir}/${db}/FULL."
     # A DIFF is only usable if it was taken after the FULL being restored; same for the LOGs.
     # Sorting by the UTC timestamp in the file name is what makes "after" comparable here.
-    full_stamp="$(basename "$full" | sed 's/.*_\([0-9]\{8\}_[0-9]\{6\}\)\.bak$/\1/')"
+    full_stamp="$(basename "$full" | sed 's/.*_\([0-9]\{8\}_[0-9]\{6\}\)Z\{0,1\}\.bak$/\1/')"
     diff=""
     for d in $(pieces "$db" DIFF bak); do
-        s="$(basename "$d" | sed 's/.*_\([0-9]\{8\}_[0-9]\{6\}\)\.bak$/\1/')"
+        s="$(basename "$d" | sed 's/.*_\([0-9]\{8\}_[0-9]\{6\}\)Z\{0,1\}\.bak$/\1/')"
         [ "$s" \> "$full_stamp" ] && diff="$d"
     done
     logs=""
     base_stamp="${full_stamp}"
-    [ -n "$diff" ] && base_stamp="$(basename "$diff" | sed 's/.*_\([0-9]\{8\}_[0-9]\{6\}\)\.bak$/\1/')"
+    [ -n "$diff" ] && base_stamp="$(basename "$diff" | sed 's/.*_\([0-9]\{8\}_[0-9]\{6\}\)Z\{0,1\}\.bak$/\1/')"
     for l in $(pieces "$db" LOG trn); do
-        s="$(basename "$l" | sed 's/.*_\([0-9]\{8\}_[0-9]\{6\}\)\.trn$/\1/')"
+        s="$(basename "$l" | sed 's/.*_\([0-9]\{8\}_[0-9]\{6\}\)Z\{0,1\}\.trn$/\1/')"
         [ "$s" \> "$base_stamp" ] && logs="$logs $l"
     done
     printf -- '-- %s: full=%s diff=%s logs=%s\n' "$db" "$(basename "$full")" \

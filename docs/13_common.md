@@ -2088,6 +2088,23 @@ rest.
 The shared layer has its own entrypoint, like every app: `python -m db_ops.common.cli`.
 It is a thin facade — logic stays in the common modules it fronts.
 
+**The shared config objects, answerable from outside Python** (`cli_config_objects.py`, 2026-09-19).
+Three questions that had no answer a program could ask for:
+
+| Command | Answers | Reads |
+| --- | --- | --- |
+| `describe-object` | what a field of a shared object means, and what it accepts | `data/shared_config_objects.json` |
+| `due-check` | would this `time_window` run now, and if not why not | nothing — it evaluates the request |
+| `check-objects` | does this node's own `data/*.json` obey the reference | that file, and every file it names |
+| `check-references` | which pointer between two config files lands nowhere | `data/config_references.json`, and every file it names |
+
+`due-check` calls `db_ops.lib.time_window.explain_due` — **the same function the schedulers call** —
+so its explanation cannot disagree with the behaviour. It is not how the daemon checks due-ness: the
+daemon sweeps once a second and metrics evaluate a verdict per target per metric, so the rule is
+imported there. A subprocess per verdict would cost more than the work it schedules, which is the
+`lib` / `common` split in one sentence. `check-objects` exits 1 when it finds a violation, so it can
+stand in a gate.
+
 **The store travels in the request, like every other value.** `common` performs work and reads
 nothing; that already held for a target database (`run-sql` carries host, login and password) but
 not for the *runtime store*, where a caller could only say "config.json" and let this side go and
@@ -2233,25 +2250,47 @@ everywhere: `time_window` schedules a unit of work whether it is a SQL task, a b
 metric; `notify` says who gets told about it; the remote-access object says how to reach a
 machine. This is the one place those shapes are specified.
 
-> **Why here and not in `data/`.** `data/` holds *values* — the per-node config that is
-> bind-mounted, partly git-ignored, and shipped to the worker. A spec is a *contract*, not
-> data: it is reviewed with the code that enforces it, and the worker has no use for it at
-> runtime. Keeping it out of `data/` also avoids the trap of a spec file sitting beside the
-> files it describes and drifting from them silently.
+> **The field-level reference is `data/shared_config_objects.json`** (2026-09-19), and this
+> section is the narrative around it: which parser reads each object, which clock its bounds are
+> on, and the failures that shaped it. For *what a field accepts* — required or not, type, range,
+> default, and what its number is measured against — the file is the authority, because it is the
+> only form of that answer a program can use:
+>
+> ```bash
+> python -m db_ops.common.cli describe-object '{"object": "time_window", "field": "timeout"}'
+> python -m db_ops.common.cli check-objects '{}'      # does THIS node's config obey it
+> ```
+>
+> **This page argued the opposite until that date**, and the argument was sound at the time: a spec
+> file sitting in `data/` beside the files it describes drifts from them silently, which is exactly
+> what happened to `notify_levels.json`. What changed is that drift is now impossible to keep —
+> `tests/test_shared_config_objects_reference.py` compares the file to the code it describes *and*
+> runs `check-objects` over this estate, so a field added to `lib` and not to the file fails the
+> suite. Its first run paid for itself: `sql_access.mode` and `sql_access.timeout_seconds` were in
+> use by 7 instances and described nowhere, and two of the reference's own paths pointed at
+> `backups[]` where the schedule actually lives on `backups[].jobs[]`.
 
 **The parser is the authority, this document is its description.** Each object below names the
-`db_ops.common` function that reads it. If the two ever disagree, the parser is right and this
-file is the bug — every one of these objects is validated at load time, so a config that
-contradicts the spec fails loudly rather than behaving oddly.
+function that reads it. If the two ever disagree, the parser is right and this file is the bug —
+every one of these objects is validated at load time, so a config that contradicts the spec fails
+loudly rather than behaving oddly.
 
-Adding a new shared object: put the shape and its parser in `db_ops/common/`, list the parser in
-the API index above, and add a subsection here. An object used by exactly one app is not shared
-and belongs in neither.
+Adding a new shared object: put the shape and its parser in `db_ops/lib/`, list the parser in the
+API index above, add a subsection here, **and describe its fields in
+`data/shared_config_objects.json`** — the guard test fails until all three agree. An object used by
+exactly one app is not shared and belongs in none of them.
 
 ### `time_window` — when a unit of work runs
 
 **Parser:** `db_ops.lib.time_window.parse_time_window_config(entry, context=...)` →
 `ParsedTimeWindow`. **Used by:** the app daemon, sql_tasks, metrics, reports, backup_restore.
+
+**Evaluated by one function, not five:** `due_from_row(time_window, row, now, local_now)` → a
+`DueVerdict` carrying `due`, `reason` and `next_due_at`. `run_anchor` is the only code that decides
+*which column* the previous run's start is read from, and **every interval is measured from that
+start** — `repeat_interval: 300` on a task that takes 240 seconds starts again about 60 seconds
+after it finishes. `sql_tasks` read `finished_at` and the reports app its last send until
+2026-09-19, which is three meanings of one field in one estate.
 
 ```jsonc
 "time_window": {

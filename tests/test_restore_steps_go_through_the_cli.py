@@ -45,8 +45,15 @@ class _Recorder:
         self.stdin: str | None = None
 
     def __call__(self, argv, *, input=None, capture_output=None, text=None, **kwargs):
-        self.argv, self.stdin = list(argv), input
-        return subprocess.CompletedProcess(argv, self.returncode, self.stdout, self.stderr)
+        # **Bytes both ways, because that is what `subprocess.run` does here.** The spawn stopped
+        # passing `text=True` on 2026-09-19 so that each direction could state its own error
+        # handling - strict on the way out, replacing on the way back, after one cp1252 byte on a
+        # child's stdout cost a command its answer. A fake that hands back `str` describes a call
+        # nobody makes, and it let that change pass a focused test run and fail here.
+        self.argv = list(argv)
+        self.stdin = input.decode("utf-8") if isinstance(input, bytes) else input
+        return subprocess.CompletedProcess(
+            argv, self.returncode, self.stdout.encode("utf-8"), self.stderr.encode("utf-8"))
 
 
 def _envelope(**over) -> str:

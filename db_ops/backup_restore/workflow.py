@@ -33,7 +33,7 @@ from db_ops.backup_restore.restore_script import (
 from db_ops.backup_restore.events import emit_backup_restore_event, stdout_excerpt
 from db_ops.backup_restore.server_metadata import replay_phase
 from db_ops.lib import instance_bundle
-from db_ops.db.store import DbOpsStore, utc_now_text
+from db_ops.db.store import DbOpsStore, RunAlreadyClaimed, utc_now_text
 
 
 def select_due_restores(
@@ -173,13 +173,19 @@ def run_scheduled_restores(
         if dry_run:
             summary["restores"].append({"restore_id": config.restore_id, "status": "dry-run"})
             continue
-        summary["ran"] += 1
         job_code = schedule.restore_job_code(config.restore_id)
         metadata = {"restore_id": config.restore_id, "source_id": config.source_id, "target_id": config.target_id}
-        log_id, _started_at = schedule.start_run(
-            store=store, job_code=job_code,
-            message=f"Restore {config.restore_id} started.", metadata=metadata,
-        )
+        try:
+            log_id, _started_at = schedule.start_run(
+                store=store, job_code=job_code,
+                message=f"Restore {config.restore_id} started.", metadata=metadata,
+            )
+        except RunAlreadyClaimed as exc:
+            summary["skipped"] += 1
+            summary["restores"].append({"restore_id": config.restore_id,
+                                        "status": "already-running", "detail": str(exc)})
+            continue
+        summary["ran"] += 1
         started = time.monotonic()
         started_at = utc_now_text()
         # This layer emits the run's events. It used to assume run_restore_workflow did - it does
@@ -299,12 +305,21 @@ def run_scheduled_restores(
         if dry_run:
             summary["restores"].append({"restore_id": job.restore_id, "db_type": job.db_type, "status": "dry-run"})
             continue
-        summary["ran"] += 1
         metadata = script_restore_metadata(job)
-        log_id, _started = schedule.start_run(
-            store=store, job_code=job.job_code,
-            message=f"Restore {job.label} started.", metadata=metadata,
-        )
+        try:
+            log_id, _started = schedule.start_run(
+                store=store, job_code=job.job_code,
+                message=f"Restore {job.label} started.", metadata=metadata,
+            )
+        except RunAlreadyClaimed as exc:
+            # Another run of this same restore is in flight. Skipped, not failed, and not counted
+            # as a run: a restore is not idempotent, and two of them into one database is the
+            # failure of 2026-09-14 rather than a busy scheduler.
+            summary["skipped"] += 1
+            summary["restores"].append({"restore_id": job.restore_id, "db_type": job.db_type,
+                                        "status": "already-running", "detail": str(exc)})
+            continue
+        summary["ran"] += 1
         started = time.monotonic()
         started_at = utc_now_text()
         emit_backup_restore_event(

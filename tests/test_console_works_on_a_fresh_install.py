@@ -59,7 +59,14 @@ def test_the_config_catalog_covers_every_file_init_writes(tmp_path):
     #     `ops-status`. It lives in a file only because the daemon runs commands through the
     #     platform's shell and single-quoted JSON does not survive cmd.exe. It holds one request,
     #     not a collection of records, so there is nothing for the console to list or edit.
-    written -= {"config_catalog.json", "encrypted_secret_text.json", "ops_status_request.json"}
+    #   - `shared_config_objects.json` and `config_references.json` are REFERENCE: they describe
+    #     what a field means and which field must point at which, they are identical on every
+    #     node, and nothing an app decides reads them. Catalogued, the console would offer an
+    #     editor for a document whose three copies the suite requires to match byte for byte -
+    #     an editor whose save is a test failure is worse than no editor. They are answered by
+    #     `common.cli describe-object` / `check-references` instead.
+    written -= {"config_catalog.json", "encrypted_secret_text.json", "ops_status_request.json",
+                "shared_config_objects.json", "config_references.json"}
     missing = sorted(written - catalogued)
     assert not missing, (
         f"init writes {missing}, which the catalog does not list, so sync-config will not load "

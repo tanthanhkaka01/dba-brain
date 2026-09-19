@@ -156,7 +156,7 @@ def test_different_task_same_process_runs_when_scopes_do_not_overlap(tmp_path, m
     )
 
     assert len(store.inserted) == 2
-    assert set(running) == {"APP-DB-X", "APP-DB-Y"}
+    assert {value.app_command.app_command_id for value in running.values()} == {"APP-DB-X", "APP-DB-Y"}
     assert {row["status"] for row in store.inserted} == {"running"}
 
 

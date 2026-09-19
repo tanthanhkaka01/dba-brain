@@ -252,3 +252,27 @@ REPO_ROOT = TOOL_ROOT
 #: Where ``data/*.json`` lives. Callers that take a ``data_dir`` argument should keep taking one —
 #: this is the default for the ones that do not, not a licence to stop passing it.
 DEFAULT_DATA_DIR = resolve_data_dir(tool_root=TOOL_ROOT)
+
+#: Where the package keeps the copies of the reference files that ``init`` seeds ``data/`` from.
+PACKAGED_CATALOGUE = Path(__file__).resolve().parents[1] / "common" / "catalogue"
+
+
+def reference_file(filename: str, data_dir: str | Path | None = None) -> Path:
+    """A reference file, in the first of its three homes that exists.
+
+    ``data/<name>`` is this node's copy, ``data/<name>.example.json`` is what a public checkout has,
+    and the packaged catalogue is what ``init`` seeds from — so a build that has never been
+    initialised still answers. Reference is identical on every node, so falling back cannot show a
+    reader another estate's anything.
+
+    One function because there were two, with the same body, in the two modules that read these
+    files (``lib/shared_objects.py`` and ``lib/config_references.py``) — the duplicate-definition
+    guard found them, which is the guarantee both of those modules exist to provide.
+    """
+    candidate = Path(data_dir or DEFAULT_DATA_DIR) / filename
+    if candidate.is_file():
+        return candidate
+    example = candidate.with_name(filename.replace(".json", ".example.json"))
+    if example.is_file():
+        return example
+    return PACKAGED_CATALOGUE / filename

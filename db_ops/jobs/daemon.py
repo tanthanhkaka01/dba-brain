@@ -12,7 +12,7 @@ import sys
 import tempfile
 import time
 import traceback
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, IO
@@ -20,11 +20,20 @@ from typing import Any, IO
 from db_ops.lib.json_io import load_json_file
 from db_ops.lib.secret_text import SECRET_KEY_ENV_VAR, resolve_cli_key
 from db_ops.config import DEFAULT_CONFIG_PATH, DbOpsConfig, load_config, resolve_config_path
-from db_ops.lib.time_window import TimeWindow, is_time_window_open, job_due, parse_time_window_config
+from db_ops.lib.time_window import (
+    DueVerdict,
+    TimeWindow,
+    due_from_row,
+    is_time_window_open,
+    parse_time_window_config,
+    run_anchor,
+)
 from db_ops.lib.timezone import display_now
 from db_ops import __version__ as db_ops_version
 from db_ops.db import DbOpsStore
-from db_ops.lib import daemon_state
+from db_ops.db.store import RunAlreadyClaimed
+from db_ops.lib import daemon_state, process_liveness, run_claim, store_outage
+from db_ops.lib import run_mode as run_mode_lib
 from db_ops.db.store import utc_now_text
 from db_ops.jobs.models import JobRun
 from db_ops.logging_ops import LOG_SCOPE_ENV_VAR, build_log_paths, log_event, log_function_error, setup_app_logger, validate_log_scope
@@ -50,6 +59,10 @@ class AppCommand:
     time_window: TimeWindow
     active: bool
     node_role: str = "all"  # master | worker | all — which cluster node runs this command
+    #: sync (default) = the daemon waits for one run to finish before starting the next; async =
+    #: it starts the command whenever it is due, in flight or not, up to max_parallel. An async
+    #: command must refuse its own duplicate work — see db_ops/lib/run_mode.py.
+    run_mode: run_mode_lib.RunMode = field(default_factory=run_mode_lib.RunMode)
 
     @property
     def repeat_interval_seconds(self) -> int | None:
@@ -201,6 +214,28 @@ def sweep_job_runs_history(
     return moved
 
 
+def wait_out_store_outage(error: Exception, *, waiter: store_outage.OutageWaiter,
+                          logger: Any = None) -> int | None:
+    """Seconds to wait before trying the store again, or ``None`` to let the error out.
+
+    The rule is :mod:`db_ops.lib.store_outage`; this is the half that logs, because a wait nobody
+    can see is indistinguishable from a daemon that has stopped scheduling. Every wait is written
+    to the error log with the code the store sent and the budget left, so the gap in ``job_runs``
+    has an explanation beside it rather than only an absence.
+    """
+    wait = waiter.wait_for(error)
+    if wait is None:
+        return None
+    code = store_outage.sqlstate(error) or "-"
+    detail = (f"store unavailable ({type(error).__name__} {code}): {error}; "
+              f"retry {waiter.attempts} in {wait}s, "
+              f"{waiter.budget_seconds - waiter.waited_seconds}s of budget left")
+    if logger:
+        log_function_error(logger, function_name="app.daemon.store_outage", error_text=detail)
+    print(f"WARNING: {detail}", file=sys.stderr)
+    return wait
+
+
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     forwarded_key_args = build_forwarded_key_args(args)
@@ -215,7 +250,19 @@ def main(argv: list[str]) -> int:
         patch_stdout(config.log_dir / "jobs_runtime.log", app_name="jobs")
         logger = setup_app_logger(config, app_name="jobs", enable_telegram_alerts=False)
         store = DbOpsStore.from_config(config)
-        store.initialize()
+        # A daemon started *during* a store restart must wait for it exactly as a running one does.
+        # Without this the first attempt to bring the estate back up after a store bounce exits on
+        # the same `57P03` that ended 0.18.0, one second before the store would have answered.
+        startup_waiter = store_outage.OutageWaiter()
+        while True:
+            try:
+                store.initialize()
+                break
+            except Exception as exc:  # noqa: BLE001 - re-raised unless it is a store outage.
+                wait = wait_out_store_outage(exc, waiter=startup_waiter, logger=logger)
+                if wait is None:
+                    raise
+                time.sleep(wait)
         data_dir = Path(args.data_dir).resolve()
         delay_seconds = max(1, int(args.delay_seconds))
         log_app_event(logger, "app.daemon.start", status="running", data_dir=str(data_dir), delay_seconds=delay_seconds)
@@ -236,6 +283,7 @@ def main(argv: list[str]) -> int:
         recover_stale_running_jobs(store=store, app_commands=_startup_commands, config=config, logger=logger)
 
         _db_lock_retries = 0
+        store_waiter = store_outage.OutageWaiter()
         while True:
             try:
                 run_scheduler_scan(
@@ -250,6 +298,7 @@ def main(argv: list[str]) -> int:
                 # After scheduling, never before: a due app command must not wait on cleanup.
                 sweep_job_runs_history(store=store, logger=logger)
                 _db_lock_retries = 0
+                store_waiter.recovered()
             except sqlite3.OperationalError as exc:
                 if "database is locked" in str(exc).lower():
                     _db_lock_retries += 1
@@ -260,6 +309,17 @@ def main(argv: list[str]) -> int:
                     time.sleep(backoff)
                     continue
                 raise
+            except Exception as exc:  # noqa: BLE001 - re-raised unless it is a store outage.
+                # The store going away for a moment is not the daemon's failure, and it used to be
+                # treated as one: a two-second container restart raised `FATAL 57P03`, this loop let
+                # it out, `main` logged one line and returned 1, and nothing restarted the process.
+                # Nineteen hours of silence and an abandoned candidate (0.18.0) came from those
+                # two seconds. Anything that is not a store outage still leaves here untouched.
+                wait = wait_out_store_outage(exc, waiter=store_waiter, logger=logger)
+                if wait is None:
+                    raise
+                time.sleep(wait)
+                continue
             if args.once:
                 while running_commands:
                     collect_running_commands(store=store, logger=logger, running_commands=running_commands)
@@ -416,7 +476,12 @@ def run_scheduler_scan(
         # usually outside the window, usually right after the last run. What it does NOT override
         # is "already running": starting a second copy of an app that is mid-flight is how two
         # collectors write the same metric run.
-        if app_command.app_command_id in running_commands:
+        in_flight = count_in_flight(running_commands, app_command.app_command_id)
+        if not run_mode_lib.may_start(app_command.run_mode, in_flight=in_flight):
+            # `sync` skips at one, which is what every command did before run_mode existed.
+            # `async` skips only at its cap: the point of that mode is to be called again while a
+            # run is still going, and what stops the same *work* running twice is the claim each
+            # unit takes in the store, not this check.
             if requested is not None:
                 log_app_event(
                     logger,
@@ -424,6 +489,8 @@ def run_scheduler_scan(
                     app_command=app_command,
                     status="skipped",
                     reason="already_running",
+                    run_mode=app_command.run_mode.mode,
+                    in_flight=in_flight,
                 )
             else:
                 log_app_event(
@@ -431,8 +498,10 @@ def run_scheduler_scan(
                     "app.daemon.command.skip_running",
                     app_command=app_command,
                     status="skipped",
-                    reason="already_running",
-                    pid=running_commands[app_command.app_command_id].process.pid,
+                    reason="already_running" if not app_command.run_mode.is_async else "at_max_parallel",
+                    run_mode=app_command.run_mode.mode,
+                    in_flight=in_flight,
+                    max_parallel=app_command.run_mode.max_parallel,
                 )
             continue
         if requested is None:
@@ -674,6 +743,22 @@ def terminate_timed_out_command(running: RunningAppCommand) -> None:
         process.wait(timeout=5)
 
 
+def running_slot_key(app_command_id: str, pid: int) -> str:
+    """The key one live run occupies in ``running_commands``.
+
+    A ``sync`` command has at most one, so its own id would do; an ``async`` command may have
+    several at once and a dict cannot hold two values under one key. One spelling for both, so
+    nothing has to know which mode it is looking at.
+    """
+    return f"{app_command_id}#{pid}"
+
+
+def count_in_flight(running_commands: dict[str, "RunningAppCommand"], app_command_id: str) -> int:
+    """How many processes of this app command this daemon currently has."""
+    return sum(1 for running in running_commands.values()
+               if running.app_command.app_command_id == app_command_id)
+
+
 def start_app_command(
     *,
     config: DbOpsConfig,
@@ -738,20 +823,44 @@ def start_app_command(
         # alone — without it a requested run is indistinguishable from a scheduled one.
         metadata["run_request_id"] = int(run_request["request_id"])
         metadata["requested_by"] = str(run_request["requested_by"] or "")
-    log_id = store.insert_job_run(
-        JobRun(
-            job_code=app_command.app_command_id,
+    try:
+        log_id = store.insert_job_run(
+            JobRun(
+                job_code=app_command.app_command_id,
+                # A `sync` command claims its own id, so a second daemon on this host - or a child
+                # that outlived its daemon - cannot start a duplicate. An `async` command claims
+                # nothing: being started again while one is running is what it is for.
+                claim_key=(None if app_command.run_mode.is_async else app_command.app_command_id),
             level="logging",
             status="running",
             message=(f"App command {app_command.app_command_id} started"
                      + (f" on request from {run_request['requested_by'] or 'the console'}."
                         if run_request is not None else ".")),
             started_at=started.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            host_name=socket.gethostname(),
-            metadata=metadata,
+                host_name=socket.gethostname(),
+                metadata=metadata,
+            )
         )
-    )
-    running_commands[app_command.app_command_id] = RunningAppCommand(
+    except RunAlreadyClaimed as exc:
+        # Somebody on this host already holds this app command's key — a second daemon, or a child
+        # of a daemon that was restarted while the child kept working. The child just spawned is
+        # the duplicate, so it is the one that stops: a claim that arrives second must never turn
+        # into two processes doing the same work, which is the whole point of the index.
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+        close_file_quietly(stdout_file)
+        close_file_quietly(stderr_file)
+        log_app_event(logger, "app.daemon.command.claim_refused", status="skipped",
+                      app_command_id=app_command.app_command_id, reason=str(exc))
+        write_command_runtime_event(
+            app_command, "app.daemon.command.claim_refused", logs_dir=config.log_dir,
+            level="logging", working_dir=working_dir, exit_code="already_running",
+            duration_seconds=0, status="skipped")
+        return
+    running_commands[running_slot_key(app_command.app_command_id, process.pid)] = RunningAppCommand(
         app_command=app_command,
         process=process,
         started_at=started,
@@ -784,27 +893,33 @@ def start_app_command(
     )
 
 
-def app_command_is_due(app_command: AppCommand, latest_run: Any | None, now: datetime | None = None) -> bool:
-    """Thin wrapper over the shared :func:`job_due` so app_commands, metrics and reports
-    all follow the same run-once / repeat / retry / stale-running convention."""
-    if latest_run is None:
-        return True
-    last_run = row_time(latest_run)
-    if last_run is None:
-        return True
-    try:
-        status = str(latest_run["status"] or "").strip().lower()
-    except (IndexError, KeyError, TypeError):
-        status = ""
-    return job_due(
-        last_run=last_run,
-        last_status=status,
-        repeat_interval=app_command.repeat_interval_seconds,
-        retry_interval=app_command.retry_interval_seconds,
+def app_command_due(app_command: AppCommand, latest_run: Any | None,
+                    now: datetime | None = None) -> DueVerdict:
+    """Whether this command runs now, with the reason when it does not.
+
+    One call into :func:`db_ops.lib.time_window.due_from_row`, which reads the anchor off the row
+    and applies the rule. The daemon's two defaults are stated here and nowhere else: a failed
+    command retries after 60 s and an unstated ``timeout`` is 300 s.
+    """
+    return due_from_row(
+        time_window=app_command.time_window,
+        row=latest_run,
         now=now or datetime.now(timezone.utc),
-        timeout=app_command.timeout_seconds,
-        timeout_disabled=app_command.timeout_disabled,
+        retry_default=60,
+        timeout_default=300,
+        # An `async` command's own run in flight is not a reason to withhold the next one - that is
+        # what the field means, and `max_parallel` is the cap. Without this the store-side due check
+        # answered "running within timeout" and the concurrency never happened: measured
+        # 2026-09-19, where one scan ran two long tasks one after the other for three minutes while
+        # the daemon started nothing beside it. What keeps the *work* from doubling is the claim,
+        # not this check.
+        running_blocks=not app_command.run_mode.is_async,
     )
+
+
+def app_command_is_due(app_command: AppCommand, latest_run: Any | None, now: datetime | None = None) -> bool:
+    """The boolean face of :func:`app_command_due`, for the scan that only branches on it."""
+    return app_command_due(app_command, latest_run, now).due
 
 
 def app_command_in_schedule_window(app_command: AppCommand, now_local: datetime | None = None) -> bool:
@@ -922,7 +1037,7 @@ def close_running_on_shutdown(
                 log_id=running.log_id,
                 level="logging",
                 status="timeout",
-                message=(f"App command {app_command_id} was interrupted: the daemon stopped "
+                message=(f"App command {running.app_command.app_command_id} was interrupted: the daemon stopped "
                          f"({reason}). It resumes on the next scan."),
                 finished_at=utc_now_text(),
                 error_text=None,
@@ -997,7 +1112,27 @@ def recover_stale_running_jobs(
         # A service has no timeout to be "within": its row is open because the daemon that owned
         # it is gone, whatever the elapsed time. Saying so explicitly rather than leaning on
         # `elapsed < 0` being false, which is true only by accident of the sentinel value.
-        if not app_command.timeout_disabled and elapsed_seconds < app_command.timeout_seconds:
+        # **Is the process that owns this row still there?** A daemon that has just started owns no
+        # children, so an open row on this host was left by a life that has ended - unless its
+        # recorded pid is alive, which happens when a child outlives the daemon that started it.
+        # Waiting for the timeout instead costs exactly what the timeout is worth: a restart on
+        # 2026-09-19 left APP-SQL_TASKS blocked for 30 minutes and APP-METRICS for 40, on rows
+        # whose processes had been gone the whole time. Another host's row is still judged on age.
+        metadata = run_claim.row_metadata(row)
+        this_host = socket.gethostname()
+        owner_pid, owner_host = run_claim.claim_owner(
+            metadata, host_fallback=str(row["host_name"] or "") if "host_name" in row.keys() else "")
+        verdict = run_claim.startup_verdict(
+            metadata=metadata,
+            this_host=this_host,
+            elapsed_seconds=elapsed_seconds,
+            timeout_seconds=0 if app_command.timeout_disabled else app_command.timeout_seconds,
+            pid_alive=(process_liveness.is_pid_alive(owner_pid)
+                       if owner_pid is not None and owner_host == this_host else None),
+        )
+        # A service (timeout 0) is still closed here whatever its age, as it always was: this is
+        # startup, and its daemon is gone. Only a live pid holds it.
+        if not verdict.reap and not app_command.timeout_disabled:
             log_app_event(
                 logger,
                 "app.daemon.startup.running_within_timeout",
@@ -1006,6 +1141,7 @@ def recover_stale_running_jobs(
                 started_at=last_run.isoformat(),
                 elapsed_seconds=elapsed_seconds,
                 timeout_seconds=app_command.timeout_seconds,
+                reason=verdict.reason,
             )
             continue
         elapsed_minutes = elapsed_seconds // 60
@@ -1065,25 +1201,24 @@ def _log_command_not_due(logger: Any, app_command: AppCommand, latest: Any | Non
     if logger is None:
         return
     now = datetime.now(timezone.utc)
-    last_run = row_time(latest)
+    # The reason comes from the rule that made the decision, not from a second reading of the
+    # same row beside it. Those two disagreed for as long as both existed: this line printed
+    # `last_run + timeout` as the next attempt for a `running` row while the rule was still
+    # measuring the interval (see lib.time_window.DueVerdict).
+    verdict = app_command_due(app_command, latest, now)
     try:
         status = str(latest["status"] or "").strip().lower() if latest is not None else "never_run"
     except Exception:
         status = "unknown"
-    next_retry_at = None
-    if last_run is not None:
-        if status == "running":
-            next_retry_at = last_run + timedelta(seconds=app_command.timeout_seconds)
-        elif status in {"error", "timeout", "fail", "failed", "failure"}:
-            next_retry_at = last_run + timedelta(seconds=app_command.retry_interval_seconds)
     log_app_event(
         logger,
         "app.daemon.command.not_due",
         app_command=app_command,
         level="logging",
         workflow_state=status,
-        last_run=last_run.isoformat() if last_run else None,
-        next_retry_at=next_retry_at.isoformat() if next_retry_at else None,
+        reason=verdict.reason,
+        last_run=verdict.last_run.isoformat() if verdict.last_run else None,
+        next_retry_at=verdict.next_due_at.isoformat() if verdict.next_due_at else None,
         retry_interval_seconds=app_command.retry_interval_seconds,
         timeout_seconds=app_command.timeout_seconds,
     )
@@ -1134,12 +1269,9 @@ def _push_daemon_telegram(
 
 
 def row_time(row: Any | None) -> datetime | None:
-    if row is None:
-        return None
-    value = row["started_at"] or row["created_at"] or row["finished_at"]
-    if not value:
-        return None
-    return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    """When a ``job_runs`` row started — :func:`db_ops.lib.time_window.run_anchor` under the name
+    this module has always called it, kept because `jobs.status` imports it."""
+    return run_anchor(row)
 
 
 def resolve_working_dir(value: str, *, data_dir: Path) -> Path:
@@ -1345,6 +1477,7 @@ def load_app_commands(path: Path, *, logger: Any = None) -> dict[str, AppCommand
                 time_window=parsed_time_window.time_window,
                 active=bool(item.get("active", True)),
                 node_role=(str(item.get("node_role", "all")).strip().lower() or "all"),
+                run_mode=run_mode_lib.parse(item),
             )
         )
     return {command.app_command_id: command for command in commands}

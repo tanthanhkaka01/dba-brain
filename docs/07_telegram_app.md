@@ -367,6 +367,13 @@ separate messages further down that look like ordinary conversation. The argumen
 `telegram_conversation_states`, positionally, and joining them back in that order produces
 `/spbot_run_sql_task 18 0 30` — one line to copy.
 
+**An uploaded file is shown by name, not by content.** A command that takes a file (e.g.
+`/spbot_xlsx_to_table`) receives it as a base64 argument, and printed verbatim one entry ran to
+111 messages. When the file arrives the processor records its name beside the arguments
+(`state.arg_files`), and the listing shows `<uploaded file: Maintenance.xlsx, 19.5 KB>`. An
+upload recorded before names were kept shows `<uploaded file, 19.5 KB>`, and any other argument
+over 120 characters is cut to its first 60. The line cannot re-send a file anyway; attach it again.
+
 **Private chat only** (`is_group: 0`). The history spans every chat this person has used the bot
 in, so answering it in a group would read a private command out loud there.
 

@@ -71,7 +71,10 @@ if [ -n "$level_override" ]; then
         incr|INCR|1) level="INCR" ;;
         *) die "BACKUP_LEVEL must be full or incr: '${level_override}'." ;;
     esac
-elif [ "$(date +%u)" = "7" ]; then
+# "Sunday" is a day in the node's configured timezone: db_ops passes it as $DB_OPS_WEEKDAY (ISO 1-7).
+# The host clock is only the fallback for a run that did not come from db_ops - a host on UTC would
+# otherwise start the weekly full seven hours into a +07 Sunday.
+elif [ "${DB_OPS_WEEKDAY:-$(date +%u)}" = "7" ]; then
     level="FULL"
 else
     level="INCR"

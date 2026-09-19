@@ -289,6 +289,12 @@ def process_pending_conversation_messages(
 
         stored_value = normalise_answer(awaited_step, value) if awaited_step and not from_file else value
         args[parameter_position - 1] = stored_value
+        if from_file:
+            # The argument is the file's content (base64 for a workbook). Its name is kept beside
+            # it, so a command listing can say which file was sent instead of printing it.
+            arg_files = dict(state_data.get("arg_files") or {})
+            arg_files[str(parameter_position)] = str(document.get("file_name") or "file")
+            state_data["arg_files"] = arg_files
         store.finish_telegram_workflow_step(
             run_key=run_key, status="answered",
             answer_text=masked_answer(awaited_step, stored_value),

@@ -9,6 +9,7 @@ from pathlib import Path
 
 from db_ops.backup_restore.config import BackupRestoreConfig
 from db_ops.backup_restore.copy_backup import build_cmdkey_command, resolve_password_ref
+from db_ops.backup_restore.space import RestoreSpaceRefused, check_free_space
 from db_ops.common import remote_exec
 from db_ops.lib.shell import POWERSHELL_NOT_FOUND_HINT, powershell_executable
 
@@ -50,7 +51,19 @@ def run_target_preflight(
     admin share is available.
 
     Only runs when os.name == 'nt' for Windows targets; skipped otherwise.
+
+    **The free-space check runs first, and on every platform.** Preparing a share the copy cannot
+    fill is wasted work, and the one failure this function was extended for is the one where the
+    copy succeeds far enough to empty the disk: 115 GB onto the host carrying the runtime store on
+    2026-09-17, `/` down to 42 MB free, the daemon gone with it. See
+    :mod:`db_ops.backup_restore.space`.
     """
+    try:
+        check_free_space(config, log=lambda message: _log(logger, message))
+    except RestoreSpaceRefused as exc:
+        # Raised as the preflight's own error so every caller that already stops on a preflight
+        # failure stops on this one too, rather than each learning about a new exception type.
+        raise PreflightError(str(exc)) from None
     if config.is_linux:
         return None
     if os.name != "nt":

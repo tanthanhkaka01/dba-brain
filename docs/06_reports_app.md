@@ -242,7 +242,7 @@ picker is HTML only: the stored copy feeds Telegram, where a fleet-sized nav blo
 - Reads `metric_results`.
 - Reads/writes `report_types`.
 - Writes/updates `reports`.
-- Reads/writes `report_send_state`.
+- Reads/writes `report_send_state`. `last_run_at` is the **start of the run that last sent** — the anchor `repeat_interval` is counted from — and a skipped evaluation does not touch it. Until 2026-09-19 it was written on every evaluation and the schedule counted from `last_sent_at`, the moment the send *finished*, so a report that took 40 seconds to build pushed its own next cycle 40 seconds out. A row written by an older build still has the old meaning, and is ignored while `last_run_at` is later than `last_sent_at`.
 - Writes `telegram_send_messages` when pushing alerts.
 - May trigger metric collection during `force-hourly-report`.
 

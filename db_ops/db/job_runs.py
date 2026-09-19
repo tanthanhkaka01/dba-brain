@@ -24,6 +24,13 @@ class JobRun:
     duration_ms: int | None = None
     error_text: str | None = None
     host_name: str | None = None
+    #: The unit of work this row claims **exclusively** while it is ``running``, or ``None`` for a
+    #: row that claims nothing. A backup job, a restore and a ``sync`` app command set their own
+    #: code here and the store's unique index then refuses a second one on the same host. An
+    #: ``async`` app command leaves it unset on purpose: the daemon is meant to start another copy
+    #: while the first is working, and what must not happen twice is the work inside it, which
+    #: claims its own key.
+    claim_key: str | None = None
     metadata: dict[str, Any] | None = None
 
 

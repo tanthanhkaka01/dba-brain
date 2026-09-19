@@ -234,7 +234,12 @@ def _plan_oracle(job: Any, secrets: dict[str, str], *, point_in_time: str,
     # One DUPLICATE and nothing else: RMAN picks the level 0, the incrementals and the archived
     # logs itself, so a diff or log step here would describe work it did not do.
     return [{"op": "restore-full", "request": request},
-            {"op": "verify-restore", "request": {"db_type": "oracle", "host": host}}]
+            # The SID goes to the check as well as to the restore. Without it `sqlplus / as sysdba`
+            # takes whatever ORACLE_SID the shell carries, which is right for a container holding
+            # one instance and wrong for a host holding two - and a check that answers for the
+            # wrong instance under the right name is worse than no check.
+            {"op": "verify-restore", "request": {"db_type": "oracle", "host": host,
+                                                 "oracle_sid": request["oracle_sid"]}}]
 
 
 def _plan_postgresql(job: Any, secrets: dict[str, str], *, point_in_time: str,
@@ -267,7 +272,11 @@ def _plan_postgresql(job: Any, secrets: dict[str, str], *, point_in_time: str,
         {"op": "restore-log", "request": {
             **common, "wal_dir": f"{directory.rstrip('/')}/wal",
             **({"stopat": point_in_time} if point_in_time else {})}},
-        {"op": "verify-restore", "request": {"db_type": "postgresql", "host": host}},
+        # PGPORT when the job states one: psql with no -p takes the default cluster, which is right
+        # inside a container and wrong on a host running two.
+        {"op": "verify-restore", "request": {
+            "db_type": "postgresql", "host": host,
+            **({"port": job.env["PGPORT"]} if job.env.get("PGPORT") else {})}},
     ]
 
 

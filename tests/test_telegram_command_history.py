@@ -257,3 +257,36 @@ def test_a_long_listing_is_sent_whole_in_parts_not_cut_short():
     joined = "".join(parts)
     assert "database_0 2000" in joined, "the newest entry is there"
     assert "database_49 2000" in joined, "and so is the last one the limit allows"
+
+
+# --------------------------------------------------------------------------- #
+# An uploaded file
+# --------------------------------------------------------------------------- #
+def _upload_row(*, with_name: bool):
+    import base64
+
+    workbook = base64.b64encode(bytes(range(256)) * 80).decode("ascii")   # 20 KB of "xlsx"
+    state = {"args": ["ACME-192-0-2-245", "Maintenance", "dbo", workbook],
+             "parameter_name": "x", "parameter_position": 4}
+    if with_name:
+        state["arg_files"] = {"4": "Maintenance.xlsx"}
+    return _row(text="/spbot_xlsx_to_table", command_payload="_xlsx_to_table",
+                conversation_status="done", conversation_command_text="spbot_xlsx_to_table",
+                conversation_state_json=json.dumps(state))
+
+
+def test_an_uploaded_file_is_listed_by_its_name_not_its_content():
+    """The upload reaches the command as base64 - 20 KB of it here - and printed verbatim one
+    entry filled 111 messages. The file cannot be sent again by copying the line anyway."""
+    entry = history.rebuild_command(_upload_row(with_name=True))
+
+    assert entry["line"] == (
+        "/spbot_xlsx_to_table ACME-192-0-2-245 Maintenance dbo "
+        "<uploaded file: Maintenance.xlsx, 20.0 KB>")
+
+
+def test_an_upload_recorded_before_names_were_kept_is_still_one_short_line():
+    entry = history.rebuild_command(_upload_row(with_name=False))
+
+    assert entry["line"].endswith("<uploaded file, 20.0 KB>")
+    assert len(entry["line"]) < 120
