@@ -174,6 +174,16 @@ python -m db_ops.sql_tasks.runner --config config.json --dry-run run-sql-id --sq
 `--dry-run` is a **top-level** flag: it goes before `run-sql-id`, not after. Placed after the
 subcommand it is an argparse usage error, not a silently ignored option.
 
+### A forced run reaches every target of the task
+
+`--force` selects targets by `sql_id` and engine only. A target whose `active` is `false` runs, as
+does one outside its time window or inside its interval. A failure on one target does not stop the
+others.
+
+So `active: false` keeps the scheduler away and is **not** a guard against a forced run —
+`/spbot_run_sql_task <id>` reaches every target the task is registered for. Remove the target from
+the configuration if it must not be written to at all.
+
 ### A forced run costs one typed `yes`
 
 `--force` is *intent* — it says the caller means to skip the schedule. It is not *presence*, so
@@ -203,6 +213,15 @@ Three ways to answer, and the gate records which one was used:
 A **rehearsal is never asked** (`--dry-run`), and neither is the scheduled scan: a schedule was
 authorized when the operator wrote it, and a daemon at 03:00 has nobody to ask. Nothing else
 proceeds without an answer — a run whose confirmation is missing exits 1 having executed nothing.
+
+**A forced run started in the background no longer hangs** (2026-09-16, a known limitation in the
+v0.17.0 notes). Backgrounded or piped, it used to select the task and then wait for ever on an
+answer nobody could give: no `sql_runs` row, no output, discovered later as "the task never ran".
+The cause is that **on Windows nothing distinguishes a human from a scheduler** — a fully detached
+process reports an interactive stdin and opens `CON` successfully — so the prompt now has a
+deadline (`confirm.ANSWER_DEADLINE_SECONDS`, 120s). Past it the run is refused, and the refusal
+says nothing was reading the prompt and names `--confirm yes` and `--assume-yes`. For an
+unattended run, say so with `--assume-yes` rather than relying on the timeout.
 
 ### From Telegram
 
@@ -327,7 +346,9 @@ ORDER BY latest_run DESC;
 ## Common Issues
 
 - Task is not due: check the latest `sql_runs` row, target interval, and time window.
-- `run-sql-id --force` behaves differently: it bypasses active/time-window/interval checks for matching SQL ID targets.
+- `run-sql-id --force` behaves differently: it bypasses the active flag, the time window and the
+  interval for **every** target of that SQL ID — including targets switched off on purpose. See
+  *A forced run reaches EVERY target of the task* above.
 - SQL file fails midway: multi-file tasks stop at the first failure.
 - Stored procedure alters fail in a folder task: check `file_order=[...]`; a DDL/table-change script with a later filename can run after dependent procedure files and break deployment.
 - Telegram alert is missing: check `logging_on_run`, `alert_on_error`, and pending rows in `telegram_send_messages`.
@@ -478,6 +499,46 @@ enabling, `"manual_only": true` is a shortcut for `"repeat_interval": -1`, and
 unknown output, a misspelled request key — comes back as `success: false` with the reason in
 `error`, before any file is touched. Until 2026-08-15 a refusal printed `ERROR: …` on **stderr**
 with exit 2 and nothing on stdout, which is why nothing could call this command programmatically.
+
+### `sql-command-add` / `sql-target-add` — the shapes `add-sql` cannot say
+
+`add-sql` writes a file, a command and one target in one call. Three shapes need the two-call form
+instead:
+
+| Shape | Why |
+| --- | --- |
+| `input_type: "python"` | `add-sql` writes no `input` block |
+| `script_type: array` / `folder` | it writes `single` only |
+| A **second** target | it writes one, under a new `sql_id` |
+
+```bash
+python -m db_ops.common.cli sql-command-add @<request>.json   # WHAT runs
+python -m db_ops.common.cli sql-target-add  @<request>.json   # WHERE it runs, one call per server
+```
+
+Full reference in [`13_common.md`](./13_common.md). The command half takes `script_path` (a file
+that exists) or `sql_text`, in which case the file is written for you. Both validate before writing:
+a missing script, an `input.parameter` no `parameters` entry declares, a `{name}` in `input.args`
+that is neither a declared parameter nor `{target_server_id}` / `{target_database}`, a `target_no`
+already taken, and a target whose `sql_id` has no command are all refused.
+
+`add-sql` remains the shortest route to a one-server task, and `/spbot_add_sql` uses it.
+
+### The three clocks
+
+A task's `time_window.repeat_interval` is read when the SQL task app runs, and the app runs when
+the daemon starts it. So three intervals stand between a schedule and a run, and only the innermost
+one is the schedule:
+
+| | Value | Decides |
+| --- | :-: | --- |
+| Daemon scan (`--delay-seconds`) | 1 s | how often any app command is considered |
+| `APP-SQL_TASKS.repeat_interval` | 1 s | how often this app is started |
+| `sql_targets[].time_window.repeat_interval` | per target | **when the task runs** |
+
+The outer two are 1 second so that neither of them is ever the answer to "why did it run then":
+a scan reads one JSON file and compares timestamps, and the app exits immediately when nothing is
+due. An outer interval longer than a task's own rounds that task up to it.
 
 ### `list-tasks` — what tasks exist, as JSON
 

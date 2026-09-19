@@ -23,6 +23,11 @@ human will be asked here" fails loudly instead of quietly restarting a productio
 A request piped in on stdin is *not* the unattended case: the question is asked on the
 controlling terminal, which the pipe did not take away (see :func:`open_terminal`).
 
+**And the asking is bounded.** On Windows no test this module can make tells a human from a
+scheduler — a detached process opens ``CON`` and reports an interactive stdin — so a prompt with
+no deadline is how a backgrounded ``--force`` run waited for ever on an answer nobody could give,
+having written nothing. Silence past :data:`ANSWER_DEADLINE_SECONDS` is a refusal.
+
 Whatever authorized the run is recorded on the gate and in ``report.facts["authorization"]``, so
 the evidence file answers *who allowed this* — a typed confirmation and an unattended one are
 different facts and must not read the same afterwards.
@@ -32,6 +37,7 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Sequence, TextIO
@@ -41,6 +47,7 @@ from db_ops.lib.paths import TOOL_ROOT  # noqa: F401 - one definition, see that 
 from db_ops.lib.timezone import format_display
 
 __all__ = [
+    "ANSWER_DEADLINE_SECONDS",
     "CONFIRM_WORD",
     "authorize_operation",
     "authorize_request",
@@ -56,6 +63,14 @@ __all__ = [
 
 # The whole word, nothing shorter. "y" is what a hand types while reading something else.
 CONFIRM_WORD = "yes"
+
+#: How long a prompt waits for a typed answer before silence is read as "no".
+#:
+#: Generous, because a person is meant to read the banner first, and finite, because on
+#: Windows nothing this module can ask distinguishes a human from a scheduler - see
+#: :func:`read_answer`. An unattended run belongs on `"assume_yes": true` or an answer
+#: carried in the request; this is the floor under everything that is neither.
+ANSWER_DEADLINE_SECONDS = 120
 
 _RULE = "=" * 72
 
@@ -119,8 +134,14 @@ def open_terminal() -> TextIO | None:
     through it (``... host-restart - < request.json``). Reading the answer from an exhausted pipe
     returns EOF instantly, which would abort a perfectly legitimate operation and teach operators
     that the prompt is broken. The terminal is a separate device from the pipe, so it is still
-    there. ``/dev/tty`` on POSIX, ``CON`` on Windows; both fail when nothing is attached, which is
-    exactly the answer we want in a container or under a scheduler.
+    there. ``/dev/tty`` on POSIX, ``CON`` on Windows.
+
+    **On POSIX this is a reliable test and on Windows it is not.** ``/dev/tty`` fails with no
+    controlling terminal, which is the answer a container or a scheduler should get; ``CON``
+    *opens* in a fully detached Windows process with no console at all (measured 2026-09-16, along
+    with ``sys.stdin.isatty()`` answering true for a null stdin). So a caller cannot treat this as
+    proof that somebody is there — only :data:`ANSWER_DEADLINE_SECONDS` in :func:`read_answer`
+    can settle it, by waiting a bounded time for an answer that never comes.
     """
     for device in ("/dev/tty", "CON"):
         try:
@@ -181,27 +202,67 @@ def banner(*, operation: str, target: str, effects: Sequence[str], reason: str =
     return "\n".join(lines)
 
 
-def read_answer(prompt: str, *, stream: TextIO | None = None) -> str:
-    """Ask on the terminal and read one line.
+def read_answer(prompt: str, *, stream: TextIO | None = None,
+                deadline_seconds: float | None = None) -> str:
+    """Ask on the terminal and read one line, giving up after ``deadline_seconds``.
 
     The prompt is written to ``stream`` (stderr by default) rather than through ``input``'s own
     prompt argument, because stdout carries the JSON result — a question printed there would end
     up inside whatever is parsing it.
+
+    **The deadline is the point.** This read had none, on the reasoning that a human reading a
+    banner is not fast. On Windows neither test above can tell a human from a scheduler: measured
+    2026-09-16, a fully detached process with its stdin on the null device reports
+    ``sys.stdin.isatty()`` **true** and opens ``CON`` successfully. A forced SQL task run started
+    in the background therefore asked a question into a void and waited on it for ever — selecting
+    the task, writing no ``sql_runs`` row, and being discovered later as "the task never ran".
+    A person who is there answers in a couple of minutes; silence past that is an answer too.
     """
     target = stream or sys.stderr
     try:
         print(prompt, end="", file=target, flush=True)
-        if sys.stdin is not None and sys.stdin.isatty():
-            return sys.stdin.readline()
-        terminal = open_terminal()
-        if terminal is None:
-            return ""
-        with terminal:
-            return terminal.readline()
-    except (EOFError, KeyboardInterrupt, OSError, ValueError):
-        # Ctrl-C, a closed stdin, or no readable terminal at a confirmation prompt all mean no —
-        # never "carry on".
+    except (OSError, ValueError):
         return ""
+    # Read at call time, not captured as a default: a default argument freezes the module
+    # constant at import, which would make the deadline unchangeable by anything - including the
+    # test that proves it is there.
+    if deadline_seconds is None:
+        deadline_seconds = ANSWER_DEADLINE_SECONDS
+    return _read_line_before(deadline_seconds)
+
+
+def _read_line_before(deadline_seconds: float) -> str:
+    """One line from stdin or the terminal, or ``""`` if none arrives in time.
+
+    The read runs on a daemon thread because there is no portable way to interrupt a blocking
+    ``readline`` on a Windows console handle. Left behind on a timeout, that thread holds nothing
+    the process needs and does not keep it alive.
+    """
+    answer: list[str] = []
+
+    def read_it() -> None:
+        try:
+            if sys.stdin is not None and sys.stdin.isatty():
+                answer.append(sys.stdin.readline())
+                return
+            terminal = open_terminal()
+            if terminal is None:
+                return
+            with terminal:
+                answer.append(terminal.readline())
+        except (EOFError, KeyboardInterrupt, OSError, ValueError):
+            # Ctrl-C, a closed stdin, or no readable terminal at a confirmation prompt all mean
+            # no — never "carry on".
+            return
+
+    if deadline_seconds is None or float(deadline_seconds) <= 0:
+        read_it()
+        return answer[0] if answer else ""
+
+    reader = threading.Thread(target=read_it, name="db_ops-confirm-answer", daemon=True)
+    reader.start()
+    reader.join(float(deadline_seconds))
+    return answer[0] if answer else ""
 
 
 def require_confirmation(
@@ -315,6 +376,24 @@ def require_confirmation(
             source = "prompt"
         else:
             source = "request"
+
+        if source == "prompt" and not supplied:
+            # Nobody answered - which on Windows is the only way to find out that nobody was
+            # there. Said in its own words, because "expected 'yes', got ''" reads like a typo
+            # and sends the operator back to the keyboard rather than to `--assume-yes`.
+            report.add(
+                gate_name,
+                FAIL,
+                f"no answer at confirmation {index} of {len(steps)} - nothing is reading this "
+                f"prompt (waited {ANSWER_DEADLINE_SECONDS:g}s). Run it from a "
+                f"terminal, or send {step['field']!r} in the request if a human answered it "
+                'elsewhere, or add "assume_yes": true if this is genuinely unattended '
+                "automation. Nothing was executed.",
+            )
+            report.note("authorization", {"authorized": False, "by": "none",
+                                          "reason": f"no answer for {step['field']}",
+                                          "at": decided_at})
+            return False
 
         if supplied.casefold() != step["expected"].casefold():
             # The wrong target id is the interesting failure: it usually means a payload aimed at

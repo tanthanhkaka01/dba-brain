@@ -51,7 +51,7 @@ def sql_command(*, script_type="single", script_files=("001.sql",), sql_id=9, sq
 
 def sql_target(*, sql_id=9, target_no=1, database_name="APPDB", repeat_interval=60, timeout=60,
                output_format="none", output_chat="", output_chat_id="", output_max_rows=0,
-               alert_on_error=None):
+               alert_on_error=None, retry_interval=None):
     return runner.SqlTarget(
         sql_id=sql_id,
         target_no=target_no,
@@ -60,7 +60,9 @@ def sql_target(*, sql_id=9, target_no=1, database_name="APPDB", repeat_interval=
         service_name="svc",
         instance_name="inst",
         credential_name="cred",
-        time_window=TimeWindow(from_day=1, to_day=31, from_hour=0, to_hour=23, repeat_interval=repeat_interval, timeout=timeout),
+        time_window=TimeWindow(from_day=1, to_day=31, from_hour=0, to_hour=23,
+                               repeat_interval=repeat_interval, timeout=timeout,
+                               retry_interval=retry_interval),
         active=True,
         database_name=database_name,
         # Every target add_sql_task writes carries this rule; without it the notify fallback in
@@ -655,19 +657,33 @@ def test_a_successful_run_does_not_repeat_a_stale_error_column():
     assert "an error from a previous attempt" not in text
 
 
-def test_the_listing_stops_before_telegram_truncates_it_and_says_so():
-    """Telegram cuts at 4096 characters. A listing the transport truncates loses its NEWEST rows
-    with nothing to say it happened, which is the wrong end and a silent one."""
+def test_a_long_listing_is_sent_whole_in_parts_not_cut_short():
+    """The listing renders every run; the transport splits it.
+
+    It used to stop at a character budget and append "N more not shown", which dropped the rows
+    past it and then counted only the survivors in its own header. The budget was retired on
+    2026-09-17 for every listing in the project (`lib.listing`), because
+    `lib.telegram_text.split_telegram_message` already sends a long body as `[part i/n]` and paces
+    the parts against the rate limit — a listing solving that again solved it worse. This test is
+    the sql_runs half of the pair; `test_telegram_command_history` holds the other.
+    """
     from db_ops.common import sql_run_history
+    from db_ops.lib.telegram_text import split_telegram_message
 
     rows = [_history_row(sql_run_id=n, sql_code="SQLSERVER-%03d-A-RATHER-LONG-TASK-NAME" % n)
             for n in range(200)]
 
     text = sql_run_history.render(rows)
 
-    assert len(text) < 4096
-    assert "more not shown (message size limit)." in text
-    assert "#0 " in text, "the newest rows are the ones that must survive"
+    assert "more not shown" not in text, "nothing is dropped any more"
+    assert len(text) > 4096, "this listing is deliberately longer than one message"
+    assert text.splitlines()[0].startswith("Last 200 SQL task run(s)"), text.splitlines()[0]
+
+    parts = split_telegram_message(text)
+    assert len(parts) > 1, "a body this long is sent as several parts"
+    joined = "".join(parts)
+    assert "SQLSERVER-000-A-RATHER-LONG-TASK-NAME" in joined, "the newest run is there"
+    assert "SQLSERVER-199-A-RATHER-LONG-TASK-NAME" in joined, "and so is the oldest"
 
 
 def test_an_empty_history_says_so_rather_than_printing_a_bare_header():
@@ -692,3 +708,57 @@ def test_the_limit_is_bounded_so_a_typo_cannot_ask_for_the_whole_table():
 
     assert asked == [sql_run_history.MAX_LIMIT, 1]
 
+
+
+def test_an_explicit_retry_interval_is_used_instead_of_the_repeat_interval(tmp_path):
+    """A failing task comes back after `retry_interval`, not after `repeat_interval`.
+
+    `test_failing_sql_task_backs_off_instead_of_running_every_tick` proves a failure backs off at
+    all, but it leaves `retry_interval` unset — and unset means "fall back to repeat_interval", so
+    it only ever exercised the `else` side of
+
+        retry_interval = window.retry_interval if window.retry_interval is not None else window.repeat_interval
+
+    That is the half that needs its own case: a daily task (`repeat_interval` 20 h) that sets
+    `retry_interval` to 5 minutes is asking to be retried *sooner* than its schedule, and nothing
+    asserted the shorter value was the one used. Written 2026-09-17.
+    """
+    store = DbOpsStore(tmp_path / "db_ops.sqlite")
+    store.initialize()
+    commands = {9: sql_command()}
+    target = sql_target(repeat_interval=72000, timeout=7200, retry_interval=300)
+    run_key = target.run_key
+
+    def _due_after(seconds_ago):
+        with sqlite3.connect(tmp_path / "db_ops.sqlite") as conn:
+            conn.execute("DELETE FROM sql_runs;")
+        when = (datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        _insert_error_run(store, run_key=run_key, finished_at=when)
+        return runner.due_sql_tasks(
+            commands=commands, targets=[target],
+            latest_runs=store.fetch_latest_done_or_running_sql_runs_by_run_key(),
+            latest_any_runs=store.fetch_latest_sql_runs_by_run_key())
+
+    assert _due_after(60) == [], "inside retry_interval: still backing off"
+
+    # 10 minutes: past the 5-minute retry_interval, and nowhere near the 20-hour repeat_interval.
+    # If the fallback were used this would still be backing off, which is the bug this catches.
+    assert _due_after(600) != [], "past retry_interval: due again, without waiting the repeat"
+
+
+def test_without_a_retry_interval_a_failure_waits_the_repeat_interval(tmp_path):
+    """The other side of the same branch, stated so the pair cannot drift apart."""
+    store = DbOpsStore(tmp_path / "db_ops.sqlite")
+    store.initialize()
+    commands = {9: sql_command()}
+    target = sql_target(repeat_interval=72000, timeout=7200)  # retry_interval unset
+    run_key = target.run_key
+
+    when = (datetime.now(timezone.utc) - timedelta(seconds=600)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _insert_error_run(store, run_key=run_key, finished_at=when)
+    due = runner.due_sql_tasks(
+        commands=commands, targets=[target],
+        latest_runs=store.fetch_latest_done_or_running_sql_runs_by_run_key(),
+        latest_any_runs=store.fetch_latest_sql_runs_by_run_key())
+
+    assert due == [], "no retry_interval means a failure waits the full repeat_interval"

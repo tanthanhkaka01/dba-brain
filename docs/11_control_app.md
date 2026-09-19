@@ -324,6 +324,21 @@ things the worker **added**; the drift gate is what rescues things it **changed*
 
 ## Part B — Docker Deployment (manual mechanism)
 
+> **The recommended worker runs the published image, not a locally built one (2026-09-16).** It runs the
+> published one — `ghcr.io/<owner>/dbabrain:<version>`, built by `release.yml` from this project's
+> own `Dockerfile` at the release tag — from `/opt/dbabrain` under `docker compose`, container
+> `dbabrain`. **Upgrading is one line: change the tag, `docker compose up -d`.**
+>
+> `DEFAULT_REMOTE_DIR` and `DEFAULT_CONTAINER` in `control/_support.py` moved with it, so
+> `worker-status`, `worker-run`, `worker-pull-data-config` and `deploy --type` reach the live node
+> with no flags. The retired pair (`/opt/db_ops`, `db_ops_daemon`) is still reachable through
+> `--remote-dir` / `--container`, and the stopped container is the rollback.
+>
+> **What is still true here:** the image layout, the mounts, `node_role`, the passphrase at run
+> time, and every command in B4 onwards — the published image is built from this same Dockerfile.
+> **What is superseded:** building and shipping a tar (B1–B3). Use it for an estate that has no
+> access to the registry, or to test a change before it is released.
+
 End-to-end runbook: encrypt secrets, build the Docker image on your Windows
 machine, ship it to an Ubuntu server, start the daemon with your key, and check
 logs/errors. This is what the control app's `deploy` automates; follow it top to
@@ -692,7 +707,7 @@ with `db_ops/` at its root). Keeping the alias fixed is what lets the same
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `DB_OPS_CONFIG` | `config.json` | Config path handed to the daemon. |
-| `DB_OPS_DAEMON_DELAY` | `2` | Daemon scan delay (seconds). |
+| `DB_OPS_DAEMON_DELAY` | `1` | Daemon scan delay (seconds). |
 | `DB_OPS_NODE_ROLE` | `master` | This node's role (`master`/`worker`) — the *only* thing that decides it. Set `worker` on the deployed container (`start-daemon`/`deploy` do this by default); set `master` to run a master daemon the same way. Unset → defaults to `master`. No host autodetection; the shared `config.json` never sets the role. |
 | `DB_OPS_SECRET_KEY` | _(unset)_ | Decryption passphrase. Normally supplied via `--key`; the daemon exports it for child app commands. Set it directly only for a non-daemon one-off. |
 | `DB_OPS_POWERSHELL` | _(auto)_ | Force a PowerShell executable; otherwise `pwsh` is auto-detected. |

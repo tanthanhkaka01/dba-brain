@@ -1,0 +1,18 @@
+{
+  "notes": [
+    "When a projected disk or tablespace exhaustion becomes a finding.",
+    "This is the file db-ops init writes, not a sample: it is read as it stands. data/capacity_policy.example.json carries worked examples of the parts that ship empty.",
+    "It ships with defaults in force rather than empty. A forecast nobody grades is a forecast nobody reads, and an absent threshold reads as 'nothing is ever close to full' - the same shape of silence a missing backup policy produced on 2026-09-14.",
+    "Critical is 'inside the time it takes to buy, provision or free space'; warning is 'plan it into the next maintenance window'. Those are properties of your organisation, not of the disk, which is why they are numbers here and not constants in the collector.",
+    "'reserve_gb' is space subtracted before the projection, for a volume that must never actually reach zero.",
+    "'overrides' ships empty because a per-volume exception is an estate fact: a 4 TB data volume and a 60 GB system volume are not the same problem at the same 'days to full'. Entries match on server_id plus 'item' - a drive letter, a mount point, or a tablespace."
+  ],
+  "capacity_policy": {
+    "defaults": {
+      "critical_days_to_full": 30,
+      "warning_days_to_full": 90,
+      "reserve_gb": 0
+    },
+    "overrides": []
+  }
+}

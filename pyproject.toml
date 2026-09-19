@@ -23,7 +23,7 @@ license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Trieu Tan Thanh" }]
 keywords = ["dba", "database", "sqlserver", "oracle", "postgresql", "mysql", "monitoring", "operations"]
-version = "0.17.0"
+version = "0.19.0"
 
 # Measured 2026-08-21, not guessed (D-05):
 #
@@ -180,7 +180,13 @@ namespaces = false
 # a blank page, and `webhost` serves one.
 "db_ops.sre" = ["host_config/**/*", "automation/**/*.j2", "automation/**/*.yml",
                 "automation/**/*.ps1", "automation/**/*.sh", "automation/**/*.cfg",
-                "docker_db/templates/**/*", "inventory/**/*.sql", "inventory/**/*.md"]
+                "docker_db/templates/**/*", "inventory/**/*.sql", "inventory/**/*.md",
+                # Added 2026-09-16, with the seeds for the last two catalogued config files. The
+                # exact omission this list's own note describes, made again: `sre_config.json` and
+                # `docker_db_connections.json` were added to PACKAGED_DEFAULTS and not here, so
+                # every source-tree test passed while an installed node's `init` would have
+                # skipped both in silence.
+                "catalogue/*.json"]
 "db_ops.reports" = ["templates/**/*.html", "catalogue/*.json"]
 "db_ops.webhost" = ["templates/**/*", "static/**/*", "catalogue/*.json"]
 # catalogue/ is the empty restore_config.json `init` writes. Missing from this line on the day it was

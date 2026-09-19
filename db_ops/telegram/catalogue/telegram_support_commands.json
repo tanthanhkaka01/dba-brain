@@ -1,1779 +1,1826 @@
 {
-  "notes": [
-    "Sample telegram_support_commands.json - what the bot will do when somebody types a command. Copy to telegram_support_commands.json and edit.",
-    "'command_type' is the clearance the command demands. A person may run it only when their telegram_users.json 'user_type' is at least this number, AND the chat's 'allow_command' is at least this number too. Both gates, every time.",
-    "This file says WHO may ask. data/emergency_operations.json says HOW HARD it is to confirm once asked - the two carry the same number for the same operation and are deliberately separate files, because they answer different questions and the shared operations layer reads no Telegram settings at all.",
-    "'is_group' / 'is_private' decide where a command is accepted. Anything that changes a production system should be private only: a group message is seen by everyone in it and answered by whoever types first.",
-    "'action_type' picks the handler. 'cli_execute' runs a module CLI as a child process; the named handlers ('list_server_id', 'list_all_command', ...) answer from the store without starting anything.",
-    "In 'command_argv', {python}, {config_path} and every declared parameter name are substituted before the process starts. Values are substituted as data, and a parameter with a 'validator' is checked first - a free-text value reaching a shell or a SQL statement unchecked is the failure this shape exists to prevent.",
-    "'requires_secret_key' passes the decryption passphrase to the child process, which anything touching a database needs and a pure listing does not.",
-    "'node_role' limits a command to the node that can actually serve it, so a command scheduled on a machine with no access to the estate is never offered there."
-  ],
-  "telegram_support_commands": [
-    {
-      "node_role": "worker",
-      "command_id": 1,
-      "command_text": "spbot_status",
-      "reply_default": 1,
-      "reply_text": "Running.",
-      "reply_parse_mode": "",
-      "reply_with_name": 0,
-      "command_type": 0,
-      "is_group": 1,
-      "is_private": 1,
-      "need_file": 0,
-      "_note": "The simplest possible entry: a fixed reply, no action. command_type 0 means anyone the bot knows may use it."
-    },
-    {
-      "node_role": "worker",
-      "command_id": 2,
-      "command_text": "spbot_list_all_command",
-      "reply_default": 1,
-      "reply_text": "{result_listing}",
-      "reply_parse_mode": "",
-      "reply_with_name": 0,
-      "command_type": 0,
-      "is_group": 1,
-      "is_private": 1,
-      "need_file": 0,
-      "action_type": "list_all_command",
-      "action_config": {},
-      "_note": "A named handler. It answers from the store, so it starts no process and needs no secret key. {result_listing} is filled in by the handler."
-    },
-    {
-      "node_role": "worker",
-      "command_id": 3,
-      "command_text": "spbot_list_server_id",
-      "reply_default": 1,
-      "reply_text": "{result_listing}",
-      "reply_parse_mode": "",
-      "reply_with_name": 0,
-      "command_type": 1,
-      "is_group": 1,
-      "is_private": 1,
-      "need_file": 0,
-      "action_type": "list_server_id",
-      "action_config": {
-        "parameters": []
-      },
-      "_note": "Lists the server_id values every other command takes as an argument. Worth keeping at a low clearance: without it nobody can use the commands that need one."
-    },
-    {
-      "node_role": "worker",
-      "command_id": 4,
-      "command_text": "spbot_report_hourly_metrics",
-      "reply_default": 0,
-      "reply_text": "",
-      "reply_parse_mode": "",
-      "reply_with_name": 0,
-      "command_type": 10,
-      "is_group": 1,
-      "is_private": 1,
-      "need_file": 0,
-      "action_type": "cli_execute",
-      "action_config": {
-        "working_dir": "tools/db_ops",
-        "command_argv": [
-          "{python}",
-          "-m",
-          "db_ops.reports.cli",
-          "--config",
-          "{config_path}",
-          "force-hourly-report",
-          "--server-id",
-          "{server_id}",
-          "--summary-limit",
-          "{summary_limit}",
-          "--dedupe-seconds",
-          "{dedupe_seconds}"
-        ],
-        "background": true,
-        "detached": true,
-        "requires_secret_key": true,
-        "startup_grace_seconds": 3,
-        "timeout_seconds": 1800,
-        "success_output_contains": "\"status\": \"success\"",
-        "start_text": "Force hourly metrics report started for {server_id} ({target_ip}). Collecting...\nMetrics restricted to a night window (CHECKDB, index fragmentation, restore validation) are skipped; add 'full' to include them.",
-        "success_text": "Force hourly metrics report completed for {server_id}",
-        "failure_text": "Force hourly metrics report failed for {server_id}\nExit code: {exit_code}\nError: {error_summary}",
-        "timeout_text": "Force hourly metrics report timed out for {server_id}. Exceeded {timeout_seconds}s.",
-        "defaults": {
-          "summary_limit": 150,
-          "dedupe_seconds": 0
+    "notes": [
+        "Sample telegram_support_commands.json - what the bot will do when somebody types a command. Copy to telegram_support_commands.json and edit.",
+        "'command_type' is the clearance the command demands. A person may run it only when their telegram_users.json 'user_type' is at least this number, AND the chat's 'allow_command' is at least this number too. Both gates, every time.",
+        "This file says WHO may ask. data/emergency_operations.json says HOW HARD it is to confirm once asked - the two carry the same number for the same operation and are deliberately separate files, because they answer different questions and the shared operations layer reads no Telegram settings at all.",
+        "'is_group' / 'is_private' decide where a command is accepted. Anything that changes a production system should be private only: a group message is seen by everyone in it and answered by whoever types first.",
+        "'action_type' picks the handler. 'cli_execute' runs a module CLI as a child process; the named handlers ('list_server_id', 'list_all_command', ...) answer from the store without starting anything.",
+        "In 'command_argv', {python}, {config_path} and every declared parameter name are substituted before the process starts. Values are substituted as data, and a parameter with a 'validator' is checked first - a free-text value reaching a shell or a SQL statement unchecked is the failure this shape exists to prevent.",
+        "'requires_secret_key' passes the decryption passphrase to the child process, which anything touching a database needs and a pure listing does not.",
+        "'node_role' limits a command to the node that can actually serve it, so a command scheduled on a machine with no access to the estate is never offered there."
+    ],
+    "telegram_support_commands": [
+        {
+            "node_role": "worker",
+            "command_id": 1,
+            "menu_order": 1.0,
+            "command_text": "spbot_status",
+            "reply_default": 1,
+            "reply_text": "Running.",
+            "reply_parse_mode": "",
+            "reply_with_name": 0,
+            "command_type": 0,
+            "is_group": 1,
+            "is_private": 1,
+            "need_file": 0,
+            "_note": "The simplest possible entry: a fixed reply, no action. command_type 0 means anyone the bot knows may use it."
         },
-        "parameters": [
-          {
-            "name": "windowed",
-            "source": "flag",
-            "flag_words": [
-              "full",
-              "all",
-              "+windowed"
-            ],
-            "present": "yes",
-            "absent": "no"
-          },
-          {
-            "name": "target",
-            "source": "arg",
-            "position": 1,
-            "required": true,
-            "consume_rest": true,
-            "resolve": "target",
-            "prompt_text": "Target? a server_id (e.g. <server_id>) or: <db_type> <ip>[:port] (e.g. mssql <ip> or mssql <ip>:1433). Use /spbot_list_server_id to list targets."
-          }
-        ],
-        "conditional_args": [
-          {
-            "parameter": "windowed",
-            "equals": "yes",
-            "argv": [
-              "--include-windowed"
-            ]
-          }
-        ]
-      },
-      "_note": "A read-only run that takes minutes, so it goes to the background and reports back when it finishes. 'working_dir' is the logical alias for the tool root, resolved to wherever the project actually lives - flat checkout or container."
-    },
-    {
-      "node_role": "worker",
-      "command_id": 5,
-      "command_text": "spbot_kill_spid",
-      "reply_default": 0,
-      "reply_text": "",
-      "reply_parse_mode": "",
-      "reply_with_name": 0,
-      "command_type": 50,
-      "is_group": 0,
-      "is_private": 1,
-      "need_file": 0,
-      "action_type": "cli_execute",
-      "action_config": {
-        "working_dir": "tools/db_ops",
-        "emergency_operation": "kill-spid",
-        "command_argv": [
-          "{python}",
-          "-m",
-          "db_ops.common.cli",
-          "kill-spid",
-          "{\"target\":\"{server_id}\",\"spid\":{spid},\"confirm\":\"{confirm}\",\"reason\":\"telegram\",\"authorized_by\":{\"channel\":\"telegram\"}}",
-          "--config",
-          "{config_path}"
-        ],
-        "requires_secret_key": true,
-        "start_text": "Killing session...",
-        "success_text": "{stdout}",
-        "failure_text": "kill-spid failed.\nExit code: {exit_code}\nError: {error_summary}",
-        "timeout_seconds": 120,
-        "parameters": [
-          {
-            "name": "server_id",
-            "source": "arg",
-            "position": 1,
-            "required": true,
-            "validator": "regex",
-            "pattern": "[A-Za-z0-9][A-Za-z0-9._:-]{0,127}",
-            "validation_error": "server_id may contain only letters, numbers, dot, underscore, colon and hyphen",
-            "prompt_text": "Server id? Use /spbot_list_server_id to list targets."
-          },
-          {
-            "name": "spid",
-            "source": "arg",
-            "position": 2,
-            "required": true,
-            "validator": "regex",
-            "pattern": "[0-9]{2,6}",
-            "validation_error": "spid must be a number",
-            "prompt_text": "Which SPID? (system sessions <= 50 are refused)"
-          },
-          {
-            "name": "confirm",
-            "source": "arg",
-            "position": 3,
-            "required": true,
-            "validator": "regex",
-            "pattern": "yes",
-            "validation_error": "Type exactly: yes",
-            "prompt_text": "This changes a LIVE system and cannot be undone. Read the target above. Type exactly: yes"
-          }
-        ]
-      },
-      "_note": "Private only, clearance 50, and 'emergency_operation' points at the entry in emergency_operations.json that decides how it must be confirmed. Every shared operation takes one JSON object - that is why the payload is a single argv word and not a row of flags."
-    },
-    {
-      "node_role": "worker",
-      "command_id": 6,
-      "command_text": "spbot_report_metric_history",
-      "reply_default": 0,
-      "reply_text": "",
-      "reply_parse_mode": "",
-      "reply_with_name": 0,
-      "command_type": 2,
-      "is_group": 1,
-      "is_private": 1,
-      "need_file": 0,
-      "action_type": "cli_execute",
-      "action_config": {
-        "working_dir": "tools/db_ops",
-        "command_argv": [
-          "{python}",
-          "-m",
-          "db_ops.reports.cli",
-          "--config",
-          "{config_path}",
-          "metric-history-report",
-          "--server-id",
-          "{server_id}",
-          "--metric-code",
-          "{metric_code}",
-          "--hours",
-          "{hours}",
-          "--summary-limit",
-          "{summary_limit}",
-          "--dedupe-seconds",
-          "{dedupe_seconds}"
-        ],
-        "start_text": "Metric history report started for server_id={server_id}, metric_code={metric_code}, hours={hours}.",
-        "success_text": "Metric history report completed for server_id={server_id}, metric_code={metric_code}, hours={hours}. row_count={row_count}, queued={queued}.",
-        "failure_text": "Metric history report failed for server_id={server_id}, metric_code={metric_code}, hours={hours}.\nExit code: {exit_code}\nError: {error_summary}",
-        "defaults": {
-          "summary_limit": 150,
-          "dedupe_seconds": 0
+        {
+            "node_role": "worker",
+            "command_id": 31,
+            "menu_order": 2.0,
+            "command_text": "spbot_self_status",
+            "reply_default": 0,
+            "reply_text": "",
+            "reply_parse_mode": "",
+            "reply_with_name": 0,
+            "command_type": 1,
+            "is_group": 1,
+            "is_private": 1,
+            "need_file": 0,
+            "action_type": "cli_execute",
+            "action_config": {
+                "working_dir": "tools/db_ops",
+                "command_argv": [
+                    "{python}",
+                    "-m",
+                    "db_ops.common.cli",
+                    "self-status",
+                    "{\"format\": \"txt\"}",
+                    "--config",
+                    "{config_path}"
+                ],
+                "start_text": "Reading this installation's own state...",
+                "success_text": "{stdout}",
+                "failure_text": "Could not read the installation state.\nExit code: {exit_code}\nError: {error_summary}",
+                "timeout_seconds": 60,
+                "parameters": []
+            }
         },
-        "parameters": [
-          {
-            "name": "server_id",
-            "source": "arg",
-            "position": 1,
-            "required": true,
-            "validator": "regex",
-            "pattern": "[A-Za-z0-9][A-Za-z0-9._:-]{0,127}",
-            "validation_error": "server_id may contain only letters, numbers, dot, underscore, colon, and hyphen (maximum 128 characters)",
-            "prompt_text": "Please input server_id"
-          },
-          {
-            "name": "metric_code",
-            "source": "arg",
-            "position": 2,
-            "required": true,
-            "validator": "regex",
-            "pattern": "[A-Za-z0-9][A-Za-z0-9._:-]{0,127}",
-            "validation_error": "metric_code may contain only letters, numbers, dot, underscore, colon, and hyphen (maximum 128 characters)",
-            "prompt_text": "Please input metric_code"
-          },
-          {
-            "name": "hours",
-            "source": "arg",
-            "position": 3,
-            "required": true,
-            "validator": "regex",
-            "pattern": "[1-9][0-9]*",
-            "validation_error": "hours must be a positive integer",
-            "prompt_text": "Please input a positive number of hours"
-          }
-        ]
-      }
-    },
-    {
-      "node_role": "worker",
-      "command_id": 7,
-      "command_text": "spbot_report_inventory",
-      "reply_default": 0,
-      "reply_text": "",
-      "reply_parse_mode": "",
-      "reply_with_name": 0,
-      "command_type": 2,
-      "is_group": 1,
-      "is_private": 1,
-      "need_file": 0,
-      "action_type": "cli_execute",
-      "action_config": {
-        "working_dir": "tools/db_ops",
-        "command_argv": [
-          "{python}",
-          "-m",
-          "db_ops.reports.cli",
-          "--config",
-          "{config_path}",
-          "inventory-workflow",
-          "--days",
-          "7",
-          "--beauty",
-          "1"
-        ],
-        "background": true,
-        "detached": true,
-        "startup_grace_seconds": 3,
-        "timeout_seconds": 1800,
-        "success_output_contains": "\"status\": \"SUCCESS\"",
-        "start_text": "Database inventory report started (last 7 days of metrics). This takes a while...",
-        "success_text": "Database inventory report completed.\nStamp: {stamp}\nServers refreshed from metrics: {merged} (unchanged: {untouched})\nhttp://{worker_host}:8080/report_dba/database-inventory.html",
-        "failure_text": "Database inventory report failed.\nExit code: {exit_code}\nError: {error_summary}",
-        "timeout_text": "Database inventory report timed out. Exceeded {timeout_seconds}s.",
-        "parameters": []
-      }
-    },
-    {
-      "node_role": "worker",
-      "command_id": 8,
-      "command_text": "spbot_sql_to_xlsx",
-      "reply_default": 1,
-      "reply_text": "SQL → xlsx: {status}\ntarget={arg_1}\nrows={result_row_count} columns={result_column_count} affected={result_affected_rows}\n{error}",
-      "reply_parse_mode": "",
-      "reply_with_name": 0,
-      "command_type": 10,
-      "is_group": 1,
-      "is_private": 1,
-      "need_file": 1,
-      "action_type": "sql_to_xlsx",
-      "action_config": {
-        "db_type": "sqlserver",
-        "max_rows": 50000,
-        "connect_timeout_seconds": 30,
-        "output_dir": "runtime/output/telegram/sql_to_xlsx",
-        "file_name_template": "sql_to_xlsx_{server_id}_{timestamp}",
-        "caption": "SQL result for {server_id} ({database}): {row_count} row(s){truncated_note}.",
-        "parameters": [
-          {
-            "name": "target",
-            "source": "arg",
-            "position": 1,
-            "required": true,
-            "prompt_text": "Target? a server_id (e.g. ACME-192-0-2-248) or: <db_type> <ip>[:port] (e.g. mssql <ip>:1433). Use /spbot_list_server_id to list targets."
-          },
-          {
-            "name": "sql_text",
-            "source": "arg",
-            "position": 2,
-            "required": true,
-            "consume_rest": true,
-            "accept_file": true,
-            "prompt_text": "Paste the SELECT statement now (single message), or attach a .sql file. Only read-only SELECT is allowed:"
-          }
-        ]
-      }
-    },
-    {
-      "node_role": "worker",
-      "command_id": 9,
-      "command_text": "spbot_sql_export",
-      "reply_default": 1,
-      "reply_text": "SQL export ({arg_2}): {status}\ntarget={arg_1}\nrows={result_row_count} columns={result_column_count} affected={result_affected_rows}\n{error}",
-      "reply_parse_mode": "",
-      "reply_with_name": 0,
-      "command_type": 10,
-      "is_group": 1,
-      "is_private": 1,
-      "need_file": 1,
-      "action_type": "sql_to_xlsx",
-      "action_config": {
-        "db_type": "sqlserver",
-        "max_rows": 50000,
-        "connect_timeout_seconds": 30,
-        "output_dir": "runtime/output/telegram/sql_export",
-        "file_name_template": "sql_export_{server_id}_{timestamp}",
-        "caption": "SQL result for {server_id} ({database}): {row_count} row(s){truncated_note}.",
-        "parameters": [
-          {
-            "name": "target",
-            "source": "arg",
-            "position": 1,
-            "required": true,
-            "prompt_text": "Target? a server_id (e.g. ACME-192-0-2-248) or: <db_type> <ip>[:port] (e.g. mssql <ip>:1433). Use /spbot_list_server_id to list targets."
-          },
-          {
-            "name": "format",
-            "source": "arg",
-            "position": 2,
-            "required": true,
-            "prompt_text": "Format? xlsx (spreadsheet), csv (spreadsheet or another tool), txt (aligned table), xml (structured), json (for another program to read).",
-            "input_type": "choice",
-            "allow_text_input": false,
-            "options": [
-              {
-                "label": "xlsx",
-                "value": "xlsx"
-              },
-              {
-                "label": "csv",
-                "value": "csv"
-              },
-              {
-                "label": "txt",
-                "value": "txt"
-              },
-              {
-                "label": "xml",
-                "value": "xml"
-              },
-              {
-                "label": "json",
-                "value": "json"
-              }
-            ]
-          },
-          {
-            "name": "sql_text",
-            "source": "arg",
-            "position": 3,
-            "required": true,
-            "consume_rest": true,
-            "accept_file": true,
-            "prompt_text": "Paste the SELECT statement now (single message), or attach a .sql file. Only read-only SELECT is allowed:"
-          }
-        ]
-      }
-    },
-    {
-      "node_role": "worker",
-      "command_id": 10,
-      "command_text": "spbot_xlsx_to_table",
-      "reply_default": 1,
-      "reply_text": "file → table: {status}\nserver   = {result_server_id}\ndatabase = {result_database}\nschema   = {result_schema}\ntable    = {result_table_name}\nread as  = {result_source_format}\ncolumns  = {result_column_count} x {result_column_type}\nrows     = {result_rows_inserted}\n\nSELECT * FROM {result_database}.{result_qualified_name}\n{error}",
-      "reply_parse_mode": "",
-      "reply_with_name": 0,
-      "command_type": 10,
-      "is_group": 0,
-      "is_private": 1,
-      "need_file": 1,
-      "action_type": "create_table_from_xlsx",
-      "_note": "Attach an .xlsx or a delimited text file (.txt/.csv/.tsv, incl. a block pasted out of Excel) and get a queryable table; the format is detected from the file's bytes, not its name. Private-only (is_private 1 / is_group 0): it writes to a real database, and a group chat is the wrong place for a command whose effect nobody else in the room can see. if_exists stays at the module default of 'error' rather than being pinned to 'drop' here - a Telegram user must not be able to destroy an existing table by re-sending a file. table_name is not prompted for; blank means temp_<random>, and the generated name is in the reply. Pass a 5th word to choose one. Every column is NVARCHAR(4000) - see db_ops/common/table_load.py for why.",
-      "action_config": {
-        "parameters": [
-          {
-            "name": "server_id",
-            "position": 1,
-            "required": true,
-            "prompt_text": "Server id? (e.g. ACME-192-0-2-248). Use /spbot_list_server_id to list targets."
-          },
-          {
-            "name": "database",
-            "position": 2,
-            "required": true,
-            "prompt_text": "Database name? (the database to create the table in - on Oracle this is the service/PDB)",
-            "_note": "prompt_choices lists what is actually on the server instead of leaving the operator to remember an exact name. Fails open: if the instance is unreachable the bare prompt is still sent and a typed name still works.",
-            "prompt_choices": {
-              "command": "list-databases",
-              "data_key": "databases",
-              "request": {
-                "target": "{server_id}"
-              }
-            }
-          },
-          {
-            "name": "schema",
-            "position": 3,
-            "required": true,
-            "prompt_text": "Schema? (e.g. dbo on SQL Server, public on PostgreSQL, the owner on Oracle)",
-            "_note": "Needs both earlier answers: schemas live inside one database, so list-schemas is refused without it rather than answering about the login's default.",
-            "prompt_choices": {
-              "command": "list-schemas",
-              "data_key": "schemas",
-              "request": {
-                "target": "{server_id}",
-                "database": "{database}"
-              }
-            }
-          },
-          {
-            "name": "xlsx_base64",
-            "position": 4,
-            "required": true,
-            "prompt_text": "Now attach the file - .xlsx, or delimited text (.txt/.csv/.tsv, tab or comma). Row 1 is the column names, everything below is data. On a workbook only the first sheet is read.",
-            "accept_file": true,
-            "file_encoding": "base64"
-          },
-          {
-            "name": "table_name",
-            "position": 5,
-            "required": false,
-            "_note": "Not prompted for: blank generates temp_<random>, which the reply names."
-          }
-        ]
-      }
-    },
-    {
-      "node_role": "worker",
-      "command_id": 11,
-      "command_text": "spbot_run_sql_task",
-      "reply_default": 0,
-      "reply_text": "",
-      "reply_parse_mode": "",
-      "reply_with_name": 0,
-      "command_type": 50,
-      "is_group": 1,
-      "is_private": 1,
-      "need_file": 0,
-      "action_type": "cli_execute",
-      "action_config": {
-        "working_dir": "tools/db_ops",
-        "emergency_operation": "run-sql-task",
-        "command_argv": [
-          "{python}",
-          "-m",
-          "db_ops.sql_tasks.runner",
-          "--config",
-          "{config_path}",
-          "run-sql-id",
-          "--sql-id",
-          "{sql_id}",
-          "--force",
-          "--output-chat-id",
-          "{chat_id}",
-          "--confirm",
-          "{confirm}"
-        ],
-        "background": true,
-        "detached": true,
-        "requires_secret_key": true,
-        "startup_grace_seconds": 3,
-        "timeout_seconds": 86400,
-        "start_text": "SQL task #{sql_id} started (forced: ignores its schedule, interval and active flag) params=[{task_params}]. Each target reports its own result as a separate message.",
-        "success_text": "SQL task #{sql_id} finished.",
-        "failure_text": "SQL task #{sql_id} failed.\nExit code: {exit_code}\nError: {error_summary}",
-        "timeout_text": "SQL task #{sql_id} timed out after {timeout_seconds}s. Check sql_runs for the per-target outcome.",
-        "parameters": [
-          {
-            "name": "sql_id",
-            "source": "arg",
-            "position": 1,
-            "required": true,
-            "validator": "regex",
-            "pattern": "[0-9]{1,9}",
-            "validation_error": "sql_id must be the number from /spbot_list_sql_tasks (e.g. 8, 11, 16)",
-            "prompt_text": "Which sql_id? The number shown by /spbot_list_sql_tasks, e.g. 8 / 11 / 16. A forced run ignores the schedule and the active flag, so an inactive task will run too."
-          },
-          {
-            "name": "task_params",
-            "source": "arg",
-            "position": 3,
-            "required": false,
-            "consume_rest": true,
-            "prompt_text": "This task takes: {sql_task_parameters}. Send the value(s) in that order, separated by spaces - names are optional (1068, or session_id=1068). Send - to run with the task's own default values.",
-            "prompt_when": {
-              "condition": "sql_task_has_parameters",
-              "parameter": "sql_id"
-            }
-          },
-          {
-            "name": "confirm",
-            "source": "arg",
-            "position": 2,
-            "required": true,
-            "validator": "regex",
-            "pattern": "yes",
-            "validation_error": "A forced run must be confirmed. Type exactly: yes - or send /spbot_run_sql_task <sql_id> with nothing after it and the bot asks one question at a time.",
-            "prompt_text": "Read the task above. It runs NOW and it runs FORCED: its schedule, its repeat interval and its active flag are all ignored, and a task that writes writes for real. Type exactly: yes"
-          }
-        ],
-        "conditional_args": [
-          {
-            "parameter": "task_params",
-            "not_equals": "",
-            "argv": [
-              "--params",
-              "{task_params}"
-            ]
-          }
-        ],
-        "_note_timeout": "24h, and it is a BACKSTOP, not the task's deadline. The background-task poller SIGKILLs the runner at this age (command_processor.check_cli_background_tasks), so whatever stands here silently caps every SQL task started from Telegram no matter what sql_targets.json says - at the old 7200 a 6-file folder task of ~2h per file was killed during file 2, mid-statement. The real per-task bound is time_window.timeout on the sql_target, which is both the statement timeout per file and the stale-run threshold. tests/test_telegram_run_sql_task_command.py pins this value at or above every configured target timeout so raising a target's timeout past the Telegram ceiling fails the suite instead of getting the task killed in production."
-      }
-    },
-    {
-      "node_role": "worker",
-      "command_id": 12,
-      "command_text": "spbot_add_sql",
-      "reply_default": 1,
-      "reply_text": "Add SQL task: {result_status}\nsql_id={result_sql_id} {result_sql_code}\nserver={result_server_id} schedule={result_schedule} output={result_output}\n{result_script_path}\n{result_error}",
-      "reply_parse_mode": "",
-      "reply_with_name": 0,
-      "command_type": 10,
-      "is_group": 0,
-      "is_private": 1,
-      "need_file": 0,
-      "action_type": "add_sql_task",
-      "action_config": {
-        "parameters": [
-          {
-            "name": "server_id",
-            "position": 1,
-            "required": true,
-            "prompt_text": "Server id? (e.g. ACME-192-0-2-248). db_type, instance and credential are taken from db_instances.json. Use /spbot_list_server_id to list targets."
-          },
-          {
-            "name": "sql_name",
-            "position": 2,
-            "required": true,
-            "prompt_text": "SQL task name?"
-          },
-          {
-            "name": "schedule",
-            "position": 3,
-            "required": true,
-            "prompt_text": "Schedule? 'manual' = only when you run it with /spbot_run_sql_task, 'default' = every 300s all day, or: from_hour to_hour repeat_interval timeout (e.g. 20 23 3600 600)"
-          },
-          {
-            "name": "output",
-            "position": 4,
-            "required": true,
-            "prompt_text": "Output? 'xlsx' = send the result as an .xlsx file, 'plain' = send the rows as text, 'none' = run it and report status only."
-          },
-          {
-            "name": "sql_text",
-            "position": 5,
-            "required": true,
-            "consume_rest": true,
-            "prompt_text": "Paste the full SQL text now (single message), or attach a .sql file:",
-            "accept_file": true
-          }
-        ]
-      }
-    },
-    {
-      "node_role": "worker",
-      "command_id": 13,
-      "command_text": "spbot_list_sql_tasks",
-      "reply_default": 1,
-      "reply_text": "{result_listing}",
-      "reply_parse_mode": "",
-      "reply_with_name": 0,
-      "command_type": 1,
-      "is_group": 1,
-      "is_private": 1,
-      "need_file": 1,
-      "action_type": "list_sql_tasks",
-      "action_config": {
-        "parameters": []
-      }
-    },
-    {
-      "node_role": "worker",
-      "command_id": 14,
-      "command_text": "spbot_restore",
-      "reply_default": 0,
-      "reply_text": "",
-      "reply_parse_mode": "",
-      "reply_with_name": 0,
-      "command_type": 10,
-      "is_group": 1,
-      "is_private": 1,
-      "need_file": 0,
-      "action_type": "cli_execute",
-      "action_config": {
-        "working_dir": "tools/db_ops",
-        "command_argv": [
-          "{python}",
-          "-m",
-          "db_ops.backup_restore.cli",
-          "restore-workflow",
-          "--config",
-          "{config_path}",
-          "--restore-id",
-          "{restore_id}"
-        ],
-        "conditional_args": [
-          {
-            "parameter": "point_in_time",
-            "not_equals": "LATEST",
-            "argv": [
-              "--point-in-time",
-              "{point_in_time}"
-            ]
-          }
-        ],
-        "background": true,
-        "detached": true,
-        "requires_secret_key": true,
-        "startup_grace_seconds": 3,
-        "start_text": "Restore workflow started for {restore_id}. point_in_time={point_in_time}",
-        "success_text": "Restore workflow completed for {restore_id}. point_in_time={point_in_time}",
-        "failure_text": "Restore workflow failed for {restore_id}. point_in_time={point_in_time}\nExit code: {exit_code}\nError: {error_summary}",
-        "timeout_text": "Restore workflow timed out for {restore_id}. point_in_time={point_in_time}. Exceeded {timeout_seconds}s.",
-        "success_output_contains": "restore-workflow completed status=SUCCESS",
-        "timeout_seconds": 7200,
-        "parameters": [
-          {
-            "name": "restore_id",
-            "source": "arg",
-            "position": 1,
-            "required": true,
-            "prompt_text": "Please input restore_id"
-          },
-          {
-            "name": "point_in_time",
-            "source": "arg",
-            "position": 2,
-            "required": true,
-            "consume_rest": true,
-            "validator": "regex",
-            "pattern": "^(LATEST|\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2} [+-]\\d{2}:\\d{2})$",
-            "validation_error": "Use point_in_time format: LATEST or YYYY-MM-DD HH:MM:SS +HH:MM",
-            "prompt_text": "Please input point_in_time: LATEST or YYYY-MM-DD HH:MM:SS +HH:MM"
-          }
-        ],
-        "completion_probe": {
-          "table": "job_runs",
-          "success_job_code": "backup_restore.restore-workflow.end",
-          "failure_job_code": "backup_restore.restore-workflow.error",
-          "match_metadata": {
-            "restore_id": "{restore_id}"
-          }
-        }
-      }
-    },
-    {
-      "node_role": "worker",
-      "command_id": 15,
-      "command_text": "spbot_list_restore_id",
-      "reply_default": 0,
-      "reply_text": "",
-      "reply_parse_mode": "",
-      "reply_with_name": 0,
-      "command_type": 1,
-      "is_group": 1,
-      "is_private": 1,
-      "need_file": 0,
-      "action_type": "cli_execute",
-      "action_config": {
-        "working_dir": "tools/db_ops",
-        "command_argv": [
-          "{python}",
-          "-m",
-          "db_ops.backup_restore.cli",
-          "list-restores",
-          "--config",
-          "{config_path}"
-        ],
-        "start_text": "Listing restore IDs...",
-        "success_text": "{stdout}",
-        "failure_text": "Failed to list restore IDs.\nExit code: {exit_code}\nError: {error_summary}",
-        "timeout_seconds": 60,
-        "parameters": []
-      }
-    },
-    {
-      "node_role": "worker",
-      "command_id": 16,
-      "command_text": "spbot_backup",
-      "reply_default": 0,
-      "reply_text": "",
-      "reply_parse_mode": "",
-      "reply_with_name": 0,
-      "command_type": 10,
-      "is_group": 1,
-      "is_private": 1,
-      "need_file": 0,
-      "action_type": "cli_execute",
-      "action_config": {
-        "working_dir": "tools/db_ops",
-        "command_argv": [
-          "{python}",
-          "-m",
-          "db_ops.backup_restore.cli",
-          "backup",
-          "--config",
-          "{config_path}",
-          "--backup-id",
-          "{backup_id}",
-          "--force"
-        ],
-        "conditional_args": [
-          {
-            "parameter": "backup_type",
-            "not_equals": "-",
-            "argv": [
-              "--backup-type",
-              "{backup_type}"
-            ]
-          }
-        ],
-        "background": true,
-        "detached": true,
-        "requires_secret_key": true,
-        "startup_grace_seconds": 3,
-        "timeout_seconds": 7200,
-        "start_text": "Backup {backup_id} started (level: {backup_type}). This can take a while for a full.",
-        "success_text": "Backup {backup_id} finished (level: {backup_type}).",
-        "failure_text": "Backup {backup_id} failed.\nExit code: {exit_code}\nError: {error_summary}",
-        "timeout_text": "Backup {backup_id} timed out after {timeout_seconds}s. Check the container on the source host.",
-        "parameters": [
-          {
-            "name": "backup_id",
-            "source": "arg",
-            "position": 1,
-            "required": true,
-            "validator": "regex",
-            "pattern": "[A-Za-z][A-Za-z0-9_-]{1,63}",
-            "validation_error": "backup_id: letters, digits, underscore and dash (see spbot_list_backup_id)",
-            "prompt_text": "Which backup_id? /spbot_list_backup_id prints them; they read like <SITE>_ORA_DB, <SITE>_PG_DB, <SITE>_MSSQL_FULL"
-          },
-          {
-            "name": "backup_type",
-            "source": "arg",
-            "position": 2,
-            "required": false,
-            "validator": "regex",
-            "pattern": "full|diff|log|-",
-            "validation_error": "backup_type must be full, diff, log, or - to let the schedule decide",
-            "prompt_text": "Level? full / diff / log - or Skip to let the schedule decide (Sunday = full, otherwise diff for Oracle/PostgreSQL).\nOracle and PostgreSQL have no 'log' level here: their archivelog and WAL backups run on their own schedule.",
-            "input_type": "choice",
-            "allow_text_input": false,
-            "allow_skip": true,
-            "options": [
-              {
-                "label": "full",
-                "value": "full"
-              },
-              {
-                "label": "diff",
-                "value": "diff"
-              },
-              {
-                "label": "log",
-                "value": "log"
-              }
-            ]
-          }
-        ],
-        "completion_probe": {
-          "table": "job_runs",
-          "success_job_code": "backup_restore.backup.end",
-          "failure_job_code": "backup_restore.backup.error",
-          "match_metadata": {
-            "backup_id": "{backup_id}"
-          }
-        }
-      }
-    },
-    {
-      "node_role": "worker",
-      "command_id": 17,
-      "command_text": "spbot_list_backup_id",
-      "reply_default": 0,
-      "reply_text": "",
-      "reply_parse_mode": "",
-      "reply_with_name": 0,
-      "command_type": 1,
-      "is_group": 1,
-      "is_private": 1,
-      "need_file": 0,
-      "action_type": "cli_execute",
-      "action_config": {
-        "working_dir": "tools/db_ops",
-        "command_argv": [
-          "{python}",
-          "-m",
-          "db_ops.backup_restore.cli",
-          "list-backups",
-          "--config",
-          "{config_path}"
-        ],
-        "start_text": "Listing backup IDs...",
-        "success_text": "{stdout}",
-        "failure_text": "Failed to list backup IDs.\nExit code: {exit_code}\nError: {error_summary}",
-        "timeout_seconds": 60,
-        "parameters": []
-      }
-    },
-    {
-      "node_role": "worker",
-      "command_id": 18,
-      "command_text": "spbot_metric_toggle",
-      "reply_default": 1,
-      "reply_text": "Metric toggle {result_state} {result_scope} on {result_server_id}: {result_status}\n{result_detail}\nSync master: python -m db_ops.control.cli worker-pull-data-config --key-base64 <KEY> --all-json --overwrite",
-      "reply_parse_mode": "",
-      "reply_with_name": 0,
-      "command_type": 10,
-      "is_group": 0,
-      "is_private": 1,
-      "need_file": 0,
-      "action_type": "metric_toggle",
-      "action_config": {
-        "parameters": [
-          {
-            "name": "server_id",
-            "source": "arg",
-            "position": 1,
-            "required": true,
-            "validator": "regex",
-            "pattern": "[A-Za-z0-9][A-Za-z0-9._:-]{0,127}",
-            "validation_error": "server_id may contain only letters, numbers, dot, underscore, colon, and hyphen (maximum 128 characters)",
-            "prompt_text": "Server id? (e.g. ACME-192-0-2-250). Use /spbot_list_server_id to list targets."
-          },
-          {
-            "name": "state",
-            "source": "arg",
-            "position": 2,
-            "required": true,
-            "validator": "regex",
-            "pattern": "on|off",
-            "validation_error": "state must be 'on' or 'off'",
-            "prompt_text": "Turn metrics on or off? (on / off)",
-            "input_type": "choice",
-            "allow_text_input": false,
-            "options": [
-              {
-                "label": "on",
-                "value": "on"
-              },
-              {
-                "label": "off",
-                "value": "off"
-              }
-            ]
-          },
-          {
-            "name": "scope",
-            "source": "arg",
-            "position": 3,
-            "required": true,
-            "validator": "regex",
-            "pattern": "[A-Za-z0-9][A-Za-z0-9._:-]{0,127}",
-            "validation_error": "scope must be 'all', 'collector:<sql|cmd|docker|k8s>', or one metric_code",
-            "prompt_text": "Scope? 'all' (whole target), 'collector:cmd' / 'collector:sql' / 'collector:docker' / 'collector:k8s' (one collector class), or one metric_code (e.g. OS_DISK_USAGE). Use /spbot_list_metrics to list metric codes."
-          }
-        ]
-      }
-    },
-    {
-      "node_role": "worker",
-      "command_id": 19,
-      "command_text": "spbot_create_db_docker",
-      "reply_default": 0,
-      "reply_text": "",
-      "reply_parse_mode": "",
-      "reply_with_name": 0,
-      "command_type": 10,
-      "is_group": 1,
-      "is_private": 1,
-      "need_file": 0,
-      "action_type": "cli_execute",
-      "action_config": {
-        "working_dir": "tools/db_ops",
-        "command_argv": [
-          "{python}",
-          "-m",
-          "db_ops.sre.cli",
-          "--config",
-          "{config_path}",
-          "create-db-docker",
-          "--name",
-          "{name}",
-          "--engine",
-          "{engine}",
-          "--version",
-          "{version}",
-          "--mode",
-          "{mode}",
-          "--worker-host",
-          "{worker_host}"
-        ],
-        "conditional_args": [
-          {
-            "parameter": "host_port",
-            "not_equals": "-",
-            "argv": [
-              "--host-port",
-              "{host_port}"
-            ]
-          },
-          {
-            "parameter": "password_env",
-            "not_equals": "-",
-            "argv": [
-              "--password-env",
-              "{password_env}"
-            ]
-          },
-          {
-            "_note": "Conditional, exactly like remote_password_text below. It used to sit in command_argv unconditionally, so `password_text = -` (the skip sentinel, meaning 'reuse the ref') still handed the CLI an env var holding the literal '-'. That stored a password of '-' when the ref was new, and refused with 'already exists with a different value' when it was not - the reuse path could never be reached.",
-            "parameter": "password_text",
-            "not_equals": "-",
-            "argv": [
-              "--password-text-env",
-              "DB_OPS_NEW_DB_PASSWORD"
-            ]
-          },
-          {
-            "parameter": "deploy_target",
-            "not_equals": "worker",
-            "argv": [
-              "--remote-host",
-              "{deploy_target}",
-              "--remote-user",
-              "{remote_user}"
-            ]
-          },
-          {
-            "parameter": "remote_password_ref",
-            "not_equals": "-",
-            "argv": [
-              "--remote-password-ref",
-              "{remote_password_ref}"
-            ]
-          },
-          {
-            "parameter": "remote_password_text",
-            "not_equals": "-",
-            "argv": [
-              "--remote-password-env",
-              "DB_OPS_REMOTE_SSH_PASSWORD"
-            ]
-          },
-          {
-            "parameter": "remote_key_name",
-            "not_equals": "-",
-            "argv": [
-              "--remote-key",
-              "{remote_key_name}"
-            ]
-          },
-          {
-            "parameter": "recreate",
-            "equals": "yes",
-            "argv": [
-              "--force",
-              "--overwrite-secret"
-            ]
-          },
-          {
-            "parameter": "install_docker",
-            "equals": "yes",
-            "argv": [
-              "--install-docker"
-            ]
-          }
-        ],
-        "env_from_parameters": {
-          "DB_OPS_NEW_DB_PASSWORD": "password_text",
-          "DB_OPS_REMOTE_SSH_PASSWORD": "remote_password_text"
+        {
+            "node_role": "worker",
+            "command_id": 2,
+            "menu_order": 3.0,
+            "command_text": "spbot_list_all_command",
+            "reply_default": 1,
+            "reply_text": "{result_listing}",
+            "reply_parse_mode": "",
+            "reply_with_name": 0,
+            "command_type": 0,
+            "is_group": 1,
+            "is_private": 1,
+            "need_file": 0,
+            "action_type": "list_all_command",
+            "action_config": {},
+            "_note": "A named handler. It answers from the store, so it starts no process and needs no secret key. {result_listing} is filled in by the handler."
         },
-        "background": true,
-        "detached": true,
-        "requires_secret_key": true,
-        "startup_grace_seconds": 3,
-        "timeout_seconds": 3600,
-        "start_text": "Creating {engine} {version} lab instance '{name}' (mode={mode}). Pulling the image and waiting for it to become healthy — this takes a few minutes...",
-        "success_text": "Lab database '{name}' is up: {engine} {version}, mode={mode}.\nThe password was stored in the encrypted secret store and the connection was registered in data/docker_db_connections.json.\nPull it back to the master with:\npython -m db_ops.control.cli worker-pull-data-config --key-base64 <KEY> --all-json --merge-secrets --overwrite",
-        "failure_text": "Creating lab database '{name}' failed.\nExit code: {exit_code}\nError: {error_summary}",
-        "timeout_text": "Creating lab database '{name}' timed out after {timeout_seconds}s. Check the container on the worker.",
-        "parameters": [
-          {
-            "name": "name",
-            "source": "arg",
-            "position": 1,
-            "required": true,
-            "validator": "regex",
-            "pattern": "[A-Za-z][A-Za-z0-9_-]{1,39}",
-            "validation_error": "name: letters, numbers, underscore and dash only (start with a letter), e.g. mssql_lab_01",
-            "prompt_text": "Instance name? (e.g. mssql_lab_01)"
-          },
-          {
-            "name": "engine",
-            "source": "arg",
-            "position": 2,
-            "required": true,
-            "validator": "regex",
-            "pattern": "postgres|mysql|mssql|oracle",
-            "validation_error": "engine must be one of: postgres, mysql, mssql, oracle",
-            "prompt_text": "Engine? postgres / mysql / mssql / oracle",
-            "input_type": "choice",
-            "allow_text_input": false,
-            "options": [
-              {
-                "label": "postgres",
-                "value": "postgres"
-              },
-              {
-                "label": "mysql",
-                "value": "mysql"
-              },
-              {
-                "label": "mssql",
-                "value": "mssql"
-              },
-              {
-                "label": "oracle",
-                "value": "oracle"
-              }
-            ]
-          },
-          {
-            "name": "version",
-            "source": "arg",
-            "position": 3,
-            "required": true,
-            "validator": "regex",
-            "pattern": "[A-Za-z0-9][A-Za-z0-9._-]{0,31}",
-            "validation_error": "version must be a Docker image tag, e.g. 18 / 8.4 / 2025-latest / 23.26.2",
-            "prompt_text": "Version (Docker image tag)? postgres: 18 · mysql: 8.4 · mssql: 2022-latest or 2025-latest · oracle: 23.26.2 or latest (= 26ai; Oracle kept 23.26.x version numbers — there is NO '26'/'26ai' tag; gvenzl/oracle-free).\nNOTE for mssql: there is no bare-year tag — '2025' does not exist. Use 2025-latest, or a full tag like 2025-CU6-ubuntu-24.04."
-          },
-          {
-            "name": "mode",
-            "source": "arg",
-            "position": 4,
-            "required": true,
-            "validator": "regex",
-            "pattern": "single|ha-lab",
-            "validation_error": "mode must be 'single' or 'ha-lab'",
-            "prompt_text": "Mode? single / ha-lab   (ha-lab: postgres streaming replication · mysql async replica · mssql Always On AG with CLUSTER_TYPE=NONE — each primary + 2 replicas · oracle Data Guard 1 primary + 1 physical standby. Manual failover, no listener.)",
-            "input_type": "choice",
-            "allow_text_input": false,
-            "options": [
-              {
-                "label": "single",
-                "value": "single"
-              },
-              {
-                "label": "ha-lab",
-                "value": "ha-lab"
-              }
-            ]
-          },
-          {
-            "name": "host_port",
-            "source": "arg",
-            "position": 5,
-            "required": false,
-            "validator": "regex",
-            "pattern": "\\d{2,5}|-",
-            "validation_error": "host_port must be a number, or - for the engine default",
-            "prompt_text": "Host port? Skip for the engine default (postgres 5432 / mysql 3306 / mssql 1433 / oracle 1521). Pick another if that port is already taken on the target host.",
-            "allow_skip": true
-          },
-          {
-            "name": "password_env",
-            "source": "arg",
-            "position": 6,
-            "required": false,
-            "validator": "regex",
-            "pattern": "[A-Za-z_][A-Za-z0-9_]{2,63}|-",
-            "validation_error": "password_env must be an env-var style name (A-Z, 0-9, _), or - for the default",
-            "prompt_text": "DB password - secret ref? Skip for the default <NAME>_PASSWORD (e.g. MSSQL_LAB_01_PASSWORD). This is the ref the DB password is stored under in the encrypted secret store.",
-            "allow_skip": true
-          },
-          {
-            "name": "password_text",
-            "source": "arg",
-            "position": 7,
-            "required": false,
-            "secret": true,
-            "validator": "regex",
-            "pattern": ".{8,128}|-",
-            "validation_error": "password must be 8-128 chars, or - to reuse the ref in password_env (stored on a previous run)",
-            "prompt_text": "DB password - value? Stored in the encrypted secret store under the ref above and used to start the container. Skip to REUSE a ref that already holds a password from an earlier run.\nIn a group chat this is visible - use a private chat.",
-            "allow_skip": true,
-            "input_type": "secret"
-          },
-          {
-            "name": "deploy_target",
-            "source": "arg",
-            "position": 8,
-            "required": true,
-            "validator": "regex",
-            "pattern": "worker|\\d{1,3}(\\.\\d{1,3}){3}",
-            "validation_error": "deploy_target must be 'worker' (in-container on the worker host) or a remote Ubuntu IP",
-            "prompt_text": "Deploy where? Tap 'worker' for the worker container's own docker host, or type the IP of an Ubuntu host to provision there over SSH.",
-            "input_type": "choice",
-            "allow_text_input": true,
-            "options": [
-              {
-                "label": "worker",
-                "value": "worker"
-              }
-            ]
-          },
-          {
-            "name": "remote_user",
-            "source": "arg",
-            "position": 9,
-            "required": true,
-            "validator": "regex",
-            "pattern": "[A-Za-z0-9._-]{1,64}",
-            "validation_error": "remote_user must be an SSH username",
-            "prompt_text": "SSH user on the remote host?",
-            "ask_when": {
-              "parameter": "deploy_target",
-              "not_equals": "worker"
+        {
+            "node_role": "worker",
+            "command_id": 32,
+            "menu_order": 4.0,
+            "command_text": "spbot_list_my_commands",
+            "reply_default": 0,
+            "reply_text": "",
+            "reply_parse_mode": "",
+            "reply_with_name": 0,
+            "command_type": 1,
+            "is_group": 0,
+            "is_private": 1,
+            "need_file": 0,
+            "action_type": "cli_execute",
+            "action_config": {
+                "working_dir": "tools/db_ops",
+                "command_argv": [
+                    "{python}",
+                    "-m",
+                    "db_ops.db.cli",
+                    "telegram-command-history",
+                    "{\"user_id\": \"{user_id}\", \"limit\": 10, \"exclude\": [\"{command_text}\"], \"format\": \"txt\"}",
+                    "--config",
+                    "{config_path}"
+                ],
+                "start_text": "Reading your recent commands...",
+                "success_text": "{stdout}",
+                "failure_text": "Could not read your command history.\nExit code: {exit_code}\nError: {error_summary}",
+                "timeout_seconds": 60,
+                "parameters": [],
+                "_note_private": "Private only (is_group 0). The history spans every chat this person has used the bot in, so answering it in a group would read a private command out loud there."
             }
-          },
-          {
-            "name": "remote_auth",
-            "source": "arg",
-            "position": 10,
-            "required": true,
-            "input_type": "choice",
-            "allow_text_input": false,
-            "allow_skip": false,
-            "ask_when": {
-              "parameter": "deploy_target",
-              "not_equals": "worker"
+        },
+        {
+            "node_role": "worker",
+            "command_id": 3,
+            "menu_order": 5.0,
+            "command_text": "spbot_list_server_id",
+            "reply_default": 1,
+            "reply_text": "{result_listing}",
+            "reply_parse_mode": "",
+            "reply_with_name": 0,
+            "command_type": 1,
+            "is_group": 1,
+            "is_private": 1,
+            "need_file": 0,
+            "action_type": "list_server_id",
+            "action_config": {
+                "parameters": []
             },
-            "options": [
-              {
-                "label": "Secret ref",
-                "value": "secret_ref"
-              },
-              {
-                "label": "Password",
-                "value": "password"
-              },
-              {
-                "label": "SSH key file",
-                "value": "key_file"
-              }
-            ],
-            "validator": "regex",
-            "pattern": "secret_ref|password|key_file",
-            "validation_error": "choose one of: secret_ref, password, key_file",
-            "prompt_text": "How does db_ops authenticate to that host?\nSecret ref = a credential already in the encrypted secret store (nothing more to type).\nPassword = type it here once.\nSSH key file = a private key already in data/ssh_keys/ on this node."
-          },
-          {
-            "name": "remote_password_ref",
-            "source": "arg",
-            "position": 11,
-            "required": true,
-            "validator": "regex",
-            "pattern": "[A-Za-z_][A-Za-z0-9_]{2,63}",
-            "validation_error": "remote_password_ref must be an env-var style secret ref",
-            "prompt_text": "Which secret ref holds the SSH password? (e.g. REMOTE_192_0_2_115_DEV)",
-            "ask_when": {
-              "parameter": "remote_auth",
-              "equals": "secret_ref"
-            }
-          },
-          {
-            "name": "remote_password_text",
-            "source": "arg",
-            "position": 12,
-            "required": true,
-            "secret": true,
-            "validator": "regex",
-            "pattern": ".+",
-            "validation_error": "the SSH password cannot be empty",
-            "prompt_text": "The SSH password? It is passed to the CLI through the environment, never on the command line.\nIn a group chat this is visible - use a private chat.",
-            "input_type": "secret",
-            "ask_when": {
-              "parameter": "remote_auth",
-              "equals": "password"
-            }
-          },
-          {
-            "name": "remote_key_name",
-            "source": "arg",
-            "position": 13,
-            "required": true,
-            "validator": "regex",
-            "pattern": "[A-Za-z0-9._-]{1,128}",
-            "validation_error": "remote_key_name must be a file name in data/ssh_keys/",
-            "prompt_text": "Which key file in data/ssh_keys/ on this node? (e.g. oracle-cloud.key)",
-            "ask_when": {
-              "parameter": "remote_auth",
-              "equals": "key_file"
-            }
-          },
-          {
-            "name": "recreate",
-            "source": "arg",
-            "position": 14,
-            "required": true,
-            "validator": "regex",
-            "pattern": "yes|no",
-            "validation_error": "answer yes or no",
-            "prompt_text": "If an instance with that name already exists, recreate it? yes / no\nyes = DESTROYS the existing containers AND their data volumes, then rebuilds from scratch (and replaces the stored password for that ref). Answer no unless you mean it — an existing instance is never touched otherwise.",
-            "input_type": "choice",
-            "allow_text_input": false,
-            "allow_skip": false,
-            "options": [
-              {
-                "label": "No",
-                "value": "no"
-              },
-              {
-                "label": "Yes - destroy and rebuild",
-                "value": "yes"
-              }
-            ]
-          },
-          {
-            "name": "install_docker",
-            "source": "arg",
-            "position": 15,
-            "required": true,
-            "validator": "regex",
-            "pattern": "yes|no",
-            "validation_error": "answer yes or no",
-            "prompt_text": "Install docker + compose on the remote VM if missing? yes / no\nyes = SSH in and install Docker (needs the SSH user to have sudo), add it to the docker group, create the containers dir. Use yes for a fresh Ubuntu VM. Answer no for deploy_target=worker or a VM that already has Docker.",
-            "input_type": "choice",
-            "allow_text_input": false,
-            "allow_skip": false,
-            "options": [
-              {
-                "label": "No",
-                "value": "no"
-              },
-              {
-                "label": "Yes - install it",
-                "value": "yes"
-              }
-            ],
-            "ask_when": {
-              "parameter": "deploy_target",
-              "not_equals": "worker"
-            }
-          }
-        ]
-      }
-    },
-    {
-      "node_role": "worker",
-      "command_id": 20,
-      "command_text": "spbot_list_metrics",
-      "reply_default": 1,
-      "reply_text": "{result_listing}",
-      "reply_parse_mode": "",
-      "reply_with_name": 0,
-      "command_type": 1,
-      "is_group": 1,
-      "is_private": 1,
-      "need_file": 1,
-      "action_type": "list_metrics",
-      "action_config": {
-        "parameters": []
-      }
-    },
-    {
-      "node_role": "worker",
-      "command_id": 23,
-      "command_text": "spbot_shrink_log",
-      "reply_default": 0,
-      "reply_text": "",
-      "reply_parse_mode": "",
-      "reply_with_name": 0,
-      "command_type": 50,
-      "is_group": 0,
-      "is_private": 1,
-      "need_file": 0,
-      "action_type": "cli_execute",
-      "action_config": {
-        "working_dir": "tools/db_ops",
-        "emergency_operation": "shrink-log",
-        "command_argv": [
-          "{python}",
-          "-m",
-          "db_ops.common.cli",
-          "shrink-log",
-          "{\"target\":\"{server_id}\",\"database\":\"{database}\",\"size_mb\":{size_mb},\"confirm\":\"{confirm}\",\"reason\":\"telegram\",\"authorized_by\":{\"channel\":\"telegram\"}}",
-          "--config",
-          "{config_path}"
-        ],
-        "requires_secret_key": true,
-        "start_text": "Shrinking log...",
-        "success_text": "{stdout}",
-        "failure_text": "shrink-log failed.\nExit code: {exit_code}\nError: {error_summary}",
-        "timeout_seconds": 120,
-        "parameters": [
-          {
-            "name": "server_id",
-            "source": "arg",
-            "position": 1,
-            "required": true,
-            "validator": "regex",
-            "pattern": "[A-Za-z0-9][A-Za-z0-9._:-]{0,127}",
-            "validation_error": "server_id may contain only letters, numbers, dot, underscore, colon and hyphen",
-            "prompt_text": "Server id? Use /spbot_list_server_id to list targets."
-          },
-          {
-            "name": "database",
-            "source": "arg",
-            "position": 2,
-            "required": true,
-            "validator": "regex",
-            "pattern": "[A-Za-z0-9_][A-Za-z0-9_.$#-]{0,127}",
-            "validation_error": "database must be a plain SQL Server database name",
-            "prompt_text": "Database? (e.g. APPDB)"
-          },
-          {
-            "name": "size_mb",
-            "source": "arg",
-            "position": 3,
-            "required": true,
-            "validator": "regex",
-            "pattern": "[1-9][0-9]{0,6}",
-            "validation_error": "size_mb must be a whole number of MB, 1 or more",
-            "prompt_text": "Shrink the log file to how many MB? (e.g. 5120)"
-          },
-          {
-            "name": "confirm",
-            "source": "arg",
-            "position": 4,
-            "required": true,
-            "validator": "regex",
-            "pattern": "yes",
-            "validation_error": "Type exactly: yes",
-            "prompt_text": "This changes a LIVE system and cannot be undone. Read the target above. Type exactly: yes"
-          }
-        ]
-      }
-    },
-    {
-      "node_role": "worker",
-      "command_id": 25,
-      "command_text": "spbot_start_job",
-      "reply_default": 0,
-      "reply_text": "",
-      "reply_parse_mode": "",
-      "reply_with_name": 0,
-      "command_type": 50,
-      "is_group": 0,
-      "is_private": 1,
-      "need_file": 0,
-      "action_type": "cli_execute",
-      "action_config": {
-        "working_dir": "tools/db_ops",
-        "emergency_operation": "start-job",
-        "command_argv": [
-          "{python}",
-          "-m",
-          "db_ops.common.cli",
-          "start-job",
-          "{\"target\":\"{server_id}\",\"job_name\":\"{job_name}\",\"confirm\":\"{confirm}\",\"reason\":\"telegram\",\"authorized_by\":{\"channel\":\"telegram\"}}",
-          "--config",
-          "{config_path}"
-        ],
-        "requires_secret_key": true,
-        "start_text": "Starting job...",
-        "success_text": "{stdout}",
-        "failure_text": "start-job failed.\nExit code: {exit_code}\nError: {error_summary}",
-        "timeout_seconds": 120,
-        "parameters": [
-          {
-            "name": "server_id",
-            "source": "arg",
-            "position": 1,
-            "required": true,
-            "validator": "regex",
-            "pattern": "[A-Za-z0-9][A-Za-z0-9._:-]{0,127}",
-            "validation_error": "server_id may contain only letters, numbers, dot, underscore, colon and hyphen",
-            "prompt_text": "Server id? Use /spbot_list_server_id to list targets."
-          },
-          {
-            "name": "job_name",
-            "source": "arg",
-            "position": 2,
-            "required": true,
-            "validator": "regex",
-            "pattern": "[A-Za-z0-9_][A-Za-z0-9_ .$#-]{0,127}",
-            "validation_error": "job_name must be a plain Agent job name",
-            "prompt_text": "Agent job name? (exact, e.g. Backup_Log)"
-          },
-          {
-            "name": "confirm",
-            "source": "arg",
-            "position": 3,
-            "required": true,
-            "validator": "regex",
-            "pattern": "yes",
-            "validation_error": "Type exactly: yes",
-            "prompt_text": "This changes a LIVE system and cannot be undone. Read the target above. Type exactly: yes"
-          }
-        ]
-      }
-    },
-    {
-      "node_role": "worker",
-      "command_id": 26,
-      "command_text": "spbot_restart_server",
-      "reply_default": 0,
-      "reply_text": "",
-      "reply_parse_mode": "",
-      "reply_with_name": 0,
-      "command_type": 100,
-      "is_group": 0,
-      "is_private": 1,
-      "need_file": 0,
-      "action_type": "cli_execute",
-      "action_config": {
-        "working_dir": "tools/db_ops",
-        "emergency_operation": "host-restart",
-        "command_argv": [
-          "{python}",
-          "-m",
-          "db_ops.common.cli",
-          "host-restart",
-          "{\"target\":\"{server_id}\",\"confirm\":\"{confirm}\",\"confirm_target\":\"{confirm_target}\",\"reason\":\"telegram\",\"authorized_by\":{\"channel\":\"telegram\"}}",
-          "--config",
-          "{config_path}"
-        ],
-        "requires_secret_key": true,
-        "background": true,
-        "detached": true,
-        "startup_grace_seconds": 3,
-        "start_text": "Restart requested. Waiting for the host to come back...",
-        "success_text": "{stdout}",
-        "failure_text": "host-restart failed or was refused.\nExit code: {exit_code}\nError: {error_summary}",
-        "timeout_seconds": 1800,
-        "parameters": [
-          {
-            "name": "server_id",
-            "source": "arg",
-            "position": 1,
-            "required": true,
-            "validator": "regex",
-            "pattern": "[A-Za-z0-9][A-Za-z0-9._:-]{0,127}",
-            "validation_error": "server_id may contain only letters, numbers, dot, underscore, colon and hyphen",
-            "prompt_text": "Server id? Use /spbot_list_server_id to list targets."
-          },
-          {
-            "name": "confirm",
-            "source": "arg",
-            "position": 2,
-            "required": true,
-            "validator": "regex",
-            "pattern": "yes",
-            "validation_error": "Type exactly: yes",
-            "prompt_text": "RESTART A SERVER. Every service on it stops, sessions are lost, an FCI may fail over. Are you sure? Type exactly: yes"
-          },
-          {
-            "name": "confirm_target",
-            "source": "arg",
-            "position": 3,
-            "required": true,
-            "validator": "regex",
-            "pattern": "[A-Za-z0-9][A-Za-z0-9._:-]{0,127}",
-            "validation_error": "Type the server id exactly as you sent it",
-            "prompt_text": "Still sure? Type the SERVER ID again, exactly, to proceed. Anything else aborts."
-          }
-        ]
-      }
-    },
-    {
-      "node_role": "worker",
-      "command_id": 27,
-      "command_text": "spbot_trace_session",
-      "reply_default": 0,
-      "reply_text": "",
-      "reply_parse_mode": "",
-      "reply_with_name": 0,
-      "command_type": 50,
-      "is_group": 0,
-      "is_private": 1,
-      "need_file": 0,
-      "action_type": "cli_execute",
-      "action_config": {
-        "_note": "Who is holding an open transaction on a given database. Reads only - it runs through common.cli trace-session, which goes through sql_run and logs like any other task. The server and database are arguments: this command describes an operation, not a machine.",
-        "working_dir": "tools/db_ops",
-        "command_argv": [
-          "{python}",
-          "-m",
-          "db_ops.common.cli",
-          "trace-session",
-          "{\"target\":\"{server_id}\",\"database\":\"{database}\",\"session_id\":{session_id},\"min_tran_seconds\":{min_tran_seconds}}"
-        ],
-        "defaults": {
-          "session_id": "0",
-          "min_tran_seconds": "300"
+            "_note": "Lists the server_id values every other command takes as an argument. Worth keeping at a low clearance: without it nobody can use the commands that need one."
         },
-        "requires_secret_key": true,
-        "start_text": "Tracing open transactions on {server_id} / {database}...",
-        "success_text": "{stdout}",
-        "failure_text": "trace-session failed.\nExit code: {exit_code}\nError: {error_summary}",
-        "timeout_seconds": 120,
-        "parameters": [
-          {
-            "name": "server_id",
-            "source": "arg",
-            "position": 1,
-            "required": true,
-            "prompt_text": "Server id? Use /spbot_list_server_id to list targets."
-          },
-          {
-            "name": "database",
-            "source": "arg",
-            "position": 2,
-            "required": true,
-            "prompt_text": "Database? (e.g. the application database on that instance)"
-          },
-          {
-            "name": "session_id",
-            "source": "arg",
-            "position": 3,
-            "required": false,
-            "validator": "regex",
-            "pattern": "[0-9]{1,6}",
-            "validation_error": "session_id must be a number (0 = every open transaction)",
-            "prompt_text": "Which SPID? Send 0 for every open transaction older than 5 minutes."
-          }
-        ]
-      }
-    },
-    {
-      "node_role": "worker",
-      "command_id": 29,
-      "command_text": "spbot_disable_job",
-      "reply_default": 0,
-      "reply_text": "",
-      "reply_parse_mode": "",
-      "reply_with_name": 0,
-      "command_type": 50,
-      "is_group": 0,
-      "is_private": 1,
-      "need_file": 0,
-      "action_type": "cli_execute",
-      "_note": "Switch a scheduled job off, on SQL Server (Agent), Oracle (DBMS_SCHEDULER or the older DBMS_JOB) or PostgreSQL (pg_cron). Private-only and clearance 50, like its siblings: it changes a live system. Disable only - there is deliberately no drop-job, because a dropped Agent job takes its schedule, steps and history with it and no prompt makes that recoverable. The job_name prompt lists the jobs that are actually ENABLED on the server just named, so the operator picks from what can be acted on rather than recalling an exact name; the listing fails open, so an unreachable instance still gets the bare prompt. Note that disabling does NOT stop a run already in progress - the reply says so every time.",
-      "action_config": {
-        "working_dir": "tools/db_ops",
-        "emergency_operation": "disable-job",
-        "command_argv": [
-          "{python}",
-          "-m",
-          "db_ops.common.cli",
-          "disable-job",
-          "{\"target\":\"{server_id}\",\"job_name\":\"{job_name}\",\"confirm\":\"{confirm}\",\"reason\":\"telegram\",\"authorized_by\":{\"channel\":\"telegram\"}}",
-          "--config",
-          "{config_path}"
-        ],
-        "requires_secret_key": true,
-        "start_text": "Disabling job...",
-        "success_text": "{stdout}",
-        "failure_text": "disable-job failed.\nExit code: {exit_code}\nError: {error_summary}",
-        "timeout_seconds": 120,
-        "parameters": [
-          {
-            "name": "server_id",
-            "source": "arg",
-            "position": 1,
-            "required": true,
-            "validator": "regex",
-            "pattern": "[A-Za-z0-9][A-Za-z0-9._:-]{0,127}",
-            "validation_error": "server_id may contain only letters, numbers, dot, underscore, colon and hyphen",
-            "prompt_text": "Server id? Use /spbot_list_server_id to list targets."
-          },
-          {
-            "name": "job_name",
-            "source": "arg",
-            "position": 2,
-            "required": true,
-            "validator": "regex",
-            "pattern": "[A-Za-z0-9_][A-Za-z0-9_ .$#:-]{0,127}",
-            "validation_error": "job_name must be a plain job name",
-            "prompt_text": "Which job? (exact name - only ENABLED jobs are listed below)",
-            "_note": "enabled_only: a job that is already disabled is not something to disable.",
-            "prompt_choices": {
-              "command": "list-jobs",
-              "data_key": "jobs",
-              "request": {
-                "target": "{server_id}",
-                "enabled_only": true
-              }
+        {
+            "node_role": "worker",
+            "command_id": 20,
+            "menu_order": 6.0,
+            "command_text": "spbot_list_metrics",
+            "reply_default": 1,
+            "reply_text": "{result_listing}",
+            "reply_parse_mode": "",
+            "reply_with_name": 0,
+            "command_type": 1,
+            "is_group": 1,
+            "is_private": 1,
+            "need_file": 1,
+            "action_type": "list_metrics",
+            "action_config": {
+                "parameters": []
             }
-          },
-          {
-            "name": "confirm",
-            "source": "arg",
-            "position": 3,
-            "required": true,
-            "validator": "regex",
-            "pattern": "yes",
-            "validation_error": "Type exactly: yes",
-            "prompt_text": "This stops the job running on its schedule until someone re-enables it. A run already in progress is NOT stopped. Read the target above. Type exactly: yes"
-          }
-        ]
-      }
-    },
-    {
-      "node_role": "worker",
-      "command_id": 30,
-      "command_text": "spbot_list_sql_runs",
-      "reply_default": 0,
-      "reply_text": "",
-      "reply_parse_mode": "",
-      "reply_with_name": 0,
-      "command_type": 1,
-      "is_group": 1,
-      "is_private": 1,
-      "need_file": 0,
-      "action_type": "cli_execute",
-      "action_config": {
-        "working_dir": "tools/db_ops",
-        "command_argv": [
-          "{python}",
-          "-m",
-          "db_ops.db.cli",
-          "sql-run-history",
-          "{\"limit\": 10, \"format\": \"txt\"}",
-          "--config",
-          "{config_path}"
-        ],
-        "start_text": "Reading the SQL task history...",
-        "success_text": "{stdout}",
-        "failure_text": "Could not read the SQL task history.\nExit code: {exit_code}\nError: {error_summary}",
-        "timeout_seconds": 60,
-        "parameters": []
-      }
-    },
-    {
-      "node_role": "worker",
-      "command_id": 31,
-      "command_text": "spbot_self_status",
-      "reply_default": 0,
-      "reply_text": "",
-      "reply_parse_mode": "",
-      "reply_with_name": 0,
-      "command_type": 1,
-      "is_group": 1,
-      "is_private": 1,
-      "need_file": 0,
-      "action_type": "cli_execute",
-      "action_config": {
-        "working_dir": "tools/db_ops",
-        "command_argv": [
-          "{python}",
-          "-m",
-          "db_ops.common.cli",
-          "self-status",
-          "{\"format\": \"txt\"}",
-          "--config",
-          "{config_path}"
-        ],
-        "start_text": "Reading this installation's own state...",
-        "success_text": "{stdout}",
-        "failure_text": "Could not read the installation state.\nExit code: {exit_code}\nError: {error_summary}",
-        "timeout_seconds": 60,
-        "parameters": []
-      }
-    },
-    {
-      "node_role": "worker",
-      "command_id": 32,
-      "command_text": "spbot_list_my_commands",
-      "reply_default": 0,
-      "reply_text": "",
-      "reply_parse_mode": "",
-      "reply_with_name": 0,
-      "command_type": 1,
-      "is_group": 0,
-      "is_private": 1,
-      "need_file": 0,
-      "action_type": "cli_execute",
-      "action_config": {
-        "working_dir": "tools/db_ops",
-        "command_argv": [
-          "{python}",
-          "-m",
-          "db_ops.db.cli",
-          "telegram-command-history",
-          "{\"user_id\": \"{user_id}\", \"limit\": 10, \"exclude\": [\"{command_text}\"], \"format\": \"txt\"}",
-          "--config",
-          "{config_path}"
-        ],
-        "start_text": "Reading your recent commands...",
-        "success_text": "{stdout}",
-        "failure_text": "Could not read your command history.\nExit code: {exit_code}\nError: {error_summary}",
-        "timeout_seconds": 60,
-        "parameters": [],
-        "_note_private": "Private only (is_group 0). The history spans every chat this person has used the bot in, so answering it in a group would read a private command out loud there."
-      }
-    }
-  ]
+        },
+        {
+            "node_role": "worker",
+            "command_id": 17,
+            "menu_order": 7.0,
+            "command_text": "spbot_list_backup_id",
+            "reply_default": 0,
+            "reply_text": "",
+            "reply_parse_mode": "",
+            "reply_with_name": 0,
+            "command_type": 1,
+            "is_group": 1,
+            "is_private": 1,
+            "need_file": 0,
+            "action_type": "cli_execute",
+            "action_config": {
+                "working_dir": "tools/db_ops",
+                "command_argv": [
+                    "{python}",
+                    "-m",
+                    "db_ops.backup_restore.cli",
+                    "list-backups",
+                    "--config",
+                    "{config_path}"
+                ],
+                "start_text": "Listing backup IDs...",
+                "success_text": "{stdout}",
+                "failure_text": "Failed to list backup IDs.\nExit code: {exit_code}\nError: {error_summary}",
+                "timeout_seconds": 60,
+                "parameters": []
+            }
+        },
+        {
+            "node_role": "worker",
+            "command_id": 15,
+            "menu_order": 8.0,
+            "command_text": "spbot_list_restore_id",
+            "reply_default": 0,
+            "reply_text": "",
+            "reply_parse_mode": "",
+            "reply_with_name": 0,
+            "command_type": 1,
+            "is_group": 1,
+            "is_private": 1,
+            "need_file": 0,
+            "action_type": "cli_execute",
+            "action_config": {
+                "working_dir": "tools/db_ops",
+                "command_argv": [
+                    "{python}",
+                    "-m",
+                    "db_ops.backup_restore.cli",
+                    "list-restores",
+                    "--config",
+                    "{config_path}"
+                ],
+                "start_text": "Listing restore IDs...",
+                "success_text": "{stdout}",
+                "failure_text": "Failed to list restore IDs.\nExit code: {exit_code}\nError: {error_summary}",
+                "timeout_seconds": 60,
+                "parameters": []
+            }
+        },
+        {
+            "node_role": "worker",
+            "command_id": 13,
+            "menu_order": 9.0,
+            "command_text": "spbot_list_sql_tasks",
+            "reply_default": 1,
+            "reply_text": "{result_listing}",
+            "reply_parse_mode": "",
+            "reply_with_name": 0,
+            "command_type": 1,
+            "is_group": 1,
+            "is_private": 1,
+            "need_file": 1,
+            "action_type": "list_sql_tasks",
+            "action_config": {
+                "parameters": []
+            }
+        },
+        {
+            "node_role": "worker",
+            "command_id": 30,
+            "menu_order": 10.0,
+            "command_text": "spbot_list_sql_runs",
+            "reply_default": 0,
+            "reply_text": "",
+            "reply_parse_mode": "",
+            "reply_with_name": 0,
+            "command_type": 1,
+            "is_group": 1,
+            "is_private": 1,
+            "need_file": 0,
+            "action_type": "cli_execute",
+            "action_config": {
+                "working_dir": "tools/db_ops",
+                "command_argv": [
+                    "{python}",
+                    "-m",
+                    "db_ops.db.cli",
+                    "sql-run-history",
+                    "{\"sql_id\": {sql_id}, \"limit\": {limit}, \"format\": \"txt\"}",
+                    "--config",
+                    "{config_path}"
+                ],
+                "start_text": "Reading the SQL task history...",
+                "success_text": "{stdout}",
+                "failure_text": "Could not read the SQL task history.\nExit code: {exit_code}\nError: {error_summary}",
+                "timeout_seconds": 60,
+                "parameters": [
+                    {
+                        "name": "sql_id",
+                        "source": "arg",
+                        "position": 1,
+                        "required": false,
+                        "default": "0",
+                        "pattern": "^\\d+$",
+                        "prompt_text": "Which sql_id? A task number, or 0 for every task."
+                    },
+                    {
+                        "name": "limit",
+                        "source": "arg",
+                        "position": 2,
+                        "required": false,
+                        "default": "0",
+                        "pattern": "^\\d+$",
+                        "prompt_text": "How many runs? 0 or blank for 10; up to 100."
+                    }
+                ]
+            }
+        },
+        {
+            "node_role": "worker",
+            "command_id": 7,
+            "menu_order": 12.0,
+            "command_text": "spbot_report_inventory",
+            "reply_default": 0,
+            "reply_text": "",
+            "reply_parse_mode": "",
+            "reply_with_name": 0,
+            "command_type": 2,
+            "is_group": 1,
+            "is_private": 1,
+            "need_file": 0,
+            "action_type": "cli_execute",
+            "action_config": {
+                "working_dir": "tools/db_ops",
+                "command_argv": [
+                    "{python}",
+                    "-m",
+                    "db_ops.reports.cli",
+                    "--config",
+                    "{config_path}",
+                    "inventory-workflow",
+                    "--days",
+                    "7",
+                    "--beauty",
+                    "1"
+                ],
+                "background": true,
+                "detached": true,
+                "startup_grace_seconds": 3,
+                "timeout_seconds": 1800,
+                "success_output_contains": "\"status\": \"SUCCESS\"",
+                "start_text": "Database inventory report started (last 7 days of metrics). This takes a while...",
+                "success_text": "Database inventory report completed.\nStamp: {stamp}\nServers refreshed from metrics: {merged} (unchanged: {untouched})\nhttp://{worker_host}:8080/report_dba/database-inventory.html",
+                "failure_text": "Database inventory report failed.\nExit code: {exit_code}\nError: {error_summary}",
+                "timeout_text": "Database inventory report timed out. Exceeded {timeout_seconds}s.",
+                "parameters": []
+            }
+        },
+        {
+            "node_role": "worker",
+            "command_id": 4,
+            "menu_order": 13.0,
+            "command_text": "spbot_report_hourly_metrics",
+            "reply_default": 0,
+            "reply_text": "",
+            "reply_parse_mode": "",
+            "reply_with_name": 0,
+            "command_type": 10,
+            "is_group": 1,
+            "is_private": 1,
+            "need_file": 0,
+            "action_type": "cli_execute",
+            "action_config": {
+                "working_dir": "tools/db_ops",
+                "command_argv": [
+                    "{python}",
+                    "-m",
+                    "db_ops.reports.cli",
+                    "--config",
+                    "{config_path}",
+                    "force-hourly-report",
+                    "--server-id",
+                    "{server_id}",
+                    "--summary-limit",
+                    "{summary_limit}",
+                    "--dedupe-seconds",
+                    "{dedupe_seconds}"
+                ],
+                "background": true,
+                "detached": true,
+                "requires_secret_key": true,
+                "startup_grace_seconds": 3,
+                "timeout_seconds": 1800,
+                "success_output_contains": "\"status\": \"success\"",
+                "start_text": "Force hourly metrics report started for {server_id} ({target_ip}). Collecting...\nMetrics restricted to a night window (CHECKDB, index fragmentation, restore validation) are skipped; add 'full' to include them.",
+                "success_text": "Force hourly metrics report completed for {server_id}",
+                "failure_text": "Force hourly metrics report failed for {server_id}\nExit code: {exit_code}\nError: {error_summary}",
+                "timeout_text": "Force hourly metrics report timed out for {server_id}. Exceeded {timeout_seconds}s.",
+                "defaults": {
+                    "summary_limit": 150,
+                    "dedupe_seconds": 0
+                },
+                "parameters": [
+                    {
+                        "name": "windowed",
+                        "source": "flag",
+                        "flag_words": [
+                            "full",
+                            "all",
+                            "+windowed"
+                        ],
+                        "present": "yes",
+                        "absent": "no"
+                    },
+                    {
+                        "name": "target",
+                        "source": "arg",
+                        "position": 1,
+                        "required": true,
+                        "consume_rest": true,
+                        "resolve": "target",
+                        "prompt_text": "Target? a server_id (e.g. <server_id>) or: <db_type> <ip>[:port] (e.g. mssql <ip> or mssql <ip>:1433). Use /spbot_list_server_id to list targets."
+                    }
+                ],
+                "conditional_args": [
+                    {
+                        "parameter": "windowed",
+                        "equals": "yes",
+                        "argv": [
+                            "--include-windowed"
+                        ]
+                    }
+                ]
+            },
+            "_note": "A read-only run that takes minutes, so it goes to the background and reports back when it finishes. 'working_dir' is the logical alias for the tool root, resolved to wherever the project actually lives - flat checkout or container."
+        },
+        {
+            "node_role": "worker",
+            "command_id": 6,
+            "menu_order": 14.0,
+            "command_text": "spbot_report_metric_history",
+            "reply_default": 0,
+            "reply_text": "",
+            "reply_parse_mode": "",
+            "reply_with_name": 0,
+            "command_type": 2,
+            "is_group": 1,
+            "is_private": 1,
+            "need_file": 0,
+            "action_type": "cli_execute",
+            "action_config": {
+                "working_dir": "tools/db_ops",
+                "command_argv": [
+                    "{python}",
+                    "-m",
+                    "db_ops.reports.cli",
+                    "--config",
+                    "{config_path}",
+                    "metric-history-report",
+                    "--server-id",
+                    "{server_id}",
+                    "--metric-code",
+                    "{metric_code}",
+                    "--hours",
+                    "{hours}",
+                    "--summary-limit",
+                    "{summary_limit}",
+                    "--dedupe-seconds",
+                    "{dedupe_seconds}"
+                ],
+                "start_text": "Metric history report started for server_id={server_id}, metric_code={metric_code}, hours={hours}.",
+                "success_text": "Metric history report completed for server_id={server_id}, metric_code={metric_code}, hours={hours}. row_count={row_count}, queued={queued}.",
+                "failure_text": "Metric history report failed for server_id={server_id}, metric_code={metric_code}, hours={hours}.\nExit code: {exit_code}\nError: {error_summary}",
+                "defaults": {
+                    "summary_limit": 150,
+                    "dedupe_seconds": 0
+                },
+                "parameters": [
+                    {
+                        "name": "server_id",
+                        "source": "arg",
+                        "position": 1,
+                        "required": true,
+                        "validator": "regex",
+                        "pattern": "[A-Za-z0-9][A-Za-z0-9._:-]{0,127}",
+                        "validation_error": "server_id may contain only letters, numbers, dot, underscore, colon, and hyphen (maximum 128 characters)",
+                        "prompt_text": "Please input server_id"
+                    },
+                    {
+                        "name": "metric_code",
+                        "source": "arg",
+                        "position": 2,
+                        "required": true,
+                        "validator": "regex",
+                        "pattern": "[A-Za-z0-9][A-Za-z0-9._:-]{0,127}",
+                        "validation_error": "metric_code may contain only letters, numbers, dot, underscore, colon, and hyphen (maximum 128 characters)",
+                        "prompt_text": "Please input metric_code"
+                    },
+                    {
+                        "name": "hours",
+                        "source": "arg",
+                        "position": 3,
+                        "required": true,
+                        "validator": "regex",
+                        "pattern": "[1-9][0-9]*",
+                        "validation_error": "hours must be a positive integer",
+                        "prompt_text": "Please input a positive number of hours"
+                    }
+                ]
+            }
+        },
+        {
+            "node_role": "worker",
+            "command_id": 8,
+            "menu_order": 15.0,
+            "command_text": "spbot_sql_to_xlsx",
+            "reply_default": 1,
+            "reply_text": "SQL → xlsx: {status}\ntarget={arg_1}\nrows={result_row_count} columns={result_column_count} affected={result_affected_rows}\n{error}",
+            "reply_parse_mode": "",
+            "reply_with_name": 0,
+            "command_type": 10,
+            "is_group": 1,
+            "is_private": 1,
+            "need_file": 1,
+            "action_type": "sql_to_xlsx",
+            "action_config": {
+                "db_type": "sqlserver",
+                "max_rows": 50000,
+                "connect_timeout_seconds": 30,
+                "output_dir": "runtime/output/telegram/sql_to_xlsx",
+                "file_name_template": "sql_to_xlsx_{server_id}_{timestamp}",
+                "caption": "SQL result for {server_id} ({database}): {row_count} row(s){truncated_note}.",
+                "parameters": [
+                    {
+                        "name": "target",
+                        "source": "arg",
+                        "position": 1,
+                        "required": true,
+                        "prompt_text": "Target? a server_id (e.g. ACME-192-0-2-248) or: <db_type> <ip>[:port] (e.g. mssql <ip>:1433). Use /spbot_list_server_id to list targets."
+                    },
+                    {
+                        "name": "sql_text",
+                        "source": "arg",
+                        "position": 2,
+                        "required": true,
+                        "consume_rest": true,
+                        "accept_file": true,
+                        "prompt_text": "Paste the SELECT statement now (single message), or attach a .sql file. Only read-only SELECT is allowed:"
+                    }
+                ]
+            }
+        },
+        {
+            "node_role": "worker",
+            "command_id": 9,
+            "menu_order": 16.0,
+            "command_text": "spbot_sql_export",
+            "reply_default": 1,
+            "reply_text": "SQL export ({arg_2}): {status}\ntarget={arg_1}\nrows={result_row_count} columns={result_column_count} affected={result_affected_rows}\n{error}",
+            "reply_parse_mode": "",
+            "reply_with_name": 0,
+            "command_type": 10,
+            "is_group": 1,
+            "is_private": 1,
+            "need_file": 1,
+            "action_type": "sql_to_xlsx",
+            "action_config": {
+                "db_type": "sqlserver",
+                "max_rows": 50000,
+                "connect_timeout_seconds": 30,
+                "output_dir": "runtime/output/telegram/sql_export",
+                "file_name_template": "sql_export_{server_id}_{timestamp}",
+                "caption": "SQL result for {server_id} ({database}): {row_count} row(s){truncated_note}.",
+                "parameters": [
+                    {
+                        "name": "target",
+                        "source": "arg",
+                        "position": 1,
+                        "required": true,
+                        "prompt_text": "Target? a server_id (e.g. ACME-192-0-2-248) or: <db_type> <ip>[:port] (e.g. mssql <ip>:1433). Use /spbot_list_server_id to list targets."
+                    },
+                    {
+                        "name": "format",
+                        "source": "arg",
+                        "position": 2,
+                        "required": true,
+                        "prompt_text": "Format? xlsx (spreadsheet), csv (spreadsheet or another tool), txt (aligned table), xml (structured), json (for another program to read).",
+                        "input_type": "choice",
+                        "allow_text_input": false,
+                        "options": [
+                            {
+                                "label": "xlsx",
+                                "value": "xlsx"
+                            },
+                            {
+                                "label": "csv",
+                                "value": "csv"
+                            },
+                            {
+                                "label": "txt",
+                                "value": "txt"
+                            },
+                            {
+                                "label": "xml",
+                                "value": "xml"
+                            },
+                            {
+                                "label": "json",
+                                "value": "json"
+                            }
+                        ]
+                    },
+                    {
+                        "name": "sql_text",
+                        "source": "arg",
+                        "position": 3,
+                        "required": true,
+                        "consume_rest": true,
+                        "accept_file": true,
+                        "prompt_text": "Paste the SELECT statement now (single message), or attach a .sql file. Only read-only SELECT is allowed:"
+                    }
+                ]
+            }
+        },
+        {
+            "node_role": "worker",
+            "command_id": 10,
+            "menu_order": 17.0,
+            "command_text": "spbot_xlsx_to_table",
+            "reply_default": 1,
+            "reply_text": "file → table: {status}\nserver   = {result_server_id}\ndatabase = {result_database}\nschema   = {result_schema}\ntable    = {result_table_name}\nread as  = {result_source_format}\ncolumns  = {result_column_count} x {result_column_type}\nrows     = {result_rows_inserted}\n\nSELECT * FROM {result_database}.{result_qualified_name}\n{error}",
+            "reply_parse_mode": "",
+            "reply_with_name": 0,
+            "command_type": 10,
+            "is_group": 0,
+            "is_private": 1,
+            "need_file": 1,
+            "action_type": "create_table_from_xlsx",
+            "_note": "Attach an .xlsx or a delimited text file (.txt/.csv/.tsv, incl. a block pasted out of Excel) and get a queryable table; the format is detected from the file's bytes, not its name. Private-only (is_private 1 / is_group 0): it writes to a real database, and a group chat is the wrong place for a command whose effect nobody else in the room can see. if_exists stays at the module default of 'error' rather than being pinned to 'drop' here - a Telegram user must not be able to destroy an existing table by re-sending a file. table_name is not prompted for; blank means temp_<random>, and the generated name is in the reply. Pass a 5th word to choose one. Every column is NVARCHAR(4000) - see db_ops/common/table_load.py for why.",
+            "action_config": {
+                "parameters": [
+                    {
+                        "name": "server_id",
+                        "position": 1,
+                        "required": true,
+                        "prompt_text": "Server id? (e.g. ACME-192-0-2-248). Use /spbot_list_server_id to list targets."
+                    },
+                    {
+                        "name": "database",
+                        "position": 2,
+                        "required": true,
+                        "prompt_text": "Database name? (the database to create the table in - on Oracle this is the service/PDB)",
+                        "_note": "prompt_choices lists what is actually on the server instead of leaving the operator to remember an exact name. Fails open: if the instance is unreachable the bare prompt is still sent and a typed name still works.",
+                        "prompt_choices": {
+                            "command": "list-databases",
+                            "data_key": "databases",
+                            "request": {
+                                "target": "{server_id}"
+                            }
+                        }
+                    },
+                    {
+                        "name": "schema",
+                        "position": 3,
+                        "required": true,
+                        "prompt_text": "Schema? (e.g. dbo on SQL Server, public on PostgreSQL, the owner on Oracle)",
+                        "_note": "Needs both earlier answers: schemas live inside one database, so list-schemas is refused without it rather than answering about the login's default.",
+                        "prompt_choices": {
+                            "command": "list-schemas",
+                            "data_key": "schemas",
+                            "request": {
+                                "target": "{server_id}",
+                                "database": "{database}"
+                            }
+                        }
+                    },
+                    {
+                        "name": "xlsx_base64",
+                        "position": 4,
+                        "required": true,
+                        "prompt_text": "Now attach the file - .xlsx, or delimited text (.txt/.csv/.tsv, tab or comma). Row 1 is the column names, everything below is data. On a workbook only the first sheet is read.",
+                        "accept_file": true,
+                        "file_encoding": "base64"
+                    },
+                    {
+                        "name": "table_name",
+                        "position": 5,
+                        "required": false,
+                        "_note": "Not prompted for: blank generates temp_<random>, which the reply names."
+                    }
+                ]
+            }
+        },
+        {
+            "node_role": "worker",
+            "command_id": 12,
+            "menu_order": 18.0,
+            "command_text": "spbot_add_sql",
+            "reply_default": 1,
+            "reply_text": "Add SQL task: {result_status}\nsql_id={result_sql_id} {result_sql_code}\nserver={result_server_id} schedule={result_schedule} output={result_output}\n{result_script_path}\n{result_error}",
+            "reply_parse_mode": "",
+            "reply_with_name": 0,
+            "command_type": 10,
+            "is_group": 0,
+            "is_private": 1,
+            "need_file": 0,
+            "action_type": "add_sql_task",
+            "action_config": {
+                "parameters": [
+                    {
+                        "name": "server_id",
+                        "position": 1,
+                        "required": true,
+                        "prompt_text": "Server id? (e.g. ACME-192-0-2-248). db_type, instance and credential are taken from db_instances.json. Use /spbot_list_server_id to list targets."
+                    },
+                    {
+                        "name": "sql_name",
+                        "position": 2,
+                        "required": true,
+                        "prompt_text": "SQL task name?"
+                    },
+                    {
+                        "name": "schedule",
+                        "position": 3,
+                        "required": true,
+                        "prompt_text": "Schedule? 'manual' = only when you run it with /spbot_run_sql_task, 'default' = every 300s all day, or: from_hour to_hour repeat_interval timeout (e.g. 20 23 3600 600)"
+                    },
+                    {
+                        "name": "output",
+                        "position": 4,
+                        "required": true,
+                        "prompt_text": "Output? 'xlsx' = send the result as an .xlsx file, 'plain' = send the rows as text, 'none' = run it and report status only."
+                    },
+                    {
+                        "name": "sql_text",
+                        "position": 5,
+                        "required": true,
+                        "consume_rest": true,
+                        "prompt_text": "Paste the full SQL text now (single message), or attach a .sql file:",
+                        "accept_file": true
+                    }
+                ]
+            }
+        },
+        {
+            "node_role": "worker",
+            "command_id": 11,
+            "menu_order": 19.0,
+            "command_text": "spbot_run_sql_task",
+            "reply_default": 0,
+            "reply_text": "",
+            "reply_parse_mode": "",
+            "reply_with_name": 0,
+            "command_type": 50,
+            "is_group": 1,
+            "is_private": 1,
+            "need_file": 0,
+            "action_type": "cli_execute",
+            "action_config": {
+                "working_dir": "tools/db_ops",
+                "emergency_operation": "run-sql-task",
+                "command_argv": [
+                    "{python}",
+                    "-m",
+                    "db_ops.sql_tasks.runner",
+                    "--config",
+                    "{config_path}",
+                    "run-sql-id",
+                    "--sql-id",
+                    "{sql_id}",
+                    "--force",
+                    "--output-chat-id",
+                    "{chat_id}",
+                    "--confirm",
+                    "{confirm}"
+                ],
+                "background": true,
+                "detached": true,
+                "requires_secret_key": true,
+                "startup_grace_seconds": 3,
+                "timeout_seconds": 86400,
+                "start_text": "SQL task #{sql_id} started (forced: ignores its schedule, interval and active flag) params=[{task_params}]. Each target reports its own result as a separate message.",
+                "success_text": "SQL task #{sql_id} finished.",
+                "failure_text": "SQL task #{sql_id} failed.\nExit code: {exit_code}\nError: {error_summary}",
+                "timeout_text": "SQL task #{sql_id} timed out after {timeout_seconds}s. Check sql_runs for the per-target outcome.",
+                "parameters": [
+                    {
+                        "name": "sql_id",
+                        "source": "arg",
+                        "position": 1,
+                        "required": true,
+                        "validator": "regex",
+                        "pattern": "[0-9]{1,9}",
+                        "validation_error": "sql_id must be the number from /spbot_list_sql_tasks (e.g. 8, 11, 16)",
+                        "prompt_text": "Which sql_id? The number shown by /spbot_list_sql_tasks, e.g. 8 / 11 / 16. A forced run ignores the schedule and the active flag, so an inactive task will run too."
+                    },
+                    {
+                        "name": "task_params",
+                        "source": "arg",
+                        "position": 3,
+                        "required": false,
+                        "consume_rest": true,
+                        "prompt_text": "This task takes: {sql_task_parameters}. Send the value(s) in that order, separated by spaces - names are optional (1068, or session_id=1068). Send - to run with the task's own default values.",
+                        "prompt_when": {
+                            "condition": "sql_task_has_parameters",
+                            "parameter": "sql_id"
+                        }
+                    },
+                    {
+                        "name": "confirm",
+                        "source": "arg",
+                        "position": 2,
+                        "required": true,
+                        "validator": "regex",
+                        "pattern": "yes",
+                        "validation_error": "A forced run must be confirmed. Type exactly: yes - or send /spbot_run_sql_task <sql_id> with nothing after it and the bot asks one question at a time.",
+                        "prompt_text": "Read the task above. It runs NOW and it runs FORCED: its schedule, its repeat interval and its active flag are all ignored, and a task that writes writes for real. Type exactly: yes"
+                    }
+                ],
+                "conditional_args": [
+                    {
+                        "parameter": "task_params",
+                        "not_equals": "",
+                        "argv": [
+                            "--params",
+                            "{task_params}"
+                        ]
+                    }
+                ],
+                "_note_timeout": "24h, and it is a BACKSTOP, not the task's deadline. The background-task poller SIGKILLs the runner at this age (command_processor.check_cli_background_tasks), so whatever stands here silently caps every SQL task started from Telegram no matter what sql_targets.json says - at the old 7200 a 6-file folder task of ~2h per file was killed during file 2, mid-statement. The real per-task bound is time_window.timeout on the sql_target, which is both the statement timeout per file and the stale-run threshold. tests/test_telegram_run_sql_task_command.py pins this value at or above every configured target timeout so raising a target's timeout past the Telegram ceiling fails the suite instead of getting the task killed in production."
+            }
+        },
+        {
+            "node_role": "worker",
+            "command_id": 18,
+            "menu_order": 20.0,
+            "command_text": "spbot_metric_toggle",
+            "reply_default": 1,
+            "reply_text": "Metric toggle {result_state} {result_scope} on {result_server_id}: {result_status}\n{result_detail}\nSync master: python -m db_ops.control.cli worker-pull-data-config --key-base64 <KEY> --all-json --overwrite",
+            "reply_parse_mode": "",
+            "reply_with_name": 0,
+            "command_type": 10,
+            "is_group": 0,
+            "is_private": 1,
+            "need_file": 0,
+            "action_type": "metric_toggle",
+            "action_config": {
+                "parameters": [
+                    {
+                        "name": "server_id",
+                        "source": "arg",
+                        "position": 1,
+                        "required": true,
+                        "validator": "regex",
+                        "pattern": "[A-Za-z0-9][A-Za-z0-9._:-]{0,127}",
+                        "validation_error": "server_id may contain only letters, numbers, dot, underscore, colon, and hyphen (maximum 128 characters)",
+                        "prompt_text": "Server id? (e.g. ACME-192-0-2-250). Use /spbot_list_server_id to list targets."
+                    },
+                    {
+                        "name": "state",
+                        "source": "arg",
+                        "position": 2,
+                        "required": true,
+                        "validator": "regex",
+                        "pattern": "on|off",
+                        "validation_error": "state must be 'on' or 'off'",
+                        "prompt_text": "Turn metrics on or off? (on / off)",
+                        "input_type": "choice",
+                        "allow_text_input": false,
+                        "options": [
+                            {
+                                "label": "on",
+                                "value": "on"
+                            },
+                            {
+                                "label": "off",
+                                "value": "off"
+                            }
+                        ]
+                    },
+                    {
+                        "name": "scope",
+                        "source": "arg",
+                        "position": 3,
+                        "required": true,
+                        "validator": "regex",
+                        "pattern": "[A-Za-z0-9][A-Za-z0-9._:-]{0,127}",
+                        "validation_error": "scope must be 'all', 'collector:<sql|cmd|docker|k8s>', or one metric_code",
+                        "prompt_text": "Scope? 'all' (whole target), 'collector:cmd' / 'collector:sql' / 'collector:docker' / 'collector:k8s' (one collector class), or one metric_code (e.g. OS_DISK_USAGE). Use /spbot_list_metrics to list metric codes."
+                    }
+                ]
+            }
+        },
+        {
+            "node_role": "worker",
+            "command_id": 16,
+            "menu_order": 21.0,
+            "command_text": "spbot_backup",
+            "reply_default": 0,
+            "reply_text": "",
+            "reply_parse_mode": "",
+            "reply_with_name": 0,
+            "command_type": 10,
+            "is_group": 1,
+            "is_private": 1,
+            "need_file": 0,
+            "action_type": "cli_execute",
+            "action_config": {
+                "working_dir": "tools/db_ops",
+                "command_argv": [
+                    "{python}",
+                    "-m",
+                    "db_ops.backup_restore.cli",
+                    "backup",
+                    "--config",
+                    "{config_path}",
+                    "--backup-id",
+                    "{backup_id}",
+                    "--force"
+                ],
+                "conditional_args": [
+                    {
+                        "parameter": "backup_type",
+                        "not_equals": "-",
+                        "argv": [
+                            "--backup-type",
+                            "{backup_type}"
+                        ]
+                    }
+                ],
+                "background": true,
+                "detached": true,
+                "requires_secret_key": true,
+                "startup_grace_seconds": 3,
+                "timeout_seconds": 7200,
+                "start_text": "Backup {backup_id} started (level: {backup_type}). This can take a while for a full.",
+                "success_text": "Backup {backup_id} finished (level: {backup_type}).",
+                "failure_text": "Backup {backup_id} failed.\nExit code: {exit_code}\nError: {error_summary}",
+                "timeout_text": "Backup {backup_id} timed out after {timeout_seconds}s. Check the container on the source host.",
+                "parameters": [
+                    {
+                        "name": "backup_id",
+                        "source": "arg",
+                        "position": 1,
+                        "required": true,
+                        "validator": "regex",
+                        "pattern": "[A-Za-z][A-Za-z0-9_-]{1,63}",
+                        "validation_error": "backup_id: letters, digits, underscore and dash (see spbot_list_backup_id)",
+                        "prompt_text": "Which backup_id? /spbot_list_backup_id prints them; they read like <SITE>_ORA_DB, <SITE>_PG_DB, <SITE>_MSSQL_FULL"
+                    },
+                    {
+                        "name": "backup_type",
+                        "source": "arg",
+                        "position": 2,
+                        "required": false,
+                        "validator": "regex",
+                        "pattern": "full|diff|log|-",
+                        "validation_error": "backup_type must be full, diff, log, or - to let the schedule decide",
+                        "prompt_text": "Level? full / diff / log - or Skip to let the schedule decide (Sunday = full, otherwise diff for Oracle/PostgreSQL).\nOracle and PostgreSQL have no 'log' level here: their archivelog and WAL backups run on their own schedule.",
+                        "input_type": "choice",
+                        "allow_text_input": false,
+                        "allow_skip": true,
+                        "options": [
+                            {
+                                "label": "full",
+                                "value": "full"
+                            },
+                            {
+                                "label": "diff",
+                                "value": "diff"
+                            },
+                            {
+                                "label": "log",
+                                "value": "log"
+                            }
+                        ]
+                    }
+                ],
+                "completion_probe": {
+                    "table": "job_runs",
+                    "success_job_code": "backup_restore.backup.end",
+                    "failure_job_code": "backup_restore.backup.error",
+                    "match_metadata": {
+                        "backup_id": "{backup_id}"
+                    }
+                }
+            }
+        },
+        {
+            "node_role": "worker",
+            "command_id": 14,
+            "menu_order": 22.0,
+            "command_text": "spbot_restore",
+            "reply_default": 0,
+            "reply_text": "",
+            "reply_parse_mode": "",
+            "reply_with_name": 0,
+            "command_type": 10,
+            "is_group": 1,
+            "is_private": 1,
+            "need_file": 0,
+            "action_type": "cli_execute",
+            "action_config": {
+                "working_dir": "tools/db_ops",
+                "command_argv": [
+                    "{python}",
+                    "-m",
+                    "db_ops.backup_restore.cli",
+                    "restore-workflow",
+                    "--config",
+                    "{config_path}",
+                    "--restore-id",
+                    "{restore_id}"
+                ],
+                "conditional_args": [
+                    {
+                        "parameter": "point_in_time",
+                        "not_equals": "LATEST",
+                        "argv": [
+                            "--point-in-time",
+                            "{point_in_time}"
+                        ]
+                    }
+                ],
+                "background": true,
+                "detached": true,
+                "requires_secret_key": true,
+                "startup_grace_seconds": 3,
+                "start_text": "Restore workflow started for {restore_id}. point_in_time={point_in_time}",
+                "success_text": "Restore workflow completed for {restore_id}. point_in_time={point_in_time}",
+                "failure_text": "Restore workflow failed for {restore_id}. point_in_time={point_in_time}\nExit code: {exit_code}\nError: {error_summary}",
+                "timeout_text": "Restore workflow timed out for {restore_id}. point_in_time={point_in_time}. Exceeded {timeout_seconds}s.",
+                "success_output_contains": "restore-workflow completed status=SUCCESS",
+                "timeout_seconds": 7200,
+                "parameters": [
+                    {
+                        "name": "restore_id",
+                        "source": "arg",
+                        "position": 1,
+                        "required": true,
+                        "prompt_text": "Please input restore_id"
+                    },
+                    {
+                        "name": "point_in_time",
+                        "source": "arg",
+                        "position": 2,
+                        "required": true,
+                        "consume_rest": true,
+                        "validator": "regex",
+                        "pattern": "^(LATEST|\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2} [+-]\\d{2}:\\d{2})$",
+                        "validation_error": "Use point_in_time format: LATEST or YYYY-MM-DD HH:MM:SS +HH:MM",
+                        "prompt_text": "Please input point_in_time: LATEST or YYYY-MM-DD HH:MM:SS +HH:MM"
+                    }
+                ],
+                "completion_probe": {
+                    "table": "job_runs",
+                    "success_job_code": "backup_restore.restore-workflow.end",
+                    "failure_job_code": "backup_restore.restore-workflow.error",
+                    "match_metadata": {
+                        "restore_id": "{restore_id}"
+                    }
+                }
+            }
+        },
+        {
+            "node_role": "worker",
+            "command_id": 19,
+            "menu_order": 23.0,
+            "command_text": "spbot_create_db_docker",
+            "reply_default": 0,
+            "reply_text": "",
+            "reply_parse_mode": "",
+            "reply_with_name": 0,
+            "command_type": 10,
+            "is_group": 1,
+            "is_private": 1,
+            "need_file": 0,
+            "action_type": "cli_execute",
+            "action_config": {
+                "working_dir": "tools/db_ops",
+                "command_argv": [
+                    "{python}",
+                    "-m",
+                    "db_ops.sre.cli",
+                    "--config",
+                    "{config_path}",
+                    "create-db-docker",
+                    "--name",
+                    "{name}",
+                    "--engine",
+                    "{engine}",
+                    "--version",
+                    "{version}",
+                    "--mode",
+                    "{mode}",
+                    "--worker-host",
+                    "{worker_host}"
+                ],
+                "conditional_args": [
+                    {
+                        "parameter": "host_port",
+                        "not_equals": "-",
+                        "argv": [
+                            "--host-port",
+                            "{host_port}"
+                        ]
+                    },
+                    {
+                        "parameter": "password_env",
+                        "not_equals": "-",
+                        "argv": [
+                            "--password-env",
+                            "{password_env}"
+                        ]
+                    },
+                    {
+                        "_note": "Conditional, exactly like remote_password_text below. It used to sit in command_argv unconditionally, so `password_text = -` (the skip sentinel, meaning 'reuse the ref') still handed the CLI an env var holding the literal '-'. That stored a password of '-' when the ref was new, and refused with 'already exists with a different value' when it was not - the reuse path could never be reached.",
+                        "parameter": "password_text",
+                        "not_equals": "-",
+                        "argv": [
+                            "--password-text-env",
+                            "DB_OPS_NEW_DB_PASSWORD"
+                        ]
+                    },
+                    {
+                        "parameter": "deploy_target",
+                        "not_equals": "worker",
+                        "argv": [
+                            "--remote-host",
+                            "{deploy_target}",
+                            "--remote-user",
+                            "{remote_user}"
+                        ]
+                    },
+                    {
+                        "parameter": "remote_password_ref",
+                        "not_equals": "-",
+                        "argv": [
+                            "--remote-password-ref",
+                            "{remote_password_ref}"
+                        ]
+                    },
+                    {
+                        "parameter": "remote_password_text",
+                        "not_equals": "-",
+                        "argv": [
+                            "--remote-password-env",
+                            "DB_OPS_REMOTE_SSH_PASSWORD"
+                        ]
+                    },
+                    {
+                        "parameter": "remote_key_name",
+                        "not_equals": "-",
+                        "argv": [
+                            "--remote-key",
+                            "{remote_key_name}"
+                        ]
+                    },
+                    {
+                        "parameter": "recreate",
+                        "equals": "yes",
+                        "argv": [
+                            "--force",
+                            "--overwrite-secret"
+                        ]
+                    },
+                    {
+                        "parameter": "install_docker",
+                        "equals": "yes",
+                        "argv": [
+                            "--install-docker"
+                        ]
+                    }
+                ],
+                "env_from_parameters": {
+                    "DB_OPS_NEW_DB_PASSWORD": "password_text",
+                    "DB_OPS_REMOTE_SSH_PASSWORD": "remote_password_text"
+                },
+                "background": true,
+                "detached": true,
+                "requires_secret_key": true,
+                "startup_grace_seconds": 3,
+                "timeout_seconds": 3600,
+                "start_text": "Creating {engine} {version} lab instance '{name}' (mode={mode}). Pulling the image and waiting for it to become healthy — this takes a few minutes...",
+                "success_text": "Lab database '{name}' is up: {engine} {version}, mode={mode}.\nThe password was stored in the encrypted secret store and the connection was registered in data/docker_db_connections.json.\nPull it back to the master with:\npython -m db_ops.control.cli worker-pull-data-config --key-base64 <KEY> --all-json --merge-secrets --overwrite",
+                "failure_text": "Creating lab database '{name}' failed.\nExit code: {exit_code}\nError: {error_summary}",
+                "timeout_text": "Creating lab database '{name}' timed out after {timeout_seconds}s. Check the container on the worker.",
+                "parameters": [
+                    {
+                        "name": "name",
+                        "source": "arg",
+                        "position": 1,
+                        "required": true,
+                        "validator": "regex",
+                        "pattern": "[A-Za-z][A-Za-z0-9_-]{1,39}",
+                        "validation_error": "name: letters, numbers, underscore and dash only (start with a letter), e.g. mssql_lab_01",
+                        "prompt_text": "Instance name? (e.g. mssql_lab_01)"
+                    },
+                    {
+                        "name": "engine",
+                        "source": "arg",
+                        "position": 2,
+                        "required": true,
+                        "validator": "regex",
+                        "pattern": "postgres|mysql|mssql|oracle",
+                        "validation_error": "engine must be one of: postgres, mysql, mssql, oracle",
+                        "prompt_text": "Engine? postgres / mysql / mssql / oracle",
+                        "input_type": "choice",
+                        "allow_text_input": false,
+                        "options": [
+                            {
+                                "label": "postgres",
+                                "value": "postgres"
+                            },
+                            {
+                                "label": "mysql",
+                                "value": "mysql"
+                            },
+                            {
+                                "label": "mssql",
+                                "value": "mssql"
+                            },
+                            {
+                                "label": "oracle",
+                                "value": "oracle"
+                            }
+                        ]
+                    },
+                    {
+                        "name": "version",
+                        "source": "arg",
+                        "position": 3,
+                        "required": true,
+                        "validator": "regex",
+                        "pattern": "[A-Za-z0-9][A-Za-z0-9._-]{0,31}",
+                        "validation_error": "version must be a Docker image tag, e.g. 18 / 8.4 / 2025-latest / 23.26.2",
+                        "prompt_text": "Version (Docker image tag)? postgres: 18 · mysql: 8.4 · mssql: 2022-latest or 2025-latest · oracle: 23.26.2 or latest (= 26ai; Oracle kept 23.26.x version numbers — there is NO '26'/'26ai' tag; gvenzl/oracle-free).\nNOTE for mssql: there is no bare-year tag — '2025' does not exist. Use 2025-latest, or a full tag like 2025-CU6-ubuntu-24.04."
+                    },
+                    {
+                        "name": "mode",
+                        "source": "arg",
+                        "position": 4,
+                        "required": true,
+                        "validator": "regex",
+                        "pattern": "single|ha-lab",
+                        "validation_error": "mode must be 'single' or 'ha-lab'",
+                        "prompt_text": "Mode? single / ha-lab   (ha-lab: postgres streaming replication · mysql async replica · mssql Always On AG with CLUSTER_TYPE=NONE — each primary + 2 replicas · oracle Data Guard 1 primary + 1 physical standby. Manual failover, no listener.)",
+                        "input_type": "choice",
+                        "allow_text_input": false,
+                        "options": [
+                            {
+                                "label": "single",
+                                "value": "single"
+                            },
+                            {
+                                "label": "ha-lab",
+                                "value": "ha-lab"
+                            }
+                        ]
+                    },
+                    {
+                        "name": "host_port",
+                        "source": "arg",
+                        "position": 5,
+                        "required": false,
+                        "validator": "regex",
+                        "pattern": "\\d{2,5}|-",
+                        "validation_error": "host_port must be a number, or - for the engine default",
+                        "prompt_text": "Host port? Skip for the engine default (postgres 5432 / mysql 3306 / mssql 1433 / oracle 1521). Pick another if that port is already taken on the target host.",
+                        "allow_skip": true
+                    },
+                    {
+                        "name": "password_env",
+                        "source": "arg",
+                        "position": 6,
+                        "required": false,
+                        "validator": "regex",
+                        "pattern": "[A-Za-z_][A-Za-z0-9_]{2,63}|-",
+                        "validation_error": "password_env must be an env-var style name (A-Z, 0-9, _), or - for the default",
+                        "prompt_text": "DB password - secret ref? Skip for the default <NAME>_PASSWORD (e.g. MSSQL_LAB_01_PASSWORD). This is the ref the DB password is stored under in the encrypted secret store.",
+                        "allow_skip": true
+                    },
+                    {
+                        "name": "password_text",
+                        "source": "arg",
+                        "position": 7,
+                        "required": false,
+                        "secret": true,
+                        "validator": "regex",
+                        "pattern": ".{8,128}|-",
+                        "validation_error": "password must be 8-128 chars, or - to reuse the ref in password_env (stored on a previous run)",
+                        "prompt_text": "DB password - value? Stored in the encrypted secret store under the ref above and used to start the container. Skip to REUSE a ref that already holds a password from an earlier run.\nIn a group chat this is visible - use a private chat.",
+                        "allow_skip": true,
+                        "input_type": "secret"
+                    },
+                    {
+                        "name": "deploy_target",
+                        "source": "arg",
+                        "position": 8,
+                        "required": true,
+                        "validator": "regex",
+                        "pattern": "worker|\\d{1,3}(\\.\\d{1,3}){3}",
+                        "validation_error": "deploy_target must be 'worker' (in-container on the worker host) or a remote Ubuntu IP",
+                        "prompt_text": "Deploy where? Tap 'worker' for the worker container's own docker host, or type the IP of an Ubuntu host to provision there over SSH.",
+                        "input_type": "choice",
+                        "allow_text_input": true,
+                        "options": [
+                            {
+                                "label": "worker",
+                                "value": "worker"
+                            }
+                        ]
+                    },
+                    {
+                        "name": "remote_user",
+                        "source": "arg",
+                        "position": 9,
+                        "required": true,
+                        "validator": "regex",
+                        "pattern": "[A-Za-z0-9._-]{1,64}",
+                        "validation_error": "remote_user must be an SSH username",
+                        "prompt_text": "SSH user on the remote host?",
+                        "ask_when": {
+                            "parameter": "deploy_target",
+                            "not_equals": "worker"
+                        }
+                    },
+                    {
+                        "name": "remote_auth",
+                        "source": "arg",
+                        "position": 10,
+                        "required": true,
+                        "input_type": "choice",
+                        "allow_text_input": false,
+                        "allow_skip": false,
+                        "ask_when": {
+                            "parameter": "deploy_target",
+                            "not_equals": "worker"
+                        },
+                        "options": [
+                            {
+                                "label": "Secret ref",
+                                "value": "secret_ref"
+                            },
+                            {
+                                "label": "Password",
+                                "value": "password"
+                            },
+                            {
+                                "label": "SSH key file",
+                                "value": "key_file"
+                            }
+                        ],
+                        "validator": "regex",
+                        "pattern": "secret_ref|password|key_file",
+                        "validation_error": "choose one of: secret_ref, password, key_file",
+                        "prompt_text": "How does db_ops authenticate to that host?\nSecret ref = a credential already in the encrypted secret store (nothing more to type).\nPassword = type it here once.\nSSH key file = a private key already in data/ssh_keys/ on this node."
+                    },
+                    {
+                        "name": "remote_password_ref",
+                        "source": "arg",
+                        "position": 11,
+                        "required": true,
+                        "validator": "regex",
+                        "pattern": "[A-Za-z_][A-Za-z0-9_]{2,63}",
+                        "validation_error": "remote_password_ref must be an env-var style secret ref",
+                        "prompt_text": "Which secret ref holds the SSH password? (e.g. REMOTE_192_0_2_115_DEV)",
+                        "ask_when": {
+                            "parameter": "remote_auth",
+                            "equals": "secret_ref"
+                        }
+                    },
+                    {
+                        "name": "remote_password_text",
+                        "source": "arg",
+                        "position": 12,
+                        "required": true,
+                        "secret": true,
+                        "validator": "regex",
+                        "pattern": ".+",
+                        "validation_error": "the SSH password cannot be empty",
+                        "prompt_text": "The SSH password? It is passed to the CLI through the environment, never on the command line.\nIn a group chat this is visible - use a private chat.",
+                        "input_type": "secret",
+                        "ask_when": {
+                            "parameter": "remote_auth",
+                            "equals": "password"
+                        }
+                    },
+                    {
+                        "name": "remote_key_name",
+                        "source": "arg",
+                        "position": 13,
+                        "required": true,
+                        "validator": "regex",
+                        "pattern": "[A-Za-z0-9._-]{1,128}",
+                        "validation_error": "remote_key_name must be a file name in data/ssh_keys/",
+                        "prompt_text": "Which key file in data/ssh_keys/ on this node? (e.g. oracle-cloud.key)",
+                        "ask_when": {
+                            "parameter": "remote_auth",
+                            "equals": "key_file"
+                        }
+                    },
+                    {
+                        "name": "recreate",
+                        "source": "arg",
+                        "position": 14,
+                        "required": true,
+                        "validator": "regex",
+                        "pattern": "yes|no",
+                        "validation_error": "answer yes or no",
+                        "prompt_text": "If an instance with that name already exists, recreate it? yes / no\nyes = DESTROYS the existing containers AND their data volumes, then rebuilds from scratch (and replaces the stored password for that ref). Answer no unless you mean it — an existing instance is never touched otherwise.",
+                        "input_type": "choice",
+                        "allow_text_input": false,
+                        "allow_skip": false,
+                        "options": [
+                            {
+                                "label": "No",
+                                "value": "no"
+                            },
+                            {
+                                "label": "Yes - destroy and rebuild",
+                                "value": "yes"
+                            }
+                        ]
+                    },
+                    {
+                        "name": "install_docker",
+                        "source": "arg",
+                        "position": 15,
+                        "required": true,
+                        "validator": "regex",
+                        "pattern": "yes|no",
+                        "validation_error": "answer yes or no",
+                        "prompt_text": "Install docker + compose on the remote VM if missing? yes / no\nyes = SSH in and install Docker (needs the SSH user to have sudo), add it to the docker group, create the containers dir. Use yes for a fresh Ubuntu VM. Answer no for deploy_target=worker or a VM that already has Docker.",
+                        "input_type": "choice",
+                        "allow_text_input": false,
+                        "allow_skip": false,
+                        "options": [
+                            {
+                                "label": "No",
+                                "value": "no"
+                            },
+                            {
+                                "label": "Yes - install it",
+                                "value": "yes"
+                            }
+                        ],
+                        "ask_when": {
+                            "parameter": "deploy_target",
+                            "not_equals": "worker"
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "node_role": "worker",
+            "command_id": 23,
+            "menu_order": 24.0,
+            "command_text": "spbot_shrink_log",
+            "reply_default": 0,
+            "reply_text": "",
+            "reply_parse_mode": "",
+            "reply_with_name": 0,
+            "command_type": 50,
+            "is_group": 0,
+            "is_private": 1,
+            "need_file": 0,
+            "action_type": "cli_execute",
+            "action_config": {
+                "working_dir": "tools/db_ops",
+                "emergency_operation": "shrink-log",
+                "command_argv": [
+                    "{python}",
+                    "-m",
+                    "db_ops.common.cli",
+                    "shrink-log",
+                    "{\"target\":\"{server_id}\",\"database\":\"{database}\",\"size_mb\":{size_mb},\"confirm\":\"{confirm}\",\"reason\":\"telegram\",\"authorized_by\":{\"channel\":\"telegram\"}}",
+                    "--config",
+                    "{config_path}"
+                ],
+                "requires_secret_key": true,
+                "start_text": "Shrinking log...",
+                "success_text": "{stdout}",
+                "failure_text": "shrink-log failed.\nExit code: {exit_code}\nError: {error_summary}",
+                "timeout_seconds": 120,
+                "parameters": [
+                    {
+                        "name": "server_id",
+                        "source": "arg",
+                        "position": 1,
+                        "required": true,
+                        "validator": "regex",
+                        "pattern": "[A-Za-z0-9][A-Za-z0-9._:-]{0,127}",
+                        "validation_error": "server_id may contain only letters, numbers, dot, underscore, colon and hyphen",
+                        "prompt_text": "Server id? Use /spbot_list_server_id to list targets."
+                    },
+                    {
+                        "name": "database",
+                        "source": "arg",
+                        "position": 2,
+                        "required": true,
+                        "validator": "regex",
+                        "pattern": "[A-Za-z0-9_][A-Za-z0-9_.$#-]{0,127}",
+                        "validation_error": "database must be a plain SQL Server database name",
+                        "prompt_text": "Database? (e.g. APPDB)"
+                    },
+                    {
+                        "name": "size_mb",
+                        "source": "arg",
+                        "position": 3,
+                        "required": true,
+                        "validator": "regex",
+                        "pattern": "[1-9][0-9]{0,6}",
+                        "validation_error": "size_mb must be a whole number of MB, 1 or more",
+                        "prompt_text": "Shrink the log file to how many MB? (e.g. 5120)"
+                    },
+                    {
+                        "name": "confirm",
+                        "source": "arg",
+                        "position": 4,
+                        "required": true,
+                        "validator": "regex",
+                        "pattern": "yes",
+                        "validation_error": "Type exactly: yes",
+                        "prompt_text": "This changes a LIVE system and cannot be undone. Read the target above. Type exactly: yes"
+                    }
+                ]
+            }
+        },
+        {
+            "node_role": "worker",
+            "command_id": 25,
+            "menu_order": 25.0,
+            "command_text": "spbot_start_job",
+            "reply_default": 0,
+            "reply_text": "",
+            "reply_parse_mode": "",
+            "reply_with_name": 0,
+            "command_type": 50,
+            "is_group": 0,
+            "is_private": 1,
+            "need_file": 0,
+            "action_type": "cli_execute",
+            "action_config": {
+                "working_dir": "tools/db_ops",
+                "emergency_operation": "start-job",
+                "command_argv": [
+                    "{python}",
+                    "-m",
+                    "db_ops.common.cli",
+                    "start-job",
+                    "{\"target\":\"{server_id}\",\"job_name\":\"{job_name}\",\"confirm\":\"{confirm}\",\"reason\":\"telegram\",\"authorized_by\":{\"channel\":\"telegram\"}}",
+                    "--config",
+                    "{config_path}"
+                ],
+                "requires_secret_key": true,
+                "start_text": "Starting job...",
+                "success_text": "{stdout}",
+                "failure_text": "start-job failed.\nExit code: {exit_code}\nError: {error_summary}",
+                "timeout_seconds": 120,
+                "parameters": [
+                    {
+                        "name": "server_id",
+                        "source": "arg",
+                        "position": 1,
+                        "required": true,
+                        "validator": "regex",
+                        "pattern": "[A-Za-z0-9][A-Za-z0-9._:-]{0,127}",
+                        "validation_error": "server_id may contain only letters, numbers, dot, underscore, colon and hyphen",
+                        "prompt_text": "Server id? Use /spbot_list_server_id to list targets."
+                    },
+                    {
+                        "name": "job_name",
+                        "source": "arg",
+                        "position": 2,
+                        "required": true,
+                        "validator": "regex",
+                        "pattern": "[A-Za-z0-9_][A-Za-z0-9_ .$#-]{0,127}",
+                        "validation_error": "job_name must be a plain Agent job name",
+                        "prompt_text": "Agent job name? (exact, e.g. Backup_Log)"
+                    },
+                    {
+                        "name": "confirm",
+                        "source": "arg",
+                        "position": 3,
+                        "required": true,
+                        "validator": "regex",
+                        "pattern": "yes",
+                        "validation_error": "Type exactly: yes",
+                        "prompt_text": "This changes a LIVE system and cannot be undone. Read the target above. Type exactly: yes"
+                    }
+                ]
+            }
+        },
+        {
+            "node_role": "worker",
+            "command_id": 29,
+            "menu_order": 26.0,
+            "command_text": "spbot_disable_job",
+            "reply_default": 0,
+            "reply_text": "",
+            "reply_parse_mode": "",
+            "reply_with_name": 0,
+            "command_type": 50,
+            "is_group": 0,
+            "is_private": 1,
+            "need_file": 0,
+            "action_type": "cli_execute",
+            "_note": "Switch a scheduled job off, on SQL Server (Agent), Oracle (DBMS_SCHEDULER or the older DBMS_JOB) or PostgreSQL (pg_cron). Private-only and clearance 50, like its siblings: it changes a live system. Disable only - there is deliberately no drop-job, because a dropped Agent job takes its schedule, steps and history with it and no prompt makes that recoverable. The job_name prompt lists the jobs that are actually ENABLED on the server just named, so the operator picks from what can be acted on rather than recalling an exact name; the listing fails open, so an unreachable instance still gets the bare prompt. Note that disabling does NOT stop a run already in progress - the reply says so every time.",
+            "action_config": {
+                "working_dir": "tools/db_ops",
+                "emergency_operation": "disable-job",
+                "command_argv": [
+                    "{python}",
+                    "-m",
+                    "db_ops.common.cli",
+                    "disable-job",
+                    "{\"target\":\"{server_id}\",\"job_name\":\"{job_name}\",\"confirm\":\"{confirm}\",\"reason\":\"telegram\",\"authorized_by\":{\"channel\":\"telegram\"}}",
+                    "--config",
+                    "{config_path}"
+                ],
+                "requires_secret_key": true,
+                "start_text": "Disabling job...",
+                "success_text": "{stdout}",
+                "failure_text": "disable-job failed.\nExit code: {exit_code}\nError: {error_summary}",
+                "timeout_seconds": 120,
+                "parameters": [
+                    {
+                        "name": "server_id",
+                        "source": "arg",
+                        "position": 1,
+                        "required": true,
+                        "validator": "regex",
+                        "pattern": "[A-Za-z0-9][A-Za-z0-9._:-]{0,127}",
+                        "validation_error": "server_id may contain only letters, numbers, dot, underscore, colon and hyphen",
+                        "prompt_text": "Server id? Use /spbot_list_server_id to list targets."
+                    },
+                    {
+                        "name": "job_name",
+                        "source": "arg",
+                        "position": 2,
+                        "required": true,
+                        "validator": "regex",
+                        "pattern": "[A-Za-z0-9_][A-Za-z0-9_ .$#:-]{0,127}",
+                        "validation_error": "job_name must be a plain job name",
+                        "prompt_text": "Which job? (exact name - only ENABLED jobs are listed below)",
+                        "_note": "enabled_only: a job that is already disabled is not something to disable.",
+                        "prompt_choices": {
+                            "command": "list-jobs",
+                            "data_key": "jobs",
+                            "request": {
+                                "target": "{server_id}",
+                                "enabled_only": true
+                            }
+                        }
+                    },
+                    {
+                        "name": "confirm",
+                        "source": "arg",
+                        "position": 3,
+                        "required": true,
+                        "validator": "regex",
+                        "pattern": "yes",
+                        "validation_error": "Type exactly: yes",
+                        "prompt_text": "This stops the job running on its schedule until someone re-enables it. A run already in progress is NOT stopped. Read the target above. Type exactly: yes"
+                    }
+                ]
+            }
+        },
+        {
+            "node_role": "worker",
+            "command_id": 27,
+            "menu_order": 27.0,
+            "command_text": "spbot_trace_session",
+            "reply_default": 0,
+            "reply_text": "",
+            "reply_parse_mode": "",
+            "reply_with_name": 0,
+            "command_type": 50,
+            "is_group": 0,
+            "is_private": 1,
+            "need_file": 0,
+            "action_type": "cli_execute",
+            "action_config": {
+                "_note": "Who is holding an open transaction on a given database. Reads only - it runs through common.cli trace-session, which goes through sql_run and logs like any other task. The server and database are arguments: this command describes an operation, not a machine.",
+                "working_dir": "tools/db_ops",
+                "command_argv": [
+                    "{python}",
+                    "-m",
+                    "db_ops.common.cli",
+                    "trace-session",
+                    "{\"target\":\"{server_id}\",\"database\":\"{database}\",\"session_id\":{session_id},\"min_tran_seconds\":{min_tran_seconds}}"
+                ],
+                "defaults": {
+                    "session_id": "0",
+                    "min_tran_seconds": "300"
+                },
+                "requires_secret_key": true,
+                "start_text": "Tracing open transactions on {server_id} / {database}...",
+                "success_text": "{stdout}",
+                "failure_text": "trace-session failed.\nExit code: {exit_code}\nError: {error_summary}",
+                "timeout_seconds": 120,
+                "parameters": [
+                    {
+                        "name": "server_id",
+                        "source": "arg",
+                        "position": 1,
+                        "required": true,
+                        "prompt_text": "Server id? Use /spbot_list_server_id to list targets."
+                    },
+                    {
+                        "name": "database",
+                        "source": "arg",
+                        "position": 2,
+                        "required": true,
+                        "prompt_text": "Database? (e.g. the application database on that instance)"
+                    },
+                    {
+                        "name": "session_id",
+                        "source": "arg",
+                        "position": 3,
+                        "required": false,
+                        "validator": "regex",
+                        "pattern": "[0-9]{1,6}",
+                        "validation_error": "session_id must be a number (0 = every open transaction)",
+                        "prompt_text": "Which SPID? Send 0 for every open transaction older than 5 minutes."
+                    }
+                ]
+            }
+        },
+        {
+            "node_role": "worker",
+            "command_id": 5,
+            "menu_order": 28.0,
+            "command_text": "spbot_kill_spid",
+            "reply_default": 0,
+            "reply_text": "",
+            "reply_parse_mode": "",
+            "reply_with_name": 0,
+            "command_type": 50,
+            "is_group": 0,
+            "is_private": 1,
+            "need_file": 0,
+            "action_type": "cli_execute",
+            "action_config": {
+                "working_dir": "tools/db_ops",
+                "emergency_operation": "kill-spid",
+                "command_argv": [
+                    "{python}",
+                    "-m",
+                    "db_ops.common.cli",
+                    "kill-spid",
+                    "{\"target\":\"{server_id}\",\"spid\":{spid},\"confirm\":\"{confirm}\",\"reason\":\"telegram\",\"authorized_by\":{\"channel\":\"telegram\"}}",
+                    "--config",
+                    "{config_path}"
+                ],
+                "requires_secret_key": true,
+                "start_text": "Killing session...",
+                "success_text": "{stdout}",
+                "failure_text": "kill-spid failed.\nExit code: {exit_code}\nError: {error_summary}",
+                "timeout_seconds": 120,
+                "parameters": [
+                    {
+                        "name": "server_id",
+                        "source": "arg",
+                        "position": 1,
+                        "required": true,
+                        "validator": "regex",
+                        "pattern": "[A-Za-z0-9][A-Za-z0-9._:-]{0,127}",
+                        "validation_error": "server_id may contain only letters, numbers, dot, underscore, colon and hyphen",
+                        "prompt_text": "Server id? Use /spbot_list_server_id to list targets."
+                    },
+                    {
+                        "name": "spid",
+                        "source": "arg",
+                        "position": 2,
+                        "required": true,
+                        "validator": "regex",
+                        "pattern": "[0-9]{2,6}",
+                        "validation_error": "spid must be a number",
+                        "prompt_text": "Which SPID? (system sessions <= 50 are refused)"
+                    },
+                    {
+                        "name": "confirm",
+                        "source": "arg",
+                        "position": 3,
+                        "required": true,
+                        "validator": "regex",
+                        "pattern": "yes",
+                        "validation_error": "Type exactly: yes",
+                        "prompt_text": "This changes a LIVE system and cannot be undone. Read the target above. Type exactly: yes"
+                    }
+                ]
+            },
+            "_note": "Private only, clearance 50, and 'emergency_operation' points at the entry in emergency_operations.json that decides how it must be confirmed. Every shared operation takes one JSON object - that is why the payload is a single argv word and not a row of flags."
+        },
+        {
+            "node_role": "worker",
+            "command_id": 26,
+            "menu_order": 29.0,
+            "command_text": "spbot_restart_server",
+            "reply_default": 0,
+            "reply_text": "",
+            "reply_parse_mode": "",
+            "reply_with_name": 0,
+            "command_type": 100,
+            "is_group": 0,
+            "is_private": 1,
+            "need_file": 0,
+            "action_type": "cli_execute",
+            "action_config": {
+                "working_dir": "tools/db_ops",
+                "emergency_operation": "host-restart",
+                "command_argv": [
+                    "{python}",
+                    "-m",
+                    "db_ops.common.cli",
+                    "host-restart",
+                    "{\"target\":\"{server_id}\",\"confirm\":\"{confirm}\",\"confirm_target\":\"{confirm_target}\",\"reason\":\"telegram\",\"authorized_by\":{\"channel\":\"telegram\"}}",
+                    "--config",
+                    "{config_path}"
+                ],
+                "requires_secret_key": true,
+                "background": true,
+                "detached": true,
+                "startup_grace_seconds": 3,
+                "start_text": "Restart requested. Waiting for the host to come back...",
+                "success_text": "{stdout}",
+                "failure_text": "host-restart failed or was refused.\nExit code: {exit_code}\nError: {error_summary}",
+                "timeout_seconds": 1800,
+                "parameters": [
+                    {
+                        "name": "server_id",
+                        "source": "arg",
+                        "position": 1,
+                        "required": true,
+                        "validator": "regex",
+                        "pattern": "[A-Za-z0-9][A-Za-z0-9._:-]{0,127}",
+                        "validation_error": "server_id may contain only letters, numbers, dot, underscore, colon and hyphen",
+                        "prompt_text": "Server id? Use /spbot_list_server_id to list targets."
+                    },
+                    {
+                        "name": "confirm",
+                        "source": "arg",
+                        "position": 2,
+                        "required": true,
+                        "validator": "regex",
+                        "pattern": "yes",
+                        "validation_error": "Type exactly: yes",
+                        "prompt_text": "RESTART A SERVER. Every service on it stops, sessions are lost, an FCI may fail over. Are you sure? Type exactly: yes"
+                    },
+                    {
+                        "name": "confirm_target",
+                        "source": "arg",
+                        "position": 3,
+                        "required": true,
+                        "validator": "regex",
+                        "pattern": "[A-Za-z0-9][A-Za-z0-9._:-]{0,127}",
+                        "validation_error": "Type the server id exactly as you sent it",
+                        "prompt_text": "Still sure? Type the SERVER ID again, exactly, to proceed. Anything else aborts."
+                    }
+                ]
+            }
+        }
+    ]
 }

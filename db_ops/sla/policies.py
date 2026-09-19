@@ -17,7 +17,17 @@ SUPPORTED_POLICY_MODELS = frozenset({"time_slo", "current_state", "finding_inven
 
 
 def load_sla_policies(path: str | Path | None = None) -> list[SlaPolicy]:
+    """Every active policy in the document, or an empty list when the default one is not there.
+
+    **Absent and named-but-absent are different.** A path the caller typed is a file they believe
+    in, and failing to open it is the answer they need. The *default* path missing is a node that
+    has not been given objectives yet, and raising there turns a configuration state into a
+    traceback — while returning `[]` reaches `validate_sla_policies`, which reports it as
+    `NOT_CONFIGURED` and names the file. Neither route may end at "compliant".
+    """
     policy_path = Path(path) if path else DEFAULT_POLICIES_PATH
+    if path is None and not policy_path.exists():
+        return []
     with policy_path.open("r", encoding="utf-8-sig") as file:
         raw = json.load(file)
     items = raw.get("sla_policies", raw) if isinstance(raw, dict) else raw

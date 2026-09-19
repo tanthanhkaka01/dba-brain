@@ -38,7 +38,8 @@ from db_ops.logging_ops.runtime_stdout import patch_stdout
 CHECK_CREDENTIALS_USAGE = (
     "usage: python -m db_ops.cli check-credentials [<json>|@<file>|-]\n"
     "\n"
-    "Verify every configured target resolves to a named credential. Exit 1 if any does not.\n"
+    "Verify every configured target resolves to a named credential, and that any secret its\n"
+    "sql_access names is in the store. Exit 1 if any does not.\n"
     "\n"
     "Answers in the standard response envelope; the unresolvable targets are in data.problems.\n"
     'Pass {"format": "txt"} for the old plain-text listing (problems on stderr, summary on\n'
@@ -55,6 +56,11 @@ CHECK_CREDENTIALS_USAGE = (
 
 def _check_credentials_command(argv: list[str]) -> int:
     """Verify every configured target resolves to a named credential. Exit 1 if any does not.
+
+    A legacy-Oracle target is checked too, and by what it actually needs: the credential its
+    connect string is built from, plus the bridge's shared secret over ``api``. It used to be
+    skipped here, which made the one command an operator runs to decide whether to look further
+    report clean on a target that could not collect anything at all.
 
     A credential is required, never inferred (see
     :func:`db_ops.common.data_sources.find_database_credential`), so a config edit that drops
@@ -97,18 +103,57 @@ def _check_credentials_command(argv: list[str]) -> int:
 
     problems: list[str] = []
     checked = 0
+    # `None` means "the store could not be read here", which is a different answer from "the ref
+    # is not in it" and must never be reported as a missing secret. A tree with no store file at
+    # all is that case too: an unprovisioned node has nothing to compare against, and saying every
+    # ref is missing would bury the one finding that matters.
+    secrets: dict[str, str] | None = None
+    if data_sources.secret_text_path(data_dir).exists():
+        try:
+            secrets = data_sources.load_secret_text(data_dir)
+        except Exception:  # noqa: BLE001 - no key here is normal; it costs one check, not the run.
+            secrets = None
 
     for target in metric_targets.load_metric_targets(data_dir=data_dir):
-        # Host-only entries and API-bridge targets carry no DB login by design. Asked through
-        # `sql_access.is_host_only`, which accepts both spellings: this test read
-        # `if not target.db_type`, which was right while a host carried `null` and silently wrong
-        # the day the estate normalised those records to `"host"` - four correct entries then
-        # reported "no credential" here, on the command whose whole value is being believed.
+        # Host-only entries carry no DB login by design. Asked through `sql_access.is_host_only`,
+        # which accepts both spellings: this test read `if not target.db_type`, which was right
+        # while a host carried `null` and silently wrong the day the estate normalised those
+        # records to `"host"` - four correct entries then reported "no credential" here, on the
+        # command whose whole value is being believed.
         if sql_access.is_host_only(target.db_type):
             continue
-        if str((target.sql_access or {}).get("method") or "direct").lower() == "api":
-            continue
         checked += 1
+        access = target.sql_access or {}
+        refs = sql_access.secret_refs(access)
+
+        # A named ref that is not *in* the store fails exactly like one that was never named - for
+        # example a secret present on the master and absent on the node running the collection.
+        # Only asked when the store opens - this command is documented as
+        # needing no key, so a node without one keeps the config-level answer below rather than
+        # reporting every ref as missing.
+        for field, ref in refs.items():
+            if secrets is not None and ref not in secrets:
+                problems.append(
+                    f"metrics target {target.target_id}: sql_access.{field} names '{ref}', "
+                    "which is not in the secret store"
+                )
+
+        # A legacy-Oracle target (`sql_access.method` api/subprocess) used to be skipped here
+        # entirely, as carrying "no DB login by design". It carries one: the bridge builds
+        # `user/password@host/service` from this target's own credential, and over `api` it needs
+        # a second secret as well - the shared token named by `sql_access.secret_ref`. Neither was
+        # looked at, so every collection for that target failed with "bridge secret not found"
+        # while this command - the one you run to decide whether to look further - reported clean.
+        if sql_access.is_legacy(access):
+            if str(access.get("method")) == "api" and not refs.get("secret_ref"):
+                problems.append(
+                    f"metrics target {target.target_id}: sql_access.method is 'api' and names no "
+                    "secret_ref, so no bridge token can be signed"
+                )
+            if refs.get("connect_ref"):
+                # That one secret holds the whole connect string, so this target has no separate
+                # credential to resolve and the check above is the whole answer for it.
+                continue
         if not target.credential:
             problems.append(
                 f"metrics target {target.target_id}: no credential "

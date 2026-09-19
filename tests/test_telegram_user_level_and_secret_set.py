@@ -194,3 +194,98 @@ def test_also_plaintext_keeps_a_masters_source_in_step(node):
     assert json.loads(source.read_text(encoding="utf-8"))["NEW_REF"] == "v"
     assert answer["data"]["plaintext_source"]["holds_ref"] is True
     assert "warning" not in answer["data"]["plaintext_source"]
+
+
+# ------------------------------------------------- a level set before anybody has ever messaged
+# The refusal "no users in telegram_users.json" could not be satisfied in the order a node is
+# built: intake only runs under the daemon, and the daemon starts after the step that sets the
+# level. So the operator met "Permission denied (user_type=0)" on their first command every time —
+# the 0.17.0 run reached hour 15 that way, and 2026-09-17 reached forty minutes. `add_group` is
+# the same fix for a chat nobody has posted in; this is its counterpart for people.
+
+
+def test_a_level_can_be_set_before_that_person_has_ever_messaged(tmp_path):
+    path = _users(tmp_path)  # nothing has messaged this node at all
+
+    result = set_user_level(user="@newcomer", level=100, users_path=path, pending=True)
+
+    assert result["pending"] is True
+    assert result["user_id"] == "" and result["username"] == "newcomer"
+    records = json.loads(path.read_text(encoding="utf-8"))["telegram_users"]
+    assert [item["username"] for item in records] == ["newcomer"]
+    assert records[0]["user_type"] == 100
+
+
+def test_the_pending_level_is_adopted_the_moment_they_first_speak(tmp_path):
+    from db_ops.telegram.updates import adopt_pending_user, build_user_record
+
+    path = _users(tmp_path)
+    set_user_level(user="@newcomer", level=100, users_path=path, pending=True)
+    pending = json.loads(path.read_text(encoding="utf-8"))["telegram_users"]
+
+    arriving = build_user_record({"id": 851670612, "username": "newcomer", "first_name": "New"})
+    assert arriving["user_type"] == 0, "intake always records a newcomer at 0"
+
+    adopted = adopt_pending_user(pending, arriving)
+
+    assert adopted["user_id"] == "851670612"
+    assert adopted["user_type"] == 100, "the level the operator set survives first contact"
+    assert pending == [], "the pending record is consumed, never left to shadow the real one"
+
+
+def test_a_pending_record_matches_the_username_case_insensitively(tmp_path):
+    from db_ops.telegram.updates import adopt_pending_user, build_user_record
+
+    path = _users(tmp_path)
+    set_user_level(user="@NewComer", level=50, users_path=path, pending=True)
+    pending = json.loads(path.read_text(encoding="utf-8"))["telegram_users"]
+
+    adopted = adopt_pending_user(pending, build_user_record({"id": 42, "username": "newcomer"}))
+
+    assert adopted["user_type"] == 50
+
+
+def test_somebody_else_speaking_does_not_consume_the_pending_record(tmp_path):
+    from db_ops.telegram.updates import adopt_pending_user, build_user_record
+
+    path = _users(tmp_path)
+    set_user_level(user="@newcomer", level=100, users_path=path, pending=True)
+    pending = json.loads(path.read_text(encoding="utf-8"))["telegram_users"]
+
+    adopted = adopt_pending_user(pending, build_user_record({"id": 99, "username": "stranger"}))
+
+    assert adopted == {}
+    assert len(pending) == 1, "the level still waits for the person it was meant for"
+
+
+def test_two_pending_users_both_survive_a_save(tmp_path):
+    # They have no id, so a dict keyed on user_id holds only one of them. The intake keeps pending
+    # records in a list beside that dict for exactly this reason.
+    path = _users(tmp_path)
+    set_user_level(user="@first_one", level=100, users_path=path, pending=True)
+    set_user_level(user="@second_one", level=50, users_path=path, pending=True)
+
+    records = json.loads(path.read_text(encoding="utf-8"))["telegram_users"]
+    assert sorted(item["username"] for item in records) == ["first_one", "second_one"]
+
+
+def test_a_numeric_id_that_matches_nobody_is_still_refused(tmp_path):
+    # There is nothing to adopt a bare id onto: the intake keys on it, so a pending record with an
+    # id and no username could never be matched to an arriving message.
+    path = _users(tmp_path, dict(OPERATOR))
+
+    with pytest.raises(RuntimeError, match="must be a @username"):
+        set_user_level(user="700000009", level=100, users_path=path, pending=True)
+
+
+def test_pre_authorising_is_asked_for_and_never_inferred(tmp_path):
+    """The safety property `test_a_fragment_of_a_username_grants_nothing` protects, restated for
+    the pending path: without `pending`, an unknown name is still a refusal. A mistyped username
+    that silently became a standing grant to whoever later claims it is the failure this prevents."""
+    path = _users(tmp_path, dict(OPERATOR))
+
+    with pytest.raises(RuntimeError, match="no user matches"):
+        set_user_level(user="@operator_onf", level=100, users_path=path)
+
+    records = json.loads(path.read_text(encoding="utf-8"))["telegram_users"]
+    assert len(records) == 1, "nothing was written for the typo"

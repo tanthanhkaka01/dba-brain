@@ -22,7 +22,7 @@
         "to_hour": 23,
         "from_minute": null,
         "to_minute": null,
-        "repeat_interval": 60,
+        "repeat_interval": 1,
         "retry_interval": 60,
         "timeout": 1800
       }

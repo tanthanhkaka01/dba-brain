@@ -148,12 +148,39 @@ def test_daemon_accepts_key_base64_argument():
     assert args.key_base64 == "SkZuc2gjJDcyM0hzM2g="
 
 
-def test_daemon_default_scan_delay_is_two_seconds():
-    assert daemon.parse_args([]).delay_seconds == 2
+def test_daemon_default_scan_delay_is_one_second():
+    """Two until 2026-09-18, and the scan was quietly the shortest schedule anything could have.
+
+    An app command's interval is checked once per scan, so the scan is a floor under every task
+    inside it: at two seconds a command asking for every 60 s got 60-62, and an operator reading
+    the two numbers had to reason about where the clocks met. The scan reads one JSON file and
+    compares timestamps - it is the cheapest thing in the loop, and the wrong place to save.
+    """
+    assert daemon.parse_args([]).delay_seconds == 1
 
 
 def test_repository_telegram_repeat_interval_is_one_second():
     commands = daemon.load_app_commands(shipped_config("app_commands.json"))
+    assert commands["APP-TELEGRAM"].repeat_interval_seconds == 1
+
+
+def test_repository_sql_task_repeat_interval_is_one_second():
+    """The SQL task app is paced like the Telegram one: this interval is a floor under every task
+    inside it, and a task's schedule belongs to the task."""
+    commands = daemon.load_app_commands(shipped_config("app_commands.json"))
+    assert commands["APP-SQL_TASKS"].repeat_interval_seconds == 1
+
+
+def test_the_packaged_catalogue_carries_the_same_cadence_as_this_repository():
+    """`shipped_config` reads this checkout's own data/ when it has one, so it can pass while the
+    file a fresh `init` copies says something else — which is how the command menu shipped one
+    order and installed another in 0.18.0. This reads the packaged catalogue directly.
+    """
+    from db_ops.lib.paths import TOOL_ROOT
+
+    catalogue = TOOL_ROOT / "db_ops" / "jobs" / "catalogue" / "app_commands.json"
+    commands = daemon.load_app_commands(catalogue)
+    assert commands["APP-SQL_TASKS"].repeat_interval_seconds == 1
     assert commands["APP-TELEGRAM"].repeat_interval_seconds == 1
 
 

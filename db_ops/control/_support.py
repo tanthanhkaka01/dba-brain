@@ -33,8 +33,29 @@ BUNDLE_DIR = DB_OPS_ROOT / "deploy" / "db_ops_deploy"
 INIT_PY = DB_OPS_ROOT / "db_ops" / "__init__.py"
 IMAGE_TAR_NAME = "db_ops_image.tar"
 IMAGE_REPO = "db_ops"
-DEFAULT_REMOTE_DIR = "/opt/db_ops"
-DEFAULT_CONTAINER = "db_ops_daemon"
+# Where the worker's tool root and its container are, as of 2026-09-16.
+#
+# **They moved together, and a stale default here does not fail — it lies.** The worker used to be
+# `/opt/db_ops` running `db_ops_daemon`, an image built on the master and `docker load`ed from a
+# tar. It now runs the published artifact, `ghcr.io/…/dbabrain:<version>`, from `/opt/dbabrain`
+# under `docker compose`, so upgrading is a tag and not a build.
+#
+# Measured the minute after the switch, with these constants still pointing at the old pair:
+# `worker-status` answered `container: db_ops_daemon | Exited (0)` — the worker reported **down**
+# while it was collecting metrics normally under the new name. `worker-pull-data-config` would
+# have carried config back out of the retired folder, which is worse: that stale copy then feeds
+# a `--merge` deploy and overwrites the master with it.
+#
+# The old container is kept stopped as the rollback. Rolling back is `docker start db_ops_daemon`
+# on the worker plus reverting this commit — both names still work through `--container` and
+# `--remote-dir` on every command that takes them.
+DEFAULT_REMOTE_DIR = "/opt/dbabrain"
+DEFAULT_CONTAINER = "dbabrain"
+
+#: The retired pair, kept named rather than deleted: `--container`/`--remote-dir` still reach the
+#: stopped node, and a reader meeting `/opt/db_ops` on the worker needs to know what it is.
+PREVIOUS_REMOTE_DIR = "/opt/db_ops"
+PREVIOUS_CONTAINER = "db_ops_daemon"
 
 # The one directory under the deploy root that the deploy must never re-own: the lab DB
 # containers keep their data and backup bind mounts here, owned by the database users inside

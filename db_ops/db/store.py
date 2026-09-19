@@ -1775,9 +1775,29 @@ class DbOpsStore:
             )
 
     def reset_telegram_send_message_pending(self, *, send_tlgmsg_id: int, fail_text: str) -> None:
+        """Put a row back in the queue, keeping what it is.
+
+        ``last_fail_text`` is **merged** into the existing metadata, not written over it. This
+        method had no caller until the rate-limit deferral in `telegram.send_queue`, and it would
+        have replaced the whole object: a re-queued row would have lost `document_path` and
+        `reply_markup` and gone out the next cycle as a plain message with the caption as its
+        body. A row that is coming back has to come back as itself.
+        """
         self.initialize()
-        metadata_json = json.dumps({"last_fail_text": fail_text}, ensure_ascii=False, sort_keys=True)
         with self.connect() as conn:
+            row = conn.execute(
+                "SELECT metadata_json FROM telegram_send_messages WHERE send_tlgmsg_id = ?;",
+                (send_tlgmsg_id,),
+            ).fetchone()
+            metadata: dict[str, Any] = {}
+            if row is not None:
+                try:
+                    parsed = json.loads(str(row["metadata_json"] or "{}"))
+                except (json.JSONDecodeError, TypeError):
+                    parsed = {}
+                if isinstance(parsed, dict):
+                    metadata = parsed
+            metadata["last_fail_text"] = fail_text
             conn.execute(
                 """
                 UPDATE telegram_send_messages
@@ -1786,7 +1806,7 @@ class DbOpsStore:
                     metadata_json = ?
                 WHERE send_tlgmsg_id = ?;
                 """,
-                (metadata_json, send_tlgmsg_id),
+                (json.dumps(metadata, ensure_ascii=False, sort_keys=True), send_tlgmsg_id),
             )
 
     def insert_sql_run(

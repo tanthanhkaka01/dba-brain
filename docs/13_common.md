@@ -621,7 +621,7 @@ with an import in it.
 | `secret_check.py` | **Single source of truth** for *proving a secret still logs in somewhere* — the read-only sibling of `password_rotation`, sharing its target resolution so an audit and a rotation can never disagree about where a secret lives. Resolves a ref by walking **every** config that can name it (`db_instances` database login or `cmd_access`, `docker_db_connections` — which carries the published non-default port — `restore_config`, `users.json` `remote_credentials`) before falling back to the standard key name. When `cmd_access` does not state a method the protocol is **probed** (SSH 22, then WinRM 5985/5986) rather than assumed. Distinguishes the four things that all used to read "unreachable": `UNREACHABLE` (nothing answers), `NO_MANAGEMENT_PORT` (host is up on RDP but has no scriptable way in), `AUTH_FAILED` (the credential is wrong), `NOT_A_LOGIN` (key material or a service token). **Input is a JSON object**; `{}` checks the whole store. | `check`, `check_ref`, `resolve_check_target`, `oracle_service_for_host`; `SecretCheckError`; `NOT_A_LOGIN`, `HTTP_LOGINS`, `SSH_PORT`, `WINRM_PORTS` |
 | `password_rotation.py` | **Single source of truth** for *changing a database login's password* — on the server **and** in the secret store, as one operation. A rotation done as two steps drifts: an `ALTER LOGIN` nobody records leaves db_ops authenticating with a dead password; a store edit nobody applies leaves a password the server never accepted. Fixed order per target: connect with the current password (a target whose current password already fails is **skipped**, never guessed at), issue the engine's change statement, **re-authenticate on a new connection** (the session that issued the change stays valid, so checking on it proves nothing), then store. A failed verify is rolled back inline with the value the process still holds. Every target gets its **own** generated password. **Input is a JSON object**, like `sql_run` and `remote_exec`. See [the section below](#rotating-a-login-password-password_rotation). | `rotate`, `rotate_ref`, `persist_rotated`, `strip_secrets`, `generate_password`, `build_change_statement`, `select_refs`, `resolve_ref_target`, `target_from_ref_name`; `PasswordRotationError`; `SUPPORTED_ENGINES`, `DEFAULT_PASSWORD_LENGTH = 28`, `MIN_PASSWORD_LENGTH = 12` |
 | `evidence.py` | The **gate model** every runbook-style operation reports through, and its JSON evidence file. One named check, a verdict (`OK` / `WARN` / `FAIL`), a sentence an operator can act on, and two independent flags: `blocking` (a failure stops the run) and `override` (a blocking failure an operator may accept deliberately). Gates are echoed as they run — a 30-minute restart that speaks only at the end is indistinguishable from a hung one — and written to `runtime/evidence/<operation>/<run_id>.json`, one file per run, never overwriting an older one. | `GateReport` (`add`, `note`, `say`, `blockers`, `passed`, `status`, `to_dict`, `write`), `Gate`, `new_run_id`; `OK`, `WARN`, `FAIL`, `SKIP`, `DEFAULT_EVIDENCE_ROOT` |
-| `confirm.py` | **The one place db_ops asks a human before doing something it cannot undo.** Every dangerous operation — restart, service stop, cumulative update, and whatever is added next — calls `require_confirmation`, so the control behaves identically everywhere. Two locks that answer different questions: `"confirm": true` is *intent* (this payload means to change a machine), typing `yes` at the prompt is *presence* (a human is reading **this** target now). The prompt names the target and the consequence — "are you sure?" with no content trains people to answer without reading. With no terminal the run is refused unless the request declares `"assume_yes": true`. See [the section below](#asking-before-something-irreversible-confirm). | `require_confirmation`, `banner`, `is_interactive`, `open_terminal`, `read_answer`; `CONFIRM_WORD = "yes"` |
+| `confirm.py` | **The one place db_ops asks a human before doing something it cannot undo.** Every dangerous operation — restart, service stop, cumulative update, and whatever is added next — calls `require_confirmation`, so the control behaves identically everywhere. Two locks that answer different questions: `"confirm": true` is *intent* (this payload means to change a machine), typing `yes` at the prompt is *presence* (a human is reading **this** target now). The prompt names the target and the consequence — "are you sure?" with no content trains people to answer without reading. With no terminal the run is refused unless the request declares `"assume_yes": true`. See [the section below](#asking-before-something-irreversible-confirm). | `require_confirmation`, `banner`, `is_interactive`, `open_terminal`, `read_answer`; `CONFIRM_WORD = "yes"`, `ANSWER_DEADLINE_SECONDS = 120` |
 | `sqlserver_instance.py` | **Single source of truth** for *what a SQL Server backup leaves behind*. Oracle and PostgreSQL are backed up physically — RMAN `DUPLICATE` rebuilds from the datafiles and users live inside the database; `pg_basebackup` copies the cluster and roles live in `pg_authid` — so a restore answers as the source did. SQL Server is backed up per user database (`WHERE database_id > 4`), so `master`/`msdb`/`model` and everything in them are absent after a restore: logins, server roles and permissions, credentials, linked servers, endpoints, `sp_configure`, Database Mail and the whole of SQL Agent. This exports them as deterministic, guarded SQL and replays them onto a newly installed instance, including a newer major version. **Input is a JSON object.** See [the section below](#sql-server-instance-metadata-sqlserver_instance). | `export_instance`, `replay_instance`, `verify_instance`; `load_policy` (a translation over `data_sources.load_sqlserver_instance_policy`), `read_bundle`, `resolve_secrets`, `major_version`; `SqlServerInstanceError`. The bundle's *shape* — `PRE_DATABASE`, `POST_DATABASE`, `SERVER_DIR`, `MANIFEST_NAME`, `artifacts_in_order` — is `lib.instance_bundle` since 2026-08-15: `backup_restore` reads all five while validating config, before there is anything to connect to |
 | `host_ops.py` | **Single source of truth** for *operating on a host* — read its state, control its services, restart it and prove it came back — on **Windows and Linux alike**. `remote_exec` reaches a machine; this is what maintenance actually asks for on top. `cmd_access` resolution used to live here too and is `lib.cmd_access` since 2026-08-15 — pure functions over a config block that `metrics` reads while loading its target list; the names are re-exported here because operating on a host is where callers look for them. **Input is a JSON object**; output is a `GateReport` dict. See [the section below](#operating-on-a-host-host_ops). | `host_facts`, `service_control`, `restart_host` (the JSON entry points); `resolve_host`, `open_host_session`, `read_facts`, `service_states`, `wait_for_services`, `wait_for_port`, `is_service_up`, `check_maintenance_window`, `load_maintenance_policy`, `parse_json_output`; re-exported from `lib.cmd_access`: `resolve_cmd_access`, `resolve_cmd_credential`, `resolve_platform`, `SUPPORTED_CMD_ACCESS_METHODS`, `SUPPORTED_PLATFORMS`; `HostTarget`, `HostOpsError`; `DEFAULT_POLICY` |
 | `db_catalog.py` | **Single source of truth** for *what is in a server*: its databases and their state, and the schemas inside one database. Both were being answered ad hoc — four spellings of `SELECT name FROM sys.databases` across four engines — and the Telegram spreadsheet upload needs all of them just to prompt. Each engine answers in **its own vocabulary** rather than a flattened common one: SQL Server's `state_desc` and recovery model, PostgreSQL's owner/encoding/`datallowconn`, Oracle's **containers** (a CDB reports root + seed + every PDB with its `open_mode`; `kind` says which is which). Oracle has two shapes and the caller must not care: `v$containers` is 12c+, so a non-CDB falls back to `v$database` — and that query is itself tried richest-first, because `database_role` is 9i+ and an 8.1.7 host answers ORA-00904 for it. Oracle's upper-cased column names are folded so `row["name"]` reads the same on every engine. System objects are hidden unless asked for. **Input is a JSON object**; resolution and connection are `sql_run`'s, not this module's. | `list_databases`, `list_schemas`; `DbCatalogError` |
@@ -771,13 +771,20 @@ recoverable: *a cumulative update cannot be uninstalled; rollback means restorin
 - **The whole word `yes`.** Not `y` — that is what a hand types while reading something else.
   Case is ignored, surrounding whitespace is stripped, everything else aborts.
 - **Ctrl-C, EOF or a closed stdin mean no.** There is no input that means "carry on".
+- **So does silence.** The prompt waits `ANSWER_DEADLINE_SECONDS` (120) and then refuses, saying
+  that nothing was reading it. Generous because a person is meant to read the banner; finite
+  because **on Windows nothing here distinguishes a human from a scheduler** — measured
+  2026-09-16, a fully detached process with a null stdin reports `sys.stdin.isatty()` true *and*
+  opens `CON`. Without a deadline a backgrounded `--force` SQL task run waited for ever on an
+  answer nobody could give, having written no `sql_runs` row and no output.
 - **`dry_run` is never asked to confirm.** Rehearsing is not performing.
 - **Automation must declare itself.** With no terminal to ask on, the operation is **refused**
   unless the request carries `"assume_yes": true`. A scheduled job that forgot to say "no human
   will be asked here" fails loudly instead of quietly rebooting production at 03:00.
 - **A piped request is not the unattended case.** `... host-restart - < request.json` leaves
   stdin exhausted, so the question is asked on the controlling terminal (`/dev/tty`, or `CON` on
-  Windows) — which the pipe did not take away.
+  Windows) — which the pipe did not take away. `/dev/tty` failing *is* proof there is nobody
+  there; `CON` opening is **not** proof that there is, which is what the deadline above is for.
 - **The authorization is recorded**, on the gate and in `facts.authorization`: a typed
   confirmation and an unattended one are different facts and must not read the same afterwards.
 
@@ -1185,6 +1192,35 @@ port reports `open` / `refused` / `timeout` separately, because on a live host a
 service is off and a timeout means a filter — the distinction that told `.235`/`.236` apart from a
 firewalled box.
 
+### `sql-command-add` / `sql-target-add` — what a SQL task runs, and where
+
+`add-sql` writes a file, a command and one target in a single call. These two cover what it cannot
+express: a task fed by a Python program, an array or folder of scripts, and additional targets for
+a task that already has one.
+
+```bash
+# WHAT runs. The script may already exist, or arrive as text and be written here.
+python -m db_ops.common.cli sql-command-add '{"sql_name": "Drain the queue",
+  "db_type": "sqlserver", "input_type": "python",
+  "script_path": "assets/tasks/sqlserver/030_summary.sql",
+  "input": {"script": "assets/tasks/python/drain.py",
+            "args": ["--target", "{target_server_id}", "--database", "{target_database}"]},
+  "parameters": [{"name": "payload", "type": "nvarchar(max)"}]}'
+
+# WHERE it runs. One call per server; three calls is a task on Testing, UAT and production.
+python -m db_ops.common.cli sql-target-add '{"sql_id": 30, "server_id": "ACME-192-0-2-111",
+  "database_name": "PAYROLL_Test", "time_window": {"repeat_interval": 60, "timeout": 600},
+  "logging_on_run": false}'
+```
+
+`sql_text` in place of an existing `script_path` writes the file, so a task registered from Telegram
+and one registered from a checkout take the same path.
+
+Both refuse before writing anything: a script that does not exist, an `input.parameter` with no
+matching entry in `parameters` (the runner writes the `DECLARE` from it), a `{name}` in
+`input.args` that is neither a declared parameter nor one of the reserved `{target_server_id}` /
+`{target_database}`, a `target_no` already taken, and a target whose `sql_id` has no command.
+
 ### `remote-credential-add` — the OS login, and the block that names it
 
 `instance-add` registers a database. The machine it runs on needs a *second* login — the OS
@@ -1243,6 +1279,14 @@ Verify the config satisfies this before a deploy:
 python -m db_ops.cli check-credentials          # exit 1 lists every target with no login
 ```
 
+It checks a legacy-Oracle target too, and by what that target actually needs: the credential its
+connect string is built from, plus `sql_access.secret_ref` over `api`. Those targets used to be
+skipped here as carrying "no DB login by design", so the one command you run to decide whether to
+look further reported clean on a target that could not collect anything at all. When the secret
+store opens — no key is required, and without one this part is simply skipped — a ref that is
+*named* and not *in* the store is reported as well — for example a secret present on the master
+and absent on the node running the collection.
+
 ### `datetimeoffset` and other ODBC types
 
 pyodbc cannot decode `SQL_SS_TIMESTAMPOFFSET` (type **-155**) on its own: one
@@ -1290,6 +1334,87 @@ did not start" would be worse than the gap in the record.
 
 The *rule* underneath both — parse a declaration, resolve it, render an instant — is pure and lives
 in `db_ops/lib/timezone.py`, imported by every app.
+
+---
+
+## What state a server is in (`db-status`, 2026-09-16)
+
+One command answers *"is it up, and can it be used"* for SQL Server, PostgreSQL and Oracle, in one
+shape, so a caller does not need to know which engine it is talking to. It was written because the
+same question was already being asked by the restore workflow, the SLA grader, the fleet page and
+the `/spbot_*` commands, and each answered it its own way — which is how three callers grow three
+notions of "online" and disagree about the same server on the same afternoon.
+
+```bash
+python -m db_ops.common.cli db-status '{"target": "ACME-192-0-2-248"}'
+python -m db_ops.common.cli db-status '{"target": "ACME-192-0-2-248", "depth": "database"}'
+python -m db_ops.common.cli db-status '@request.json'
+```
+
+### Three depths, and which one is *correct* depends on the engine
+
+| Depth | What it answers |
+| --- | --- |
+| `instance` (default) | Is the engine up and answering |
+| `database` | One named database's own state |
+| `schema` | A schema inside a database, and whether the asking login can see it |
+
+**PostgreSQL and Oracle restore at the level of the instance** — `pg_basebackup` plus WAL replay,
+RMAN `DUPLICATE` — so for a restore the instance depth is the whole answer there, and walking the
+databases asks the same question repeatedly. **SQL Server restores one database at a time**, so each
+can fail on its own and the database depth is what that engine needs. The deeper depths exist for
+every engine because other callers ask other questions.
+
+### Two rules it exists to enforce
+
+**The instance is checked at every depth.** A verdict about a database on an instance nobody could
+reach is a guess, not a verdict — so the instance probe runs first whatever was asked for, and when
+it fails nothing deeper is attempted. Asking anyway produces a second, less useful copy of the same
+failure.
+
+**A state column is never the whole answer.** A real statement is run at the depth asked for,
+because every engine has a way of looking finished and being unusable:
+
+| Engine | Looks finished | Is not usable |
+| --- | --- | --- |
+| SQL Server | the restore command returned | the database is `RESTORING`, or reads `ONLINE` and refuses a query while it finishes an upgrade step |
+| PostgreSQL | the cluster is up and accepts connections | `pg_is_in_recovery()` is true and every write is refused |
+| Oracle | `v$instance.status` is `OPEN` | `v$database.open_mode` is `MOUNTED` — RMAN finished and the database was never opened |
+
+That last row is why the Oracle probe reads **both** columns: the instance's status alone answers
+"up" about a database nobody can query.
+
+### What comes back
+
+```json
+{"ok": false, "depth": "database", "db_type": "sqlserver", "server_id": "ACME-SQL01",
+ "instance": {"ok": true, "state": "ONLINE", "version": "16.0.1000", "edition": "Developer"},
+ "items": [{"name": "SALES", "kind": "database", "state": "ONLINE", "ok": true,
+            "detail": "answered; 7 tables visible"},
+           {"name": "STAGING", "kind": "database", "state": "RESTORING", "ok": false,
+            "detail": "state is RESTORING"}],
+ "checked": 2, "failed": 1}
+```
+
+A database that was **asked about and is not there** comes back as `ABSENT` with `ok: false` rather
+than being left out — silence is how an empty check passes for a database a restore never created.
+
+`success` in the response envelope is whether the *question was answered*; `data.ok` is the
+*answer*. A server that is down is a successful call reporting `ok: false`. That split is what lets
+a caller tell "it is broken" from "I could not find out", and it is the same one `check-secret`
+makes.
+
+### Where it sits
+
+It is the **verdict** layer over `db_catalog`, which is the **listing** layer: `list-databases` and
+`list-schemas` say what exists and what state the engine reports, and `db-status` decides what that
+means. Kept apart on purpose — a listing that also decides has to be re-read every time the rule
+changes.
+
+It is also distinct from `verify-restore`, which asks the same question *in the context of a
+restore* and reaches Oracle and PostgreSQL over ssh, because a container-to-container drill is
+reachable that way and not through the inventory. `db-status` goes through the inventory and the
+ordinary SQL path, which is what every other caller already uses.
 
 ---
 
@@ -1351,7 +1476,7 @@ preference (see *Design rules*). Names are the public API of `db_ops.common.<mod
 | `config_admin` | `add_sql_task()`, `set_metric_toggle()`, `set_metric_severity_map()`, `known_metric_codes()`, `next_sql_id()`, `next_target_no()`, `normalize_time_window()`, `slugify()`; `ConfigAdminError`; `MANUAL_SCHEDULE`. Its CLI face is `common.cli add-sql` / `metric-toggle`, and both answer in the response envelope. `normalize_output()` and `OUTPUT_FORMATS` moved to `lib.task_output`, `resolve_target_from_server_id()` to `data_sources.resolve_sql_target_fields()` — 2026-08-15, so an app needs neither of them from here |
 | `data_sources` | `load_credentials()`, `load_all_credentials()`, `load_remote_credentials()`, `load_db_instances()`, `load_inventory()`, `load_secret_text()`, `group_credentials_by_type()`, `find_database_credential()`, `resolve_sql_target_fields()`; `CredentialNotFound`, `TargetResolveError`; paths `users_path()`, `db_instances_path()`, `secret_text_path()` |
 | `event_policy` | `normalize_error_type()`, `normalize_error_signature()`, `report_event_code()` |
-| `confirm` | `require_confirmation()`, `banner()`, `is_interactive()`, `open_terminal()`, `read_answer()`; `CONFIRM_WORD` |
+| `confirm` | `require_confirmation()`, `banner()`, `is_interactive()`, `open_terminal()`, `read_answer()`; `CONFIRM_WORD`, `ANSWER_DEADLINE_SECONDS` |
 | `evidence` | `GateReport` (`add()`, `note()`, `say()`, `blockers()`, `passed()`, `status()`, `counts()`, `to_dict()`, `render()`, `write()`), `Gate`, `new_run_id()`, `symbol()`; `OK`, `WARN`, `FAIL`, `SKIP`, `DEFAULT_EVIDENCE_ROOT` |
 | `host_ops` | `host_facts()`, `service_control()`, `restart_host()`, `resolve_host()`, `open_host_session()`, `read_facts()`, `service_states()`, `wait_for_services()`, `wait_for_port()`, `is_service_up()`, `check_maintenance_window()`, `load_maintenance_policy()`, `parse_json_output()`; `HostTarget`, `HostOpsError`; `DEFAULT_POLICY`. The `cmd_access` readers — `resolve_cmd_access()`, `resolve_cmd_credential()`, `resolve_platform()`, `infer_platform_from_os()`, `SUPPORTED_PLATFORMS`, `SUPPORTED_CMD_ACCESS_METHODS` — are `lib.cmd_access`, re-exported here |
 | `sqlserver_patch` | `precheck()`, `apply_cu()`, `verify_build()`, `patch_arguments()`, `patch_exit_verdict()`, `sqlserver_service_names()`, `sqlserver_registry_key()`, `setup_log_root()`, `version_tuple()`; `SqlServerPatchError`; `EXIT_SUCCESS`, `EXIT_SUCCESS_RESTART_REQUIRED` |
@@ -1613,6 +1738,12 @@ resolve a target the same way so an audit and a rotation cannot disagree about w
 An audit that reports a secret as untestable invites someone to delete it, so the burden is on this
 module to look everywhere and to ask the right question. Resolution order:
 
+0. `db_instances.json` — `sql_access.secret_ref` / `connect_ref` on a legacy-Oracle target. **First,
+   ahead of the name heuristics**: a bridge secret matches the `ORACLE_BRIDGE` fragment and would
+   stop there as `NOT_A_LOGIN`, which is true and useless — the instance that names the ref says
+   which bridge, which login and which service, so it is provable. Config is evidence; a name is a
+   guess. Until 2026-09-16 no source read `sql_access` at all and a configured bridge secret came
+   back `NO_TARGET`, "no config names this ref";
 1. `db_instances.json` — `default_credential_name` (a database login) or `cmd_access` (an OS login,
    which also states `method`, so the protocol is known rather than guessed);
 2. `docker_db_connections.json` — carries the **published, non-default port** a container listens on
@@ -1635,6 +1766,15 @@ the wrong question.
 | `NO_MANAGEMENT_PORT` | host answers on RDP 3389 but neither SSH nor WinRM listens | enable WinRM, or accept it is administered interactively |
 | `AUTH_FAILED` | the service rejected the credential | rotate it — this is the one that is actually broken |
 | `NOT_A_LOGIN` | key material or a service token; there is no session to open | verify through the system that uses it |
+
+A legacy-Oracle secret is the one kind that *is* verified through the system that uses it: the
+check signs a token with it and runs `SELECT 1 FROM DUAL` over the target's own transport, so `OK`
+means the bridge accepted the token and the login behind it. The verdict covers the **pair** —
+token secret and database password — because the transport needs both and neither can be exercised
+alone; `field` in the result says which of the two was under test. A bridge nobody started is
+`UNREACHABLE` and says where to start it, never `AUTH_FAILED`: the 8i bridge is started by hand and
+nothing restarts it, so down is the ordinary state to meet, and reading that as a bad secret is how
+a good one gets rotated for nothing.
 
 `NO_TARGET` is separate again: a config names the ref but carries no host — or, for Oracle, no
 `service_name` is declared anywhere for that IP, which is reported in those words because a raw
@@ -2303,6 +2443,11 @@ carry its own `sql_access` block to override the instance's for one run.
 `user/pass@host/service` string) is still honoured for a login that exists nowhere else, but the
 two that used to exist were deleted for duplicating a password.
 
+The two fields that name a **secret** — `secret_ref` and `connect_ref` — are read back by
+`lib.sql_access.secret_refs`, which is how `check-credentials` and `check-secret` see them. That is
+their whole reason for existing as a named rule: while each checker went looking for refs its own
+way, neither looked here.
+
 ### Where each object appears
 
 | File | Objects |
@@ -2329,7 +2474,8 @@ two that used to exist were deleted for duplicating a password.
 | `db_connect` | `sql_run` (so telegram + the CLI), metrics (`executor`) |
 | `xlsx_export` | telegram (`spbot_sql_to_xlsx`), sql_tasks (a target with `output.format = "xlsx"`) |
 | `xlsx_import`, `delimited_import`, `table_load` | telegram (`spbot_xlsx_to_table`), the `create-table-from-xlsx` CLI |
-| `db_catalog` | the `list-databases` / `list-schemas` CLIs; the prompts behind `spbot_xlsx_to_table` |
+| `db_catalog` | the `list-databases` / `list-schemas` CLIs; the prompts behind `spbot_xlsx_to_table`; the listing half `dbstatus` judges |
+| `dbstatus` | the `db-status` CLI - is a server up and usable, at instance / database / schema depth |
 | `time_window` | jobs/daemon, sql_tasks, metrics, reports |
 | `policy_engine`, `event_policy`, `target_flags`, `metric_targets_config` | metrics, reports, sla, telegram |
 | `oracle_bridge` | metrics (SQL-family collection for Oracle 8i targets), sql_run (`run-sql`, `/spbot_sql_to_xlsx` on an 8i target) |

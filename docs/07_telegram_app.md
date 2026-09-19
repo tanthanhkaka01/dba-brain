@@ -117,6 +117,34 @@ the metrics reports do, because each chunk is queued as its own row and so carri
 If a later part fails to send, `send_queue` retries the whole row and re-sends the parts that
 already landed; duplicated output on a rare failure beats a result with a silent hole in it.
 
+## Telegram's own rate limit (2026-09-16)
+
+Splitting a body creates the burst that the limit refuses. On 2026-09-09 the hourly warning report
+went out as a dozen-plus messages at once, Telegram answered **HTTP 429**, and the parts that met
+it ended at `send_status = -1`. Nothing was wedged and nothing retried for ever, so every pass
+condition read clean — and the failure reached **no log file at all**. The only record was
+`metadata_json` on the row.
+
+A 429 is Telegram asking for a pause, not refusing the message, and it says for how long in
+`parameters.retry_after`. Three things follow from that:
+
+- **It is its own error.** `TelegramRateLimited` carries the interval. As an ordinary
+  `RuntimeError` it went through the queue's retry loop — immediate, three times — which spent
+  every attempt inside one second and then marked the row failed, over a limit that had asked for
+  a two-second pause.
+- **The parts of one body are paced** (`PART_PAUSE_SECONDS`), because the limit is roughly 20
+  messages a minute to one group and an unpaced dozen is over it before the first is read. A part
+  that is still refused waits the interval and is retried, up to `MAX_RATE_LIMIT_WAIT_SECONDS` —
+  past that it goes back to the queue, since a send layer asleep longer than the daemon's cycle
+  is indistinguishable from a hang.
+- **A rate-limited row returns to `send_status = 0`**, not to a terminal `-1`, and it comes back
+  *as itself*: `reset_telegram_send_message_pending` merges its failure note into the row's
+  metadata instead of replacing it, or a re-queued document row would lose `document_path` and go
+  out next cycle as a plain message.
+
+Either way it is **logged** — a warning for a deferral, an error for a refusal. A message nobody
+received is a message that did not happen, and it belongs where an operator reads failures.
+
 ## How to Run
 
 ```powershell
@@ -193,7 +221,43 @@ Add or change commands in this order:
 4. If `action_type = "sql_execute"`, place the SQL file under `assets/sql_telegram_commands/` and use `?` placeholders. Do not use `GO` in these SQL files.
 5. Validate JSON and run the command tests.
 
-Important command fields include `command_id`, `command_text`, `command_type`, `is_group`, `is_private`, `reply_default`, `reply_text`, `action_type`, `action_config`, and `node_role`.
+Important command fields include `command_id`, `menu_order`, `command_text`, `command_type`, `is_group`, `is_private`, `reply_default`, `reply_text`, `action_type`, `action_config`, and `node_role`.
+
+**`telegram group-add` registers a chat nobody has posted in.** `save-updates` learns a group from
+`getUpdates`, which only reports a chat somebody has **written in** — so a chat created *for* alerts
+could not be configured at all, and `group-level` refuses until a group exists. `group-add` takes
+the numeric chat id and **confirms it with `getChat`** rather than trusting it: a digit typed wrong
+routes every alert of that level to a chat that does not exist, or to somebody else's. Telegram's
+own title is what gets written, so the operator reads back the chat they actually configured. With
+no token the command refuses rather than writing an unchecked route; `--no-verify` is for a node
+that has no token yet and marks the entry accordingly. Registering a chat grants **no** command
+permission — where alerts go and who may drive the node from a chat are two decisions.
+
+**`route` takes a level, and refuses a JSON request rather than looking one up.** It and `groups`
+are the two commands here that are *not* on the JSON-request contract: they answer from config
+alone, before this app sets up logging, so a caller can parse their single line of stdout. An
+operator reaching for the shape every `common.cli` command takes typed
+`route '{"level":"critical"}'` — and the lookup obliged, searching for a notify level named
+`{"level":"critical"}`, finding none, and answering `chat_id: ""` for it. That answer is
+indistinguishable from broken routing, and the routing was fine. The three shapes of the contract
+(`{...}`, `@file`, `-`) are now refused with the form that works.
+
+**`menu_order` decides where a command is listed, and it is a float.** One order, used everywhere the
+commands are listed: `/spbot_list_all_command`, and all three listings in
+`data/telegram_support_commands.md` — the BotFather block, the Command Details table and the Usage
+sections. Before 2026-09-16 those were four different hand-made orders that had drifted apart
+independently, and the bot followed whichever order entries happened to be appended in.
+
+The order is: **`spbot_status` first, `spbot_self_status` second, everything that only *lists*
+before everything that *runs***, and within the runnable half ascending by what a command can break
+— so the last line of the menu is the one that restarts a host. `tests/test_the_command_menu_has_one_order.py`
+holds the document and the config to it.
+
+It is a **float** so a new command can be slotted between two that exist — `2.5` between `2` and `3`
+— rather than renumbering every entry below it, which makes the diff unreadable and hides whether
+anything else moved. A command with no `menu_order` sorts **last**, not first: something nobody
+placed should be visible, not the first thing an operator sees. `command_id` is unchanged and stays
+the identity key the dispatcher and the store look rows up by.
 
 ### Cluster routing — `node_role`
 

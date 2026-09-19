@@ -43,6 +43,9 @@ ALL_COMMANDS = [
     # others), so the request has a perfectly ordinary shape with no secret in it and there is
     # nothing to gain from making it stdin-only.
     "remote-credential-add",
+    # 2026-09-18. Two commands rather than one because they are two decisions - what a SQL
+    # task runs, and where - and the second is what lets one command serve three targets.
+    "sql-command-add", "sql-target-add",
     "probe-host", "self-status", "timezone", "metric-severity", "trace-session",
     "inventory-summary", "restore-database", "list-backup-files",
     "pack-backup", "pull-file", "push-file",
@@ -59,7 +62,7 @@ ALL_COMMANDS = [
     "sqlserver-export-instance", "sqlserver-replay-instance", "sqlserver-verify-instance",
     "delete-file", "delete-files", "backup-database", "prune-backup-files",
     "list-databases", "list-schemas", "list-jobs", "create-table-from-xlsx",
-    "copy-schema",
+    "copy-schema", "db-status",
     # Left this file on 2026-08-15 and covered elsewhere now, for the same reason in each case —
     # they were not shared-layer work:
     #   check-credentials    -> db_ops/cli.py  (needs two apps' resolvers)

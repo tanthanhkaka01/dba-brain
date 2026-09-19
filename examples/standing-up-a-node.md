@@ -174,6 +174,21 @@ db-ops telegram --config config.json group-level --group "Alerts - critical" --l
 db-ops telegram --config config.json route critical
 ```
 
+Two commands exist for the case where that cannot happen yet, and both are new in 0.19.0:
+
+```powershell
+db-ops telegram --config config.json group-add --group-id "-1001234567890" --level critical --allow-command 10
+db-ops telegram --config config.json user-level --user @you --level 100 --pending
+```
+
+- `group-add` registers a chat that has never posted. A group created *for* alerts has nobody
+  talking in it, so intake never sees it — the one case that matters is the one that did not work.
+- `--pending` records a level against a username the node has not met. Intake runs only under the
+  daemon, so on a brand-new node your own first command is refused until it has. The first message
+  from that username adopts the level. **Without `--pending` an unknown name is still refused**: it
+  is far more often a typo, and a level left waiting for whoever claims it is a permission granted
+  to nobody in particular.
+
 - Intake records every sender at level **0**, so until you run `user-level` the bot answers your own
   commands with *"Permission denied (user_type=0)"*.
 - A command with `command_type` N needs a user at N or above, and in a group the group's
@@ -298,9 +313,42 @@ required and each has cost somebody a real incident:
 
 **Proves:** `list-backups` and `list-restores` show the entry with the window it will actually use.
 
-> **Check the target after a restore drill.** A restore can currently report `done` on a database
-> that did not come online — the per-database outcome is written to the store, but the workflow's
-> own verdict comes from its steps returning. See the release notes.
+**A restore's verdict is computed, not asserted.** The workflow ends with a `verify` phase that
+queries every database it touched; one that will not answer fails the run, whatever the steps before
+it reported. A drill that used to read `done` may therefore now read `failed` — what fell is the
+false part. Nothing checks free space on the target before a restore starts: size a drill to fit.
+
+## 9a. SQL tasks, by command
+
+`add-sql` (and `/spbot_add_sql`) writes a script, a command and one target in one call — the
+shortest route to a one-server task. Anything it cannot say takes two calls instead: **what** runs,
+then **where**, once per server.
+
+```powershell
+# WHAT runs. `sql_text` writes the script for you; `script_path` names one that already exists.
+'{"sql_name": "Row count of the audit table", "db_type": "sqlserver",
+  "sql_text": "SELECT COUNT(*) AS n FROM dbo.audit_log;"}' |
+  db-ops common sql-command-add -
+
+# WHERE it runs. One call per target; `sql_id` is the one the first call answered with.
+'{"sql_id": 1, "server_id": "ACME-192-0-2-10-SQL01", "database_name": "PAYROLL_Test",
+  "time_window": {"repeat_interval": 300, "timeout": 600}}' |
+  db-ops common sql-target-add -
+
+db-ops sql-tasks list-tasks --sql-id 1 --all
+```
+
+- A task fed by a Python program (`input_type: "python"`) may use `{target_server_id}` and
+  `{target_database}` in `input.args`; they are filled per target, so **one** command serves every
+  server it is registered on.
+- Both calls validate before writing: a missing script, an undeclared `{name}`, a taken `target_no`
+  or a target whose `sql_id` has no command are refused, not discovered on the schedule.
+- The schedule is the target's own `repeat_interval`. The daemon scan and the SQL task app both run
+  every second, so neither rounds it up.
+- **`active: false` on a target keeps the scheduler away, not a forced run.** `--force` (and
+  `/spbot_run_sql_task`) runs every target of the task, including the switched-off ones.
+
+**Proves:** `list-tasks --all` shows the command with every target and the `active` flag each has.
 
 ## 10. Watch it work
 
@@ -367,7 +415,12 @@ Get-Content logs\errors.log                  # only a header = nothing has faile
 db-ops db --config config.json ops-status '{}'   # which app failed, when, and whether it is overdue
 db-ops check-credentials                     # a target with no resolvable credential
 db-ops common self-status '{"format":"txt"}'  # what this node is, and the addresses it serves
+db-ops common db-status '{"target": "ACME-192-0-2-248"}'   # is one instance, database or schema up and usable
 ```
+
+`db-status` answers at three depths — the instance, one database, one schema — for SQL Server,
+PostgreSQL and Oracle, and reports what that engine actually has rather than pretending the three
+are the same shape. A JSON object in, a JSON object out, so a script can read it.
 
 Each app also writes `logs/<app>_runtime.log` with the command line it ran, its exit code and the
 first lines of its output — which is usually the whole answer.

@@ -792,10 +792,17 @@ SQL_RUN_HISTORY_USAGE = (
     "`sql_tasks list-tasks` answers what tasks exist; this answers what they did.\n"
     "\n"
     "The request is a JSON object, given inline, as @path/to/request.json, or on stdin (-):\n"
-    '  {"limit": 10,          // optional; default 10, capped at 200\n'
-    '   "sql_id": 28,         // optional; default = every task\n'
+    '  {"limit": 10,          // optional; 0 or absent = 10, capped at 100\n'
+    '   "sql_id": 28,         // optional; 0 or absent = every task\n'
     '   "format": "txt"}      // optional; txt for the chat listing, json (default) for the envelope\n'
 )
+
+
+#: What a request means by "no limit given", and the ceiling one may ask for. The ceiling is the
+#: chat's, not the store's: `sql_run_history.MAX_LIMIT` (200) still bounds a direct API caller,
+#: while a listing rendered into a Telegram message is capped lower so it stays readable.
+REQUEST_LISTING_LIMIT = 10
+REQUEST_LISTING_MAX = 100
 
 
 def _sql_run_history_command(argv: list[str]) -> int:
@@ -831,20 +838,28 @@ def _sql_run_history_command(argv: list[str]) -> int:
     from db_ops.config import load_config, resolve_config_path
     from db_ops.db import DbOpsStore
 
-    limit = request.get("limit", sql_run_history.DEFAULT_LISTING_LIMIT)
-    sql_id = request.get("sql_id")
+    # `0 means "unset"` on both, because the caller that matters cannot express "absent".
+    # `/spbot_list_sql_runs` renders its request from a JSON template, so a parameter the operator
+    # skipped still arrives - as 0. Reading 0 literally answered the two questions nobody asks:
+    # `sql_id: 0` filtered on a task numbered zero and returned an empty listing, and `limit: 0`
+    # clamped through `max(1, ...)` to a single row. Both read as "there is no history".
+    try:
+        limit = int(request.get("limit") or 0) or REQUEST_LISTING_LIMIT
+        limit = max(1, min(limit, REQUEST_LISTING_MAX))
+        sql_id = int(request.get("sql_id") or 0) or None
+    except (TypeError, ValueError) as exc:
+        return response.emit(response.fail(
+            "sql-run-history", f"limit and sql_id must be whole numbers: {exc}"))
     try:
         store = DbOpsStore.from_config(load_config(resolve_config_path("sql_tasks", config_path)))
-        rows = sql_run_history.collect(
-            store, limit=int(limit), sql_id=int(sql_id) if sql_id is not None else None)
+        rows = sql_run_history.collect(store, limit=limit, sql_id=sql_id)
     except (TypeError, ValueError) as exc:
         return response.emit(response.fail(
             "sql-run-history", f"limit and sql_id must be whole numbers: {exc}"))
     except Exception as exc:  # noqa: BLE001 - report as a response like every other command.
         return response.emit(response.fail("sql-run-history", str(exc)))
 
-    listing = sql_run_history.render(
-        rows, sql_id=int(sql_id) if sql_id is not None else None)
+    listing = sql_run_history.render(rows, sql_id=sql_id)
     if str(request.get("format") or "json").strip().lower() == "txt":
         print(listing)
         return 0

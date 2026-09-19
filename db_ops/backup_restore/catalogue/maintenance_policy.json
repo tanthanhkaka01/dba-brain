@@ -1,0 +1,35 @@
+{
+  "notes": [
+    "The timing budgets and safety gates for host maintenance: restart-and-wait, service control, and the SQL Server cumulative-update path.",
+    "This is the file db-ops init writes, not a sample: it is read as it stands. data/maintenance_policy.example.json carries worked examples of the parts that ship empty.",
+    "The defaults are in force. A maintenance step with no budget waits for ever, which on a host that is not coming back is indistinguishable from one that is still rebooting.",
+    "'servers' ships empty: a per-host exception is an estate fact. A host with slow storage or a large instance legitimately needs longer than the default and should say so here rather than raising the budget for everyone."
+  ],
+  "maintenance_policy": {
+    "defaults": {
+      "down_timeout_seconds": 600,
+      "up_timeout_seconds": 1800,
+      "services_timeout_seconds": 600,
+      "poll_seconds": 15,
+      "connect_timeout_seconds": 30,
+      "facts_timeout_seconds": 300,
+      "max_uptime_days_warn": 90,
+      "min_free_gb_system": 15.0,
+      "min_free_gb_installer": 5.0,
+      "max_backup_age_hours": 30.0,
+      "patch_timeout_seconds": 5400,
+      "sql_reconnect_timeout_seconds": 900
+    },
+    "field_notes": {
+      "down_timeout_seconds": "How long to wait for the host to STOP answering after a restart is issued. Without this wait, a machine that has not begun shutting down yet looks exactly like one that already came back.",
+      "up_timeout_seconds": "How long to wait for the host to answer again. Thirty minutes covers a Windows host applying updates during the restart.",
+      "services_timeout_seconds": "How long to wait for every named service to report up AFTER the transport answers. The remote shell returns long before a database engine does; a single sample taken when the port opens reports healthy services as down.",
+      "poll_seconds": "How often to re-check while waiting. Short enough to feel responsive, long enough not to hammer a machine that is booting.",
+      "max_uptime_days_warn": "Uptime above this is reported as a warning: long-running Windows hosts accumulate pending file-rename operations, which make database setup refuse to patch.",
+      "min_free_gb_system": "Free space required on the system drive before a cumulative update. Setup extracts and stages there, not next to the installer, which is why this is a separate number from min_free_gb_installer.",
+      "max_backup_age_hours": "A database whose newest full backup is older than this blocks a patch. Overridable per run, deliberately awkwardly.",
+      "patch_timeout_seconds": "Upper bound on the unattended setup run. A cumulative update on a small instance takes minutes; ninety minutes leaves room for a large estate without hanging forever."
+    },
+    "servers": {}
+  }
+}

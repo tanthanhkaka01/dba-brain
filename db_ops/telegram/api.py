@@ -2,17 +2,81 @@ from __future__ import annotations
 from db_ops.lib.telegram_text import TELEGRAM_MESSAGE_LIMIT  # noqa: F401 - one definition, see that module
 
 import json
+import logging
 import mimetypes
+import time
 import uuid
 from pathlib import Path
 from typing import Any
 from urllib import error, parse, request
 
 from db_ops.lib.telegram_text import split_telegram_message
+from db_ops.logging_ops import log_event
 from db_ops.telegram.severity import decorate_message
 
 
 DEFAULT_TELEGRAM_API_URL = "https://api.telegram.org"
+
+#: How long to wait when Telegram rate-limits a call and does **not** say for how long. It always
+#: does in practice; this is the floor for the case where the body is unreadable.
+DEFAULT_RATE_LIMIT_WAIT_SECONDS = 5
+
+#: The longest this layer will wait on one 429. Telegram can ask for minutes after a flood, and a
+#: sleep longer than the daemon's own cycle is indistinguishable from a hang: past this, the part
+#: is given back to the queue, which will bring the row round again.
+MAX_RATE_LIMIT_WAIT_SECONDS = 60
+
+#: Attempts per part, including the first. Two waits is enough for the burst this exists for -
+#: a dozen-part report handed to Telegram at once - and short enough that a genuinely throttled
+#: chat is handed back to the queue rather than held here.
+RATE_LIMIT_ATTEMPTS = 3
+
+#: The gap between the parts of one body. Telegram allows roughly 20 messages a minute to one
+#: group and answers 429 above it. A dozen parts posted with no gap is over that limit by itself,
+#: which is how a report arrived with its middle missing.
+PART_PAUSE_SECONDS = 0.35
+
+
+class TelegramRateLimited(RuntimeError):
+    """Telegram refused this call for **its own** rate limit, and said for how long.
+
+    A distinct type because the response is different from every other failure: nothing is wrong
+    with the message, the token or the chat, and retrying after the interval Telegram hands back
+    is the documented, expected thing to do. It used to arrive as a bare ``RuntimeError`` reading
+    ``Telegram HTTP 429: ...``, so the queue's retry loop spent all three attempts inside the same
+    second and marked the row failed - the row's whole output lost to a limit that had asked for a
+    two-second pause.
+    """
+
+    def __init__(self, message: str, retry_after: float) -> None:
+        super().__init__(message)
+        self.retry_after = float(retry_after)
+
+
+def _retry_after_seconds(body: str) -> float:
+    """The ``retry_after`` Telegram sends with a 429, clamped to something a caller can wait for."""
+    seconds: Any = None
+    try:
+        parsed = json.loads(body)
+        seconds = (parsed.get("parameters") or {}).get("retry_after")
+    except (ValueError, AttributeError):
+        seconds = None
+    try:
+        wait = float(seconds)
+    except (TypeError, ValueError):
+        wait = float(DEFAULT_RATE_LIMIT_WAIT_SECONDS)
+    return max(0.0, wait)
+
+
+def _log_delivery(level: str, message: str) -> None:
+    """Say it in the app log, not only in the store.
+
+    On 2026-09-09 a report lost parts to a 429 and the only record anywhere was ``metadata_json``
+    on the queue row. A warning nobody received is a warning that did not happen, so the loss has
+    to be visible where an operator reads failures. The logger is the one the telegram CLI
+    configures; outside it this is a no-op, which is what a test wants.
+    """
+    log_event(logging.getLogger("telegram"), level=level, message=message)
 
 
 
@@ -43,6 +107,11 @@ def call_telegram_api(
             body = response.read().decode("utf-8")
     except error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
+        # 429 is Telegram asking for a pause, not refusing the message. It carries
+        # `parameters.retry_after`, and the caller can only honour it if this layer keeps it.
+        if exc.code == 429:
+            raise TelegramRateLimited(
+                f"Telegram HTTP 429: {body}", _retry_after_seconds(body)) from exc
         raise RuntimeError(f"Telegram HTTP {exc.code}: {body}") from exc
     except error.URLError as exc:
         raise RuntimeError(f"Telegram request failed: {exc.reason}") from exc
@@ -64,6 +133,7 @@ def send_message(
     reply_to_message_id: int | None = None,
     reply_markup: dict[str, Any] | None = None,
     message_type: str | None = None,
+    part_pause_seconds: float = PART_PAUSE_SECONDS,
 ) -> dict[str, Any]:
     if not chat_id:
         raise RuntimeError("Telegram chat id is empty.")
@@ -85,6 +155,11 @@ def send_message(
     parts = split_telegram_message(text)
     first_result: dict[str, Any] | None = None
     for index, part in enumerate(parts):
+        # Paced, because the limit this hits is Telegram's own: roughly 20 messages a minute to
+        # one group. A dozen parts posted back to back is over it before the first one is read,
+        # and what came back was a 429 that lost the rest of the body.
+        if index:
+            time.sleep(part_pause_seconds)
         payload: dict[str, Any] = {
             "chat_id": str(chat_id),
             # Severity emoji goes on here, once, for every producer — see db_ops.telegram.severity.
@@ -100,18 +175,66 @@ def send_message(
         if reply_markup is not None and index == len(parts) - 1:
             payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
 
-        result = call_telegram_api(
+        result = _send_part_honouring_rate_limit(
             bot_token=bot_token,
-            method_name="sendMessage",
             payload=payload,
             api_url=api_url,
             timeout_seconds=timeout_seconds,
+            part_number=index + 1,
+            part_count=len(parts),
+            chat_id=str(chat_id),
         )
         # The first part's id is the one recorded against the queue row: it is where the output
         # starts, so a reply that quotes it quotes the beginning and not the tail.
         if first_result is None:
             first_result = result
     return first_result or {}
+
+
+def _send_part_honouring_rate_limit(
+    *,
+    bot_token: str,
+    payload: dict[str, Any],
+    api_url: str,
+    timeout_seconds: int,
+    part_number: int,
+    part_count: int,
+    chat_id: str,
+) -> dict[str, Any]:
+    """One ``sendMessage``, waiting out a 429 the number of seconds Telegram asked for.
+
+    Retrying *at all* is what was missing. The queue above does retry, but immediately and three
+    times, so a limit asking for two seconds consumed every attempt inside one second and the row
+    was marked failed - a multi-part report lost its later parts and the only record anywhere was
+    ``metadata_json`` on that row.
+
+    Waiting is capped: past :data:`MAX_RATE_LIMIT_WAIT_SECONDS` the part is handed back to the
+    queue instead, because a chat that is throttled for minutes is a queue problem, and a send
+    layer asleep longer than the daemon's cycle looks exactly like a hang.
+    """
+    where = f"part {part_number}/{part_count} to chat {chat_id}"
+    for attempt in range(1, RATE_LIMIT_ATTEMPTS + 1):
+        try:
+            return call_telegram_api(
+                bot_token=bot_token,
+                method_name="sendMessage",
+                payload=payload,
+                api_url=api_url,
+                timeout_seconds=timeout_seconds,
+            )
+        except TelegramRateLimited as exc:
+            wait = min(exc.retry_after, float(MAX_RATE_LIMIT_WAIT_SECONDS))
+            if attempt == RATE_LIMIT_ATTEMPTS or exc.retry_after > MAX_RATE_LIMIT_WAIT_SECONDS:
+                _log_delivery("error", (
+                    f"telegram.send_message rate limited and NOT delivered: {where}, "
+                    f"Telegram asked for {exc.retry_after:.0f}s after {attempt} attempt(s). "
+                    "The message goes back to the queue."))
+                raise
+            _log_delivery("warning", (
+                f"telegram.send_message rate limited: {where}, waiting {wait:.1f}s "
+                f"(attempt {attempt} of {RATE_LIMIT_ATTEMPTS})"))
+            time.sleep(wait)
+    raise RuntimeError(f"Telegram send gave up on {where}.")  # unreachable; the loop returns or raises
 
 
 def send_document(

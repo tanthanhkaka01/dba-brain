@@ -42,7 +42,9 @@ IGNORED_NAMES = frozenset({"__all__"})
 #: name -> the files that still define it identically. Measured 2026-08-15 at 2.85.19.
 #: Every entry is work to do; none of it is permission.
 KNOWN_DUPLICATES: dict[str, frozenset[str]] = {
-
+    # 0.19.0 ships the reserved placeholder names in two places; 0.20.0 moves them to
+    # lib/task_input.py and removes this entry.
+    "TARGET_PLACEHOLDERS": frozenset({"common/sql_task_admin.py", "sql_tasks/python_source.py"}),
 }
 
 

@@ -222,9 +222,20 @@ def test_an_empty_history_says_so_rather_than_printing_a_bare_header():
         "You have not run any bot command yet.")
 
 
-def test_the_listing_stops_before_telegram_truncates_it_and_says_so():
-    """Telegram cuts at 4096 characters. A listing the transport truncates loses its newest rows
-    with nothing to say it happened, which is the wrong end and a silent one."""
+def test_a_long_listing_is_sent_whole_in_parts_not_cut_short():
+    """The listing renders every entry; the transport splits it.
+
+    It used to stop at a 3,500-character budget and append "N more not shown", which cost twice:
+    the entries past the budget were lost, and the header counted the survivors rather than what
+    existed — so a history of ten distinct commands with one long one among them printed
+    "Your last 1 command(s)" directly above a line admitting nine were missing. The budget also
+    broke on the FIRST oversized entry, so one long command hid every command after it.
+
+    `lib.telegram_text.split_telegram_message` is the standard for this and it already paces the
+    parts against the rate limit, so a listing has no reason to solve it again.
+    """
+    from db_ops.lib.telegram_text import split_telegram_message
+
     long_argument = "A-RATHER-LONG-SERVER-NAME-AS-THIS-ESTATE-WRITES-THEM-%03d" % 0
     rows = [_row(text=f"/spbot_shrink_log {long_argument} database_{n} 2000",
                  command_payload=f"_shrink_log {long_argument} database_{n} 2000",
@@ -233,6 +244,16 @@ def test_the_listing_stops_before_telegram_truncates_it_and_says_so():
 
     text = history.render(history.collect(_Store(rows), user_id="123456789", limit=history.MAX_LIMIT))
 
-    assert len(text) < 4096
-    assert "more not shown (message size limit)." in text
-    assert "database_0 2000\n" in text, "the newest rows are the ones that must survive"
+    assert "more not shown" not in text, "nothing is dropped any more"
+    assert len(text) > 4096, "this listing is deliberately longer than one message"
+
+    # The header counts what the caller actually has, not what fitted.
+    shown = text.splitlines()[0]
+    assert shown.startswith(f"Your last {history.MAX_LIMIT} command(s)"), shown
+
+    # And every entry survives the trip, across however many parts it takes.
+    parts = split_telegram_message(text)
+    assert len(parts) > 1, "a body this long is sent as several parts"
+    joined = "".join(parts)
+    assert "database_0 2000" in joined, "the newest entry is there"
+    assert "database_49 2000" in joined, "and so is the last one the limit allows"

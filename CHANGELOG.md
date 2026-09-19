@@ -15,7 +15,56 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
-Nothing yet.
+## [0.19.0] - 2026-09-19
+
+### Fixed
+
+- **A restore's verdict is computed from the state of the databases it touched**, not asserted by
+  the step that ran last. The workflow ends with a `verify` phase that queries each database; one
+  that will not answer is a failed restore.
+- **`restore-add` accepts a script-driven restore.** It required `source` and `target`, which the
+  script-driven shape does not carry.
+- **`user-level --pending` grants a level to a username the node has not seen yet**, adopted on that
+  user's first message. Without the flag an unknown name is still refused.
+- **Reports print addresses in full.** A render-time abbreviation produced forms that appeared in no
+  configuration file and passed every identifier check.
+- **Multi-part reports survive Telegram's rate limit.** Parts are paced, HTTP 429 is waited out, and
+  a refused message returns to the queue.
+- **A forced SQL task run started without a terminal no longer waits indefinitely.** The prompt
+  gives up after 120 seconds; pass `--assume-yes` for an unattended run.
+- **`check-credentials` and `check-secret` see a legacy-Oracle target's secrets.** Both reported
+  clean while every collection for that target failed.
+- **`telegram route` refuses a JSON request** instead of answering with an empty chat id.
+- **An SLA run with no policy reports `NOT_CONFIGURED`**, not `PASSED`.
+- **`metrics collect` states why it collected nothing.**
+- **The command menu order reaches a new install.**
+- **`sla validate --notify` works on a node that has never queued a message.**
+- **`/spbot_list_sql_runs` answers when called with no arguments.** A default declared on the
+  parameter is now applied.
+- **A SQL task whose Python step is killed reports what is known:** the task ran no SQL of its own,
+  and work the program had already done is not rolled back.
+- **A task runs on its own schedule.** The daemon scan and the SQL task app interval are one second,
+  so neither rounds a task's `repeat_interval` up.
+
+### Added
+
+- **`db-status`** — whether a server is up and usable, at three depths: instance, database, schema;
+  SQL Server, PostgreSQL and Oracle.
+- **`sql-command-add` and `sql-target-add`** — register a SQL task in two calls: what it runs, and
+  where. They cover what `add-sql` cannot express: a task fed by a Python program, an array or
+  folder of scripts, and additional targets for an existing task. The SQL is given as a file path or
+  as text, in which case the file is written for you.
+- **`{target_server_id}` / `{target_database}` in a Python step's arguments**, substituted per
+  target, so one command serves several targets.
+- **`telegram group-add`** — register a group that has never posted.
+- **`timezone`**, and `self-status` names the clock the node runs on.
+- **A shipped seed for every catalogued configuration file.**
+
+### Changed
+
+- **A restore that previously reported success may now report failure.** The verdict is computed
+  rather than asserted, so restores that were failing silently now say so.
+
 
 ## [0.17.0] - 2026-09-16
 

@@ -352,7 +352,8 @@ def add_restore(request: dict[str, Any] | None = None, *,
                 data_dir: str | Path | None = None,
                 key: str | None = None) -> dict[str, Any]:
     """Register one ``backup_restore.restores[]`` entry and the secrets it logs in with."""
-    from db_ops.backup_restore.config import load_restore_configs
+    from db_ops.backup_restore.config import (
+        SCRIPT_RESTORE_DB_TYPES, is_script_restore, load_restore_configs)
 
     payload = dict(request or {})
     root = Path(data_dir) if data_dir else data_sources.DEFAULT_DATA_DIR
@@ -364,12 +365,35 @@ def add_restore(request: dict[str, Any] | None = None, *,
         raise RegistrationError(
             "missing required field(s): restore_id. A restore entry needs a name before anything "
             "else can refer to it.")
-    for name in ("source", "target"):
-        block = payload.get(name)
-        if not isinstance(block, dict) or not block:
+    # Two shapes live in `restores[]`, and this command knew only one. `config.is_script_restore`
+    # is the product's own answer to which is which - declaring a `script` makes an entry
+    # script-driven, and so does an Oracle/PostgreSQL/MySQL `db_type` - and the SQL Server parser
+    # already skips those rather than failing on the SMB/`.bak`/sqlcmd fields they do not carry.
+    # Requiring `source` and `target` of every entry therefore refused, by construction, every
+    # entry the engine path is written to step over.
+    #
+    # Measured 2026-09-17 rebuilding a node one command at a time: **9 of 14 production restores
+    # were refused**, all with "needs a source object" - the Oracle/PostgreSQL drills and the
+    # cross-site transfers. Each one runs today and each one had to go back to being a hand-edit
+    # of restore_config.json, which is the hand-edit `restore-add` was added in 0.17.0 to replace.
+    if is_script_restore(payload):
+        # What a script-driven entry reads from. The script itself may come from `script` or be
+        # implied by `db_type`, so `backup_dir` is the one field that is always its own.
+        if not str(payload.get("backup_dir") or "").strip():
             raise RegistrationError(
-                f"{restore_id} needs a {name} object - see restore-add --help and "
-                "data/restore_config.example.json for the fields it takes.")
+                f"{restore_id} is script-driven (it declares a script, or a db_type of "
+                f"{'/'.join(sorted(SCRIPT_RESTORE_DB_TYPES))}), so it needs backup_dir - the "
+                "directory the script reads the backup from. A script-driven entry takes no "
+                "source/target object; those belong to the SQL Server engine path.")
+    else:
+        for name in ("source", "target"):
+            block = payload.get(name)
+            if not isinstance(block, dict) or not block:
+                raise RegistrationError(
+                    f"{restore_id} needs a {name} object - see restore-add --help and "
+                    "data/restore_config.example.json for the fields it takes. (An entry that "
+                    "declares a script, or an oracle/postgresql/mysql db_type, is script-driven "
+                    "and needs backup_dir instead.)")
     # Checked here rather than left to the loader, because the loader accepts the two legacy
     # spellings and this command must not let a new entry be written in them.
     if "cleanup_retention" not in payload:

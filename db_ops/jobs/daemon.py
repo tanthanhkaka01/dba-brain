@@ -116,7 +116,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run DB Ops app-command daemon forever.")
     parser.add_argument("--config", default=None, help="Path to config JSON. Defaults to config.jobs.json or config.json.")
     parser.add_argument("--data-dir", default=str(DEFAULT_DATA_DIR), help="Directory containing app_commands.json.")
-    parser.add_argument("--delay-seconds", type=int, default=2, help="Delay between app command scans. Default: 2.")
+    # 1 second since 2026-09-18, from 2. The scan is a read of app_commands.json and a due-ness
+    # check; what it costs is nothing next to being the thing that decides when a task runs. At 2
+    # a command asking for every 60 s got 60-62, and the operator had to reason about two clocks.
+    parser.add_argument("--delay-seconds", type=int, default=1, help="Delay between app command scans. Default: 1.")
     parser.add_argument("--once", action="store_true",
                         help="Run one app command scan and exit after started commands finish. "
                              "Long-running services (timeout 0, e.g. the web host) are skipped, "

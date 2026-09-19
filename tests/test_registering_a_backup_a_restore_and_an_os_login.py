@@ -719,3 +719,70 @@ def test_one_notify_on_the_entry_covers_every_job(tmp_path):
     outcome = registration.add_backup(request, data_dir=tmp_path, key=KEY)
 
     assert outcome["backup_id"] == "ACME_APPDB_FULL"
+
+
+# ------------------------------------------------------------------- the two restore shapes
+# `restores[]` holds two kinds of entry and `config.is_script_restore` is what tells them apart.
+# Until 2026-09-17 `add_restore` required `source` and `target` of every entry, so it refused - by
+# construction - every entry the SQL Server parser is written to step over. Measured rebuilding a
+# node one command at a time: 9 of 14 production restores refused, all with "needs a source
+# object", and each one had to go back to being the hand-edit this command exists to replace.
+
+
+def _script_restore(**over):
+    request = {
+        "restore_id": "ACME_PG_RESTORE_DRILL",
+        "db_type": "postgresql",
+        "script": "assets/restore/pg_drill.sh",
+        "backup_dir": "/backup/pg",
+        "cleanup_retention": 86400,
+        "time_window": {"from_hour": 2, "to_hour": 5, "repeat_interval": 72000,
+                        "retry_interval": 600, "timeout": 7200},
+        "notify": {"logging_on_run": {"enabled": True, "telegram_chat": "restore"},
+                   "alert_on_error": {"enabled": True, "telegram_chat": "restore"}},
+    }
+    request.update(over)
+    return request
+
+
+def test_a_script_driven_restore_registers_without_source_or_target(tmp_path):
+    registration.add_restore(_script_restore(), data_dir=tmp_path, key=KEY)
+
+    written = json.loads((tmp_path / "restore_config.json")
+               .read_text(encoding="utf-8"))["backup_restore"]["restores"]
+    assert [entry["restore_id"] for entry in written] == ["ACME_PG_RESTORE_DRILL"]
+    assert "source" not in written[0] and "target" not in written[0]
+
+
+def test_a_sqlserver_entry_that_declares_a_script_is_script_driven_too(tmp_path):
+    # The engine is not the deciding factor - `script` is. A container-to-container SQL Server
+    # drill reuses the Oracle/PostgreSQL machinery and carries none of the SMB/.bak fields.
+    registration.add_restore(
+        _script_restore(restore_id="ACME_MSSQL_TO_DRILL", db_type="sqlserver"),
+        data_dir=tmp_path, key=KEY)
+
+    written = json.loads((tmp_path / "restore_config.json")
+               .read_text(encoding="utf-8"))["backup_restore"]["restores"]
+    assert written[0]["restore_id"] == "ACME_MSSQL_TO_DRILL"
+
+
+def test_a_script_driven_restore_still_needs_the_directory_it_reads_from(tmp_path):
+    with pytest.raises(registration.RegistrationError) as excinfo:
+        registration.add_restore(
+            _script_restore(backup_dir=""), data_dir=tmp_path, key=KEY)
+
+    message = str(excinfo.value)
+    assert "backup_dir" in message
+    # It must not send the operator after source/target, which this shape never has.
+    assert "needs a source object" not in message
+
+
+def test_an_engine_restore_is_still_refused_without_source_and_target(tmp_path):
+    # The original rule survives for the shape it was written for, and the refusal now points a
+    # script-driven entry at the field it actually needs.
+    with pytest.raises(registration.RegistrationError) as excinfo:
+        registration.add_restore(_restore(source={}), data_dir=tmp_path, key=KEY)
+
+    message = str(excinfo.value)
+    assert "needs a source object" in message
+    assert "backup_dir" in message

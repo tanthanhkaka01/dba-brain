@@ -81,6 +81,35 @@ def normalize_sql_access(raw: Any, *, label: str = "") -> dict[str, Any]:
     return resolved
 
 
+#: The ``sql_access`` fields that name an entry in the secret store, and what each one holds.
+#:
+#: Written down here, once, because nothing else in the tree knew these fields named secrets at
+#: all: ``check-credentials`` skipped a legacy target outright and ``check-secret`` walked five
+#: config files without reading ``sql_access``, so the bridge token an estate had configured was
+#: invisible to both. Every collection for that target then failed on a secret two commands had
+#: just reported clean.
+SECRET_REF_FIELDS = {
+    "secret_ref": "the shared secret the Oracle bridge token is signed with",
+    "connect_ref": "a whole user/password@host/service connect string",
+}
+
+
+def secret_refs(raw: Any) -> dict[str, str]:
+    """The secret-store refs one ``sql_access`` block names, ``field -> ref``.
+
+    Empty for a ``direct`` target, which names none — so a caller can ask every target the same
+    question rather than branching on transport first.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    found: dict[str, str] = {}
+    for field in SECRET_REF_FIELDS:
+        ref = str(raw.get(field) or "").strip()
+        if ref:
+            found[field] = ref
+    return found
+
+
 def is_legacy(sql_access: Any) -> bool:
     """True when this target's SQL must go through the legacy tool rather than a DB connection."""
     if not isinstance(sql_access, dict):

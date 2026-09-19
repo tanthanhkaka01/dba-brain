@@ -29,6 +29,7 @@ import socket
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from db_ops.lib import timezone as display_timezone
 from db_ops.lib.timezone import format_display_text
 from typing import Any
 
@@ -338,10 +339,21 @@ def collect(*, tool_root: Path, version: str, public_version: str | None = None,
     running_role = str((ours or {}).get("node_role") or "") if (ours or {}).get(
         "status") == "running" else ""
 
+    # The clock this node's SCHEDULES are read against, which is the one identity field that
+    # changes what the node *does* rather than what it is: every `time_window.from_hour` is a local
+    # hour read against it. It was absent until 2026-09-16, and the `+08` a reader could see came
+    # only from `format_display_text` stamping an offset onto the two uptime lines - so the offset
+    # leaked onto two lines and the zone appeared nowhere. `db timezone` and `runtime_nodes` had
+    # computed the whole answer all along.
+    clock = display_timezone.describe()
+
     return {
         "version": version,
         "public_version": public_version,
         "python": platform.python_version(),
+        "timezone": clock.get("timezone"),
+        "utc_offset": clock.get("utc_offset"),
+        "tz_abbreviation": clock.get("tz_abbreviation"),
         "distribution": distribution(),
         "runtime": runtime(),
         "os": operating_system(),
@@ -359,6 +371,22 @@ def collect(*, tool_root: Path, version: str, public_version: str | None = None,
         "db_ops_uptime": ours,
         "pid": os.getpid(),
     }
+
+
+def _timezone_line(facts: dict[str, Any]) -> str:
+    """The zone, the offset and the abbreviation on one line - all three, because each answers a
+    different question. The name is what a config file can be written back to, the offset is what
+    a reader converts a timestamp with, and the abbreviation is what the estate calls it. Under
+    daylight saving the offset changes twice a year and only the name does not.
+    """
+    zone = facts.get("timezone") or "unknown"
+    offset = str(facts.get("utc_offset") or "")
+    abbreviation = str(facts.get("tz_abbreviation") or "")
+    # Many zones have no abbreviation of their own and Python answers with the offset again, so a
+    # naive join reads `+07 (+07)`. Print it only when it says something the offset did not.
+    if abbreviation and abbreviation != offset:
+        offset = f"{offset} ({abbreviation})".strip()
+    return f"timezone  : {zone}" + (f"  {offset}" if offset else "")
 
 
 def render(facts: dict[str, Any]) -> str:
@@ -394,6 +422,7 @@ def render(facts: dict[str, Any]) -> str:
         f"ip        : {host.get('ip') or 'unavailable'}",
         f"tool root : {facts.get('tool_root')}",
         f"node_role : {facts.get('node_role')}",
+        _timezone_line(facts),
     ]
     if facts.get("store"):
         lines.append(f"store     : {facts['store']}")

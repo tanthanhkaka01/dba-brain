@@ -1705,6 +1705,20 @@ def _command_parameter_summary(config: dict[str, Any]) -> str:
     return " ".join(parts)
 
 
+def menu_order_of(entry: Any) -> float:
+    """Where a command sits in the listing, as a number the config carries.
+
+    It is a **float** so a command can be inserted between two that already exist - 2.5 between 2
+    and 3 - without renumbering the file and re-reading every diff to see whether anything else
+    moved. An entry with no `menu_order` sorts to the end rather than to the front: a command
+    somebody forgot to place should be visible, not first.
+    """
+    try:
+        return float(entry.get("menu_order"))
+    except (TypeError, ValueError):
+        return float("inf")
+
+
 def execute_list_all_command_command(
     *,
     store: DbOpsStore,
@@ -1729,11 +1743,12 @@ def execute_list_all_command_command(
     from db_ops.lib import listing as listing_lib
 
     data_dir = TOOL_ROOT / "data"
-    entries = [
-        entry for entry in load_json_object(data_dir / "telegram_support_commands.json",
-                                            "telegram_support_commands")
-        if isinstance(entry, dict)
-    ]
+    entries = sorted(
+        (entry for entry in load_json_object(data_dir / "telegram_support_commands.json",
+                                             "telegram_support_commands")
+         if isinstance(entry, dict)),
+        key=menu_order_of,
+    )
 
     keys = row.keys() if hasattr(row, "keys") else {}
     chat_type = str((row["chat_type"] if "chat_type" in keys else "") or "private")
@@ -3392,16 +3407,28 @@ def cli_action_values(
             continue
         if bool(parameter.get("required", True)) and str(value).strip() == "":
             raise TelegramCommandError(f"Missing required argument: {name}.", exit_code=2)
-        if str(value).strip() == "" and not bool(parameter.get("required", True)) and name in values:
-            # An optional argument that was not typed keeps its `defaults` entry. Assigning the
+        if str(value).strip() == "" and not bool(parameter.get("required", True)):
+            # An optional argument that was not typed falls back to its default. Assigning the
             # empty string over it is what broke `/spbot_trace_session` with no argument on
             # 2026-08-12: `"session_id":{session_id}` rendered as `"session_id":,` and the CLI
-            # rejected its own payload as malformed JSON. `defaults` only means something if an
-            # absent optional value falls back to it.
+            # rejected its own payload as malformed JSON.
             #
-            # Only when a default exists — an optional parameter with none still resolves to "",
-            # which is what `conditional_args` tests with `equals`/`not_equals`.
-            continue
+            # A default may be written in either of two places, and BOTH are read here since
+            # 2026-09-18. `action_config.defaults` is the older spelling; `parameters[].default`
+            # is the one the prompt flow already uses and the one a reader writes without
+            # thinking, next to the parameter it belongs to. Reading only the first is what broke
+            # `/spbot_list_sql_runs` the same way three weeks after the comment above was
+            # written - "request is not valid JSON: Expecting value: line 1 column 12" - because
+            # its two zeros live on the parameters.
+            #
+            # An optional parameter with no default in either place still resolves to "", which
+            # is what `conditional_args` tests with `equals`/`not_equals`.
+            if name in values:
+                continue
+            fallback = parameter.get("default")
+            if fallback is not None:
+                values[name] = str(fallback)
+                continue
         if str(parameter.get("validator") or "") == "target_ip" and str(value).strip():
             value = validate_target_ip(value)
         if str(parameter.get("validator") or "") == "regex" and str(value).strip():

@@ -234,6 +234,13 @@ def _print_collect_summary(summary: object) -> None:
         "duration_seconds",
     ):
         print(f"{key}: {getattr(summary, key)}")
+    # The run's own words, last, where the eye ends up. The summary has carried a `message` since
+    # it was written and nothing printed it, so what the run had to say - what it archived, and
+    # since 2026-09-16 why it collected from nothing - reached the store and never the operator
+    # who had just asked.
+    message = str(getattr(summary, "message", "") or "").strip()
+    if message:
+        print(message)
 
 
 def _format_latest_table(rows: list[object]) -> str:

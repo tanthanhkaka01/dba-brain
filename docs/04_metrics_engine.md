@@ -1224,6 +1224,13 @@ and grades itself in SQL. Editing those thresholds will not change SQL Server be
 
 ## Common Issues
 
+- **`target_count: 0`: the run says why, in its last line.** Since 2026-09-16 a collection that
+  found nothing to collect from names which of the five situations it is in — no inventory at all,
+  every instance `enabled: false`, every instance `metrics.enabled: false`, a `--db-type` /
+  `--target-id` that matched nothing (it names what the estate *does* have, because the cause is
+  usually a typo), or an inventory that should have produced targets and did not, which says
+  **defect** rather than advice. The sentence is `CollectSummary.message`, printed after the
+  counts and stored on the run. Before that, all five ended at the same accurate, useless `0`.
 - No rows collected: run `collect --dry-run` and confirm targets and metrics are active and due.
 - Connection failures: check target credential names and secret references.
 - Missing metric file: confirm the variant `file` in `data/metric_definitions.json` exists under `db_ops/metrics/collectors/`.

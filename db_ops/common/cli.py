@@ -74,6 +74,8 @@ USAGE = (
     "  lift-example     Refresh a data/*.example.json from your own file, refusing identifiers\n"
     "  build-showcase   Snapshot the published pages with every real name replaced (see --help)\n"
     "  instance-add     Register one database to monitor: inventory, credential, secret (see --help)\n"
+    "  sql-command-add  Register WHAT a SQL task runs: scripts, or a python program (see --help)\n"
+    "  sql-target-add   Register WHERE a SQL task runs: one server, one schedule (see --help)\n"
     "  remote-credential-add  Register one host's OS login + the cmd_access naming it (see --help)\n"
     "  secret-set       Store one secret encrypted, never in clear; request on stdin (see --help)\n"
     "  probe-host       What a host listens on, and what db_ops can do with it (see --help)\n"
@@ -94,6 +96,7 @@ USAGE = (
     "  restore-log      Apply log backups, with STOPAT for a point in time (see --help)\n"
     "  restore-key      Import the certificate an encrypted backup needs (see --help)\n"
     "  restore-metadata  Apply SQL Server logins/roles/Agent jobs from .sql exports (see --help)\n"
+    "  db-status        Is a server up and usable: instance, one database, one schema (see --help)\n"
     "  verify-restore   Is the restored database actually usable, not just 'done' (see --help)\n"
     "  fetch-file       Copy one named file from a host to here (see --help)\n"
     "  send-file        Copy one named file from here to a host (see --help)\n"
@@ -421,6 +424,58 @@ def _instance_add_command(argv: list[str]) -> int:
         data=outcome))
 
 
+def _sql_command_add_command(argv: list[str]) -> int:
+    """``sql-command-add`` — the CLI face of :mod:`db_ops.common.sql_task_admin`."""
+    from db_ops.common import sql_task_admin
+    from db_ops.lib import response
+
+    if argv and argv[0] in {"-h", "--help"}:
+        print(sql_task_admin.USAGE_COMMAND)
+        return 0
+    if not argv:
+        print(sql_task_admin.USAGE_COMMAND, file=sys.stderr)
+        return response.emit(response.fail("sql-command-add", "no request given; see --help"))
+    request, code = _read_json_request(argv[0], sql_task_admin.USAGE_COMMAND)
+    if request is None:
+        return code
+    try:
+        outcome = sql_task_admin.add_sql_command(request)
+    except sql_task_admin.SqlTaskAdminError as exc:
+        return response.emit(response.fail("sql-command-add", str(exc)))
+    verb = "replaced" if outcome["replaced"] else "registered"
+    return response.emit(response.ok(
+        "sql-command-add",
+        message=f"{verb} sql_id {outcome['sql_id']} ({outcome['sql_code']}) - wrote "
+                f"{', '.join(outcome['files_written'])}",
+        data=outcome))
+
+
+def _sql_target_add_command(argv: list[str]) -> int:
+    """``sql-target-add`` — the CLI face of :mod:`db_ops.common.sql_task_admin`."""
+    from db_ops.common import sql_task_admin
+    from db_ops.lib import response
+
+    if argv and argv[0] in {"-h", "--help"}:
+        print(sql_task_admin.USAGE_TARGET)
+        return 0
+    if not argv:
+        print(sql_task_admin.USAGE_TARGET, file=sys.stderr)
+        return response.emit(response.fail("sql-target-add", "no request given; see --help"))
+    request, code = _read_json_request(argv[0], sql_task_admin.USAGE_TARGET)
+    if request is None:
+        return code
+    try:
+        outcome = sql_task_admin.add_sql_target(request)
+    except sql_task_admin.SqlTaskAdminError as exc:
+        return response.emit(response.fail("sql-target-add", str(exc)))
+    verb = "replaced" if outcome["replaced"] else "registered"
+    return response.emit(response.ok(
+        "sql-target-add",
+        message=f"{verb} target {outcome['target_no']} of sql_id {outcome['sql_id']} on "
+                f"{outcome['server_id']} - wrote {', '.join(outcome['files_written'])}",
+        data=outcome))
+
+
 def _remote_credential_add_command(argv: list[str]) -> int:
     """``remote-credential-add`` — the CLI face of :mod:`db_ops.common.remote_credential_admin`."""
     import os
@@ -595,6 +650,43 @@ CHECK_IDENTIFIERS_USAGE = (
     "  {\"extra_terms\": [\"SITECODE\"]}           add a term configuration does not name\n"
     "  {\"allow\": [\"# example:\"]}             lines carrying this fragment are deliberate\n"
 )
+
+DB_STATUS_USAGE = (
+    "usage: python -m db_ops.common.cli db-status <json>|@<file>|- [--config ...]\n"
+    "\n"
+    "What state a server is in, at the depth you ask for. One shape whichever engine answers,\n"
+    "so a caller does not need to know which engine it is talking to.\n"
+    "\n"
+    "The instance is checked at EVERY depth: a verdict about a database on an instance nobody\n"
+    "could reach is a guess, not a verdict. A state column is never the whole answer either -\n"
+    "a real statement is run, because a database can read ONLINE and still refuse a query while\n"
+    "it finishes an upgrade step.\n"
+    "\n"
+    "  {\"target\": \"ACME-192-0-2-248\"}                                  // depth: instance\n"
+    "  {\"target\": \"ACME-192-0-2-248\", \"depth\": \"database\"}            // every database\n"
+    "  {\"target\": \"ACME-192-0-2-248\", \"depth\": \"database\",\n"
+    "   \"databases\": [\"SALES_STG\"]}                                   // just these\n"
+    "  {\"target\": \"ACME-192-0-2-248\", \"depth\": \"schema\",\n"
+    "   \"database\": \"APPDB\", \"schemas\": [\"sales\"]}\n"
+    "\n"
+    "Fields:\n"
+    "  target          (required) server_id, or \"<db_type> <ip> [port]\"\n"
+    "  depth           instance (default) | database | schema\n"
+    "  databases       names to check at depth database; default every database\n"
+    "  database        (required at depth schema on sqlserver/postgresql) which one to look in\n"
+    "  schemas         names to check at depth schema; default every schema\n"
+    "  credential_name which login to connect as (default: the instance's)\n"
+    "  timeout_seconds connect/statement timeout\n"
+    "  data_dir        folder holding db_instances.json (default: data/)\n"
+    "\n"
+    "PostgreSQL and Oracle restore at the level of the INSTANCE, so for a restore the instance\n"
+    "depth is the whole answer there. SQL Server restores one database at a time, so each can\n"
+    "fail on its own and the database depth is what that engine needs.\n"
+    "\n"
+    "data: {\"ok\", \"depth\", \"db_type\", \"server_id\", \"instance\": {\"ok\", \"state\", ...},\n"
+    "       \"items\": [{\"name\", \"kind\", \"state\", \"ok\", \"detail\"}], \"checked\", \"failed\"}\n"
+)
+
 
 CHECK_SECRET_USAGE = (
     "usage: python -m db_ops.common.cli check-secret <json>|@<file>|- "
@@ -1996,6 +2088,57 @@ SELF_STATUS_USAGE = (
 )
 
 
+def _db_status_command(argv: list[str]) -> int:
+    """``db-status`` - the verdict layer over what the catalog lists.
+
+    Separate from `verify-restore`, which asks the same question *in the context of a restore* and
+    reaches Oracle and PostgreSQL over ssh because that is how a container drill is reachable. This
+    one goes through the inventory and the ordinary SQL path, which is what the SLA grader, the
+    fleet page and the chat commands already use.
+    """
+    from db_ops.common import dbstatus
+    from db_ops.lib import response
+
+    source, config_path, rest = "", None, list(argv)
+    while rest:
+        token = rest.pop(0)
+        if token in {"-h", "--help"}:
+            print(DB_STATUS_USAGE)
+            return 0
+        if token == "--config":
+            config_path = rest.pop(0) if rest else None
+        elif not source:
+            source = token
+        else:
+            print(f"Unexpected argument: {token}\n\n{DB_STATUS_USAGE}", file=sys.stderr)
+            return 2
+    _ = config_path
+
+    request, code = _read_json_request(source or "{}", DB_STATUS_USAGE)
+    if request is None:
+        return code
+    try:
+        data = dbstatus.status(request)
+    except (dbstatus.DbStatusError, Exception) as exc:  # noqa: BLE001 - reported, not raised
+        return response.emit(response.fail("db-status", str(exc)))
+
+    instance = data.get("instance") or {}
+    where = data.get("server_id") or "target"
+    if data["depth"] == "instance":
+        message = f"{where}: instance {instance.get('state')}"
+    else:
+        message = (f"{where}: instance {instance.get('state')}, "
+                   f"{data['checked']} {data['depth']}(s) checked, {data['failed']} not usable")
+    # `success` is whether the QUESTION was answered; `data.ok` is the answer. A server that is
+    # down is a successful call reporting `ok: false` - the same split `check-secret` makes, and
+    # the reason a caller can tell "it is broken" from "I could not find out".
+    return response.emit(response.ok(
+        "db-status", message=message, data=data,
+        metrics={"checked": data["checked"], "failed": data["failed"],
+                 "ok": 1 if data["ok"] else 0},
+    ))
+
+
 def _self_status_command(argv: list[str]) -> int:
     """``self-status`` - the installation describing itself.
 
@@ -2300,12 +2443,18 @@ def main(argv: list[str] | None = None) -> int:
         return _build_showcase_command(argv[1:])
     if argv[0] == "instance-add":
         return _instance_add_command(argv[1:])
+    if argv[0] == "sql-command-add":
+        return _sql_command_add_command(argv[1:])
+    if argv[0] == "sql-target-add":
+        return _sql_target_add_command(argv[1:])
     if argv[0] == "remote-credential-add":
         return _remote_credential_add_command(argv[1:])
     if argv[0] == "secret-set":
         return _secret_set_command(argv[1:])
     if argv[0] == "probe-host":
         return _probe_host_command(argv[1:])
+    if argv[0] == "db-status":
+        return _db_status_command(argv[1:])
     if argv[0] == "self-status":
         return _self_status_command(argv[1:])
     if argv[0] == "timezone":

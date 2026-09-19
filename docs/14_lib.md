@@ -125,7 +125,7 @@ differently in two places.
 | `backup_kinds.py` | the three kinds of backup |
 | `backup_level.py` | what `full`/`diff`/`log` is called on each engine |
 | `cmd_access.py` | the `cmd_access` vocabulary — how to reach a *host* |
-| `sql_access.py` | the `sql_access` vocabulary — how to reach a *database* |
+| `sql_access.py` | the `sql_access` vocabulary — how to reach a *database*. `secret_refs(block)` answers which secret-store entries it names (`secret_ref`, the shared secret a bridge token is signed with; `connect_ref`, a whole connect string), because nothing else in the tree knew these fields named secrets at all — `check-credentials` skipped a legacy target and `check-secret` read five config files, none of them this one, so a configured bridge secret was invisible to both while every collection for that target failed on it |
 | `target_profile.py` | what a target **is** — engine, engine version, OS version, runtime — and which tool that implies |
 | `connection_spec.py` | one database connection stated **in full**, so nothing has to be looked up |
 | `task_output.py` | what a scheduled SQL task does with its result set |

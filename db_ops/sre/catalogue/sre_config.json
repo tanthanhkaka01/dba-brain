@@ -1,0 +1,103 @@
+{
+  "notes": [
+    "How lab environments are built: the hypervisor, the templates, the network, and the defaults each engine is installed with.",
+    "This is the file db-ops init writes, not a sample: it is read as it stands. data/sre_config.example.json carries worked examples of the parts that ship empty.",
+    "Every key ships PRESENT and EMPTY. The shape is the product's and the answers are yours - a hypervisor path, a template name and a network are facts about your hardware, and a seed that invented them would describe a lab nobody has. Empty means the SRE app can say which field it is missing instead of failing on a path that was never real.",
+    "The password fields are refs into the encrypted secret store, never values. See data/sre_config.example.json for a worked lab."
+  ],
+  "app_name": "db_ops_sre",
+  "console_level": "INFO",
+  "file_level": "INFO",
+  "sre": {
+    "vmware": {
+      "vmrun_path": "",
+      "vm_root": "",
+      "template_name": "",
+      "template_snapshot_name": "",
+      "net_interface": "",
+      "cidr": 24,
+      "gateway": "",
+      "dns_servers": []
+    },
+    "automation": {
+      "dir": "",
+      "powershell_dir": "",
+      "bash_dir": "",
+      "ansible_dir": ""
+    },
+    "credentials": {
+      "_note": "Lab-only. These machines are created from a template, rehearsed on and destroyed, which is why a literal password here is defensible. Prefer the ref form anyway: write \"<name>_password_ref\": \"SOME_STORE_KEY\" and keep the value in the encrypted secret store (db-ops encrypt-secret). A literal, \"<name>_password_env\", and \"<name>_password_ref\" are all read, in that order. A lab that gets kept is how a throwaway password becomes a stored one.",
+      "guest_user": "",
+      "guest_password_ref": "",
+      "root_user": "",
+      "root_password_ref": "",
+      "windows_administrator_password_ref": "",
+      "ssh_identity_file": "",
+      "plink_path": ""
+    },
+    "inventory": {
+      "dir": "",
+      "groups": {
+        "shared": [],
+        "postgresql": [],
+        "sqlserver": [],
+        "mysql": [],
+        "oracle_dg": []
+      }
+    },
+    "oracle": {
+      "version": "",
+      "rac_template_name": "",
+      "dg_template_name": "",
+      "grid_installer_path": "",
+      "db_installer_path": "",
+      "install_stage": ""
+    },
+    "database_defaults": {
+      "postgresql": {
+        "cluster_name": "",
+        "version": 16,
+        "port": 5432,
+        "superuser": "",
+        "superuser_password_ref": "",
+        "replication_user": "",
+        "replication_password_ref": ""
+      },
+      "mysql": {
+        "cluster_name": "",
+        "cluster_admin_user": "",
+        "cluster_admin_password_ref": "",
+        "classic_port": 3306
+      },
+      "sqlserver": {
+        "port": 1433,
+        "instance_name": "",
+        "sa_user": "",
+        "sa_password_ref": "",
+        "dba_user": "",
+        "dba_password_ref": "",
+        "ha_mode": "",
+        "ag_name": "",
+        "ag_listener": "",
+        "ag_listener_port": 1433
+      },
+      "oracle_dataguard": {
+        "oracle_topology": "",
+        "oracle_version": "",
+        "port": 1521,
+        "service_name": "",
+        "sys_user": "",
+        "sys_password_ref": "",
+        "dba_user": "",
+        "dba_password_ref": "",
+        "oracle_home": "",
+        "oracle_base": "",
+        "primary_service": "",
+        "standby_service": "",
+        "dg_broker_enabled": true,
+        "log_transport_mode": "",
+        "protection_mode": ""
+      }
+    }
+  }
+}

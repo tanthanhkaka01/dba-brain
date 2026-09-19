@@ -22,6 +22,10 @@ STATUS_DISPLAY = {
     "AT_RISK": ("⚠️", "warn"),
     "FAILED": ("❌", "bad"),
     "NO_DATA": ("⬜", "nodata"),
+    # Not a measurement: nothing was graded because nothing says what "good" is. It reads like
+    # NO_DATA on purpose - blank, not green - and the summary's `reason` says which file is
+    # missing. Green here would report an unjudged estate as compliant.
+    "NOT_CONFIGURED": ("⬜", "nodata"),
 }
 
 
@@ -249,7 +253,7 @@ def _delta_note(summary: SlaValidationSummary, previous_state: dict[str, str] | 
     from db_ops.lib.state_transition import diff_states
 
     current = {state_key(result.policy_id, result.target_id): result.status for result in summary.results}
-    diff = diff_states(previous_state, current, severity_order=("FAILED", "AT_RISK", "NO_DATA", "PASSED"),
+    diff = diff_states(previous_state, current, severity_order=("FAILED", "AT_RISK", "NO_DATA", "NOT_CONFIGURED", "PASSED"),
                        healthy=("PASSED",))
     counts = diff.counts
     text = (f"Since the previous run: {counts['new_failed']} newly failing, "

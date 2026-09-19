@@ -32,7 +32,7 @@ from db_ops.metrics.executor import execute_metric_sql
 from db_ops.metrics.importance import DEFAULT_OVERRIDES_PATH, load_metric_importance_overrides, resolve_metric_importance
 from db_ops.metrics.models import CollectSummary, MetricDefinition, MetricResult, MetricTarget
 from db_ops.metrics.storage import MetricStore
-from db_ops.metrics.targets import DEFAULT_DATA_DIR, load_metric_targets
+from db_ops.metrics.targets import DEFAULT_DATA_DIR, explain_no_targets, load_metric_targets
 
 
 NORMALIZED_RESULT_FIELDS = ("metric_item", "metric_value", "metric_unit", "status", "message")
@@ -234,6 +234,15 @@ def collect_metrics(
     run_id = None if store is None else store.start_run(started_at=started_at, message="Metric collect started.")
 
     tally = _Tally()
+    if not targets:
+        # "Not configured" is a state, not a failure - and only if the state says WHAT. This run
+        # used to end at `target_count: 0`, which is accurate and tells an operator nothing:
+        # an empty inventory, an estate switched off, metrics switched off and a filter that
+        # matched nothing all look identical and need four different actions.
+        tally.messages.append(explain_no_targets(
+            data_sources.load_db_instances(DEFAULT_DATA_DIR),
+            db_type=db_type or "", target_id=target_id or "",
+        ))
     if archived_count:
         tally.messages.append(
             f"Archived {archived_count} metric row(s) older than {archive_days} days into metric_results_archive."

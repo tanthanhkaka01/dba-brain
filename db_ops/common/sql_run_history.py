@@ -23,7 +23,7 @@ from typing import Any
 
 # The size budget and the default depth are the same rule every /spbot_list_* reply follows, and
 # saying them twice is how two listings end up disagreeing about what fits in one message.
-from db_ops.lib.listing import DEFAULT_LISTING_LIMIT, LISTING_CHARACTER_BUDGET
+from db_ops.lib.listing import DEFAULT_LISTING_LIMIT
 from db_ops.lib.timezone import format_display_text
 
 #: A ceiling, so a typo in a request cannot ask the store for the whole table.
@@ -55,23 +55,18 @@ def _one_line(row: Any) -> str:
 
 
 def render(rows: Sequence[Any], *, sql_id: int | None = None) -> str:
-    """The history as a chat message: one entry per run, newest first, within the size budget."""
+    """The history as a chat message: one entry per run, newest first — all of them.
+
+    No character budget. `telegram.api.split_telegram_message` splits a long body into parts
+    and paces them against the rate limit, so a listing that cut itself short was solving a
+    transport problem the transport already solves — and solving it badly, by dropping the
+    entries and then counting only the survivors in its own header.
+    """
     scope = f" for sql_id {sql_id}" if sql_id is not None else ""
     if not rows:
         return f"No SQL task runs recorded{scope} yet."
 
-    lines = [_one_line(row) for row in rows]
-    kept: list[str] = []
-    used = 0
-    for line in lines:
-        if used + len(line) + 1 > LISTING_CHARACTER_BUDGET and kept:
-            break
-        kept.append(line)
-        used += len(line) + 1
-
-    header = f"Last {len(kept)} SQL task run(s){scope}, newest first:"
-    body = "\n".join(kept)
-    dropped = len(lines) - len(kept)
-    if dropped:
-        body += f"\n... {dropped} more not shown (message size limit)."
+    lines_out = [_one_line(row) for row in rows]
+    header = f"Last {len(lines_out)} SQL task run(s){scope}, newest first:"
+    body = "\n".join(lines_out)
     return f"{header}\n{body}"

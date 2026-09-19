@@ -16,6 +16,13 @@ So target resolution walks **every** place a ref can be named, in priority order
 4. ``users.json`` ``remote_credentials`` — the host for an OS account no instance references;
 5. the standard key name, which carries the IP — a label, so it is last and only with ``allow_name_host``.
 
+Before all five sits ``db_instances.json`` ``sql_access`` — the block that says a target is
+reached through the legacy Oracle tool rather than a driver. Its ``secret_ref`` (the shared
+secret the bridge token is signed with) and ``connect_ref`` were named by no other source, so a
+configured bridge secret resolved to ``unknown`` and was reported ``NO_TARGET`` while every
+collection for that target failed on it. It is proven the way its own entry in
+:data:`NOT_A_LOGIN` always claimed — by a bridge query.
+
 When the protocol is not stated, it is **probed** rather than assumed: SSH on 22 and WinRM on
 5985/5986 are tried in turn, because the estate is mixed and an Ubuntu host answered "unreachable"
 only because something insisted on asking it over WinRM.
@@ -32,10 +39,16 @@ import re
 from pathlib import Path
 from typing import Any
 
-from db_ops.common import data_sources, db_connect, host_probe, remote_exec, sql_run
+from db_ops.common import data_sources, db_connect, host_probe, oracle_bridge, remote_exec, sql_run
 from db_ops.common.password_rotation import target_from_ref_name
+from db_ops.lib import sql_access
 
 DEFAULT_TIMEOUT_SECONDS = 8
+
+#: The statement a bridge check runs. Every Oracle release answers it, it reads nothing, and
+#: it fails only for the reasons this check is about - a token the bridge will not accept, a
+#: login it rejects, or a bridge that is not there.
+BRIDGE_PROBE_SQL = "SELECT 1 FROM DUAL"
 SSH_PORT = 22
 WINRM_PORTS = (5985, 5986)
 
@@ -91,6 +104,13 @@ def resolve_check_target(
     ``kind`` is ``db``, ``remote``, ``not_a_login`` or ``unknown`` — the last meaning no config
     names this ref and its name is not the standard scheme, which is the only honest "cannot check".
     """
+    # Config before name. A bridge secret matches the ``ORACLE_BRIDGE`` fragment below and would
+    # stop there as "not a login" - true, and useless: it is provable, and the instance that names
+    # it says how. Config is evidence; the fragment list is a guess about a name.
+    named = _sql_access_target(ref, data_dir=data_dir)
+    if named:
+        return named
+
     for fragment, why in NOT_A_LOGIN.items():
         if fragment in ref:
             return {"kind": "not_a_login", "detail": why}
@@ -188,6 +208,32 @@ def resolve_check_target(
             "detail": "no config names this ref and its name is not the standard scheme"}
 
 
+def _sql_access_target(ref: str, *, data_dir: str | Path | None = None) -> dict[str, Any] | None:
+    """The legacy-Oracle target whose ``sql_access`` names this ref, or ``None``.
+
+    Two fields can name one: ``secret_ref``, the shared secret the bridge token is signed with,
+    and ``connect_ref``, a whole connect string. Both are proven the same way - by running a
+    statement through the transport that uses them - so the target carries the field that named
+    it rather than two kinds of target.
+    """
+    for instance in data_sources.load_db_instances(data_dir):
+        access = instance.get("sql_access") or {}
+        if not sql_access.is_legacy(access):
+            continue
+        for field, named in sql_access.secret_refs(access).items():
+            if named != ref:
+                continue
+            return {
+                "kind": "bridge", "source": f"db_instances.json sql_access.{field}",
+                "field": field, "method": str(access.get("method") or ""),
+                "sql_access": dict(access), "instance": dict(instance),
+                "host": str(instance.get("ip") or instance.get("server_id") or ""),
+                "server_id": str(instance.get("server_id") or ""),
+                "_data_dir": str(data_dir) if data_dir else "",
+            }
+    return None
+
+
 def _engine_from_name(ref: str) -> str:
     prefix = ref.split("_", 1)[0]
     return {"MSSQL": "sqlserver", "SQLSERVER": "sqlserver", "POSTGRE": "postgresql",
@@ -235,6 +281,11 @@ def check_ref(ref: str, *, data_dir: str | Path | None = None, key: str | None =
         return _check_db(result, target, password, timeout_seconds)
     if target["kind"] == "http":
         return _check_http(result, target, password, timeout_seconds)
+    if target["kind"] == "bridge":
+        # The whole store, not just this ref: a bridge query needs the token secret *and* the
+        # login's password, and they are two different entries. The detail says which one was
+        # under test, because a failure can belong to either.
+        return _check_bridge(result, target, secrets, timeout_seconds, data_dir=data_dir)
     return _check_remote(result, target, password, timeout_seconds)
 
 
@@ -327,6 +378,79 @@ def _check_db(result: dict[str, Any], target: dict[str, Any], password: str,
             pass
         result.update(status="OK", detail="authenticated")
     except Exception as exc:  # noqa: BLE001
+        result.update(status=_classify(str(exc)), detail=str(exc)[:200].replace("\n", " "))
+    return result
+
+
+def _check_bridge(result: dict[str, Any], target: dict[str, Any], secrets: dict[str, str],
+                  timeout_seconds: int, *, data_dir: str | Path | None = None) -> dict[str, Any]:
+    """Prove a legacy-Oracle secret by running one statement through the transport that uses it.
+
+    There is no session to open with the shared secret on its own - it signs a token, and the
+    token is only worth anything to the bridge. So the check is the real call: sign a token,
+    POST it, and read the answer. That is what :data:`NOT_A_LOGIN` promised for this ref all
+    along while resolution was returning "no config names it".
+
+    The verdict covers the *pair* - token secret and database login - because that is what the
+    transport needs and there is no way to exercise one without the other. ``result["field"]``
+    says which of the two this ref is.
+    """
+    import time
+    import urllib.parse
+
+    access = target.get("sql_access") or {}
+    instance = target.get("instance") or {}
+    method = str(target.get("method") or "")
+    bridge_url = str(access.get("bridge_url") or "")
+    result.update(protocol=method, host=target.get("host"), field=target.get("field"),
+                  server_id=target.get("server_id"))
+
+    credential: dict[str, Any] | None = None
+    if target.get("field") != "connect_ref":
+        # The connect string is built from the instance's own credential. Without one there is
+        # nothing to sign a token *about*, and saying that is a different answer from a bridge
+        # that refused us.
+        db_type = db_connect.normalize_db_type(instance.get("db_type") or "oracle")
+        try:
+            credential = data_sources.find_database_credential(
+                data_sources.load_all_credentials(data_dir).get(db_type, []),
+                server_id=str(instance.get("server_id") or ""),
+                credential_name=str(instance.get("default_credential_name") or ""),
+                db_type=db_type,
+                service_name=str(instance.get("service_name") or ""),
+                instance_name=str(instance.get("instance_name") or ""),
+            )
+        except Exception as exc:  # noqa: BLE001 - report it, the same as any other missing target.
+            result.update(status="NO_TARGET",
+                          detail=f"{target.get('source')} names this ref, but the instance has no "
+                                 f"credential to build a connect string with: {exc}")
+            return result
+
+    if method == "api":
+        parsed = urllib.parse.urlsplit(bridge_url)
+        host = parsed.hostname or ""
+        port = int(parsed.port or (443 if parsed.scheme == "https" else 80))
+        result.update(port=port)
+        # The 8i bridge is started by hand on its host and nothing restarts it, so "down" is the
+        # ordinary state to meet here - and it says nothing about the secret.
+        if host and not _port_open(host, port):
+            result.update(status="UNREACHABLE",
+                          detail=f"the Oracle bridge at {bridge_url} is not listening - start it "
+                                 "on that host before reading this as a bad secret")
+            return result
+
+    try:
+        oracle_bridge.run_query(
+            sql=BRIDGE_PROBE_SQL, sql_access=access, secrets=secrets, credential=credential,
+            host=str(instance.get("ip") or instance.get("server_id") or ""),
+            port=instance.get("port"),
+            service_name=str(instance.get("service_name") or instance.get("instance_name") or ""),
+            now=time.time(), limit=1, timeout_seconds=timeout_seconds,
+        )
+        result.update(status="OK",
+                      detail=f"a statement ran over the '{method}' transport, so the token this "
+                             "secret signs is one the bridge accepts")
+    except Exception as exc:  # noqa: BLE001 - every failure here is a result, not a crash.
         result.update(status=_classify(str(exc)), detail=str(exc)[:200].replace("\n", " "))
     return result
 

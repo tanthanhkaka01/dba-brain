@@ -92,7 +92,13 @@ STDOUT_HEAD_CHARS = 600
 
 
 class PythonSourceError(RuntimeError):
-    """The task's Python step could not produce rows. Nothing was sent to the database."""
+    """The task's Python step produced no rows, so the task's SQL never ran.
+
+    It says nothing about what the *program* did. A fetch has written nothing; a program that
+    does its own work - a stored procedure per row, say - may have done most of it before it
+    failed, and db_ops cannot see that from here. The messages below are careful about the
+    difference: a person reading that nothing reached the database stops looking.
+    """
 
 
 @dataclass(frozen=True)
@@ -194,12 +200,20 @@ def resolve_script(script_path: str, *, tool_root: Path) -> Path:
     return resolved
 
 
+#: Placeholders the RUNNER fills from the sql_targets entry the task is running on, next to the
+#: task's own parameters: its ``server_id`` and ``database_name``, as configured. A script that
+#: must reach the target itself takes it from here, so one command runs on every tier it has a
+#: target for.
+TARGET_PLACEHOLDERS = ("target_server_id", "target_database")
+
+
 def substitute(args: tuple[str, ...], values: dict[str, Any]) -> list[str]:
     """``{name}`` in an argument becomes that parameter's value.
 
     So one command can be scheduled for its default window and re-run for a named date range from
     Telegram, without a second entry. An unknown name is refused rather than left in place: a
     script handed a literal ``{fromdate}`` fails somewhere far from the config that caused it.
+    The runner adds the reserved ``{target_*}`` names (:data:`TARGET_PLACEHOLDERS`) to ``values``.
     """
     out: list[str] = []
     for arg in args:
@@ -221,12 +235,17 @@ def substitute(args: tuple[str, ...], values: dict[str, Any]) -> list[str]:
 
 
 def run(source: PythonSource, *, tool_root: Path,
-        parameter_values: dict[str, Any] | None = None) -> PythonResult:
-    """Run the script and return its rows. Raises :class:`PythonSourceError` with the reason."""
+        parameter_values: dict[str, Any] | None = None,
+        target: dict[str, str] | None = None) -> PythonResult:
+    """Run the script and return its rows. Raises :class:`PythonSourceError` with the reason.
+
+    ``target`` fills the reserved ``{target_server_id}`` / ``{target_database}`` placeholders from
+    the sql_targets entry the task runs on. A task parameter of the same name wins.
+    """
     import time
 
     script = resolve_script(source.script_path, tool_root=tool_root)
-    args = substitute(source.args, dict(parameter_values or {}))
+    args = substitute(source.args, {**(target or {}), **dict(parameter_values or {})})
 
     environment = dict(os.environ)
     # Pinned for the same reason `lib.common_cli.spawn` pins it, and this end matters more: the
@@ -246,7 +265,8 @@ def run(source: PythonSource, *, tool_root: Path,
     except subprocess.TimeoutExpired as exc:
         raise PythonSourceError(
             f"{script.name} did not finish within input.timeout_seconds "
-            f"({source.timeout_seconds}s) and was killed. Nothing was sent to the database.") \
+            f"({source.timeout_seconds}s) and was killed, so this task ran no SQL of its own. "
+            f"Whatever the program did before it was killed stands.") \
             from exc
     except OSError as exc:
         raise PythonSourceError(f"{script.name} could not run: {exc}") from exc
@@ -256,7 +276,8 @@ def run(source: PythonSource, *, tool_root: Path,
     if completed.returncode not in source.accept_exit_codes:
         raise PythonSourceError(
             f"{script.name} exited {completed.returncode}; accepted (input.accept_exit_codes): "
-            f"{list(source.accept_exit_codes)}. Nothing was sent to the database. "
+            f"{list(source.accept_exit_codes)}. This task ran no SQL of its own; whatever the "
+            f"program did before it exited stands. "
             f"stderr tail: {stderr_tail or '(empty)'}")
 
     document = _load_document(completed.stdout or "", script_name=script.name)

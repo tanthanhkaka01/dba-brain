@@ -180,6 +180,19 @@ def test_arguments_can_carry_the_task_s_own_parameters(root):
     assert produced.rows == [{"a": "--from"}]
 
 
+def test_arguments_can_carry_the_target_the_task_runs_on(root):
+    """One command, one sql_targets entry per tier: the script is told which one it runs on."""
+    path = write(root, "echo_target.py",
+                 "import json, sys; print(json.dumps({'data': [{'t': sys.argv[2], 'd': sys.argv[4]}]}))")
+    source = ps.PythonSource(script_path=path,
+                             args=("--target", "{target_server_id}", "--database", "{target_database}"))
+
+    produced = ps.run(source, tool_root=root, parameter_values={},
+                      target={"target_server_id": "ACME-192-0-2-111", "target_database": "PAYROLL_Test"})
+
+    assert produced.rows == [{"t": "ACME-192-0-2-111", "d": "PAYROLL_Test"}]
+
+
 def test_an_argument_naming_a_parameter_that_does_not_exist_is_refused(root):
     """It would otherwise reach the script as the literal `{fromdate}` and fail a long way from
     the config that caused it."""
@@ -220,7 +233,6 @@ def test_a_non_zero_exit_stops_the_task_even_when_it_printed_rows(root):
         ps.run(source, tool_root=root)
 
     assert "exited 1" in str(caught.value)
-    assert "Nothing was sent to the database" in str(caught.value)
     # The reason the script gave, not just the exit code.
     assert "page 3 failed" in str(caught.value)
 

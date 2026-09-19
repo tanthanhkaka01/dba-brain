@@ -18,10 +18,12 @@ from typing import Any, Callable, Iterable, TypeVar
 
 T = TypeVar("T")
 
-#: How long a listing may get before it stops itself. Telegram cuts a body at 4096 characters, and
-#: a listing the transport truncates loses its NEWEST entries with nothing to say it happened -
-#: the wrong end, and silent. Stopping here leaves room to say how many were dropped.
-LISTING_CHARACTER_BUDGET = 3500
+#: Retired 2026-09-17. A listing no longer stops itself at a character budget: the transport
+#: splits a long body (`lib.telegram_text.split_telegram_message`, `[part i/n]`) and paces the
+#: parts against the rate limit, so cutting the listing short dropped entries to solve a
+#: problem that was already solved. It also counted only the survivors in its own header, and
+#: broke on the FIRST oversized entry, hiding every entry after it however short they were.
+#: Left named rather than deleted so the next reader meets the decision, not a blank.
 
 #: How many entries a history-shaped listing shows when the caller does not say. Ten is a
 #: screenful on a phone, which is where these are read.

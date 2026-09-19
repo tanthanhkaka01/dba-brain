@@ -32,7 +32,7 @@ from typing import Any
 
 # The size budget and the default depth are the rule every /spbot_list_* reply follows; a second
 # copy of them here is how two listings end up disagreeing about what fits in one message.
-from db_ops.lib.listing import DEFAULT_LISTING_LIMIT, LISTING_CHARACTER_BUDGET
+from db_ops.lib.listing import DEFAULT_LISTING_LIMIT
 from db_ops.lib.timezone import format_display_text
 from db_ops.lib.telegram_command_text import (
     command_key_from_message,
@@ -176,19 +176,17 @@ def render(result: dict[str, Any]) -> str:
         return "You have not run any bot command yet."
 
     blocks = [_one_entry(index, entry) for index, entry in enumerate(entries, start=1)]
-    kept: list[str] = []
-    used = 0
-    for block in blocks:
-        if used + len(block) + 1 > LISTING_CHARACTER_BUDGET and kept:
-            break
-        kept.append(block)
-        used += len(block) + 1
-
-    header = f"Your last {len(kept)} command(s), newest first:"
-    body = "\n".join(kept)
-    dropped = len(blocks) - len(kept)
-    if dropped:
-        body += f"\n... {dropped} more not shown (message size limit)."
+    # Everything the caller asked for, whole. The transport already splits a long body into
+    # parts (`telegram.api.split_telegram_message`) and paces them against the rate limit, so a
+    # listing has no business cutting itself short. The character budget cost twice over: the
+    # entries past it were lost, and the header counted what SURVIVED rather than what existed -
+    # ten distinct commands with one long one among them reported "Your last 1 command(s)"
+    # directly above a line admitting nine were missing.
+    #
+    # It also cut at the wrong boundary: the loop BROKE on the first oversized block, so one long
+    # command hid every command after it, however short those were.
+    header = f"Your last {len(blocks)} command(s), newest first:"
+    body = "\n".join(blocks)
     unfinished = int(result.get("unfinished") or 0)
     if unfinished:
         body += (f"\n({unfinished} unanswered prompt(s) skipped: the bot asked a question and "

@@ -1,0 +1,21 @@
+{
+  "notes": [
+    "How much a given metric matters on a given instance.",
+    "This is the file db-ops init writes, not a sample: it is read as it stands. data/metric_importance_overrides.example.json carries worked examples of the parts that ship empty.",
+    "'scale' is the product's own vocabulary and ships in force, so an override written here means the same thing on every node.",
+    "'instance_overrides' ships empty. Importance is the one judgement no default can make: the same metric is a shrug on a lab box and a page at 3am on the instance the business runs on, and only the operator knows which is which."
+  ],
+  "scale": {
+    "min": 0,
+    "max": 5,
+    "labels": {
+      "0": "disabled",
+      "1": "informational",
+      "2": "low",
+      "3": "medium",
+      "4": "high",
+      "5": "critical"
+    }
+  },
+  "instance_overrides": []
+}

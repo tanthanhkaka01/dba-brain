@@ -32,6 +32,22 @@ def validate_sla_policies(
     """
     end_dt = _parse_time(window_end) if window_end else datetime.now(timezone.utc)
     end_text = _format_time(end_dt)
+
+    # No policies is not a pass. With an empty list nothing is evaluated, `required_failure` is
+    # False because there is nothing to fail, and the summary fell out of that as **PASSED** - a
+    # green SLA page over an estate nobody has written a single objective for. A missing policy
+    # file must never make a page say something false (audit of 2026-09-14): "no rule required this" and
+    # "no rule exists" must never produce the same sentence, and the most dangerous configuration
+    # state a monitoring tool can be in must not render as its healthiest answer.
+    if not policies:
+        return SlaValidationSummary(
+            status="NOT_CONFIGURED", policy_count=0, result_count=0, passed_count=0,
+            at_risk_count=0, failed_count=0, no_data_count=0, window_end=end_text, results=(),
+            reason=("no SLA policy is configured: data/sla_policies.json is absent, empty, or "
+                    "every policy in it is inactive. Nothing was measured, so nothing is "
+                    "compliant - this is unjudged, not a pass."),
+        )
+
     store = SlaStore(sqlite_path)
     results: list[SlaPolicyResult] = []
     for policy in policies:

@@ -1,0 +1,8 @@
+{
+  "notes": [
+    "The throwaway database containers the SRE app provisions and the drills run against.",
+    "This is the file db-ops init writes, not a sample: it is read as it stands. data/docker_db_connections.example.json carries worked examples of the parts that ship empty.",
+    "It ships EMPTY, and that is the correct default: there is no sensible container to invent for somebody else's host. An empty list means the SRE app reports 'not configured' by name rather than failing, and `spbot_create_db_docker` writes entries here as it creates them."
+  ],
+  "docker_db_connections": []
+}

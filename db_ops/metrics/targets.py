@@ -34,6 +34,7 @@ __all__ = [
     "DEFAULT_DATA_DIR",
     "SUPPORTED_CMD_ACCESS_METHODS",
     "SUPPORTED_PLATFORMS",
+    "explain_no_targets",
     "load_metric_targets",
     "resolve_metric_target",
 ]
@@ -158,6 +159,52 @@ def load_metric_targets(
             )
         )
     return targets
+
+
+def explain_no_targets(
+    instances: list[dict[str, Any]],
+    *,
+    db_type: str = "",
+    target_id: str = "",
+) -> str:
+    """Why a collection run found nothing, in the words of the thing to change.
+
+    "Not configured" is a state, not a failure - but only when the state says **what**. A pass
+    that reports ``target_count: 0`` is accurate and useless: the four ways to arrive at it need
+    four different actions, and the operator cannot tell which one they are in without opening
+    the inventory themselves. Every other app in this tree names the missing piece; this one
+    counted it.
+
+    Pure over an already-loaded inventory, so the collector can ask *after* finding nothing
+    rather than duplicating the load.
+    """
+    total = len(instances)
+    if not total:
+        return ("No metric targets: data/db_instances.json holds no instance. Register one with "
+                "`db_ops.common.cli instance-add`, or run `db-ops init` if this node is new.")
+
+    enabled = [item for item in instances if is_target_enabled(item)]
+    if not enabled:
+        return (f"No metric targets: all {total} instance(s) in data/db_instances.json are "
+                "`enabled: false`. Nothing is wrong with this node - nothing has been turned on.")
+
+    collectable = [item for item in enabled if is_metrics_enabled(item)]
+    if not collectable:
+        return (f"No metric targets: {len(enabled)} instance(s) are enabled and every one of them "
+                "sets `metrics.enabled: false`. Metrics are off for this estate, by configuration.")
+
+    # Past here the inventory would have produced targets, so the filter on this run is what
+    # emptied it - and naming what the estate *does* have is the difference between a typo the
+    # operator sees at once and one they go looking for in the config.
+    if target_id:
+        return (f"No metric targets: --target-id / --target-ip matched none of the "
+                f"{len(collectable)} collectable instance(s). Asked for: {target_id}")
+    if db_type:
+        present = sorted({str(item.get("db_type") or "host").strip().lower() for item in collectable})
+        return (f"No metric targets: --db-type {db_type} matched none of the {len(collectable)} "
+                f"collectable instance(s). Present: {', '.join(present)}")
+    return (f"No metric targets: {len(collectable)} instance(s) are collectable, and none of them "
+            "produced a target. This is a defect in target resolution, not a configuration state.")
 
 
 def resolve_metric_target(

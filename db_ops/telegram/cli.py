@@ -26,7 +26,7 @@ from db_ops.telegram.commands import save_command_messages_from_messages
 from db_ops.telegram.metrics_reports import queue_metrics_reports
 from db_ops.telegram.send_queue import send_one_message, send_pending_messages
 from db_ops.telegram import bot_info, get_updates, send_message
-from db_ops.telegram.updates import set_group_level, set_user_level
+from db_ops.telegram.updates import add_group, set_group_level, set_user_level
 from db_ops.telegram.updates import fetch_and_save_updates
 from db_ops.telegram.workflow import run_bot_workflow
 from db_ops.logging_ops.runtime_stdout import patch_stdout
@@ -74,6 +74,29 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                                    "it as it is; 0 means no commands from this group.")
     level_parser.set_defaults(telegram_function=set_group_level)
 
+    add_group_parser = subparsers.add_parser(
+        "group-add",
+        help="Register a chat the bot has never been spoken to in. `save-updates` only learns a "
+             "group somebody has POSTED in, so a new alert chat cannot be configured at all "
+             "until then - which is the normal state of a chat created for alerts.")
+    add_group_parser.add_argument("--group-id", required=True, dest="group_id",
+                                  help="The numeric chat id, e.g. -1001234567890.")
+    add_group_parser.add_argument("--level", default="",
+                                  help="notify_level, e.g. logging|warning|error|critical|sla|"
+                                       "backup|restore|sql|control|test.")
+    add_group_parser.add_argument("--title", default="",
+                                  help="Only used when the id is not confirmed with Telegram; "
+                                       "otherwise getChat's own title wins.")
+    add_group_parser.add_argument("--allow-command", type=int, default=None, dest="allow_command",
+                                  help="Minimum user level allowed to run commands here. Default 0 "
+                                       "- registering a chat says where alerts go, not who may "
+                                       "drive the node from it.")
+    add_group_parser.add_argument("--no-verify", dest="verify", action="store_false",
+                                  help="Write the entry without confirming the id with Telegram. "
+                                       "Only where there is no token; the entry is marked so the "
+                                       "file says it was never confirmed.")
+    add_group_parser.set_defaults(telegram_function=add_group, verify=True)
+
     user_level_parser = subparsers.add_parser(
         "user-level",
         help="Give a discovered user the level that decides which commands they may run. "
@@ -84,7 +107,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     user_level_parser.add_argument("--level", required=True, type=int,
                                    help="user_type. A command with command_type N runs in a "
                                         "private chat for a user at N or above; 0 = public only.")
-    user_level_parser.set_defaults(telegram_function=set_user_level)
+    user_level_parser.add_argument(
+        "--pending", action="store_true",
+        help="Set the level for a @username that has NOT messaged this bot yet. The level waits "
+             "against the username and is adopted the moment they first message. Needed because "
+             "intake only runs under the daemon, so a node cannot clear its operator before the "
+             "daemon starts. Without this flag an unknown name is refused, because it is usually "
+             "a typo and a level is a permission.")
+    user_level_parser.set_defaults(telegram_function=set_user_level, pending=False)
 
     updates_parser = subparsers.add_parser("get-updates", help="Call Telegram getUpdates.")
     updates_parser.add_argument("--offset", type=int, default=None, help="Optional update offset.")
@@ -197,6 +227,42 @@ def call_telegram_function(
     return telegram_function(**function_args)
 
 
+def _route_argument_refusal(level: str) -> str:
+    """The message for a ``route`` argument that is a JSON request rather than a level, or ``""``.
+
+    The three shapes every ``common.cli`` command accepts — an inline object, ``@file``, ``-`` —
+    are the three an operator reaches for here out of habit. None of them is a level, and all
+    three used to be *looked up* as one.
+    """
+    text = str(level or "").strip()
+    shape = ""
+    if text.startswith("{") or text.startswith("["):
+        shape = "a JSON object"
+    elif text.startswith("@"):
+        shape = "a @file reference"
+    elif text == "-":
+        shape = "stdin"
+    if not shape:
+        return ""
+    # Plain ASCII: this goes to stderr, and the console it is read on is cp1252.
+    return (
+        f"telegram route takes a notify level, not {shape}: {text}\n"
+        "It is a config lookup, not a JSON-request command - it answers before this app sets up\n"
+        "logging, so that a caller can parse its one line of stdout.\n"
+        "\n"
+        "  python -m db_ops.telegram.cli route <level>\n"
+        f"  levels: {', '.join(routing_levels())}, or one your groups define\n"
+        "  python -m db_ops.telegram.cli groups        # every configured level -> chat_id"
+    )
+
+
+def routing_levels() -> tuple[str, ...]:
+    """The standard notify levels, for a message that has to name them."""
+    from db_ops.telegram.routing import STANDARD_LEVELS
+
+    return STANDARD_LEVELS
+
+
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     set_key_env(args.key, args.key_base64)
@@ -206,6 +272,18 @@ def main(argv: list[str]) -> int:
     # be cheap and their stdout must carry nothing but the answer.
     if args.command in ("route", "groups"):
         from db_ops.telegram import routing
+
+        # `route` is the one command in this family that does NOT take the JSON-request contract,
+        # and getting that wrong failed *silently*: `route '{"level":"critical"}'` looked up a
+        # level literally named `{"level":"critical"}`, found nothing, and answered `chat_id: ""`
+        # — which is exactly what genuinely broken routing looks like. It was written down as a
+        # trap in the 0.17.0 sheet before that run started and still caught nobody during it; a
+        # note two screens up does not stop anyone, and a refusal does.
+        if args.command == "route":
+            refusal = _route_argument_refusal(args.level)
+            if refusal:
+                print(refusal, file=sys.stderr)
+                return 2
 
         try:
             answer = routing.route_for_level(args.level) if args.command == "route" else routing.groups()

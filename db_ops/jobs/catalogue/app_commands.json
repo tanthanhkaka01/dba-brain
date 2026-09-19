@@ -22,10 +22,11 @@
         "to_hour": 23,
         "from_minute": null,
         "to_minute": null,
-        "repeat_interval": 60,
+        "repeat_interval": 1,
         "retry_interval": 60,
         "timeout": 1800
-      }
+      },
+      "note": "repeat_interval 1, the same as APP-TELEGRAM: this interval is checked once per run of the app, so it is a floor under every task inside it - at 60 a task whose own time_window asked for 60 s ran every 60-120 s depending on phase, and nothing in that task's config said why. The app exits immediately when nothing is due."
     },
     {
       "node_role": "all",

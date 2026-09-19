@@ -50,6 +50,10 @@ READS_LOCAL_CONFIG: dict[str, str] = {
               "parameter, and `data_dir` is already the parameter that makes it testable.",
     "config_admin.py": "writes data/*.json (add-sql, metric-toggle). Editing the config IS the "
                        "operation, so it cannot be handed the config as a value.",
+    "sql_task_admin.py": "writes data/sql_commands.json and data/sql_targets.json (sql-command-add, "
+                         "sql-target-add). The same argument as config_admin.py above it: editing "
+                         "the config IS the operation. `data_dir` and `tool_root` are both "
+                         "parameters, which is what keeps it testable against a temporary root.",
     # data_sources became a package on 2026-08-15: `metric_targets_config` and `target_resolve`
     # were doing the same job (open a file under data/, answer what is configured) and, under
     # "an app does not import common", had nowhere else to live. One exemption, one package.

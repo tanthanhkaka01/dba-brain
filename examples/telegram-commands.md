@@ -30,14 +30,15 @@ host it is on, and **the URLs it publishes**, which is otherwise guesswork.
 
 ```
 ✅ DBA Brain / db_ops - current state
-product   : DBA Brain (published)  [pip: dbabrain 0.16.0]
-version   : 0.16.0  (public 0.16.0)
+product   : DBA Brain (published)  [pip: dbabrain 0.19.0]
+version   : 0.19.0  (public 0.19.0)
 running   : on the OS directly, on Windows 11 (10.0.26200)
 python    : 3.14.4
 host      : DBNODE01
 ip        : 192.0.2.93
 tool root : C:\dbabrain-node
 node_role : worker
+timezone  : UTC  +00 (UTC)
 store     : sqlite C:\dbabrain-node\runtime\dbabrain.sqlite
 cpu       : 20 core(s)
 memory    : 21.7 GiB used of 31.7 GiB (68%), 10.0 GiB free
@@ -56,7 +57,8 @@ reports   : http://192.0.2.93:8080/report_dba/
 ```
 
 `node_role` is the line to read when a daemon seems idle: in the default `master` role it schedules
-nothing. Inside a container the URLs come from `report_base_url` instead of the node's own address,
+nothing. `timezone` is the clock every `time_window` hour is read against; a node left
+on `UTC` runs a 01:00–06:00 window at whatever that is locally. Inside a container the URLs come from `report_base_url` instead of the node's own address,
 because a container cannot see the port it is published on.
 
 ## `/spbot_list_server_id` — what this node watches

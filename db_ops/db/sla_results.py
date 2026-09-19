@@ -79,6 +79,10 @@ class SlaValidationSummary:
     no_data_count: int
     window_end: str
     results: tuple[SlaPolicyResult, ...]
+    #: Why the run reached a status that is not a measurement — today, that no policy was
+    #: configured to measure against. Empty on an ordinary run: a verdict explains itself
+    #: through its results, and a sentence beside it would be one more thing to keep true.
+    reason: str = ""
 
 
 def state_key(policy_id: object, target_id: object) -> str:

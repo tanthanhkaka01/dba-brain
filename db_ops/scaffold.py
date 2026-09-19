@@ -251,6 +251,38 @@ EMPTY_USERS = {
     "monitor_users": [],
 }
 
+EMPTY_TELEGRAM_USERS = {
+    "schema_version": 1,
+    "notes": [
+        "People the bot has seen, and the permission level each holds. The intake writes an entry",
+        "the first time somebody messages the bot, at user_type 0 - `telegram user-level` is what",
+        "raises one. Nothing can be written here in advance: a user who has never posted is a user",
+        "Telegram has not told this node about.",
+        "Ships EMPTY for the same reason telegram_groups.json does. Absent and empty are different",
+        "states, and only one of them says 'nobody has spoken to this bot yet'.",
+    ],
+    "telegram_users": [],
+}
+
+#: Which bot this node speaks as. Written empty so the file EXISTS and says "no bot yet" - before
+#: 2026-09-16 `init` wrote a `telegram_config.json` pointing at this file and did not create it,
+#: which is a dangling reference a reader has to guess about. `telegram use-bot --ref <SECRET_REF>`
+#: fills it in, reading the id and username back from Telegram rather than taking them typed.
+#: The token itself is never here - only the ref naming it in the encrypted store.
+EMPTY_BOT_TELEGRAM = {
+    "schema_version": 1,
+    "notes": [
+        "Which bot db_ops speaks as. Set it with: db-ops telegram use-bot --ref <SECRET_REF>",
+        "The ref names a key in the encrypted secret store; the token is never written here.",
+        "This travels inside a config bundle, so a node imported from another estate arrives on",
+        "THAT estate's bot unless use-bot is run. Two pollers on one token is refused by Telegram",
+        "and a retry delivers the same message twice.",
+    ],
+    "telegram_bot_token_ref": "",
+    "telegram_bot_id": "",
+    "telegram_bot_username": "",
+}
+
 EMPTY_TELEGRAM_GROUPS = {
     "schema_version": 1,
     "notes": [
@@ -560,6 +592,22 @@ PACKAGED_DEFAULTS: dict[str, str] = {
     # none, so this entry is about giving the operator a file to *edit* rather than about making
     # the tool work. It ships because a manifest nobody can see is one nobody maintains.
     "data/data_files.json": "control/catalogue/data_files.json",
+    # The eight that had no seed at all until 2026-09-16. `config_catalog.json` lists thirty files
+    # and the package shipped twelve, so `init` could not write these and no registration command
+    # creates them: a clean install was permanently incomplete for all eight, four of them
+    # graders' policies. That is the 0.16.0 failure again, where an absent `backup_policy.json`
+    # made every database compliant and printed "4/4 DB within policy" over a 168-day-old log
+    # backup. Which ones carry defaults and which ship empty is decided by whose fact they hold -
+    # a rule the product owns ships in force, a fact about this estate ships empty with its shape
+    # intact, so the app can name the missing field instead of inventing a lab.
+    "data/capacity_policy.json": "metrics/catalogue/capacity_policy.json",
+    "data/metric_importance_overrides.json": "metrics/catalogue/metric_importance_overrides.json",
+    "data/restore_drill_policy.json": "backup_restore/catalogue/restore_drill_policy.json",
+    "data/maintenance_policy.json": "backup_restore/catalogue/maintenance_policy.json",
+    "data/sqlserver_instance_policy.json": "common/catalogue/sqlserver_instance_policy.json",
+    "data/docker_db_connections.json": "sre/catalogue/docker_db_connections.json",
+    "data/sre_config.json": "sre/catalogue/sre_config.json",
+    "data/network_reservations.json": "control/catalogue/network_reservations.json",
     # What each dangerous operation costs to authorize. Without it every confirmed command is
     # priced at the STRICTEST level - two answers, the second the target's id typed out - while
     # every one of them collects exactly one `yes`, so `/spbot_kill_spid`, `/spbot_shrink_log`,
@@ -652,6 +700,8 @@ def _files(app_name: str) -> list[tuple[str, dict]]:
         ("data/users.json", EMPTY_USERS),
         ("data/telegram_config.json", TELEGRAM_CONFIG),
         ("data/telegram_groups.json", EMPTY_TELEGRAM_GROUPS),
+        ("data/telegram_users.json", EMPTY_TELEGRAM_USERS),
+        ("data/bot_telegram.json", EMPTY_BOT_TELEGRAM),
         ("data/sql_commands.json", EMPTY_SQL_COMMANDS),
         ("data/sql_targets.json", EMPTY_SQL_TARGETS),
         ("secrets/secret_text.json", SECRET_TEXT),

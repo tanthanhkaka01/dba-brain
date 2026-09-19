@@ -62,13 +62,32 @@ The current configured commands are `APP-SQL_TASKS`, `APP-METRICS`, `APP-REPORTS
 
 The `time_window` check uses the **configured timezone** (`config.json` → `timezone`), so `from_hour: 1` means 01:00 in that zone on every node regardless of the host clock. `job_runs` timestamps are stored in **UTC (+00)** and are unaffected by it — see "Timezone convention" in [`docs/13_common.md`](./13_common.md).
 
+## The scan interval is a floor under every schedule
+
+The daemon wakes every `--delay-seconds` (**1** by default, and the minimum the code accepts),
+reads `data/app_commands.json` and asks each command whether it is due. A command's own
+`repeat_interval` is therefore only ever checked that often, and its tasks' intervals only when the
+command runs — three clocks in a row, each a floor under the next:
+
+| | Default | Decides |
+| --- | :-: | --- |
+| `--delay-seconds` | 1 s | how often any command is considered |
+| `app_commands[].time_window.repeat_interval` | per command | how often that app is started |
+| the app's own config (a SQL task's target, a backup job) | per entry | when the work actually runs |
+
+Both of the outer two are one second for the two apps that are polled rather than scheduled —
+`APP-TELEGRAM` and `APP-SQL_TASKS` — so neither is ever the answer to "why did it run then". A
+scan reads one JSON file and compares timestamps, and an app with nothing due exits immediately;
+the cost of asking is far below the cost of an interval nobody can see in the config they are
+reading.
+
 ## How to Run
 
-Run forever with a 2-second scan interval:
+Run forever with a 1-second scan interval:
 
 ```powershell
 # python -m db_ops.jobs.cli [daemon|status] is an equivalent alias (uniform <app>.cli convention)
-python -m db_ops.jobs.daemon --config config.json --delay-seconds 2
+python -m db_ops.jobs.daemon --config config.json --delay-seconds 1
 ```
 
 Run one scan and wait for started commands to finish:

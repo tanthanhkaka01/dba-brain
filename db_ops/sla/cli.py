@@ -130,7 +130,11 @@ def _run_validate(args: argparse.Namespace, config, logger) -> int:
 #: is in the shipped schedule, so exiting 1 there makes a correct new install log a failing app
 #: command every cycle, on its first day, with nothing wrong. A *measured* failure still exits 1,
 #: which is the signal this app exists to give.
-NON_FAILING_STATUSES: tuple[str, ...] = ("PASSED", "NO_DATA")
+# NOT_CONFIGURED joins them for the same reason and not the same fact: an estate with no
+# objective written for it has nothing to measure, and a failing app command every cycle
+# teaches its reader to ignore the log. It is visible where it matters - on the page and in
+# the summary - as blank rather than green.
+NON_FAILING_STATUSES: tuple[str, ...] = ("PASSED", "NO_DATA", "NOT_CONFIGURED")
 
 
 def exit_code_for(status: str, *, allow_fail: bool = False) -> int:
@@ -223,7 +227,7 @@ def _maybe_notify_telegram(args, config, summary, logger, *, sla_run_id: int | N
 
 #: Worst first. Used to tell an escalation (AT_RISK -> FAILED) from a de-escalation, so a finding
 #: that got worse can interrupt while one that improved does not.
-SLA_SEVERITY_ORDER = ("FAILED", "AT_RISK", "NO_DATA", "PASSED")
+SLA_SEVERITY_ORDER = ("FAILED", "AT_RISK", "NO_DATA", "NOT_CONFIGURED", "PASSED")
 
 
 def _reminder_seconds(config) -> int:

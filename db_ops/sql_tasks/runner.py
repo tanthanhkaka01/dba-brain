@@ -1380,7 +1380,9 @@ def _run_python_source(
     )
     try:
         produced = python_source_module.run(
-            source, tool_root=tool_root, parameter_values=parameter_values)
+            source, tool_root=tool_root, parameter_values=parameter_values,
+            target={"target_server_id": target.server_id,
+                    "target_database": target.database_name})
     except PythonSourceError as exc:
         metadata["input"] = {"type": command.input_type, "script": source.script_path,
                              "status": "failed", "error": str(exc)}

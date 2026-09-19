@@ -8,8 +8,15 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
-from db_ops.backup_restore.backup import BACKUP_TYPES, load_backup_jobs, run_backup
+from db_ops.backup_restore.backup import (
+    BACKUP_TYPES,
+    _load_secrets,
+    load_backup_jobs,
+    run_backup,
+)
+from db_ops.lib import common_cli
 from db_ops.backup_restore.restore_script import load_script_restores
 from db_ops.lib.listing import active_only, hidden_note
 from db_ops.backup_restore.workflow import run_workflow
@@ -1046,6 +1053,7 @@ def run_restore_workflow(
         "per_restore_results": None,
         "copy-backup": None,
         "restore-latest": None,
+        "verify-restore": None,
         "delete-backup": None,
     }
     _rw_restore_id = restore_configs[0].restore_id if len(restore_configs) == 1 else ""
@@ -1130,14 +1138,98 @@ def run_restore_workflow(
                 run_restore_all_latest(config=config, db_ops_config=app_config, dry_run=dry_run, logger=logger, point_in_time_utc=point_in_time_utc)
                 for config in restore_inputs
             ]
+        restore_counts = _count_restore_statuses(restore_outputs)
+        failed_databases = _failed_restore_databases(restore_outputs)
         summary["restore-latest"] = {
-            "status": "DRY_RUN" if dry_run else "SUCCESS",
+            # Computed, not asserted. This said `SUCCESS` whenever no exception escaped, while the
+            # `failed` count directly below it was already right - so on 2026-09-15 a database left
+            # mid-restore by `Msg 5149` was recorded FAILED in `backup_restore_history` and
+            # announced to the group as `status=done`. The count was never the missing part.
+            "status": "DRY_RUN" if dry_run else ("FAILED" if failed_databases else "SUCCESS"),
             "sources": restore_outputs,
         }
-        restore_counts = _count_restore_statuses(restore_outputs)
         summary.update(restore_counts)
         per_restore_results = _build_per_restore_results(restore_configs, restore_outputs)
         summary["per_restore_results"] = per_restore_results
+        if failed_databases:
+            # Raised rather than returned, so the one `except` below sets the status, the error tail
+            # and the alert - the shape `delete-backup` already uses for a non-zero return code.
+            #
+            # **And this deliberately stops before the retention cleanup.** A restore drill is what
+            # proves the backups are restorable; pruning them in the same run that failed to restore
+            # one is exactly backwards. Do not "fix" the early return.
+            raise RuntimeError(
+                f"restore failed for {len(failed_databases)} database(s): "
+                f"{', '.join(sorted(failed_databases))}. Retention cleanup was not run.")
+
+        # **The last question, and the only one that matters to whoever asked for the restore:
+        # can the database be opened?** Every step above reports on the command it ran, and a
+        # command can return having left a database mid-restore - which is exactly what happened on
+        # 2026-09-15, when `Msg 5149` stopped a restore and the run still announced `status=done`.
+        # `verify-restore` runs a real query rather than reading a state column, because a database
+        # can read ONLINE and still refuse one while it finishes an upgrade step.
+        #
+        # `restore_by_id` has planned this as its last step for all three engines since it was
+        # written; this path never called it. So the check existed and the nightly job skipped it.
+        verify_outputs: list[dict[str, object]] = []
+        if not dry_run:
+            _say("VERIFY_START",
+                 f"Restore {restore_configs[0].restore_id or restore_configs[0].source_id}: "
+                 f"checking the restored database(s) can be opened.")
+            with _workflow_phase(logger, f"{_rid}restore-workflow verify-restore", summary=summary,
+                                 current_phase="verify-restore", source_count=len(restore_configs)):
+                try:
+                    verify_secrets = _load_secrets(data_dir=None, key=None, key_base64=None)
+                except Exception as exc:  # noqa: BLE001 - no key is a state, not a broken restore
+                    # The restore itself got its credentials some other way (a generated batch, an
+                    # ssh session). Failing the whole run because *this* check could not read the
+                    # store would make the check more fragile than the work it is checking.
+                    verify_secrets = {}
+                    _verify_unavailable = sanitize_text(str(exc))
+                else:
+                    _verify_unavailable = ""
+                for config in restore_configs:
+                    request = _verify_request(config, verify_secrets)
+                    if request is None:
+                        verify_outputs.append({
+                            "restore_id": config.restore_id, "target_id": config.target_id,
+                            "status": "SKIPPED",
+                            "reason": _verify_unavailable
+                            or "no target login configured for this entry",
+                        })
+                        continue
+                    outcome = common_cli.run("verify-restore", request)
+                    verify_outputs.append({
+                        "restore_id": config.restore_id, "target_id": config.target_id,
+                        "status": "SUCCESS" if outcome.get("ok") else "FAILED",
+                        "checked": outcome.get("checked"), "failed": outcome.get("failed"),
+                        "databases": outcome.get("databases"),
+                    })
+            unusable = [
+                str(db.get("database"))
+                for item in verify_outputs
+                for db in (item.get("databases") or [])
+                if isinstance(db, dict) and not db.get("ok")
+            ]
+            _checked = sum(int(item.get("checked") or 0) for item in verify_outputs)
+            _skipped_entries = sum(1 for item in verify_outputs if item.get("status") == "SKIPPED")
+            summary["verify-restore"] = {
+                "status": "FAILED" if unusable else "SUCCESS",
+                "checked": _checked, "failed": len(unusable),
+                "skipped_entries": _skipped_entries, "targets": verify_outputs,
+            }
+            _say("VERIFY_DONE",
+                 f"Restore {restore_configs[0].restore_id or restore_configs[0].source_id}: "
+                 f"{_checked} database(s) checked, {len(unusable)} unusable"
+                 + (f", {_skipped_entries} entry(ies) skipped" if _skipped_entries else "") + ".",
+                 {"checked": _checked, "failed": len(unusable),
+                  "skipped_entries": _skipped_entries})
+            if unusable:
+                # Same reason the failed-restore count raises: the retention cleanup must not prune
+                # the backups when the drill that proves them restorable has just failed.
+                raise RuntimeError(
+                    f"restore finished but {len(unusable)} database(s) cannot be opened: "
+                    f"{', '.join(sorted(unusable))}. Retention cleanup was not run.")
 
         delete_outputs = []
         # Announced like every other phase. Until 2026-09-11 the retention cleanup was the one
@@ -1294,6 +1386,71 @@ def _summarize_restore_sources(source_outputs: list[dict[str, object]]) -> dict[
     }
 
 
+def _verify_targets(config: Any) -> list[str]:
+    """The names to look for on the TARGET, which are not always the names on the source.
+
+    A drill commonly restores `SALES` as `SALES_STG`. Verifying the source name asks the target
+    about a database it was never asked to create, and reports the drill broken when it worked.
+    """
+    names: list[str] = []
+    for mapping in (getattr(config, "databases", None) or ()):
+        name = (getattr(mapping, "restore_database_name", "")
+                or getattr(mapping, "source_database_name", ""))
+        if name and name not in names:
+            names.append(str(name))
+    return names
+
+
+def _verify_request(config: Any, secrets: dict[str, str]) -> dict[str, Any] | None:
+    """The `verify-restore` request for one entry, or ``None`` when this entry cannot be checked.
+
+    ``None`` is a *state*, not a failure: an entry that names no target login is not a broken
+    restore, it is one this node was never given the credentials to look at. It is reported as
+    skipped, with the reason, rather than counted against the run - the rule the whole app follows
+    for "not configured".
+    """
+    host = str(getattr(config, "vm_credential_target", "") or "").strip()
+    username = str(getattr(config, "restore_sql_username", "") or "").strip()
+    password_ref = str(getattr(config, "restore_sql_password_env", "") or "").strip()
+    databases = _verify_targets(config)
+    if not (host and username and password_ref and databases):
+        return None
+    password = secrets.get(password_ref)
+    if not password:
+        return None
+    return {"db_type": "sqlserver", "databases": databases,
+            "target": {"host": host, "port": 1433, "username": username, "password": password}}
+
+
+#: A per-database outcome that is not a failure. `SKIPPED` is here because a database the run had
+#: no work for has not failed - it was not restored at all - while anything else (`FAILED`, an
+#: engine's own word, or a status nobody recognises) is not evidence of a usable database and is
+#: counted against the run.
+_RESTORE_SUCCESS_STATUSES = frozenset({"SUCCESS", "DRY_RUN"})
+_RESTORE_OK_STATUSES = _RESTORE_SUCCESS_STATUSES | {"SKIPPED"}
+
+
+def _failed_restore_databases(source_outputs: list[dict[str, object]]) -> list[str]:
+    """Which databases the restore reported a non-success for, named so the failure can be read.
+
+    The count has always been computed; what was missing was anything that *said* which. A workflow
+    that fails with "1 database failed" sends its reader back to the store, which is where this
+    failure hid for two releases.
+    """
+    failed: list[str] = []
+    for source in source_outputs:
+        if not isinstance(source, dict):
+            continue
+        per_database = source.get("per_database_restore_status")
+        if not isinstance(per_database, dict):
+            if source.get("status") and str(source.get("status")) not in _RESTORE_OK_STATUSES:
+                failed.append(str(source.get("source_id") or source.get("target_id") or "?"))
+            continue
+        failed.extend(str(name) for name, status in per_database.items()
+                      if str(status) not in _RESTORE_OK_STATUSES)
+    return failed
+
+
 def _count_restore_statuses(source_outputs: list[dict[str, object]]) -> dict[str, int]:
     statuses: list[str] = []
     for source in source_outputs:
@@ -1305,7 +1462,7 @@ def _count_restore_statuses(source_outputs: list[dict[str, object]]) -> dict[str
             continue
         if source.get("status"):
             statuses.append(str(source.get("status")))
-    success = sum(1 for status in statuses if status in {"SUCCESS", "DRY_RUN"})
+    success = sum(1 for status in statuses if status in _RESTORE_SUCCESS_STATUSES)
     skipped = sum(1 for status in statuses if status == "SKIPPED")
     failed = len(statuses) - success - skipped
     return {

@@ -148,6 +148,14 @@ def last_queued_at(*, store: Any, source_type: str, note: str = "") -> str:
     """
     if not source_type:
         return ""
+    # A store whose schema has never been built has, by definition, never carried a message from
+    # this producer - and asking is how a fresh node meets the question. Without this, an `sla
+    # validate --notify` on a root where nothing has queued anything yet died with the raw
+    # `no such table: telegram_send_messages` and exited 1: a correct new install, logging a
+    # failing app command every cycle for a queue that is simply empty.
+    initialize = getattr(store, "initialize", None)
+    if callable(initialize):
+        initialize()
     clauses = ["source_type = ?", "send_status <> -1"]
     params: list[object] = [source_type]
     if note:

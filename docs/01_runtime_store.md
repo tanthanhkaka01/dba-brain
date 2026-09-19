@@ -623,6 +623,8 @@ The Reports App reads latest `metric_results`, writes `reports`, updates `report
 
 The Telegram App reads pending queue rows where `telegram_send_messages.send_status = 0`, writes send outcomes with `send_status`, `send_date`, and `message_id`, saves updates into `telegram_messages`, and copies command messages into `telegram_command_messages`.
 
+One outcome is neither sent nor failed: a row refused for Telegram's **own rate limit** goes back to `send_status = 0` through `reset_telegram_send_message_pending`, because a 429 is a pause rather than a refusal. That method **merges** its `last_fail_text` into `metadata_json` rather than replacing the object — it had no caller until 2026-09-16, and as written a re-queued document row would have lost `document_path` and gone out next cycle as a plain message. (`mark_telegram_send_message_failed` still replaces the object; a `-1` row is terminal and nothing re-sends it.)
+
 `/spbot_list_my_commands` reads one person's own history back out of these two tables at once (`fetch_recent_telegram_command_messages`): `telegram_command_messages` for the commands, left-joined to the **last** `telegram_conversation_states` row carrying the same `source_telegram_command_message_id`, because a command answered one prompt at a time keeps its arguments there and not in the message. Ordered by `telegram_command_message_id`, not by `message_date`: the date is nullable and the two engines disagree about where NULLs sort in a DESC order.
 
 The Backup Restore App writes `backup_restore_history` for restore starts/finishes and also records workflow-level events in `job_runs`.

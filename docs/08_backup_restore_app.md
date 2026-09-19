@@ -90,6 +90,49 @@ Verify with `list-backups` / `list-restores`, then `backup --dry-run`.
 
 Restore config -> copy recent backup files into import location -> optionally import certificate -> locate latest FULL backup -> generate/execute SQL Server restore SQL -> verify restored database -> write `backup_restore_history` and logs -> delete old copied files when requested.
 
+### A restore is not `done` until the databases open
+
+Two rules, both added 2026-09-16 after a drill reported `status=done` over a database `Msg 5149`
+had left mid-restore and nobody could open:
+
+1. **The verdict is computed from the per-database outcomes, never asserted beside them.** The
+   workflow used to set `status: SUCCESS` next to the `failed` count it had already calculated, so
+   only an exception could make a run fail. A non-success on any database now fails the run and
+   **names the databases** — a message reading "1 database failed" sends its reader to the store,
+   which is where this hid for two releases. A status the code does not recognise counts against
+   the run: the engines do not agree on a word for failure, and "unknown" is not evidence that a
+   database is usable.
+2. **A `verify-restore` phase runs last**, before retention cleanup. It opens each restored
+   database with a real query rather than reading a state column, because a database can read
+   ONLINE and still refuse one while it finishes an upgrade step. It asks about the name on the
+   **target** (`restore_database_name`), not the source's — a drill that restores `SALES` as
+   `SALES_STG` would otherwise be asked about a database it was never told to create.
+
+**Both stop before the retention cleanup, deliberately.** A restore drill is what proves the
+backups are restorable; pruning them in the same run that failed to restore one is exactly
+backwards.
+
+**An entry this node holds no target login for is `SKIPPED`, with the reason** — not failed. "Not
+configured" is a state, and a check that cannot run is not evidence of a broken restore. The same
+applies when the secret store cannot be read at all: the restore itself got its credentials some
+other way, and this check must not be more fragile than the work it is checking.
+
+Where each engine is verified:
+
+| Path | Engines | Verified by |
+| --- | --- | --- |
+| `restore-workflow` — the SMB engine flow | SQL Server | the phase above, added 2026-09-16 |
+| `restore-by-id` — script-driven drills | Oracle, PostgreSQL, MySQL, and SQL Server container drills | `verify-restore` has been the planner's last step for all three engines since it was written; a failure raises, and the scheduled runner records `status=error` with the text and notifies |
+
+So the check already existed and was already planned for every engine. What was missing was the
+nightly SQL Server path calling it.
+
+**The depth differs by engine, on purpose.** SQL Server restores one database at a time, so each
+can fail on its own and the check takes a list of database names. PostgreSQL (`pg_basebackup` plus
+WAL replay) and Oracle (RMAN `DUPLICATE`) restore **the whole instance**, so the instance coming up
+*is* the answer and `verify-restore` takes only a host for them. An engine that restores an instance
+is verified at the instance; only SQL Server needs the per-database list.
+
 ## How to Run
 
 These commands read encrypted secrets (SMB/SQL passwords, certificate API token),
