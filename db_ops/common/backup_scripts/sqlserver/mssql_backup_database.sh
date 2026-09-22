@@ -9,7 +9,8 @@
 # backup newer than the oldest one still needed" - see the retention section.
 #
 # Runs on the container host (shipped over SSH by db_ops.backup_restore.backup) and
-# `docker exec`s into $DOCKER_CONTAINER, mirroring the Oracle and PostgreSQL jobs.
+# `docker exec`s into $DOCKER_CONTAINER when one is named, and runs on the host when one is not,
+# mirroring the Oracle and PostgreSQL jobs. Windows instances use the .ps1 beside this file.
 #
 # Layout, one file per backup:
 #   $BACKUP_DIR/<DB>/FULL/<DB>_FULL_<YYYYMMDD_HHMMSS>Z.bak   the stamp is UTC, and the Z says so
@@ -26,7 +27,7 @@
 # .cer/.pvk pair into the target instance first; db_ops.backup_restore.certificate does this
 # for the production flow.
 #
-# Env: DOCKER_CONTAINER (required), BACKUP_DIR (required, path inside the container),
+# Env: DOCKER_CONTAINER (OPTIONAL since 0.21.0 - unset means this Linux host), BACKUP_DIR (required, path inside the container),
 #      BACKUP_LEVEL (required: full|diff|log),
 #      MSSQL_USER (default sa), MSSQL_PASSWORD (required, from env_secrets),
 #      MSSQL_DATABASES (optional comma list; default = every online user database),
@@ -47,7 +48,6 @@ retention_days="${RETENTION_DAYS:-14}"
 
 die() { printf 'RESULT=error reason=%s\n' "$1" >&2; exit 1; }
 
-[ -n "$container" ]      || die "DOCKER_CONTAINER is not set."
 [ -n "$backup_dir" ]     || die "BACKUP_DIR is not set."
 [ -n "$mssql_password" ] || die "MSSQL_PASSWORD is not set (declare it in the job's env_secrets)."
 case "$level" in
@@ -58,33 +58,52 @@ case "$retention_days" in
     ''|*[!0-9]*) die "RETENTION_DAYS must be a whole number of days: '${retention_days}'." ;;
 esac
 
-# docker CLI: plain first, fall back to sudo (host user may not be in the docker group).
-DOCKER="docker"
-$DOCKER info >/dev/null 2>&1 || DOCKER="sudo docker"
-$DOCKER inspect "$container" >/dev/null 2>&1 \
-    || die "container '${container}' not found or docker unavailable on host."
+# $DOCKER_CONTAINER is optional since 0.21.0: set it for an instance inside a container, leave it
+# unset for one installed on this Linux host. A NARROWER gap than the PostgreSQL and Oracle scripts
+# closed - SQL Server on Windows is backed up by mssql_backup_database.ps1 beside this file, so what
+# was unreachable was only SQL Server installed natively on Linux.
+#
+# `exec_here` wraps one command; every sqlcmd call below goes through it, so a call written for one
+# of the two paths cannot quietly work in testing and fail on the other.
+if [ -n "$container" ]; then
+    # docker CLI: plain first, fall back to sudo (host user may not be in the docker group).
+    DOCKER="docker"
+    $DOCKER info >/dev/null 2>&1 || DOCKER="sudo docker"
+    $DOCKER inspect "$container" >/dev/null 2>&1 \
+        || die "container '${container}' not found or docker unavailable on host."
+    # stdin is closed on every docker exec: this whole script arrives on the host's `bash -s`
+    # stdin, and an exec that keeps it open would eat the rest of the script.
+    exec_here() { $DOCKER exec -i "$container" "$@" < /dev/null; }
+    probe_here() { $DOCKER exec "$container" sh -c "$1" >/dev/null 2>&1; }
+    where="container ${container}"
+else
+    exec_here() { "$@" < /dev/null; }
+    probe_here() { sh -c "$1" >/dev/null 2>&1; }
+    where="this host"
+fi
+printf 'reaching the instance: %s\n' "$where"
 
-# sqlcmd moved between tool versions; take whichever the image ships.
+# sqlcmd moved between tool versions; take whichever is present. The same list either way - the
+# mssql-tools paths are where a native Linux install puts them too, not only the image.
 sqlcmd_bin=""
 for candidate in /opt/mssql-tools18/bin/sqlcmd /opt/mssql-tools/bin/sqlcmd sqlcmd; do
-    if $DOCKER exec "$container" test -x "$candidate" 2>/dev/null \
-       || $DOCKER exec "$container" sh -c "command -v $candidate" >/dev/null 2>&1; then
+    if probe_here "test -x '$candidate'" || probe_here "command -v $candidate"; then
         sqlcmd_bin="$candidate"; break
     fi
 done
-[ -n "$sqlcmd_bin" ] || die "no sqlcmd found in container '${container}'."
+[ -n "$sqlcmd_bin" ] || die "no sqlcmd found (${where}); install mssql-tools or set DOCKER_CONTAINER."
 
 # -C trusts the self-signed server certificate the image generates; -b makes sqlcmd exit
 # non-zero on a SQL error, which is what turns a failed BACKUP into a failed job.
 # stdin is closed on every docker exec: this whole script arrives on the host's `bash -s`
 # stdin, and an exec that keeps it open would eat the rest of the script.
 run_sql() {
-    $DOCKER exec -i "$container" "$sqlcmd_bin" -C -b -S localhost \
-        -U "$mssql_user" -P "$mssql_password" -Q "$1" < /dev/null
+    exec_here "$sqlcmd_bin" -C -b -S localhost \
+        -U "$mssql_user" -P "$mssql_password" -Q "$1"
 }
 query_sql() {   # single column, no headers, trimmed
-    $DOCKER exec -i "$container" "$sqlcmd_bin" -C -b -S localhost \
-        -U "$mssql_user" -P "$mssql_password" -h -1 -W -Q "SET NOCOUNT ON; $1" < /dev/null \
+    exec_here "$sqlcmd_bin" -C -b -S localhost \
+        -U "$mssql_user" -P "$mssql_password" -h -1 -W -Q "SET NOCOUNT ON; $1" \
         | sed '/^$/d;/^(.*rows affected)$/d'
 }
 
@@ -101,8 +120,8 @@ if [ -n "$enc_password" ]; then
     esc_pw="$(sql_escape "$enc_password")"
     esc_cert="$(sql_escape "$cert_name")"
     cert_dir="${backup_dir%/}/_cert"
-    $DOCKER exec -i "$container" mkdir -p "$cert_dir" < /dev/null \
-        || die "cannot create ${cert_dir} in the container."
+    exec_here mkdir -p "$cert_dir" \
+        || die "cannot create ${cert_dir} (${where})."
 
     run_sql "
 IF NOT EXISTS (SELECT 1 FROM sys.symmetric_keys WHERE name = '##MS_DatabaseMasterKey##')
@@ -113,7 +132,7 @@ IF NOT EXISTS (SELECT 1 FROM sys.certificates WHERE name = '${esc_cert}')
 
     # Export once. Without the .cer/.pvk pair beside the backups, an encrypted backup is
     # restorable only on the instance that wrote it — which defeats the point of taking it.
-    if ! $DOCKER exec -i "$container" test -f "${cert_dir}/${cert_name}.cer" < /dev/null; then
+    if ! exec_here test -f "${cert_dir}/${cert_name}.cer"; then
         run_sql "
 BACKUP CERTIFICATE [${cert_name}]
     TO FILE = '${cert_dir}/${cert_name}.cer'
@@ -176,7 +195,7 @@ for db in $databases; do
     esac
     target_dir="${backup_dir%/}/${db}/${sub}"
     target_file="${target_dir}/${db}_${sub}_${stamp}.${ext}"
-    $DOCKER exec -i "$container" mkdir -p "$target_dir" < /dev/null \
+    exec_here mkdir -p "$target_dir" \
         || { printf 'ERROR mkdir failed: %s\n' "$target_dir" >&2; failed=1; continue; }
 
     if [ "$level" = "log" ]; then
@@ -208,15 +227,15 @@ done
 # or newer than the newest FULL, whatever its age, and apply the age cut only below that.
 for db in $databases; do
     db_dir="${backup_dir%/}/${db}"
-    newest_full="$($DOCKER exec -i "$container" sh -c \
-        "ls -1t '${db_dir}/FULL'/*.bak 2>/dev/null | head -1" < /dev/null || true)"
+    newest_full="$(exec_here sh -c \
+        "ls -1t '${db_dir}/FULL'/*.bak 2>/dev/null | head -1" || true)"
     if [ -z "$newest_full" ]; then
         continue   # nothing to anchor retention to; keep everything
     fi
-    $DOCKER exec -i "$container" sh -c "
+    exec_here sh -c "
         find '${db_dir}' -type f \\( -name '*.bak' -o -name '*.trn' \\) \
              -mtime +${retention_days} ! -newer '${newest_full}' -delete 2>/dev/null || true
-    " < /dev/null
+    "
 done
 
 [ "$failed" -eq 0 ] || die "one or more ${level} backups failed."

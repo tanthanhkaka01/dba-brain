@@ -47,6 +47,7 @@ from db_ops.common.config_admin import (
     slugify,
 )
 from db_ops.lib import task_output
+from db_ops.lib.sql_access import SQL_TASK_DB_TYPES
 from db_ops.lib.task_input import TARGET_PLACEHOLDERS
 from db_ops.lib.task_output import TaskOutputError
 
@@ -73,7 +74,7 @@ USAGE_COMMAND = """usage: python -m db_ops.common.cli sql-command-add <json>|@<f
 Registers WHAT a SQL task runs, in data/sql_commands.json. Where it runs is sql-target-add.
 
   {"sql_name": "Drain the working-hour queue",     // required
-   "db_type": "sqlserver",                          // required: sqlserver|oracle|postgresql|mysql
+   "db_type": "sqlserver",                          // required: sqlserver|oracle (what a task can run on)
    "script_type": "single",                         // single (default) | array | folder
    "script_path": "assets/tasks/sqlserver/030_x.sql",   // single/folder: a file that EXISTS
    "sql_text": "SELECT 1;",                         // ...or the SQL itself, and db_ops writes
@@ -244,6 +245,14 @@ def add_sql_command(request: dict[str, Any], *, data_dir: str | Path | None = No
     db_type = str(request.get("db_type") or "").strip().lower()
     if db_type not in KNOWN_DB_TYPES:
         raise SqlTaskAdminError(f"db_type must be one of {KNOWN_DB_TYPES}, got {db_type!r}.")
+    # Refuse here what the runner cannot run, rather than at the task's first scheduled run. A
+    # postgresql task registered on 2026-09-21 passed this command and `check-references`, then
+    # errored `Unsupported db_type: postgresql` nine hours later on the node it was scheduled on.
+    if db_type not in SQL_TASK_DB_TYPES:
+        raise SqlTaskAdminError(
+            f"db_type {db_type!r} is a valid engine for this estate, but a scheduled SQL task can "
+            f"only be run on {SQL_TASK_DB_TYPES}. The task would register and then fail at its "
+            f"first run with 'Unsupported db_type: {db_type}'.")
     sql_name = str(request.get("sql_name") or "").strip()
     if not sql_name:
         raise SqlTaskAdminError("sql_name is required.")

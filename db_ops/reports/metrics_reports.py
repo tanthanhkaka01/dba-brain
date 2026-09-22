@@ -406,20 +406,10 @@ def load_report_configs(path: str | Path = DEFAULT_REPORTS_CONFIG_PATH, *, logge
         )
         _log_report_time_window_warnings(logger, parsed_time_window.warnings)
         item = dict(item)
-        item["time_window"] = {
-            "from_year": parsed_time_window.time_window.from_year,
-            "to_year": parsed_time_window.time_window.to_year,
-            "from_month": parsed_time_window.time_window.from_month,
-            "to_month": parsed_time_window.time_window.to_month,
-            "from_day": parsed_time_window.time_window.from_day,
-            "to_day": parsed_time_window.time_window.to_day,
-            "from_hour": parsed_time_window.time_window.from_hour,
-            "to_hour": parsed_time_window.time_window.to_hour,
-            "from_minute": parsed_time_window.time_window.from_minute,
-            "to_minute": parsed_time_window.time_window.to_minute,
-            "repeat_interval": parsed_time_window.time_window.repeat_interval,
-            "timeout": parsed_time_window.time_window.timeout,
-        }
+        # TimeWindow.to_dict, not a list of names written here: this was twelve of the fourteen and
+        # the two it left out were `retry_interval` and `weekdays` - so a report that asked to run on
+        # certain weekdays had that erased at validation, before any scheduler could read it.
+        item["time_window"] = parsed_time_window.time_window.to_dict()
         seen_codes.add(report_code)
         validated.append(item)
     return validated

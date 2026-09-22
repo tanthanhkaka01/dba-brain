@@ -52,11 +52,19 @@ def _fields(reference: list[dict], name: str) -> list[str]:
 # --------------------------------------------------------------------------- #
 # Every described object exists, and every shared object is described
 # --------------------------------------------------------------------------- #
-def test_the_seven_shared_objects_are_described_and_nothing_else_is(reference):
-    """Seven: six objects and one field. An eighth belongs here the day it is written."""
+def test_the_eleven_shared_objects_are_described_and_nothing_else_is(reference):
+    """Eight: six objects, one shared field, and one whole record.
+
+    ``app_command`` was added 2026-09-21, and it is the first entry that describes a *record* rather
+    than a block appearing inside many of them. It carries ``kind: "field"`` anyway, because that is
+    the kind whose declared names ``check_data_dir`` looks for directly **on** the record — a
+    ``"record"`` kind would send it looking for a nested block called ``app_command``, find none, and
+    certify clean for ever.
+    """
     assert [item.get("object") for item in reference] == [
         "time_window", "notify", "notify_rule", "output", "cmd_access", "sql_access",
-        "cleanup_retention"]
+        "cleanup_retention", "app_command",
+    "backup_entry", "backup_job", "restore_entry"]
 
 
 def test_every_entry_states_its_shape_before_a_reader_has_to_count(reference):
@@ -80,7 +88,7 @@ def test_every_field_says_what_it_is_measured_against(reference):
 # --------------------------------------------------------------------------- #
 # The reference against the code it describes
 # --------------------------------------------------------------------------- #
-def test_time_window_lists_exactly_the_thirteen_fields_the_parser_accepts(reference):
+def test_time_window_lists_exactly_the_fourteen_fields_the_parser_accepts(reference):
     assert _fields(reference, "time_window") == list(NEW_FIELDS)
 
 
@@ -163,9 +171,14 @@ def test_an_unknown_name_says_what_there_is_instead_of_raising_a_key_error():
 
 def test_all_three_copies_are_the_same_bytes():
     """The packaged seed, the master's file and the public example. They carry no estate data, so
-    a difference between them is drift rather than configuration."""
+    a difference between them is drift rather than configuration.
+
+    A public checkout has no `data/shared_config_objects.json` — only the example — so the copies
+    that exist are the ones compared, and at least two must. Requiring all three made this red on
+    every public tree, which is how v0.20.0 came to be released with a failing CI.
+    """
     contents = {path: path.read_bytes() for path in COPIES if path.is_file()}
-    assert len(contents) == len(COPIES), f"missing: {[p.name for p in COPIES if not p.is_file()]}"
+    assert len(contents) >= 2, f"only {[p.name for p in contents]} is present; nothing to compare"
     first, *rest = list(contents.items())
     for path, payload in rest:
         assert payload == first[1], (
@@ -174,7 +187,9 @@ def test_all_three_copies_are_the_same_bytes():
 
 
 def test_it_is_valid_json_with_the_schema_version_every_data_file_carries():
-    payload = json.loads(COPIES[1].read_text(encoding="utf-8-sig"))
+    # The packaged seed, which is the one copy every checkout has: a public tree ships the example
+    # and no `data/shared_config_objects.json`.
+    payload = json.loads(COPIES[0].read_text(encoding="utf-8-sig"))
     assert payload["schema_version"] == 2
     assert payload["notes"], "the notes are where the rules a field table cannot hold are written"
 
@@ -184,7 +199,7 @@ def test_it_is_valid_json_with_the_schema_version_every_data_file_carries():
 def test_every_field_carries_a_constraint_a_program_can_evaluate(reference):
     """`range_text` is for a person and cannot be tested. `constraint` is the testable half, and a
     field with only the prose is a field nothing can hold the estate to."""
-    kinds = {"integer", "string", "boolean", "object"}
+    kinds = {"integer", "string", "boolean", "object", "array"}
     for item in reference:
         for entry in item.get("fields") or []:
             constraint = entry.get("constraint")
@@ -197,7 +212,15 @@ def test_every_field_carries_a_constraint_a_program_can_evaluate(reference):
                 if low is not None and high is not None:
                     assert int(low) <= int(high), where
             if constraint["kind"] == "object":
-                assert constraint.get("object") in {i["object"] for i in reference}, where
+                # Three ways an object constraint is evaluable, each saying something different.
+                # `object` names the entry to recurse into. `checked_by` names the entry that
+                # already walks this path, so recursing would report one mistake twice.
+                # `free_form` says the CONTENTS are deliberately not described because the keys are
+                # the operator's own - a backup job's `env`, a restore's `target` - so only the
+                # shape can be checked. Refused is an object constraint that says none of the
+                # three, because nothing can act on it.
+                if not (constraint.get("checked_by") or constraint.get("free_form")):
+                    assert constraint.get("object") in {i["object"] for i in reference}, where
 
 
 def test_the_paths_it_declares_exist_in_the_files_it_names(reference):
@@ -209,7 +232,12 @@ def test_the_paths_it_declares_exist_in_the_files_it_names(reference):
             file_name = str(site.get("file") or "")
             if not file_name:
                 continue
+            # The same fallback `check_data_dir` makes: a public checkout ships only the
+            # `*.example.json`, and a guard that cannot read what the code reads is a guard that
+            # fails for the wrong reason.
             path = REPO_ROOT / "data" / file_name
+            if not path.is_file():
+                path = REPO_ROOT / "data" / file_name.replace(".json", ".example.json")
             assert path.is_file(), f"{item['object']} names a file that is not there: {file_name}"
             payload = json.loads(path.read_text(encoding="utf-8-sig"))
             records = shared_objects.walk_records(payload, str(site.get("path")))

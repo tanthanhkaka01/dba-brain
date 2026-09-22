@@ -41,6 +41,20 @@ SQL_ACCESS_FIELDS: tuple[str, ...] = (
 #: read while validating config, before any driver is loaded.
 KNOWN_DB_TYPES = ("sqlserver", "mysql", "postgresql", "oracle")
 
+#: The engines a **scheduled SQL task** can actually be run on. A narrower set than
+#: :data:`KNOWN_DB_TYPES` on purpose: that one is the config vocabulary for the whole estate, where
+#: a PostgreSQL instance is perfectly legitimate — metrics collect from it and backup_restore backs
+#: it up. What no layer supports yet is *executing a task script* on it, because
+#: ``sql_tasks.runner`` has one engine dispatch and it covers these two.
+#:
+#: It exists as a constant, next to the wider set, because the two were related only by a literal.
+#: On 2026-09-21 ``sql-command-add`` accepted ``db_type: "postgresql"``, ``check-references`` passed
+#: it, and the scheduler carried it for nine hours before the first run errored with
+#: ``Unsupported db_type: postgresql`` at 16:00:00Z — on a soak node, where a wasted run costs
+#: clock. The registrar now refuses at registration; the dispatch reads the same tuple, so widening
+#: it is one edit and cannot half-apply.
+SQL_TASK_DB_TYPES = ("sqlserver", "oracle")
+
 #: The ``db_type`` of a machine with **no database on it** - an application server, a hypervisor,
 #: a VM that only needs OS metrics. It exists so OS metrics are collected once per machine rather
 #: than once per instance, and `data/db_instances.example.json` has documented it since long

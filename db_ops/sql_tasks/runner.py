@@ -514,13 +514,9 @@ def collect_sql_tasks(
                 "active": bool(target.active),
                 "manual_only": bool(target.manual_only),
                 "output_format": target.output_format,
-                "time_window": target.time_window.to_dict()
-                if hasattr(target.time_window, "to_dict") else {
-                    "repeat_interval": target.time_window.repeat_interval,
-                    "timeout": target.time_window.timeout,
-                    "from_hour": target.time_window.from_hour,
-                    "to_hour": target.time_window.to_hour,
-                },
+                # TimeWindow.to_dict, never a subset written here: this used to fall back to four
+                # hand-listed names and the listing therefore hid `weekdays` entirely.
+                "time_window": target.time_window.to_dict(),
                 # Which transport this target's SQL takes: "direct" (a database connection) or
                 # the legacy Oracle tool. Visible in the listing because it is the difference
                 # between a task that needs the bridge up and one that does not.
@@ -1896,7 +1892,7 @@ def execute_on_target(
     where it differs.
     """
     engine = sql_access.normalize_db_type(target.db_type)
-    if engine not in {"sqlserver", "oracle"}:
+    if engine not in sql_access.SQL_TASK_DB_TYPES:
         raise RuntimeError(f"Unsupported db_type: {target.db_type}")
 
     request: dict[str, Any] = {

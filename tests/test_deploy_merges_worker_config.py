@@ -215,20 +215,23 @@ def test_merge_keeps_master_order_and_appends_worker_records():
     master = [{"sql_id": 8}, {"sql_id": 11}]
     worker = [{"sql_id": 11}, {"sql_id": 17}, {"sql_id": 18}]
 
-    merged, added = worker_data.merge_record_lists(
+    merged, added, overridden = worker_data.merge_record_lists(
         master=master, worker=worker, key_fields=("sql_id",))
 
     assert [item["sql_id"] for item in merged] == [8, 11, 17, 18]
     assert added == [("17",), ("18",)]
+    # sql_id 11 is on both sides and identical, so the master imposes nothing.
+    assert overridden == []
 
 
 @pytest.mark.parametrize("junk", [None, "text", 42, []])
 def test_non_records_in_either_list_are_ignored(junk):
     """A hand-edited config with a stray value must not crash a deploy."""
-    merged, added = worker_data.merge_record_lists(
+    merged, added, overridden = worker_data.merge_record_lists(
         master=[{"sql_id": 8}, junk], worker=[junk, {"sql_id": 17}], key_fields=("sql_id",))
 
     assert added == [("17",)]
+    assert overridden == []
     assert {item["sql_id"] for item in merged if isinstance(item, dict)} == {8, 17}
 
 
@@ -373,3 +376,134 @@ def test_the_file_keeps_the_indent_it_already_used(tmp_path, monkeypatch, indent
 
     second_line = path.read_text(encoding="utf-8").splitlines()[1]
     assert len(second_line) - len(second_line.lstrip(" ")) == indent
+
+
+# --------------------------------------------------------------------------- #
+# The half that was silent: "master wins" never said what it won
+# --------------------------------------------------------------------------- #
+def test_a_shared_record_the_master_overrides_is_named_with_its_fields():
+    """`--merge` used to print `SAME` for a file whose worker copy it was about to overwrite.
+
+    The rule is right — a record on both sides was usually edited on the master — but it was applied
+    without a word, and the deploy that follows uploads the master's copy over the worker's. The
+    operator's only chance to notice is this line.
+    """
+    master = [{"sql_id": 29, "active": False, "note": "off here on purpose"}]
+    worker = [{"sql_id": 29, "active": False, "note": ""}]
+
+    _merged, added, overridden = worker_data.merge_record_lists(
+        master=master, worker=worker, key_fields=("sql_id",))
+
+    assert added == []
+    assert len(overridden) == 1
+    assert overridden[0].startswith("29 (note)")
+
+
+def test_an_override_that_stops_a_running_job_says_so_in_those_words():
+    """`active` is the one field whose override does not ship a changed configuration — it ships a
+    stopped job. Listed alphabetically among four other field names it reads as one more detail."""
+    master = [{"sql_id": 29, "active": False, "time_window": {"repeat_interval": 18000}}]
+    worker = [{"sql_id": 29, "active": True, "time_window": {"repeat_interval": 300}}]
+
+    _merged, _added, overridden = worker_data.merge_record_lists(
+        master=master, worker=worker, key_fields=("sql_id",))
+
+    assert "STOPS A JOB THAT IS ACTIVE ON THE WORKER" in overridden[0]
+    assert "active" in overridden[0] and "time_window" in overridden[0]
+
+
+def test_the_other_direction_is_not_a_warning():
+    """A task switched ON by the master is the ordinary way a task is enabled. Warning about it
+    would train its reader to skip the line that matters."""
+    master = [{"sql_id": 29, "active": True}]
+    worker = [{"sql_id": 29, "active": False}]
+
+    _merged, _added, overridden = worker_data.merge_record_lists(
+        master=master, worker=worker, key_fields=("sql_id",))
+
+    assert "STOPS A JOB" not in overridden[0]
+    assert overridden[0] == "29 (active)"
+
+
+def test_an_identical_shared_record_is_not_reported_at_all():
+    """Every deploy shares most records with the worker. A merge that named all of them would be a
+    page of noise with the one real override somewhere inside it."""
+    same = {"sql_id": 29, "active": True, "time_window": {"repeat_interval": 300}}
+
+    _merged, _added, overridden = worker_data.merge_record_lists(
+        master=[dict(same)], worker=[dict(same)], key_fields=("sql_id",))
+
+    assert overridden == []
+
+
+def test_an_override_is_not_counted_as_a_change_to_the_master(tmp_path, monkeypatch, capsys):
+    """It changes nothing on this side: the master keeps the record it already had.
+
+    Counting it would report "applied 1 change(s) to the master config" for a file that was not
+    written, and would drop the master's own file through a rewrite whose only effect is a new mtime
+    — which this module already refuses to do elsewhere for the same reason.
+    """
+    before = {"sql_targets": [_task(16, name="punch", interval=18000)]}
+    added = _merge(
+        tmp_path, monkeypatch,
+        master={"sql_targets.json": before},
+        worker={"sql_targets.json": {"sql_targets": [_task(16, name="punch", interval=300)]}},
+    )
+    out = capsys.readouterr().out
+
+    assert added == 0
+    assert "OVERRIDE" in out
+    assert "repeat_interval" in out or "time_window" in out
+    # The master's file is untouched, byte for byte.
+    assert json.loads((tmp_path / "sql_targets.json").read_text(encoding="utf-8")) == before
+
+
+def test_a_record_differing_only_in_per_node_state_is_not_reported():
+    """Found by running it, not by a test: the first live merge printed nine OVERRIDE lines for nine
+    app commands and every one of them was `node_role` alone.
+
+    `node_role` is "THIS node's role, resolved per-node", so it differs between any two nodes that
+    have ever existed — master `worker` against that node's `all`. A report whose lines are
+    nine-tenths inevitable is one its reader learns to skip, which is the failure this report exists
+    to prevent. The merge is unchanged; only the reporting is.
+    """
+    master = [{"command_code": "APP-METRICS", "node_role": "worker", "active": True}]
+    worker = [{"command_code": "APP-METRICS", "node_role": "all", "active": True}]
+
+    _merged, _added, overridden = worker_data.merge_record_lists(
+        master=master, worker=worker, key_fields=("command_code",))
+
+    assert overridden == []
+
+
+def test_per_node_state_does_not_hide_a_real_override_beside_it():
+    """The dangerous half of the rule above. `node_role` is dropped from the line, not the line from
+    the report — a record differing in `node_role` *and* `active` still has to be named."""
+    master = [{"command_code": "APP-METRICS", "node_role": "worker", "active": False}]
+    worker = [{"command_code": "APP-METRICS", "node_role": "all", "active": True}]
+
+    _merged, _added, overridden = worker_data.merge_record_lists(
+        master=master, worker=worker, key_fields=("command_code",))
+
+    assert len(overridden) == 1
+    assert "active" in overridden[0]
+    assert "node_role" not in overridden[0]
+    assert "STOPS A JOB THAT IS ACTIVE ON THE WORKER" in overridden[0]
+
+
+def test_a_file_with_overrides_and_nothing_to_pull_does_not_say_SAME(tmp_path, monkeypatch, capsys):
+    """Also found by running it: nine OVERRIDE lines followed by `SAME app_commands.json`.
+
+    `SAME` means "nothing to apply", which is true — and read immediately after nine differences it
+    says the opposite of them.
+    """
+    _merge(
+        tmp_path, monkeypatch,
+        master={"sql_targets.json": {"sql_targets": [_task(16, name="punch", interval=18000)]}},
+        worker={"sql_targets.json": {"sql_targets": [_task(16, name="punch", interval=300)]}},
+    )
+    out = capsys.readouterr().out
+
+    assert "OVERRIDE" in out
+    assert "KEPT" in out
+    assert "SAME" not in out

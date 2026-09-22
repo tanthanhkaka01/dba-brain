@@ -50,6 +50,13 @@ READS_LOCAL_CONFIG: dict[str, str] = {
               "parameter, and `data_dir` is already the parameter that makes it testable.",
     "config_admin.py": "writes data/*.json (add-sql, metric-toggle). Editing the config IS the "
                        "operation, so it cannot be handed the config as a value.",
+    "app_command_admin.py": "edits data/app_commands.json (app-command-set), for the same reason "
+                       "config_admin.py beside it does: editing the config IS the operation. It "
+                       "reads one more file than it writes - the app_command entry in "
+                       "shared_config_objects.json, which is where the field list and every "
+                       "field's constraint live - because a second list here would be a second "
+                       "opinion about the shape of a record. `data_dir` is the parameter that "
+                       "keeps it testable.",
     "sql_task_admin.py": "writes data/sql_commands.json and data/sql_targets.json (sql-command-add, "
                          "sql-target-add). The same argument as config_admin.py above it: editing "
                          "the config IS the operation. `data_dir` and `tool_root` are both "

@@ -864,3 +864,16 @@ Three properties worth knowing:
 - **It prints the resolved connection afterwards**, because the mistake this command exists to
   prevent is *believing* a node is on its own file.
 
+
+## What a drift report says
+
+`content differs: sql_targets[29|1] changed (time_window, note)` — the record by its catalogued key,
+then the fields that differ, up to four and then `and N more`. Nested values are named at their top
+level: a `time_window` whose `weekdays` changed reads as `(time_window)`.
+
+The field names are there because this one line is the whole of what an operator decides
+`--on-config-drift keep` against `adopt` from, and those are opposite actions. Measured on
+2026-09-22 the record above differed by `time_window` and `note`, both master-side additions the
+store had not been synced with, which makes `keep` obviously right. Had it differed by `active`,
+`keep` would have been obviously wrong. Naming the field is the difference between a decision and a
+guess, and until 0.21.0 the message stopped at `changed`.

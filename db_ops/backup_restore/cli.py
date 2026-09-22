@@ -19,6 +19,7 @@ from db_ops.backup_restore.backup import (
 from db_ops.lib import common_cli
 from db_ops.lib import sql_instance
 from db_ops.backup_restore.restore_script import load_script_restores
+from db_ops.lib.time_window import WEEKDAY_NAMES
 from db_ops.lib.listing import active_only, hidden_note
 from db_ops.backup_restore.workflow import run_workflow
 from db_ops.backup_restore.config import (
@@ -375,16 +376,48 @@ def _format_backup_list(jobs: list) -> str:
             when = f"every {window.repeat_interval // 60}m"
         else:
             when = "run-once"
-        # A log/archive job has no full-vs-diff choice, so saying "auto (Sun=full...)" there
-        # would invite --backup-type on a job that cannot take one.
+        # The days, when the entry names them. Since 0.21.0 "the weekly full" is
+        # `time_window.weekdays` rather than a literal inside the engine script, and an entry that
+        # runs one day in seven listed as "every 1200m" reads as a job that runs every 20 hours.
+        # `[]` is a real configuration meaning never, so it is printed, not skipped.
+        if window.weekdays is not None:
+            days = ",".join(WEEKDAY_NAMES[day][:3] for day in sorted(window.weekdays))
+            when = f"{when} on {days or 'no day'}"
+        # A log/archive job has no full-vs-diff choice, so naming a derived level there would
+        # invite --backup-type on a job that cannot take one.
         if job.job in ("archivelog", "wal", "log"):
             level = f"{job.job} (no full/diff level)"
         else:
-            level = job.env.get("BACKUP_LEVEL") or "auto (Sun=full, else diff)"
+            # No BACKUP_LEVEL is a level the SCRIPT picks, and it no longer picks it by the day:
+            # it takes the incremental/diff, and promotes to a baseline when there is nothing it
+            # can chain onto. Saying "auto (Sun=full, else diff)" here outlived the rule it
+            # described by a whole version, and it was the only place an operator could read it.
+            level = job.env.get("BACKUP_LEVEL") or "unset (script default: diff/incr)"
         encrypted = "  [encrypted]" if job.env_secrets.get("BACKUP_ENCRYPTION_PASSWORD") else ""
         lines.append(f"- {job.backup_id}{encrypted}")
         lines.append(f"    {job.db_type} {job.server_id}")
         lines.append(f"    level: {level} | schedule: {when}")
+    # A PostgreSQL incremental chains onto the newest backup in BACKUP_DIR/base/, so the baseline
+    # has to be a job of the SAME entry - that is what makes them share one backup_dir. Split across
+    # two entries, a mismatched directory is not an error: `latest` comes back empty, the script
+    # takes a FULL baseline instead, reports success, and does so for ever. Nothing else would say
+    # so, which is why it is said here, in the listing an operator reads before running one.
+    # Grouped by backup_id, because `active` is already flattened one element per JOB - the first
+    # draft of this read each element as an entry and so reported every incremental in the estate.
+    by_entry: dict[str, set[str]] = {}
+    engines: dict[str, str] = {}
+    for one in active:
+        by_entry.setdefault(one.backup_id, set()).add(str(getattr(one, "job", "")).lower())
+        engines[one.backup_id] = str(getattr(one, "db_type", "")).lower()
+    for backup_id in sorted(by_entry):
+        if engines.get(backup_id) != "postgresql":
+            continue
+        levels = by_entry[backup_id]
+        if "database" in levels and "database_full" not in levels:
+            lines.append(f"    ! {backup_id}: an incremental with no database_full job beside "
+                         "it. A PostgreSQL incremental chains onto the newest backup in this "
+                         "entry's own backup_dir, so a baseline in another entry is not one it can "
+                         "reach - every run will take a FULL instead, and report success.")
     lines.append("")
     lines.append("Run one:  /spbot_backup <backup_id> <full|diff|log|->")
     lines.append("Use - to let the schedule's own rule pick the level.")

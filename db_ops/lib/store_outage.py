@@ -48,6 +48,10 @@ TRANSIENT_PHRASES: tuple[str, ...] = (
     "connection already closed",
     "server closed the connection",
     "the database system is starting up",
+    # The other thing 57P03 says, and the words the server used on 2026-09-22 when it came back up
+    # under a full disk. Second-line defence only: with the SQLSTATE now read through the exception
+    # chain the text is never consulted for this one.
+    "the database system is in recovery mode",
     "the database system is shutting down",
     "connection reset",
     "connection refused",
@@ -77,14 +81,26 @@ def sqlstate(error: BaseException) -> str:
     Read by shape rather than by class, because :mod:`db_ops.lib` may not import a database driver —
     and because a driver that grows a ``sqlstate`` attribute should be read through it instead.
     """
-    direct = getattr(error, "sqlstate", None) or getattr(error, "pgcode", None)
-    if isinstance(direct, str) and direct.strip():
-        return direct.strip()
-    for arg in getattr(error, "args", ()) or ():
-        if isinstance(arg, dict):
-            code = arg.get("C") or arg.get("code")
-            if isinstance(code, str) and code.strip():
-                return code.strip()
+    seen: list[int] = []
+    current: BaseException | None = error
+    # Walk the chain, because the code is usually not on the exception a caller sees. Every store
+    # CONNECT failure arrives as `PostgresStoreError("Could not connect to …: <driver error>")`,
+    # raised `from` the driver's own exception — so the SQLSTATE is one link down and reading only
+    # the top gave "". That is not a cosmetic miss: it classified `57P03` as permanent, so the
+    # daemon exited on the first attempt instead of waiting the store out, and on 2026-09-21 a soak
+    # lost 5 h 45 m and the estate 7 h of log backups to exactly that. The chain is bounded by
+    # identity rather than by depth, so a self-referential __context__ cannot loop.
+    while current is not None and id(current) not in seen:
+        seen.append(id(current))
+        direct = getattr(current, "sqlstate", None) or getattr(current, "pgcode", None)
+        if isinstance(direct, str) and direct.strip():
+            return direct.strip()
+        for arg in getattr(current, "args", ()) or ():
+            if isinstance(arg, dict):
+                code = arg.get("C") or arg.get("code")
+                if isinstance(code, str) and code.strip():
+                    return code.strip()
+        current = current.__cause__ or current.__context__
     return ""
 
 

@@ -32,13 +32,25 @@ def _write(directory: Path, name: str, payload: dict) -> None:
     (directory / name).write_text(json.dumps(payload, indent=4), encoding="utf-8")
 
 
+def _rules_file() -> Path:
+    """This tree's rules, wherever this tree keeps them.
+
+    A public checkout ships `config_references.example.json` and no `config_references.json`, so a
+    test that reads only the latter fails for the wrong reason - which is how v0.20.0 reached PyPI
+    with a red CI.
+    """
+    real = REPO_ROOT / "data" / config_references.FILENAME
+    if real.is_file():
+        return real
+    return REPO_ROOT / "data" / config_references.FILENAME.replace(".json", ".example.json")
+
+
 @pytest.fixture()
 def data_dir(tmp_path: Path) -> Path:
     """A data directory holding this tree's real rules and the minimum they point at."""
     directory = tmp_path / "data"
     directory.mkdir()
-    (directory / config_references.FILENAME).write_bytes(
-        (REPO_ROOT / "data" / config_references.FILENAME).read_bytes())
+    (directory / config_references.FILENAME).write_bytes(_rules_file().read_bytes())
     _write(directory, "db_instances.json", {"db_instances": [
         {"server_id": "ACME-192-0-2-115-MSSQL25-1433", "enabled": True},
     ]})

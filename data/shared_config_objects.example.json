@@ -2,7 +2,7 @@
     "schema_version": 2,
     "notes": [
         "The shared configuration objects: the blocks that appear inside MANY data/*.json records and are parsed once, in db_ops/lib, rather than by each app. This file is the field-level reference for them - what each field does, whether it is required, what values it accepts, and what its number is measured against.",
-        "Seven entries: six objects (time_window, notify, notify_rule, output, cmd_access, sql_access) and one shared FIELD (cleanup_retention). 'field_count' and 'required_field_count' are stated per entry so a reader can see the shape before reading it.",
+        "Eleven entries: six objects (time_window, notify, notify_rule, output, cmd_access, sql_access), one shared FIELD (cleanup_retention) and four whole RECORDS (app_command, added 2026-09-21; backup_entry, backup_job and restore_entry, added 2026-09-22). 'field_count' and 'required_field_count' are stated per entry so a reader can see the shape before reading it. The four records carry kind 'field' deliberately - see their 'kind_note': that is the kind whose declared names the reader looks for directly ON the record, which is what a whole record is. backup_entry, backup_job and restore_entry are described separately although they live in ONE file, because they share only two field names (active, note) and because the schedule sits in a different place in each: a backup_entry has no time_window at all - every one of its jobs carries its own - while a restore_entry carries one directly.",
         "Every field carries BOTH 'range_text' (for a person) and 'constraint' (for a program): kind, nullable, min, max, enum, special_values. Prose cannot be checked, and the reason this is data rather than more docs is that a program holds the estate to it: 'python -m db_ops.common.cli check-objects' reads every record at every path in 'used_in' and reports three things - a required field missing, a value out of range, and a field the reference does not describe.",
         "'open_enum': true means an unlisted value is REPORTED, not refused, because the estate may legitimately define its own (a Telegram level, a shell). 'forbidden_in_config': true is the opposite - a field that is valid in an ad-hoc request and must never appear in a config file, because configuration names a secret and does not hold one. 'legacy_fields' are older spellings the parser still reads: present in a file they are reported as deprecated rather than unknown.",
         "It describes; it does not decide. No parser, scheduler or validator reads it, and editing it changes nothing an app does. What earns it its place in data/ is that it cannot go stale: tests/test_shared_config_objects_reference.py checks it against the code AND runs check-objects over this estate's own files, so a field added to lib and not here fails the suite.",
@@ -52,7 +52,7 @@
                 "hour_from": "from_hour",
                 "hour_to": "to_hour"
             },
-            "field_count": 13,
+            "field_count": 14,
             "required_field_count": 0,
             "fields": [
                 {
@@ -269,6 +269,44 @@
                     "measured_against": "the previous run's START (job_runs.started_at / sql_runs.started_at)",
                     "rule": "also the grace on a 'running' row: a row still open after timeout is reaped instead of a second copy being started",
                     "purpose": "Seconds a run may take before it is killed. Set it above the SLOWEST thing inside the command and below repeat_interval."
+                },
+                {
+                    "field": "weekdays",
+                    "type": "array|null",
+                    "required": false,
+                    "default": "null = no restriction, the record may run on any day",
+                    "range_text": "an array of ISO weekdays 1-7 (1=Monday .. 7=Sunday); [] = never runs",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true,
+                        "item_kind": "integer",
+                        "item_enum": [
+                            1,
+                            2,
+                            3,
+                            4,
+                            5,
+                            6,
+                            7
+                        ],
+                        "unique_items": true,
+                        "special_values": {
+                            "[]": "no day is permitted - the record never runs on a schedule",
+                            "null": "no restriction on the day of the week"
+                        },
+                        "enum_names": {
+                            "1": "Monday",
+                            "2": "Tuesday",
+                            "3": "Wednesday",
+                            "4": "Thursday",
+                            "5": "Friday",
+                            "6": "Saturday",
+                            "7": "Sunday"
+                        }
+                    },
+                    "measured_against": "the day of the week on the node's configured clock (config.json -> timezone)",
+                    "rule": "ISO 1-7, the same numbering isoweekday() and 'date +%u' use, so a config value, DB_OPS_WEEKDAY and a shell script all mean the same thing by 7. 0 is REFUSED rather than dropped: it is the cron spelling of Sunday, and a dropped [0] would become [], which means never. A duplicate is refused too - it is a set, not a weighting. IT GATES DUE-NESS AND DOES NOT GRANT IT: repeat_interval still decides whether, this decides whether today, so a weekly full is weekdays [7] plus an hour window plus an interval WELL UNDER A DAY - with a 6-day interval the due moment walks and the record skips whole weeks. Checked before the five bounds, because a day that is not permitted excludes every hour in it",
+                    "purpose": "Which days of the week the record may run on. The one field that is a SET rather than a from_/to_ pair, because a pair cannot say 'Monday and Thursday'."
                 }
             ]
         },
@@ -949,6 +987,682 @@
                     "measured_against": "each backup file's own age",
                     "rule": "LEGACY spelling, read but never written. Use cleanup_retention",
                     "purpose": "What a backup job used to call cleanup_retention."
+                }
+            ]
+        },
+        {
+            "object": "app_command",
+            "kind": "field",
+            "required": true,
+            "one_line": "One scheduled process the daemon runs: what it is, where it runs, when, and how many at once.",
+            "parsed_in": "db_ops/jobs/daemon.py",
+            "shared_entry_point": "db_ops.jobs.daemon.load_app_commands",
+            "kind_note": "kind is 'field' and not 'record', because that is what the reader does with it: check_data_dir treats a 'field' entry as names living directly ON the record, which is exactly an app command. A 'record' kind would make it look for a nested block called app_command, find none, and certify clean for ever - so do not invent one.",
+            "used_in": [
+                {
+                    "file": "app_commands.json",
+                    "path": "app_commands[]",
+                    "note": "the whole record, not a block inside it. One per scheduled process; the daemon keys them by app_command_id, so a duplicate id keeps only the last record"
+                }
+            ],
+            "legacy_fields": {
+                "command_name": "display_name"
+            },
+            "field_count": 14,
+            "required_field_count": 2,
+            "fields": [
+                {
+                    "field": "app_command_id",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - it is the key",
+                    "range_text": "any non-empty string; unique across the file",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false,
+                        "min_length": 1
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The identity of this scheduled process. It is the job_code the store records runs under, so renaming one starts a new history and orphans the old rows.",
+                    "rule": "Must be unique: load_app_commands builds a dict keyed by it, so a duplicate id keeps only the LAST record and says nothing about the one it dropped"
+                },
+                {
+                    "field": "app_ord",
+                    "type": "integer",
+                    "required": false,
+                    "default": "none",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The order records are written in when a file is rebuilt from store rows (db/config_store.py).",
+                    "rule": "READ BY NOTHING AT RUN TIME. It does not order execution, does not set priority and does not affect scheduling - the daemon starts whatever is due. Named here because a number that looks like a priority and is not is worth naming"
+                },
+                {
+                    "field": "app_code",
+                    "type": "string",
+                    "required": false,
+                    "default": "app_command_id",
+                    "range_text": "any non-empty string",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "A short code for the app this command belongs to, so several commands of one app group."
+                },
+                {
+                    "field": "app_name",
+                    "type": "string",
+                    "required": false,
+                    "default": "app_code, then app_command_id",
+                    "range_text": "any non-empty string",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The app's own name, as the logs and the console show it."
+                },
+                {
+                    "field": "display_name",
+                    "type": "string",
+                    "required": false,
+                    "default": "command_name, then app_name, then app_command_id",
+                    "range_text": "any non-empty string",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "What a person reads in Telegram and on the console: a sentence saying what this does.",
+                    "rule": "The legacy spelling command_name is still read and must not be written"
+                },
+                {
+                    "field": "log_scope",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - logging refuses an empty scope",
+                    "range_text": "a filename-safe string: no / \\ : * ? \" < > |",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false,
+                        "min_length": 1
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Which log file this command's lines go to, so one app's output is one file.",
+                    "rule": "Validated by db_ops.logging_ops.writer.validate_log_scope, which RAISES on an empty value or a path separator - the one field of the fourteen that can stop the daemon loading the file at all"
+                },
+                {
+                    "field": "working_dir",
+                    "type": "string",
+                    "required": false,
+                    "default": "empty (the tool root)",
+                    "range_text": "a path, or the logical alias tools/db_ops",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Where command_text is run from.",
+                    "rule": "tools/db_ops is a LOGICAL ALIAS for the tool root, not a filesystem path: the image lays the project out under /app/tools/db_ops and the daemon resolves the alias to wherever the project actually lives (db_ops/jobs/daemon.py). Docs printing it as a path are stale"
+                },
+                {
+                    "field": "command_text",
+                    "type": "string",
+                    "required": false,
+                    "default": "empty (nothing runs)",
+                    "range_text": "a command line for the node's own shell",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The process the daemon starts.",
+                    "rule": "It goes through the platform's shell, so SINGLE-QUOTED JSON BREAKS ON WINDOWS - a command passing a JSON request uses @data/<file>.json. Never put a secret here: the file is committed and the line is logged"
+                },
+                {
+                    "field": "active",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "true",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Whether the daemon schedules this command at all.",
+                    "rule": "false is how a command is stopped. It is NOT max_parallel 0, which would leave the command due for ever and never run it"
+                },
+                {
+                    "field": "node_role",
+                    "type": "string",
+                    "required": false,
+                    "default": "all",
+                    "range_text": "master | worker | all",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "enum": [
+                            "master",
+                            "worker",
+                            "all"
+                        ]
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Which node runs this command, matched against DB_OPS_NODE_ROLE at run time.",
+                    "rule": "The shipped catalogue says all, so a single-node install runs everything; this estate's own file says worker because the worker is its scheduler. A node whose role matches nothing runs nothing and reports no error"
+                },
+                {
+                    "field": "run_mode",
+                    "type": "string",
+                    "required": false,
+                    "default": "sync",
+                    "range_text": "sync | async",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "enum": [
+                            "sync",
+                            "async"
+                        ]
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Whether the daemon waits for one run to finish before starting the next.",
+                    "rule": "async starts the command whenever it is due, in flight or not - SAFE ONLY IF THE APP REFUSES ITS OWN DUPLICATE WORK through the store claim (ux_sql_runs_claim, ux_job_runs_claim). Declaring async on an app with no claim runs the same unit of work twice. sync is the default and is exactly what every command did before the field existed"
+                },
+                {
+                    "field": "max_parallel",
+                    "type": "integer",
+                    "required": false,
+                    "default": "4 when run_mode is async and it is unstated; 1 when sync",
+                    "range_text": "1 to 32; only with run_mode async",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 1,
+                        "max": 32
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "How many processes of this one command may be alive at once.",
+                    "rule": "A BRAKE, not a tuning knob: APP-SQL_TASKS is due every second, so without a cap async means a new process every second for as long as the first one runs. REFUSED on a sync command unless it is 1, and refused above 32 - the cost lands on the database being worked, not on this host"
+                },
+                {
+                    "field": "time_window",
+                    "type": "time_window",
+                    "required": false,
+                    "default": "from_day 1, to_day 31, from_hour 0, to_hour 23, retry_interval 60, timeout 300 - applied by load_app_commands, not by lib/time_window",
+                    "range_text": "a time_window object; see that entry for all of its fields",
+                    "constraint": {
+                        "kind": "object",
+                        "object": "time_window",
+                        "nullable": true,
+                        "checked_by": "time_window's own entry, whose used_in already lists app_commands.json:app_commands[]. Declared here as a non-recursing kind so one mistake is not reported twice"
+                    },
+                    "measured_against": "the previous run's START; the bounds are read in the configured timezone",
+                    "rule": "THIS INTERVAL IS A FLOOR UNDER EVERY UNIT OF WORK INSIDE THE APP. The app is one process working through its own due list, so a task or job declaring 900 s inside an app command declaring 300 s runs every 900-1200 s and nothing in the inner record says why. APP-SQL_TASKS and APP-TELEGRAM use 1 for this reason; APP-BACKUP-RESTORE moved 300 -> 30 on 2026-09-21",
+                    "purpose": "When this command may run, how often, and how long it may take."
+                },
+                {
+                    "field": "note",
+                    "type": "string",
+                    "required": false,
+                    "default": "none",
+                    "range_text": "free text, ENGLISH - it is read back through Telegram and the console",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Why this command is configured the way it is.",
+                    "rule": "Say WHY, not what: what a reader needs is the failure that motivated the setting. The shipped catalogue carries one per command explaining the default; an estate file carries one where it differs from that default"
+                }
+            ]
+        },
+        {
+            "object": "backup_entry",
+            "kind": "field",
+            "required": true,
+            "one_line": "One machine's backup registration in restore_config.json -> backup_restore.backups: what to back up and where to put it. It carries NO schedule of its own.",
+            "parsed_in": "db_ops/backup_restore/config.py",
+            "shared_entry_point": "load_restore_configs",
+            "kind_note": "kind is 'field' for the reason app_command is: check_data_dir reads a 'field' entry as names living directly ON the record, which is what these are. A 'record' kind would look for a nested block called backup_entry, find none, and certify clean for ever.",
+            "used_in": [
+                {
+                    "file": "restore_config.json",
+                    "path": "backup_restore.backups[]",
+                    "note": "the whole record, not a block inside it. One per MACHINE's backup set; its jobs[] carry the schedules, so this record has no time_window of its own"
+                }
+            ],
+            "legacy_fields": [],
+            "field_count": 8,
+            "required_field_count": 5,
+            "fields": [
+                {
+                    "field": "backup_id",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - it is the key",
+                    "range_text": "unique within backups[]",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "How this registration is addressed: --backup-id, /spbot_backup, and every job_runs row.",
+                    "rule": "It names a MACHINE's backup set, not a database. One entry can cover every database MSSQL_DATABASES lists, which is why a full/diff/log count per ENTRY hides a database with no full of its own"
+                },
+                {
+                    "field": "server_id",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - there is no default machine",
+                    "range_text": "a server_id present in db_instances.json",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Which machine the job is shipped to, and where its cmd_access and credentials come from.",
+                    "rule": "Checked by check-references. A backup names its machine ONE way, by server_id; a restore_entry names it two, which is the asymmetry the 0.21.0 audit measured"
+                },
+                {
+                    "field": "db_type",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - it selects the scripts",
+                    "range_text": "sqlserver | oracle | postgresql",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false,
+                        "enum": [
+                            "sqlserver",
+                            "oracle",
+                            "postgresql"
+                        ],
+                        "case_insensitive": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Which engine's scripts run. It selects the script, not the connection.",
+                    "rule": "Narrower than KNOWN_DB_TYPES (mysql has no backup script) and wider than SQL_TASK_DB_TYPES (what a scheduled SQL task can run on). The three sets are deliberately different, each derived from what its own layer supports"
+                },
+                {
+                    "field": "backup_dir",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - stating where the pieces go IS the registration",
+                    "range_text": "an absolute path",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Where the pieces are written: inside the container when the job sets DOCKER_CONTAINER, on the host otherwise.",
+                    "rule": "Two entries sharing one directory is safe for Oracle (every RMAN FORMAT carries %d) and for SQL Server (the path carries the database name); for PostgreSQL it is made safe by comparing the parent's System-Identifier before an incremental chains onto it"
+                },
+                {
+                    "field": "jobs",
+                    "type": "array",
+                    "required": true,
+                    "default": "none - an entry with no jobs backs nothing up",
+                    "range_text": "one or more backup_job objects",
+                    "constraint": {
+                        "kind": "array",
+                        "item_kind": "object",
+                        "nullable": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The work this registration does. Each element is a backup_job with its OWN schedule.",
+                    "rule": "This is where the schedule lives, and it is the most confusable thing in this file: a backup entry has no time_window, a restore_entry has one. 'the weekly full on Sunday' is weekdays [7] on ONE job beside a sibling pinning the incremental level on the other six days"
+                },
+                {
+                    "field": "env_secrets",
+                    "type": "object",
+                    "required": false,
+                    "default": "empty - no secret is passed",
+                    "range_text": "name -> secret ref",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Values passed to the script through the environment that must not be written down, resolved from the encrypted store at run time.",
+                    "rule": "BACKUP_ENCRYPTION_PASSWORD belongs here and never in a job's env, which is plain config read back through Telegram"
+                },
+                {
+                    "field": "active",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "true",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Whether this registration is scheduled at all.",
+                    "rule": "false stops every job inside it whatever their own flags say. It is also how an entry is held on a master that must not run it: deploy gives the master a shared key, so a master saying false switches it off on the worker - 'master keeps ... STOPS A JOB THAT IS ACTIVE ON THE WORKER' is the line that says so"
+                },
+                {
+                    "field": "note",
+                    "type": "string",
+                    "required": false,
+                    "default": "empty",
+                    "range_text": "free text, English",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Why this record is as it is.",
+                    "rule": "English, like every other note field: these are read back through Telegram"
+                }
+            ]
+        },
+        {
+            "object": "backup_job",
+            "kind": "field",
+            "required": true,
+            "one_line": "One scheduled piece of work inside a backup_entry's jobs[]: a level, a script, and the schedule that decides when it runs. THE SCHEDULE LIVES HERE, not on the entry.",
+            "parsed_in": "db_ops/backup_restore/config.py",
+            "shared_entry_point": "load_restore_configs",
+            "kind_note": "kind is 'field': its names live directly on each element of jobs[].",
+            "used_in": [
+                {
+                    "file": "restore_config.json",
+                    "path": "backup_restore.backups[].jobs[]",
+                    "note": "the whole record. THIS is where a backup's schedule lives - the level, the hours and, since 0.21.0, the days"
+                }
+            ],
+            "legacy_fields": [],
+            "field_count": 8,
+            "required_field_count": 1,
+            "fields": [
+                {
+                    "field": "job",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - it selects the script and decides whether a level applies",
+                    "range_text": "database | database_full | wal | archivelog | full | diff | log",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Which shape of work this is. It selects the script and decides whether a level applies at all.",
+                    "rule": "A wal/archivelog/log job has no full-vs-diff level, so --backup-type is refused on one. Two jobs differing only in level and weekdays is how a weekly full sits beside a daily incremental"
+                },
+                {
+                    "field": "script",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - the engine's default script for this job type",
+                    "range_text": "a path under assets/backup/",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The script shipped to the machine and run there.",
+                    "rule": "Resolved through the tool root, so it is the same string on every node"
+                },
+                {
+                    "field": "env",
+                    "type": "object",
+                    "required": false,
+                    "default": "empty - the script's own defaults apply",
+                    "range_text": "name -> value, all strings",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "What the script is told: the level, which databases, which container, which port or SID.",
+                    "rule": "BACKUP_LEVEL states the level and is the JOB's decision, never the script's - a weekday literal inside a script reads the container HOST's clock while its window is read on the node's, which cost five nights on 2026-09-19. DOCKER_CONTAINER is optional since 0.21.0: unset means the engine is on the host. PG_PORT, ORACLE_SID, ORACLE_OS_USER and RMAN_CONFIGURE are the rest, all defaulting to today's behaviour. Nothing secret: use the entry's env_secrets"
+                },
+                {
+                    "field": "time_window",
+                    "type": "time_window",
+                    "required": false,
+                    "default": "{}",
+                    "range_text": "see the time_window entry",
+                    "constraint": {
+                        "kind": "object",
+                        "checked_by": "time_window"
+                    },
+                    "measured_against": "its own fields",
+                    "purpose": "When this job runs: the hours, the interval, and since 0.21.0 the days.",
+                    "rule": "weekdays gates due-ness without granting it, so repeat_interval must stay well under a day on a weekday-gated job or the due moment walks out of the window and skips whole cycles. Measured: a full job at repeat_interval 72000 against a four-hour window drifts through it"
+                },
+                {
+                    "field": "cleanup_retention",
+                    "type": "integer",
+                    "required": false,
+                    "default": "0 - no age gate",
+                    "range_text": "seconds, >= 0; see the cleanup_retention entry",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0,
+                        "checked_by": "cleanup_retention"
+                    },
+                    "measured_against": "seconds",
+                    "purpose": "How long this job's output is kept.",
+                    "rule": "Seconds, as everywhere it appears. RETENTION_DAYS in env is the SCRIPT's own separate knob and is days"
+                },
+                {
+                    "field": "notify",
+                    "type": "notify",
+                    "required": false,
+                    "default": "{}",
+                    "range_text": "see the notify entry",
+                    "constraint": {
+                        "kind": "object",
+                        "checked_by": "notify"
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Which chat hears about this job, per level.",
+                    "rule": "Parsed once in db_ops/lib/notify.py; a per-app copy is a bug"
+                },
+                {
+                    "field": "active",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "true",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Whether this one job is scheduled.",
+                    "rule": "Independent of the entry's own active and ANDed with it: turning one level off leaves its siblings running"
+                },
+                {
+                    "field": "note",
+                    "type": "string",
+                    "required": false,
+                    "default": "empty",
+                    "range_text": "free text, English",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Why this record is as it is.",
+                    "rule": "English, like every other note field: these are read back through Telegram"
+                }
+            ]
+        },
+        {
+            "object": "restore_entry",
+            "kind": "field",
+            "required": true,
+            "one_line": "One restore drill in restore_config.json -> backup_restore.restores: which backup to take, which machine to put it on, and when. It carries its schedule DIRECTLY, unlike a backup_entry.",
+            "parsed_in": "db_ops/backup_restore/config.py",
+            "shared_entry_point": "load_restore_configs",
+            "kind_note": "kind is 'field': its names live directly on the record.",
+            "used_in": [
+                {
+                    "file": "restore_config.json",
+                    "path": "backup_restore.restores[]",
+                    "note": "the whole record. Unlike a backup_entry it carries its time_window DIRECTLY, which is the asymmetry these three descriptions exist to make impossible to get wrong"
+                }
+            ],
+            "legacy_fields": [],
+            "field_count": 10,
+            "required_field_count": 1,
+            "fields": [
+                {
+                    "field": "restore_id",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - it is the key",
+                    "range_text": "unique within restores[]",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "How this drill is addressed.",
+                    "rule": "Separate from any backup_id: a drill may restore a set taken by another tool entirely"
+                },
+                {
+                    "field": "source",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - absent on a script-driven restore",
+                    "range_text": "where the backup is read FROM",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The machine and directory the pieces are copied from.",
+                    "rule": "Nine of the fourteen restores in this estate are script-driven and give script/backup_dir with NO source or target. Both forms are valid, and a registrar that refused the script form shipped in 0.17.0"
+                },
+                {
+                    "field": "target",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - absent on a script-driven restore, which is nine of fourteen here",
+                    "range_text": "where the backup is restored TO",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": false,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The instance the restore runs against.",
+                    "rule": "The second way a restore names a machine. The 0.21.0 audit measured three target.id values that were ad-hoc labels with an address baked into them, matching nothing in db_instances.json - and found no separate 'ip' field to remove, because the address is inside the label"
+                },
+                {
+                    "field": "databases",
+                    "type": "array",
+                    "required": false,
+                    "default": "empty - the script decides what it restores",
+                    "range_text": "database names, or mappings",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Which databases this drill restores, and under what names.",
+                    "rule": "A physical restore carries the SOURCE's logins with it, so the target answers to the source's password afterwards and its own stored credential goes stale"
+                },
+                {
+                    "field": "server_metadata",
+                    "type": "object",
+                    "required": false,
+                    "default": "empty",
+                    "range_text": "free-form facts about the target",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "What a report needs to say about the machine without connecting to it.",
+                    "rule": "Descriptive only: nothing schedules or connects from this"
+                },
+                {
+                    "field": "time_window",
+                    "type": "time_window",
+                    "required": false,
+                    "default": "{}",
+                    "range_text": "see the time_window entry",
+                    "constraint": {
+                        "kind": "object",
+                        "checked_by": "time_window"
+                    },
+                    "measured_against": "its own fields",
+                    "purpose": "When this drill runs.",
+                    "rule": "DIRECTLY on the entry, which is the difference from a backup_entry - there the window sits on each job. Reading one shape and assuming the other is the mistake these two descriptions exist to prevent"
+                },
+                {
+                    "field": "cleanup_retention",
+                    "type": "integer",
+                    "required": false,
+                    "default": "0 - no age gate",
+                    "range_text": "seconds, >= 0; see the cleanup_retention entry",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0,
+                        "checked_by": "cleanup_retention"
+                    },
+                    "measured_against": "seconds",
+                    "purpose": "How long the copied-in pieces are kept on the target.",
+                    "rule": "Seconds. A drill that keeps every copy fills the target host, which killed a daemon 26 minutes into a soak by leaving 42 MB free"
+                },
+                {
+                    "field": "notify",
+                    "type": "notify",
+                    "required": false,
+                    "default": "{}",
+                    "range_text": "see the notify entry",
+                    "constraint": {
+                        "kind": "object",
+                        "checked_by": "notify"
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Which chat hears the drill's verdict.",
+                    "rule": "Parsed once in db_ops/lib/notify.py"
+                },
+                {
+                    "field": "active",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "true",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Whether this drill is scheduled.",
+                    "rule": "A drill writes to a real instance, so false is the safe state on any node not meant to run it"
+                },
+                {
+                    "field": "note",
+                    "type": "string",
+                    "required": false,
+                    "default": "empty",
+                    "range_text": "free text, English",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Why this record is as it is.",
+                    "rule": "English, like every other note field: these are read back through Telegram"
                 }
             ]
         }

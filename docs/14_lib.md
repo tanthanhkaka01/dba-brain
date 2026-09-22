@@ -255,7 +255,11 @@ active backup failed every cycle with `server_id not found in db_instances.json`
 were valid, and nothing in the tree compared one against the other.
 
 * `notify` — `logging_on_run` / `alert_on_error` → Telegram level → chat.
-* `time_window` — ten wall-clock bounds and three intervals. Consulted on every daemon tick.
+* `time_window` — ten wall-clock bounds, one day-of-week set (`weekdays`, ISO 1-7, added
+  2026-09-21) and three intervals. Consulted on every daemon tick. The weekday reaches all five
+  schedulers through one `if` in `time_window_closed_reason`, because `is_time_window_open` is that
+  function negated — which is why the dimension the scripts used to carry could be added without
+  touching an app.
   **Every interval is measured from the previous run's start**, and one function decides it for all
   four schedulers: `due_from_row` (row in, verdict out), with `run_anchor` the only code that picks
   the anchor column and `explain_due` producing the verdict and its reason together. `sql_tasks`

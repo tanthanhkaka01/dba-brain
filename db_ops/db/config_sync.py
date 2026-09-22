@@ -525,14 +525,44 @@ def _changed_keys(spec: SourceSpec, on_disk: Any, from_store: Any) -> list[str]:
             if disk_rows.get(key) != store_rows.get(key):
                 where = "added" if key not in disk_rows else (
                     "removed" if key not in store_rows else "changed")
-                changed.append(f"{collection.collection}[{key}] {where}")
+                fields = (_differing_fields(disk_rows.get(key), store_rows.get(key))
+                          if where == "changed" else "")
+                changed.append(f"{collection.collection}[{key}] {where}{fields}")
     document_disk = {k: v for k, v in on_disk.items()
                      if k not in {c.collection for c in spec.collections}}
     document_store = {k: v for k, v in from_store.items()
                       if k not in {c.collection for c in spec.collections}}
     if document_disk != document_store:
-        changed.append("file settings changed")
+        changed.append("file settings changed"
+                       + _differing_fields(document_disk, document_store))
     return changed
+
+
+def _differing_fields(disk: Any, store: Any, *, limit: int = 4) -> str:
+    """Which fields of one record differ, in parentheses, or "" when that cannot be said.
+
+    ``sql_targets[29|1] changed`` is true and not enough. It is the whole of what the gate tells an
+    operator who then has to choose between `keep` (ship the master's value) and `adopt` (take the
+    store's) — opposite actions, on a record whose contents the message did not name.
+
+    Measured on 2026-09-22, on that exact record: the fields were `time_window` and `note`, both
+    master-side additions the store had not been synced with, which makes `keep` obviously right.
+    Had it been `active`, `keep` would have been obviously wrong. The one word that separates those
+    two readings was the one word the message left out.
+
+    Nested values are named at their top level: a `time_window` whose `weekdays` changed reads as
+    `(time_window)`. That is the right depth for one line - the record itself is in the revision
+    history for anyone who needs the rest.
+    """
+    if not isinstance(disk, dict) or not isinstance(store, dict):
+        return ""
+    names = [name for name in dict.fromkeys(list(disk) + list(store))
+             if disk.get(name) != store.get(name)]
+    if not names:
+        return ""
+    shown = ", ".join(names[:limit])
+    more = f" and {len(names) - limit} more" if len(names) > limit else ""
+    return f" ({shown}{more})"
 
 
 def _safe_key(collection: CollectionSpec, record: dict[str, Any]) -> str:

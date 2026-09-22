@@ -7,7 +7,6 @@
     "An SSH key credential leaves 'password_ref' empty and is resolved through the key file instead - keep key files out of the repository (data/ssh_keys/ is ignored).",
     "The tool needs far less than an administrator on a monitored instance. The least-privilege grants per engine are in docs/security.md; the short form is a read-only login plus the server-level view permissions the metric SQL reads."
   ],
-
   "database_credentials": [
     {
       "server_id": "ACME-192-0-2-10",
@@ -60,7 +59,6 @@
       ]
     }
   ],
-
   "remote_credentials": [
     {
       "server_id": "ACME-192-0-2-10",
@@ -93,6 +91,21 @@
       ]
     },
     {
+      "server_id": "ACME-192-0-2-40-HOST",
+      "host": "192.0.2.40",
+      "server_description": "Linux host with no database - OS metrics over SSH only",
+      "credentials": [
+        {
+          "credential_name": "remote_192.0.2.40_dba_user",
+          "username": "dba_user",
+          "password_ref": "REMOTE_192_0_2_40_DBA_USER",
+          "role": "REMOTE",
+          "account_owner": "DBA",
+          "notes": "The host-only instance in db_instances.example.json points its cmd_access here. It was missing until 2026-09-21, so the shipped examples carried a dangling pointer and check-references reported one on a fresh install."
+        }
+      ]
+    },
+    {
       "server_id": "ACME-192-0-2-30-ORA-1521",
       "host": "192.0.2.30",
       "server_description": "Linux host - SSH key authentication, no password",
@@ -108,7 +121,6 @@
       ]
     }
   ],
-
   "monitor_users": [
     {
       "type": "Monitor-ACME",

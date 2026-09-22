@@ -46,6 +46,9 @@ ALL_COMMANDS = [
     # 2026-09-18. Two commands rather than one because they are two decisions - what a SQL
     # task runs, and where - and the second is what lets one command serve three targets.
     "sql-command-add", "sql-target-add",
+    # 2026-09-22. The first command that edits an app command. `set` and not `add`: the nine records
+    # correspond to code that exists, so it changes a schedule and refuses to invent a tenth.
+    "app-command-set",
     "probe-host", "self-status", "timezone", "metric-severity", "trace-session",
     "inventory-summary", "restore-database", "list-backup-files",
     "pack-backup", "pull-file", "push-file",

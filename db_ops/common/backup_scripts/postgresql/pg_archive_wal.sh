@@ -16,7 +16,7 @@
 # Deleting by age would leave the oldest base backups present but unrestorable - so
 # $RETENTION_DAYS acts as a floor here, never as permission to break a chain.
 #
-# Env: DOCKER_CONTAINER (required), BACKUP_DIR (required, path inside the container),
+# Env: DOCKER_CONTAINER (OPTIONAL since 0.21.0 - unset means the cluster is on this host), BACKUP_DIR (required, path inside the container),
 #      RETENTION_DAYS (default 7), PG_USER (default postgres),
 #      PG_OS_USER (OS user inside the container, default postgres).
 # Exit: 0 on success, non-zero on failure. Prints RESULT=ok only on a completed run.
@@ -30,24 +30,44 @@ pg_os_user="${PG_OS_USER:-postgres}"
 
 die() { printf 'RESULT=error reason=%s\n' "$1" >&2; exit 1; }
 
-[ -n "$container" ]  || die "DOCKER_CONTAINER is not set."
 [ -n "$backup_dir" ] || die "BACKUP_DIR is not set."
 case "$retention_days" in
     ''|*[!0-9]*) die "RETENTION_DAYS must be a whole number of days: '${retention_days}'." ;;
 esac
 
-DOCKER="docker"
-$DOCKER info >/dev/null 2>&1 || DOCKER="sudo docker"
-$DOCKER inspect "$container" >/dev/null 2>&1 \
-    || die "container '${container}' not found or docker unavailable on host."
+# $DOCKER_CONTAINER is optional since 0.21.0, exactly as in pg_basebackup_database.sh: set it for a
+# cluster inside a container, leave it unset for one on the host. Chosen once, here, so nothing below
+# can be written for one of the two by accident.
+if [ -n "$container" ]; then
+    DOCKER="docker"
+    $DOCKER info >/dev/null 2>&1 || DOCKER="sudo docker"
+    $DOCKER inspect "$container" >/dev/null 2>&1 \
+        || die "container '${container}' not found or docker unavailable on host."
 
-# -u $pg_os_user and stdin closed - see the notes in pg_basebackup_database.sh.
-in_container() { $DOCKER exec -u "$pg_os_user" "$container" bash -lc "$1" </dev/null; }
-psql_1() { in_container "psql -U '${pg_user}' -tAc \"$1\"" 2>/dev/null | tr -d '\r' | tr -d '[:space:]'; }
+    # -u $pg_os_user and stdin closed - see the notes in pg_basebackup_database.sh.
+    run_db() { $DOCKER exec -u "$pg_os_user" "$container" bash -lc "$1" </dev/null; }
+    where="container ${container}"
+else
+    command -v psql >/dev/null 2>&1 \
+        || die "psql is not on PATH and DOCKER_CONTAINER is not set, so there is no way to reach a cluster. Set DOCKER_CONTAINER for a containerised cluster, or install the PostgreSQL client tools on this host."
+    if [ "$(id -un 2>/dev/null)" = "$pg_os_user" ]; then
+        run_db() { bash -lc "$1" </dev/null; }
+        where="host as ${pg_os_user}"
+    else
+        id "$pg_os_user" >/dev/null 2>&1 \
+            || die "PG_OS_USER '${pg_os_user}' does not exist on this host."
+        command -v su >/dev/null 2>&1 || die "su is not available, so this cannot drop to '${pg_os_user}'."
+        run_db() { su -s /bin/bash "$pg_os_user" -c "$1" </dev/null; }
+        where="host as ${pg_os_user} via su"
+    fi
+fi
+printf 'reaching the cluster: %s\n' "$where"
+
+psql_1() { run_db "psql -U '${pg_user}' -tAc \"$1\"" 2>/dev/null | tr -d '\r' | tr -d '[:space:]'; }
 
 wal_dir="${backup_dir}/wal"
 base_dir="${backup_dir}/base"
-in_container "mkdir -p '${wal_dir}'" || die "could not create '${wal_dir}' inside '${container}'."
+run_db "mkdir -p '${wal_dir}'" || die "could not create '${wal_dir}' (${where})."
 
 archive_mode="$(psql_1 "select current_setting('archive_mode')")"
 [ "$archive_mode" = "on" ] || [ "$archive_mode" = "always" ] \
@@ -76,19 +96,50 @@ printf 'last_archived_wal=%s last_failed_wal=%s failed_count=%s\n' \
 # A failure that is newer than the last success means archiving is broken right now. An older
 # failure is history the database has already recovered from.
 if [ -n "$failed" ] && { [ -z "$archived" ] || [ "$failed" \> "$archived" ]; }; then
-    err="$(psql_1 "select coalesce(last_failed_time::text,'') from pg_stat_archiver")"
-    die "WAL archiving is failing: last_failed_wal=${failed} newer than last_archived_wal=${archived:-none} at ${err}."
+    err="$(psql_1 "select coalesce(to_char(last_failed_time, 'YYYY-MM-DD\"T\"HH24:MI:SSOF'),'') from pg_stat_archiver")"
+    since="$(psql_1 "select coalesce(to_char(stats_reset, 'YYYY-MM-DD\"T\"HH24:MI:SSOF'),'') from pg_stat_archiver")"
+    command_text="$(psql_1 "select coalesce(current_setting('archive_command', true),'')")"
+
+    # Name the cause, because the three have three different fixes and the counters name none of
+    # them: a full disk is the host's, an unwritable directory is the container's uid, and a
+    # destination that already exists is the `archive_command` itself. On 2026-09-22 this job
+    # reported `last_archived_wal=none failed_count=108` for hours and an operator reading it could
+    # not tell which — the real cause was the third, and it does not heal on its own.
+    why=""
+    if run_db "test -e '${wal_dir}/${failed}'"; then
+        size="$(run_db "wc -c < '${wal_dir}/${failed}' 2>/dev/null" | tr -d '[:space:]')"
+        why="the destination ${wal_dir}/${failed} ALREADY EXISTS (${size:-unknown} bytes)"
+        # 16 MiB is the default segment; anything short is a copy that was cut off mid-write, which
+        # is what a disk filling during archiving leaves behind.
+        if [ -n "$size" ] && [ "$size" -lt 16777216 ] 2>/dev/null; then
+            why="${why} and is SHORT of a 16777216-byte segment, so it was truncated mid-copy"
+        fi
+        why="${why}. An archive_command of the form 'test ! -f DEST && cp SRC DEST' exits non-zero"
+        why="${why} when DEST is present, so the server retries the same segment for ever and never"
+        why="${why} advances. Remove or verify that file, and use a command that succeeds when the"
+        why="${why} destination is already byte-identical."
+    elif ! run_db "test -w '${wal_dir}'"; then
+        why="${wal_dir} is not writable by the database user in the archive directory."
+    else
+        free_kb="$(run_db "df -Pk '${wal_dir}' 2>/dev/null | awk 'NR==2{print \$4}'" | tr -d '[:space:]')"
+        why="the destination does not exist and the directory is writable, with ${free_kb:-unknown} KiB free"
+        why="${why}; read the server log for what archive_command printed."
+    fi
+
+    printf 'archive_command=%s\n' "${command_text:-<unset>}"
+    printf 'archiver_stats_since=%s\n' "${since:-unknown}"
+    die "WAL archiving is failing: last_failed_wal=${failed} newer than last_archived_wal=${archived:-none} at ${err}. ${why}"
 fi
 
 # --- 3. Remove WAL no retained base backup needs ------------------------------------------------
 # The oldest base backup's START WAL is the cut line. pg_archivecleanup deletes everything
 # strictly older and nothing that is still required.
-oldest_base="$(in_container "ls -1d ${base_dir}/*_FULL 2>/dev/null | sort | head -1" | tr -d '\r')"
+oldest_base="$(run_db "ls -1d ${base_dir}/*_FULL 2>/dev/null | sort | head -1" | tr -d '\r')"
 if [ -n "$oldest_base" ]; then
-    start_wal="$(in_container "grep -m1 -o '[0-9A-F]\{24\}' '${oldest_base}/backup_label' 2>/dev/null" | tr -d '\r')"
+    start_wal="$(run_db "grep -m1 -o '[0-9A-F]\{24\}' '${oldest_base}/backup_label' 2>/dev/null" | tr -d '\r')"
     if [ -n "$start_wal" ]; then
         printf 'wal_cleanup_floor=%s from=%s\n' "$start_wal" "$oldest_base"
-        in_container "pg_archivecleanup '${wal_dir}' '${start_wal}' 2>&1" \
+        run_db "pg_archivecleanup '${wal_dir}' '${start_wal}' 2>&1" \
             || printf 'warning: pg_archivecleanup reported an error\n' >&2
     else
         printf 'skipping WAL cleanup: no START WAL in %s/backup_label\n' "$oldest_base"
@@ -97,7 +148,7 @@ else
     # Nothing to protect yet, but do not let the archive grow without bound while the first
     # base backup has not run: fall back to the age floor.
     printf 'no base backup yet; falling back to age-based WAL cleanup (%s days)\n' "$retention_days"
-    in_container "find '${wal_dir}' -type f -mtime +${retention_days} -delete" \
+    run_db "find '${wal_dir}' -type f -mtime +${retention_days} -delete" \
         || printf 'warning: age-based WAL cleanup reported an error\n' >&2
 fi
 
@@ -108,9 +159,9 @@ fi
 # Group ownership cannot fix it (the group is the database user's own), so this opens read to
 # others. That is a deliberate trade: these are lab backups on a private host, and the
 # alternative is a transfer that breaks every time the job writes a new file.
-in_container "chmod -R a+rX '${backup_dir}'"     || printf 'warning: could not relax permissions on %s
+run_db "chmod -R a+rX '${backup_dir}'"     || printf 'warning: could not relax permissions on %s
 ' "${backup_dir}" >&2
 
-wal_count="$(in_container "ls -1 '${wal_dir}' 2>/dev/null | wc -l" | tr -d '\r')"
+wal_count="$(run_db "ls -1 '${wal_dir}' 2>/dev/null | wc -l" | tr -d '\r')"
 printf 'RESULT=ok archived_wal=%s wal_files_kept=%s retention_days=%s\n' \
     "${archived:-none}" "${wal_count:-0}" "$retention_days"

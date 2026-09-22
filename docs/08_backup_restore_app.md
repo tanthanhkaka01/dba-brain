@@ -117,9 +117,99 @@ prefer `@file`: a single-quoted JSON argument does not survive the shell.
   `APP-BACKUP-RESTORE` runs, and that app runs every `app_commands.json` `repeat_interval`. With the
   app at 300 s, a log backup declared at 900 s waited up to 300 s more for the app's next pass and
   ran every ~1,200 s (measured 2026-09-19). Keep the app's interval short against the shortest job:
-  this estate runs it at 30 s. The app exits at once when nothing is due, so a short interval costs
-  a process start, not a backup. It is the same rule as the SQL task app ([05](05_sql_task_runner.md),
-  *The three clocks*).
+  **the shipped default is 30 s since 2026-09-21**, down from 300. It shipped at 300 for two
+  releases after this estate had already corrected it on one node — a fix that reached the node and
+  not the catalogue, which is the drift a shipped default hides. The app exits at once when nothing
+  is due, so a short interval costs a process start, not a backup, and it is safe at 30 s only
+  because `run_mode: async` is paired with the claim (`ux_job_runs_claim`, one `running` row per
+  backup job). It is the same rule as the SQL task app ([05](05_sql_task_runner.md), *The three
+  clocks*).
+* **Two shapes, and the difference is the engine, not untidiness.** A backup entry holds `jobs[]`
+  and each job carries its own `time_window`; a restore entry carries one directly. All three shapes
+  are described field by field in `data/shared_config_objects.json` as `backup_entry`, `backup_job`
+  and `restore_entry`, so where a `weekdays` goes is answerable rather than inferred.
+
+  **PostgreSQL's `database_full` and `database` stay in ONE entry.** `pg_basebackup --incremental`
+  chains onto the newest backup in *that entry's* `backup_dir/base/`, so one entry is what makes them
+  share a directory. Split across two, `backup_dir` becomes a copy-paste invariant and getting it
+  wrong raises nothing: `latest` comes back empty, the script takes a FULL baseline by the rule that
+  stops a first run being an error, reports success, and does that for ever — no incremental again,
+  every run `done`. `list-backups` warns when an entry has an incremental with no baseline beside it.
+
+  SQL Server is different and its `full`/`diff`/`log` **are** separate entries here: a diff needs its
+  full in the same database history, not the same directory. The WAL and archivelog streams are their
+  own entries too, on every PostgreSQL and Oracle registration — they are not part of a chain and run
+  on a 15-minute cadence rather than nightly.
+
+* **PostgreSQL and Oracle backups require a container.** `DOCKER_CONTAINER` is not optional and
+  every command in both engine scripts goes through `docker exec`; there is no host-native path, so
+  an engine installed directly on a VM cannot be backed up by db_ops. Every PostgreSQL and Oracle
+  target in this estate is a container, so nothing is blocked — but the failure on a native instance
+  is `DOCKER_CONTAINER is not set`, which reads like a configuration mistake rather than a missing
+  capability. SQL Server has no such limit.
+
+* **What else a job's `env` can say to an engine script.** All optional, all defaulting to the
+  behaviour every entry in this estate already has:
+
+  | Var | Engine | What it is for |
+  | --- | --- | --- |
+  | `PG_PORT` | PostgreSQL | The cluster's port inside the container. Unset means the image default. It travels as a `-p` argument, not as `PGPORT`: `docker exec` does not carry the calling script's environment in, so an exported `PGPORT` would reach the container host and never reach `psql`. |
+  | `ORACLE_SID` | Oracle | Which instance `rman target /` connects to. Unset leaves the container login profile's own choice. Exported *inside* the container after the profile has run, because a profile that sets `ORACLE_SID` would overwrite a `docker exec -e`. |
+  | `ORACLE_OS_USER` | Oracle | The OS user inside the container. Unset means the image's own, which is what both Oracle containers here run as and the only behaviour exercised. The PostgreSQL script pins `-u postgres` because a backup written by the wrong user is owned `root:root` and `0700`, which `pg_verifybackup` cannot read and PostgreSQL will not start on a restore of. |
+  | `RMAN_CONFIGURE` | Oracle | `apply` (default) or `skip`. The `CONFIGURE` statements are **persistent** database settings, not options for the run: RMAN stores them in the controlfile, they govern every later connection, and they decide what this script's own `DELETE NOPROMPT OBSOLETE` removes. `skip` is for a database whose retention policy is somebody else's to set. Either way `SHOW ALL` runs first, so the values as they were are in `stdout_tail`. |
+
+  `skip` is not free on the **archivelog** job. Its deletes name an age, but RMAN still consults the
+  archivelog deletion policy before removing anything: under the policy the script sets
+  (`BACKED UP 1 TIMES TO DISK`) a log that has not been backed up survives its age, and under
+  `TO NONE` — the default on a fresh database — the same statement deletes it.
+
+* **An incremental that cannot chain takes a baseline instead of failing.** Three things are asked
+  before `pg_basebackup --incremental` is attempted: that a parent exists, that `summarize_wal` is
+  on, and that the parent's `System-Identifier` is this cluster's. A parent from a restored or
+  rebuilt cluster is refused by the server **permanently** — no retry changes which cluster it came
+  from — so it is caught first and the run takes a FULL. Without that, the job answered `error`
+  every night and left `base/` without a single directory, which is what five nights from
+  2026-09-19 actually looked like from the other cause.
+
+* **The level is configuration, not a weekday inside the script.** `BACKUP_LEVEL` in a job's `env`
+  says which backup the script takes — `full`/`incr` for PostgreSQL, `0`/`1` for Oracle, and
+  `full`/`diff`/`log` for SQL Server — and **which days that job may run on is
+  `time_window.weekdays`** (ISO 1-7, read on the node's configured clock). So a weekly baseline plus
+  daily incrementals is **two jobs on one entry**:
+
+  ```jsonc
+  {"job": "database_full", "env": {"BACKUP_LEVEL": "full"},
+   "time_window": {"weekdays": [7], "from_hour": 1, "to_hour": 5, "repeat_interval": 72000}},
+  {"job": "database",      "env": {"BACKUP_LEVEL": "incr"},
+   "time_window": {"weekdays": [1,2,3,4,5,6], "from_hour": 1, "to_hour": 5, "repeat_interval": 72000}}
+  ```
+
+  Until 2026-09-21 the PostgreSQL and Oracle scripts chose the level themselves, comparing
+  `${DB_OPS_WEEKDAY:-$(date +%u)}` against `7`. db_ops only began passing `DB_OPS_WEEKDAY` in
+  0.20.0, so every older node fell through to the container **host's** clock — a different day from
+  the one the daemon read the same job's `from_hour` on. On 2026-09-19 the host said Saturday while
+  the node's own +07 said Sunday, and five incrementals ran and failed on the night the weekly full
+  was due. **Keep `repeat_interval` under a day on a weekday-gated job**: `weekdays` decides which
+  day and the interval decides whether it is due, so a multi-day interval lets the due moment walk
+  past the window and skip whole weeks.
+* **The PostgreSQL and Oracle backup scripts require a container, and one cluster per container.**
+  `DOCKER_CONTAINER` is required and every command goes through `docker exec`, so an engine
+  installed **natively** on a VM cannot be backed up by these scripts at all — the failure is
+  `DOCKER_CONTAINER is not set`, which reads like a config mistake rather than a missing capability.
+  There is also no `PGPORT`/`PGHOST` and no `ORACLE_SID` in their env contract: `psql` and
+  `pg_basebackup` are called with no `-h`/`-p` and land on the container's default socket, and
+  `rman target /` connects to whatever SID the image's login profile exports. So **two clusters or
+  two SIDs inside one container cannot be addressed**, and the `port` in `db_instances.json` is the
+  published host port, which these scripts never use. Different containers on one host, and
+  different hosts, are fine and are what the estate runs.
+* **An incremental that cannot chain takes a baseline instead, in the same run.** PostgreSQL's
+  `pg_basebackup --incremental` needs WAL summaries covering the parent's LSN range, and a baseline
+  taken before `summarize_wal` was enabled can never be chained onto — no retry can produce
+  summaries for WAL that has been recycled. The script now asks `show summarize_wal` first, and
+  classifies the server's refusal: a *"WAL summaries"* error on an incremental takes a FULL instead
+  and the night still has a backup, while every other failure is still fatal. It never creates the
+  backup directory itself — a directory the script made so the run looked successful would be a
+  backup that does not restore.
 * **`notify` is required too**, and for a reason that looks like the opposite of a missing
   notification. An entry without one still notifies — `BACKUP_RESTORE_NOTIFY_DEFAULTS` turns both
   rules on — but at the *neutral* levels, `logging` and `error`, rather than the entry's own chat.

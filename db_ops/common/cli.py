@@ -74,6 +74,7 @@ USAGE = (
     "  lift-example     Refresh a data/*.example.json from your own file, refusing identifiers\n"
     "  build-showcase   Snapshot the published pages with every real name replaced (see --help)\n"
     "  instance-add     Register one database to monitor: inventory, credential, secret (see --help)\n"
+    "  app-command-set  Change an app command's schedule or state in data/app_commands.json\n"
     "  sql-command-add  Register WHAT a SQL task runs: scripts, or a python program (see --help)\n"
     "  sql-target-add   Register WHERE a SQL task runs: one server, one schedule (see --help)\n"
     "  remote-credential-add  Register one host's OS login + the cmd_access naming it (see --help)\n"
@@ -426,6 +427,53 @@ def _instance_add_command(argv: list[str]) -> int:
         message=f"{verb} {outcome['server_id']} ({outcome['db_type']}) - wrote "
                 f"{', '.join(outcome['files_written'])}",
         data=outcome))
+
+
+USAGE_APP_COMMAND_SET = """usage: python -m db_ops.common.cli app-command-set <json>|@<file>|-
+
+Change the schedule or the state of ONE app command in data/app_commands.json. This is the only
+command that edits that file; until 2026-09-22 nothing did, which is how the estate, a soak node and
+the shipped catalogue came to hold three different schedules for the same app at once.
+
+   {"app_code": "APP-BACKUP-RESTORE",              // required: which one. Not the id - app_code is
+                                                   // what every log line and job_runs row says
+    "time_window": {"repeat_interval": 30},        // a PARTIAL edit: named fields change, the rest
+                                                   // of the window is kept
+    "data_dir": "data"}                            // optional; defaults to data/
+
+Editable: active, node_role, run_mode, max_parallel, time_window, note, app_ord, display_name.
+The field list comes from the app_command entry in data/shared_config_objects.json, not from here.
+
+Refused, and not by oversight: app_command_id, app_code, app_name, log_scope, command_text and
+working_dir. Those are what the command IS rather than how it is scheduled - command_text names the
+module that runs, so pointing it elsewhere is a release, not a configuration edit. It also will not
+create or delete an app command: the records correspond to code that exists.
+
+The answer names the old and the new value of every field it touched. An edit that reported only
+"ok" would reproduce, in a new place, the fault this command was written to end.
+"""
+
+
+def _app_command_set_command(argv: list[str]) -> int:
+    """``app-command-set`` — the CLI face of :mod:`db_ops.common.app_command_admin`."""
+    from db_ops.common import app_command_admin
+    from db_ops.lib import response
+
+    if argv and argv[0] in {"-h", "--help"}:
+        print(USAGE_APP_COMMAND_SET)
+        return 0
+    if not argv:
+        print(USAGE_APP_COMMAND_SET, file=sys.stderr)
+        return response.emit(response.fail("app-command-set", "no request given; see --help"))
+    request, code = _read_json_request(argv[0], USAGE_APP_COMMAND_SET)
+    if request is None:
+        return code
+    try:
+        outcome = app_command_admin.set_app_command(request)
+    except app_command_admin.AppCommandAdminError as exc:
+        return response.emit(response.fail("app-command-set", str(exc)))
+    return response.emit(response.ok(
+        "app-command-set", message=outcome["message"], data=outcome))
 
 
 def _sql_command_add_command(argv: list[str]) -> int:
@@ -2447,6 +2495,8 @@ def main(argv: list[str] | None = None) -> int:
         return _build_showcase_command(argv[1:])
     if argv[0] == "instance-add":
         return _instance_add_command(argv[1:])
+    if argv[0] == "app-command-set":
+        return _app_command_set_command(argv[1:])
     if argv[0] == "sql-command-add":
         return _sql_command_add_command(argv[1:])
     if argv[0] == "sql-target-add":

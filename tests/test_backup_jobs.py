@@ -359,21 +359,45 @@ def test_asking_an_engine_for_a_level_it_does_not_have_is_refused():
         backup_level_for("postgresql", "log")
 
 
-def test_the_scheduled_config_passes_no_level_so_the_script_still_decides():
-    """The daily 1-5h entries must not hardcode a level: the script picks full on Sunday and
-    diff otherwise. --backup-type exists for the manual override, not for the schedule."""
+def test_every_engine_script_job_states_its_level_and_its_days():
+    """The inverse of what this asserted until 2026-09-21, and the inversion is the fix.
+
+    These entries used to pass **no** level, because the PostgreSQL and Oracle scripts chose one by
+    comparing a weekday against 7. That comparison read the container **host's** clock whenever
+    db_ops did not pass ``DB_OPS_WEEKDAY`` — a different day from the one the daemon evaluated the
+    same job's ``from_hour`` on — and on 2026-09-19 the two disagreed and five incrementals ran on
+    the night the weekly full was due.
+
+    So the level is now stated in the job, and the day is ``time_window.weekdays``. A job that states
+    neither would silently take an incremental for ever, which is the failure this holds the config
+    to: nothing weekly, and nothing saying so.
+    """
     from db_ops.backup_restore.backup import load_backup_jobs
 
     # The ids are read from the config rather than named — see the note in the sqlserver-levels
-    # test above. What identifies these entries is what they are: the once-a-day `database` job
-    # of an engine whose script derives its own level.
-    daily = [j for j in load_backup_jobs(shipped_config("restore_config.json"))
-             if j.job == "database" and j.db_type in ("oracle", "postgresql")]
-    assert daily, "no engine-script database backup in the shipped config"
+    # test above. What identifies these entries is what they are: the `database*` jobs of an engine
+    # whose script takes the level it is given.
+    jobs = [j for j in load_backup_jobs(shipped_config("restore_config.json"))
+            if j.job.startswith("database") and j.db_type in ("oracle", "postgresql")]
+    assert jobs, "no engine-script database backup in the shipped config"
 
-    for job in daily:
-        assert "BACKUP_LEVEL" not in job.env, f"{job.backup_id} should let the script decide"
+    by_entry: dict[str, list] = {}
+    for job in jobs:
+        assert job.env.get("BACKUP_LEVEL"), f"{job.label} states no BACKUP_LEVEL"
+        assert job.time_window.weekdays, f"{job.label} states no weekdays"
         assert job.time_window.from_hour == 1 and job.time_window.to_hour == 5
+        # weekdays says WHICH day; repeat_interval still says whether it is due. An interval of a
+        # day or more lets the due moment walk past the window and skip whole cycles.
+        assert job.time_window.repeat_interval < 86400, f"{job.label} repeats less often than daily"
+        by_entry.setdefault(job.backup_id, []).append(job)
+
+    for backup_id, entry_jobs in by_entry.items():
+        # Together they must cover all seven days exactly once: a gap is a day with no backup, and
+        # an overlap is two levels racing for the same night.
+        covered = [day for job in entry_jobs for day in job.time_window.weekdays]
+        assert sorted(covered) == [1, 2, 3, 4, 5, 6, 7], f"{backup_id} covers {sorted(covered)}"
+        levels = {job.env["BACKUP_LEVEL"] for job in entry_jobs}
+        assert len(levels) == len(entry_jobs), f"{backup_id} repeats a level across its jobs"
 
 
 def test_force_skips_the_schedule_but_not_a_run_already_in_flight():

@@ -62,7 +62,7 @@ ERROR_STATUSES = {"error", "timeout", "fail", "failed", "failure"}
 
 @dataclass(frozen=True)
 class TimeWindow:
-    """The thirteen fields, in two groups that answer two different questions.
+    """The fourteen fields, in three groups that answer three different questions.
 
     **The ten bounds — "may it run at this moment?"** Five dimensions, each a ``from_``/``to_``
     pair, read off ``current`` as wall-clock values in the node's configured timezone. Every bound
@@ -79,7 +79,13 @@ class TimeWindow:
     "the caller's default", which differs per app, so an interval that matters is stated rather
     than left out.
 
-    Required: **none of the thirteen**. The object itself is optional everywhere, and each field
+    **The day-of-week set — "may it run *today*?"** One field, :attr:`weekdays`, added 2026-09-21.
+    It is neither a bound nor an interval: a ``from_``/``to_`` pair cannot say "Monday and
+    Thursday", so this one is a set. Until it existed the weekday lived in the backup scripts as a
+    shell literal, which is how one scheduled backup came to read its hour window on the node's
+    clock and its FULL/INCR choice on the container host's — two clocks, one decision.
+
+    Required: **none of the fourteen**. The object itself is optional everywhere, and each field
     falls back to a documented default. That is deliberate — a config that omits the block still
     runs — but it means an omission cannot be told from a decision, so the shipped catalogues state
     ``repeat_interval`` and ``timeout`` explicitly on everything they schedule.
@@ -92,8 +98,8 @@ class TimeWindow:
     #: Month 1-12, inclusive, wrapping (``from_month: 11, to_month: 2`` is the winter).
     from_month: int | None = None
     to_month: int | None = None
-    #: Day of the **month** 1-31, inclusive, wrapping. Not a weekday: there is no weekday
-    #: dimension, and a "weekends only" schedule cannot be expressed here.
+    #: Day of the **month** 1-31, inclusive, wrapping. Not a weekday — that is :attr:`weekdays`,
+    #: which is a set rather than a pair; "weekends only" is ``weekdays: [6, 7]``, not a range here.
     from_day: int | None = None
     to_day: int | None = None
     #: Hour 0-23, inclusive, wrapping. The field the estate actually schedules by, and the one
@@ -131,6 +137,57 @@ class TimeWindow:
     #: only the slow one — and below ``repeat_interval``, or the reaper and the scheduler disagree
     #: about what a cycle is.
     timeout: int | None = None
+    #: **The one dimension that is a set rather than a pair.** ISO weekdays — ``1`` Monday to ``7``
+    #: Sunday, the same numbering :func:`datetime.date.isoweekday` and ``date +%u`` use, so a
+    #: config value, ``DB_OPS_WEEKDAY`` and a shell script all mean the same thing by ``7``.
+    #: ``None`` (absent) means *no restriction*, like every other bound. ``()`` — an empty set in
+    #: the file — means **no day is permitted, so the record never runs on a schedule**; that is the
+    #: field's own reading rather than a special case, and it is not the same as
+    #: :data:`MANUAL_ONLY`, which still runs on a forced run, nor as ``active: false``, which stops
+    #: the record being listed at all. What ``weekdays`` parks is the *window*, leaving the interval
+    #: and the hour bounds exactly as written.
+    #:
+    #: **It gates due-ness, it does not grant it.** ``repeat_interval`` still decides *whether*,
+    #: and this decides *whether today*. So "the weekly full, on Sunday, in the small hours" is
+    #: ``weekdays: [7]`` plus ``from_hour: 1, to_hour: 5`` plus an interval **well under a day**
+    #: (72000 works): with a 6-day interval the due moment walks, and when it lands after Sunday's
+    #: window has closed the record skips a whole week — which is worse than having no weekday at
+    #: all. A pair (``from_weekday``/``to_weekday``) was considered and refused: it cannot express
+    #: "Monday and Thursday", and a wrapping pair over seven values is the comparison this module
+    #: exists to stop apps writing.
+    #:
+    #: It is checked **before** the five bounds, because a weekday that is not permitted excludes
+    #: the whole day: naming an hour when the day itself is closed sends the reader to the wrong
+    #: field. Duplicates and anything outside 1-7 are refused at parse time, never dropped — an
+    #: ignored ``[0]`` (the cron spelling of Sunday) would become ``()``, which means *never*, and a
+    #: weekly full would stop for good while its config still read like a schedule.
+    weekdays: tuple[int, ...] | None = None
+
+
+    def to_dict(self) -> dict[str, Any]:
+        """The fields this window actually carries, for a listing or a JSON answer.
+
+        Over :data:`NEW_FIELDS`, so a field added to the object reaches every reader that prints a
+        window without anyone remembering to add it. That is not hypothetical: `list-tasks` built
+        its own dict of four names — ``repeat_interval``, ``timeout``, ``from_hour``, ``to_hour`` —
+        and so the listing an operator reads to see a task's schedule silently omitted
+        :attr:`weekdays`, the one field that can stop a task running on six days in seven.
+
+        **Every field, including the ones that are ``None``**, because one caller round-trips this
+        back through :func:`parse_time_window_config`: the reports app replaces its record's
+        ``time_window`` with this dict. Omitting a null there would change its meaning — an explicit
+        ``"from_hour": null`` is *no restriction*, and a key that is simply absent takes the caller's
+        default, which for reports is ``0``. A few nulls in a listing is the cheaper half of that
+        trade.
+
+        ``weekdays`` comes back as a list because this goes to JSON, and ``()`` survives as ``[]`` —
+        that means *never*, which is a value and not an absence.
+        """
+        out: dict[str, Any] = {}
+        for name in NEW_FIELDS:
+            value = getattr(self, name)
+            out[name] = list(value) if name == WEEKDAYS_FIELD and value is not None else value
+        return out
 
 
 @dataclass(frozen=True)
@@ -153,7 +210,23 @@ NEW_FIELDS = (
     "repeat_interval",
     "retry_interval",
     "timeout",
+    "weekdays",
 )
+
+#: The field whose value is a set of ISO weekdays rather than one integer. Named once so the two
+#: places that must treat it differently — the coercing loops below, and the reference that
+#: describes every field — cannot disagree about which field that is.
+WEEKDAYS_FIELD = "weekdays"
+
+#: The thirteen that are single integers. ``NEW_FIELDS`` is the whole contract (what a config may
+#: carry, and what ``data/shared_config_objects.json`` must describe); this is the subset the
+#: ``_optional_int`` loops may touch. Deriving it rather than writing it out twice is deliberate:
+#: a field added to one list and forgotten in the other is exactly the drift this module is about.
+INT_FIELDS = tuple(name for name in NEW_FIELDS if name != WEEKDAYS_FIELD)
+
+#: ISO weekdays, for the error message and for the reference's enum.
+WEEKDAY_NAMES = {1: "Monday", 2: "Tuesday", 3: "Wednesday", 4: "Thursday",
+                 5: "Friday", 6: "Saturday", 7: "Sunday"}
 
 LEGACY_TIME_WINDOW_FIELDS = {
     "day_from": "from_day",
@@ -189,10 +262,14 @@ def parse_time_window_config(
         raise RuntimeError(f"{context}.time_window must be an object.")
 
     defaults = defaults or {}
-    values: dict[str, int | None] = {
+    values: dict[str, Any] = {
         field: _optional_int(defaults.get(field), f"{context}.time_window.{field}.default") if field in defaults else None
-        for field in NEW_FIELDS
+        for field in INT_FIELDS
     }
+    # The weekday set never goes through _optional_int; a caller's default is a sequence.
+    values[WEEKDAYS_FIELD] = parse_weekdays(
+        defaults.get(WEEKDAYS_FIELD), f"{context}.time_window.{WEEKDAYS_FIELD}.default"
+    ) if WEEKDAYS_FIELD in defaults else None
     warnings: list[str] = []
 
     for legacy_name, new_name in LEGACY_TOP_LEVEL_FIELDS.items():
@@ -205,9 +282,14 @@ def parse_time_window_config(
             warnings.append(f"{context}: deprecated field time_window.{legacy_name} used; use time_window.{new_name}.")
             values[new_name] = _optional_int(raw_time_window.get(legacy_name), f"{context}.time_window.{legacy_name}")
 
-    for field in NEW_FIELDS:
+    for field in INT_FIELDS:
         if field in raw_time_window:
             values[field] = _optional_int(raw_time_window.get(field), f"{context}.time_window.{field}")
+
+    if WEEKDAYS_FIELD in raw_time_window:
+        values[WEEKDAYS_FIELD] = parse_weekdays(
+            raw_time_window.get(WEEKDAYS_FIELD), f"{context}.time_window.{WEEKDAYS_FIELD}"
+        )
 
     _validate_non_negative(values, "year", context)
     _validate_non_negative(values, "month", context)
@@ -241,6 +323,15 @@ def time_window_closed_reason(time_window: TimeWindow | None, current: datetime)
     """
     if time_window is None:
         return ""
+    # The weekday is named first because it excludes a whole day: reporting an hour when the day
+    # itself is not permitted sends the reader to a field that is not the reason. An empty set gets
+    # its own wording, because "outside allowed weekday window: 3" reads like a range problem when
+    # in fact no range was given.
+    if time_window.weekdays is not None:
+        if not time_window.weekdays:
+            return "no weekday is allowed"
+        if current.isoweekday() not in time_window.weekdays:
+            return f"outside allowed weekday window: {current.isoweekday()}"
     checks = (
         ("year", current.year),
         ("month", current.month),
@@ -263,6 +354,52 @@ def time_window_closed_reason(time_window: TimeWindow | None, current: datetime)
             if to_value is not None and value > to_value:
                 return f"outside allowed {name} window: {value}"
     return ""
+
+
+def parse_weekdays(value: Any, name: str) -> tuple[int, ...] | None:
+    """``weekdays`` as ISO 1-7, or ``None`` when the config does not restrict the day.
+
+    **Everything wrong here raises rather than being dropped**, and that is the whole point of the
+    function. A parser that ignored what it did not recognise would turn ``[0]`` — the cron spelling
+    of Sunday, which somebody will write — into an empty set, and an empty set means *never runs*:
+    a weekly full would stop for good while its config still read like a schedule. The same applies
+    to a duplicate: silently de-duplicating ``[7, 7]`` hides a hand-edit that meant something else.
+
+    ``[]`` is kept, because it is the field's own reading rather than a mistake: *only on the days in
+    the set*, and the set is empty. It is distinguished from ``None`` in the return type, not by a
+    sentinel — ``()`` closes the window, ``None`` does not restrict it.
+    """
+    if value is None or value == "":
+        return None
+    if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple)):
+        raise RuntimeError(
+            f"{name} must be an array of ISO weekdays 1-7 (1=Monday .. 7=Sunday); "
+            f"got {value!r}. An empty array means the record never runs on a schedule."
+        )
+    parsed: list[int] = []
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, int):
+            # A bool is refused for the reason _as_int refuses it: True == 1 would silently mean
+            # Monday.
+            try:
+                item = int(str(item).strip())
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError(
+                    f"{name} must contain whole numbers 1-7; got {item!r}."
+                ) from exc
+        if item not in WEEKDAY_NAMES:
+            extra = (" 0 is the cron spelling of Sunday; this field is ISO, so Sunday is 7."
+                     if item == 0 else "")
+            raise RuntimeError(
+                f"{name} must contain ISO weekdays 1-7 (1=Monday .. 7=Sunday); got {item}.{extra}"
+            )
+        if item in parsed:
+            raise RuntimeError(
+                f"{name} lists {item} ({WEEKDAY_NAMES[item]}) twice. It is a set, so a repeat is a "
+                f"mistake rather than a weighting."
+            )
+        parsed.append(item)
+    return tuple(parsed)
 
 
 def _optional_int(value: Any, name: str) -> int | None:

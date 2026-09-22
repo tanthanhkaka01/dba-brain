@@ -115,7 +115,7 @@ def _record_key(record: dict, fields: tuple[str, ...]) -> tuple:
 
 def merge_record_lists(
     *, master: list[dict], worker: list[dict], key_fields: tuple[str, ...]
-) -> tuple[list[dict], list[tuple]]:
+) -> tuple[list[dict], list[tuple], list[str]]:
     """Master's records, plus every worker record whose key the master does not have.
 
     **The master wins on a shared key, and that direction is deliberate.** A record present on
@@ -128,21 +128,72 @@ def merge_record_lists(
     the same target between deploys is a conflict, and quietly interleaving their fields would
     produce a row neither of them wrote.
 
-    Returns the merged list and the keys that were added, so the caller can report them.
+    Returns ``(merged, added_keys, overridden_descriptions)``.
+
+    The third value is the half that was missing. "Master wins" is the right rule and it was also
+    completely silent: a `--merge` reported `+0 added / SAME` while discarding a worker record that
+    differed, and the deploy that followed uploaded the master's copy over it. Measured on
+    2026-09-22 on `sql_targets[29|1]`, a task deliberately `active: false` on the master because it
+    writes to production and must only run where it is meant to — which is exactly the record whose
+    override an operator needs to see named before it ships, not after the task stops running.
     """
-    master_keys = {_record_key(item, key_fields) for item in master if isinstance(item, dict)}
+    worker_by_key = {
+        _record_key(item, key_fields): item for item in worker if isinstance(item, dict)
+    }
+    master_by_key = {
+        _record_key(item, key_fields): item for item in master if isinstance(item, dict)
+    }
     merged = list(master)
     added: list[tuple] = []
+    overridden: list[str] = []
     for item in worker:
         if not isinstance(item, dict):
             continue
         key = _record_key(item, key_fields)
-        if key in master_keys:
+        counterpart = master_by_key.get(key)
+        if counterpart is not None:
+            if counterpart != item:
+                # An empty note means every field that differs is per-node state, which is not an
+                # override anybody needs told about.
+                note = _override_note(counterpart, item)
+                if note:
+                    overridden.append(f"{'/'.join(key)}{note}")
             continue
         merged.append(item)
-        master_keys.add(key)
+        master_by_key[key] = item
         added.append(key)
-    return merged, added
+    return merged, added, overridden
+
+
+#: Fields that differ between any two nodes **by design**, so a difference in one is not news.
+#:
+#: ``node_role`` is "THIS node's role, resolved per-node" (`config.py`), so it differs on every node
+#: that has ever existed: the first live run of the override report printed nine OVERRIDE lines for
+#: nine app commands, all of them `node_role` alone — master `worker` against a node's `all`. A
+#: report that is nine-tenths inevitable is one whose reader learns to skip it, which is exactly what
+#: this report exists to prevent, so a record differing *only* in these is not reported at all.
+#:
+#: This affects the REPORT only. The merge is unchanged: the master still wins the whole record, as
+#: it always has.
+PER_NODE_FIELDS: tuple[str, ...] = ("node_role",)
+
+
+def _override_note(master_record: dict, worker_record: dict) -> str:
+    """The fields the master is about to impose, or ``""`` when none of them is news.
+
+    `active` is singled out rather than listed alphabetically among the rest because it is the only
+    field whose override *stops something that is currently running*. Every other difference ships a
+    changed configuration; this one ships a stopped job, and reading that out of a list of five
+    field names is how it gets missed.
+    """
+    names = [name for name in dict.fromkeys(list(master_record) + list(worker_record))
+             if master_record.get(name) != worker_record.get(name)
+             and name not in PER_NODE_FIELDS]
+    if not names:
+        return ""
+    stopping = (worker_record.get("active") is True and master_record.get("active") is False)
+    shown = ", ".join(names[:4]) + (f" and {len(names) - 4} more" if len(names) > 4 else "")
+    return f" ({shown}){' STOPS A JOB THAT IS ACTIVE ON THE WORKER' if stopping else ''}"
 
 
 _MISSING = object()
@@ -419,18 +470,35 @@ def merge_config_sources(
         master_records = list(master_data.get(list_key) or [])
         worker_records = list(worker_data.get(list_key) or [])
 
+        # `changed` is the master being MODIFIED (a field merge overlays the worker's value);
+        # `overridden` is the worker's copy being REFUSED. Opposite directions, so they are counted
+        # and written differently: only `changed` is a change to the master.
+        overridden: list[str] = []
         if worker_owned_paths:
             merged, added, changed = merge_records_by_field(
                 master=master_records, worker=worker_records,
                 key_fields=key_fields, worker_owned_paths=worker_owned_paths,
             )
         else:
-            merged, added = merge_record_lists(
+            merged, added, overridden = merge_record_lists(
                 master=master_records, worker=worker_records, key_fields=key_fields)
             changed = []
 
+        # Reported whether or not anything else happened, and before the SAME short-circuit: a file
+        # whose only news is "the master is about to overwrite three of the worker's records" used
+        # to print SAME, which is how the news never reached anybody.
+        for note in overridden:
+            print(f"  OVERRIDE {name}: master keeps {note}", flush=True)
+
         if not added and not changed:
-            print(f"  SAME     {name}", flush=True)
+            # Not SAME when an override was just printed for this same file. Nine OVERRIDE lines
+            # followed by `SAME app_commands.json` is what the first run of this actually produced,
+            # and `SAME` reads as "no differences" — the opposite of the nine lines above it.
+            if overridden:
+                print(f"  KEPT     {name}: nothing to carry back; the master's copy stands",
+                      flush=True)
+            else:
+                print(f"  SAME     {name}", flush=True)
             continue
 
         details = [f"+{len(added)} added"] if added else []

@@ -40,13 +40,17 @@ from db_ops.lib.json_io import (  # noqa: F401 - one definition, see that module
 
 from db_ops.lib.notify import NOTIFY_CHAT_LEVELS, NotifyConfigError, notify_rule_dict
 from db_ops.lib import task_output
-from db_ops.lib.sql_access import KNOWN_DB_TYPES  # noqa: F401 - one definition, see that module
+from db_ops.lib.sql_access import (  # noqa: F401 - one definition, see that module
+    KNOWN_DB_TYPES,
+    SQL_TASK_DB_TYPES,
+)
 from db_ops.lib.task_output import (  # noqa: F401 - one definition, see that module
     FILE_OUTPUT_FORMATS,
     OUTPUT_FORMATS,
     TaskOutputError,
 )
-from db_ops.lib.time_window import MANUAL_ONLY, NEW_FIELDS as _TIME_WINDOW_FIELDS
+from db_ops.lib.time_window import (
+    MANUAL_ONLY, NEW_FIELDS as _TIME_WINDOW_FIELDS, WEEKDAYS_FIELD, parse_weekdays)
 from db_ops.lib.paths import DEFAULT_DATA_DIR, TOOL_ROOT  # noqa: F401 - one definition, see that module
 
 # The notify shape (levels, rule form, validation) is owned by db_ops.lib.notify — this
@@ -72,6 +76,9 @@ _DEFAULT_TIME_WINDOW = {
     # `None` and not a number: unset means "the app's own default", which differs per app, and
     # writing one app's default into every target would freeze it for all of them.
     "repeat_interval": 300, "retry_interval": None, "timeout": 1800,
+    # `None` means "any day", which is what a target that says nothing about weekdays wants. An
+    # empty list is NOT the same thing and is never the default: it means no day is permitted.
+    WEEKDAYS_FIELD: None,
 }
 
 
@@ -159,6 +166,16 @@ def normalize_time_window(raw: dict[str, Any] | None) -> dict[str, Any]:
         for key, value in raw.items():
             if key not in _TIME_WINDOW_KEYS:
                 raise ConfigAdminError(f"Unknown time_window field: {key}")
+            if key == WEEKDAYS_FIELD:
+                # The runtime's own parser, not a second reading of the same rule: a registrar that
+                # accepted a weekday set the scheduler would refuse is the drift this file exists
+                # to stop. A list rather than the parser's tuple, because this goes to JSON.
+                try:
+                    parsed = parse_weekdays(value, f"time_window.{key}")
+                except RuntimeError as exc:
+                    raise ConfigAdminError(str(exc)) from exc
+                window[key] = None if parsed is None else list(parsed)
+                continue
             if value is None or value == "":
                 window[key] = None
                 continue
@@ -210,8 +227,11 @@ def add_sql_task(
     in order, each atomically.
     """
     db_type = str(db_type or "").strip().lower()
-    if db_type not in KNOWN_DB_TYPES:
-        raise ConfigAdminError(f"db_type must be one of {KNOWN_DB_TYPES}, got {db_type!r}.")
+    if db_type not in SQL_TASK_DB_TYPES:
+        raise ConfigAdminError(
+            f"db_type must be one of {SQL_TASK_DB_TYPES} for a SQL task, got {db_type!r}. "
+            f"{KNOWN_DB_TYPES} are valid engines for this estate, but only those two can have a "
+            "task script run on them.")
     server_id = str(server_id or "").strip()
     if not server_id:
         raise ConfigAdminError("server_id is required.")
@@ -664,7 +684,7 @@ def _build_parser() -> argparse.ArgumentParser:
                      description="Register a new SQL task and (by default) enable it.")
     sub = parser.add_subparsers(dest="command", required=True)
     add = sub.add_parser("add-sql", help="Add a single-script SQL task + target.")
-    add.add_argument("--db-type", required=True, choices=KNOWN_DB_TYPES)
+    add.add_argument("--db-type", required=True, choices=SQL_TASK_DB_TYPES)
     add.add_argument("--server-id", required=True)
     add.add_argument("--sql-name", required=True)
     src = add.add_mutually_exclusive_group(required=True)

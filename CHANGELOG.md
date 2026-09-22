@@ -15,6 +15,137 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-09-22
+
+### Added
+
+- **`time_window` now has a day-of-week dimension: `weekdays`.** An array of ISO weekdays, `1` =
+  Monday to `7` = Sunday, on every object that carries a `time_window` — app commands, SQL targets,
+  metrics, reports, backup jobs and restore entries. Absent means any day. `[]` means no day is
+  permitted, so the record never runs on a schedule, which is different from `repeat_interval: -1`
+  (still runnable on request) and from `active: false` (not listed at all). `0` is refused rather
+  than ignored — it is the cron spelling of Sunday, and dropping it would silently leave `[]` — and
+  a day listed twice is refused, because it is a set. `due-check` explains a weekday verdict the
+  same way it explains an hour one.
+  - **It gates due-ness, it does not grant it**: `repeat_interval` still decides *whether*, and
+    `weekdays` decides *whether today*. Keep the interval well under a day on a weekday-gated
+    record — with a multi-day interval the due moment walks, and the week it lands after the window
+    has closed the record skips a whole cycle.
+
+### Fixed
+
+- **A weekly backup no longer reads two different clocks.** The PostgreSQL and Oracle backup
+  scripts chose FULL by comparing `${DB_OPS_WEEKDAY:-$(date +%u)}` against `7`. db_ops only began
+  passing `DB_OPS_WEEKDAY` in 0.20.0, so on any older node the fallback read the **container
+  host's** clock — a different day from the one the daemon read the same job's `from_hour` on. On
+  2026-09-19 the host said Saturday while the node's own +07 said Sunday, and five incrementals ran
+  and failed on the night the weekly full was due. The level is now `BACKUP_LEVEL` in the job's
+  `env` and the day is `time_window.weekdays`, read on the node's configured clock.
+  - **If you have a PostgreSQL or Oracle backup entry, it needs the two-job shape** — one job
+    pinning `BACKUP_LEVEL` to the full level with `weekdays: [7]`, one pinning the incremental level
+    with `weekdays: [1,2,3,4,5,6]`. A job that pins no `BACKUP_LEVEL` now takes the **incremental**
+    every day instead of a full on Sundays. SQL Server entries already pinned their level and are
+    unaffected. See [08](docs/08_backup_restore_app.md).
+- **A PostgreSQL incremental that cannot chain now takes a baseline instead of producing nothing.**
+  An incremental needs WAL summaries covering its parent's LSN range, so a baseline taken before
+  `summarize_wal` was enabled can never be chained onto — and the job failed every night, leaving
+  `base/` without a single new directory. It now asks `show summarize_wal` before trying, and when
+  the server refuses an incremental for want of summaries it takes a FULL in the same run. Every
+  other failure is still fatal, and the script never creates the backup directory itself.
+- **`APP-BACKUP-RESTORE` now ships at `repeat_interval: 30`**, down from 300. The app's interval is
+  a floor under every job inside it, so at 300 a log backup declared at 900 s ran every ~1,200 s.
+  An existing `app_commands.json` keeps whatever it says; `init` writes the new default.
+- **The daemon now waits out a store restart that reaches it wrapped.** A store outage is classified
+  from the SQLSTATE the server sends, and every *connect* failure arrives as a `PostgresStoreError`
+  raised from the driver's exception — so the code was one link down the chain and was not read.
+  `57P03` therefore counted as permanent and the daemon exited on its first attempt instead of
+  waiting, which is the failure the tolerance was added to prevent. The chain is now walked, a
+  wrapped permanent code is still permanent, and `"the database system is in recovery mode"` — the
+  other wording of `57P03` — is recognised from its text as well.
+- **A failing WAL archiver now says which fault it is.** The PostgreSQL WAL job correctly refuses to
+  pass a broken archiver, but reported only that archiving had failed, and the three causes have
+  three different fixes. It now prints the instance's `archive_command` and the archiver's stats
+  window, and names the cause it can prove: a destination file that already exists — with its size,
+  and a note when it is short of a full segment, because an `archive_command` of the form
+  `test ! -f DEST && cp SRC DEST` exits non-zero when `DEST` is present and the server then retries
+  the same segment for ever — an archive directory the database user cannot write, or neither, in
+  which case it reports the free space and points at the server log.
+
+- **A SQL task can no longer be registered on an engine no task can run on.** `sql-command-add` and
+  `add-sql` accepted `postgresql` and `mysql` — valid engines for this estate, which metrics collect
+  from and `backup_restore` backs up — and the task then failed at its first scheduled run with
+  `Unsupported db_type`. On 2026-09-21 three such tasks sat in a scheduler for nine hours before the
+  first one came due and said so. Both commands now refuse at registration and name what a task can
+  run on; nothing about PostgreSQL or MySQL *instances* changes.
+- **A PostgreSQL incremental no longer chains onto a backup of a different cluster.** `latest` was
+  only the newest directory under `base/`; nothing checked it belonged to the database being backed
+  up. A cluster that has been restored, re-`initdb`'d or replaced gets a new system identifier, and
+  the server refuses the old parent **permanently** — no retry changes which cluster it came from, so
+  the job answered `error` every night with `base/` untouched. The parent's `System-Identifier` is
+  now read before the attempt and a mismatch takes a FULL baseline, as does a parent too old to carry
+  one (manifests only record it from PostgreSQL 17). The server's own refusal is still recovered from
+  as a second line of defence.
+- **The engine scripts now say which database they mean.** A job's `env` takes `PG_PORT` for
+  PostgreSQL and `ORACLE_SID` for Oracle; unset keeps today's behaviour in both cases. Neither could
+  previously be expressed at all: `docker exec` does not carry the calling script's environment into
+  the container, so an exported `PGPORT` would never have reached `psql`, and `rman target /` took
+  whatever SID the container's login profile happened to export. On a host running one instance per
+  container — every entry in this estate — both were right by luck; on two they were a coin toss that
+  reported success against the wrong database.
+- **An Oracle backup no longer rewrites a database's persistent RMAN configuration in silence.** The
+  four `CONFIGURE` statements are stored in the controlfile, govern every later connection, and
+  decide what the same script's `DELETE NOPROMPT OBSOLETE` removes — so on a database db_ops did not
+  create, the first run replaced somebody else's retention and archivelog deletion policy with
+  nothing in the output to say so. `SHOW ALL` now runs first, unconditionally, so the values as they
+  were are in `stdout_tail`; `RMAN_CONFIGURE=skip` leaves the database's own configuration alone. The
+  default stays `apply`, because changing a default silently is the same fault from the other side —
+  and on the archivelog job `skip` is not free: its deletes name an age, but RMAN still consults the
+  deletion policy, and under `TO NONE` the same statement removes a log that was never backed up.
+- **`deploy --merge` now says which of the worker's records the master is about to overwrite.** The
+  rule — master wins a shared key — has not changed, but it was applied without a word: a file whose
+  only news was three discarded worker records printed `SAME`, and the upload that followed applied
+  the master's copy anyway. Each one now prints one `OVERRIDE` line naming the fields, and an
+  override that would switch off a task currently `active` on the worker says so in those words. It
+  is reported, not counted: the master keeps what it had, so nothing is written on this side. A
+  record that differs only in per-node state — `node_role` is resolved per node, so it differs on
+  every node there has ever been — is not reported, because a report that is nine-tenths inevitable
+  is one its reader learns to skip; the field is dropped from the line, never the line from the
+  report. A file with overrides and nothing to carry back reads `KEPT`, not `SAME`.
+- **A config drift report names the fields that differ**, not just the record. `sql_targets[29|1]
+  changed` was the whole of what an operator chose `--on-config-drift keep` against `adopt` from, and
+  those are opposite actions — `keep` is obviously right when the difference is a note the store has
+  not been synced with, and obviously wrong when it is `active`.
+
+- **A container is no longer required to back up PostgreSQL, Oracle or SQL Server on Linux.**
+  `DOCKER_CONTAINER` is optional in all four engine scripts: set it for an engine inside a container,
+  leave it unset for one installed on the host. Each script chooses one wrapper once and every command
+  goes through it, so a step written for one path cannot work in testing and fail on the other. The
+  host path still runs as the database OS user, because the container path's `-u` exists for a reason
+  a host install shares: files owned by the wrong user cannot be read back by a restore. Before this,
+  an engine installed directly on a machine could not be backed up at all, and the failure read
+  `DOCKER_CONTAINER is not set` — which looks like a configuration mistake rather than a missing
+  capability. Windows SQL Server was already covered by its own `.ps1` and is unaffected.
+- **`app-command-set`: the first command that edits an app command.** `data/app_commands.json` holds
+  the schedule of every app on the node and nothing could change it, so the only way was to open the
+  file on whichever node you were looking at — which is how this estate, a test node and the shipped
+  catalogue came to hold three different schedules for `APP-BACKUP-RESTORE` at once. A `time_window`
+  edit is partial, so retuning an interval cannot drop a `weekdays` somebody else set; the answer names
+  the old and new value of every field it touched; and it refuses to change what the command *is*
+  (`command_text` names the module that runs, so that is a release) or to invent a tenth record.
+
+### Changed
+
+- **`data/shared_config_objects.json` describes three more records**: `backup_entry`, `backup_job` and
+  `restore_entry`. They live in one file and are described separately because they share only two field
+  names (`active`, `note`) and because the schedule sits in a different place in each — a backup entry
+  has **no** `time_window` at all, since every one of its `jobs` carries its own, while a restore entry
+  carries one directly. That asymmetry is real, follows from the engines rather than from untidiness,
+  and was previously something you had to infer from an example.
+- **`data/shared_config_objects.json` describes two more things**: `time_window.weekdays`, with an
+  item range a program can evaluate rather than only prose, and **`app_command`** — all fourteen
+  fields of an app command, two of them required, including which ones are read at run time and
+  which are not. `check-objects` now validates app command records as well.
+
 ## [0.20.0] - 2026-09-20
 
 ### Fixed

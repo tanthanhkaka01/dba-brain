@@ -219,11 +219,11 @@
         "to_hour": null,
         "from_minute": null,
         "to_minute": null,
-        "repeat_interval": 300,
-        "retry_interval": 300,
+        "repeat_interval": 30,
+        "retry_interval": 30,
         "timeout": 7200
       },
-      "note": "On by default, and idle until data/restore_config.json declares a backup or a restore: init writes that file with both lists empty, and an empty list is 'nothing configured' - status done, no work, no alert. Nothing is backed up or restored until an entry is added."
+      "note": "On by default, and idle until data/restore_config.json declares a backup or a restore: init writes that file with both lists empty, and an empty list is 'nothing configured' - status done, no work, no alert. Nothing is backed up or restored until an entry is added. repeat_interval 30 since 2026-09-21, down from 300: this app's interval is a FLOOR under every job inside it, because the app is one process working through its own due list - at 300 a log backup declared at 900 s ran every ~1200 s and nothing in that job's own config said why. It shipped at 300 for two more releases after the estate had already corrected it on one node, which is the drift a shipped default hides. 30 costs one process every 30 s that exits at once when nothing is due, and it is safe only because run_mode async is paired with the claim: ux_job_runs_claim accepts one running row per backup job, so a second process is told the work is taken."
     },
     {
       "node_role": "all",

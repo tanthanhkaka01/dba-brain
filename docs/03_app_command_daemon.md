@@ -189,7 +189,7 @@ same question and are now answered in one place.
 **And the other direction — a run that is genuinely still going blocks the next one, across a
 restart.** The `running` row is tested *before* the repeat interval, which matters because almost
 every command repeats far more often than its worst case takes: `APP-BACKUP-RESTORE` repeats every
-300s with a 7200s timeout, since most cycles find nothing to do. Testing the interval first made
+30s with a 7200s timeout, since most cycles find nothing to do. Testing the interval first made
 the `running` branch unreachable for exactly the commands that need it, and within a single daemon
 the in-memory duplicate check hid that. Across a restart nothing hid it: on 2026-09-14 a daemon
 started 47 minutes into a restore began a second restore of the same database onto the same

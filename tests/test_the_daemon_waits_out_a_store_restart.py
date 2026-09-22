@@ -170,3 +170,63 @@ def test_the_scan_loop_consults_the_waiter_and_reraises_what_it_will_not_wait_fo
     assert "wait = wait_out_store_outage(exc, waiter=store_waiter, logger=logger)" in source
     assert "if wait is None:\n                    raise" in source
     assert "store_waiter.recovered()" in source
+
+
+# --------------------------------------------------------------------------- #
+# The half that was missing: the code is usually not on the exception a caller sees
+# --------------------------------------------------------------------------- #
+def test_a_code_one_link_down_the_chain_is_still_found():
+    """The gap the 0.21.0 soak found, at the cost of 5 h 45 m of clock.
+
+    Every store CONNECT failure reaches the daemon as ``PostgresStoreError("Could not connect to
+    …: <driver error>")``, raised ``from`` the driver's exception. Reading only the top of the chain
+    returned "" — so ``57P03``, the very code this module exists for, classified as permanent and
+    the daemon exited on its first attempt instead of waiting. There was no log line to say so,
+    because the waiter returns before it logs when it decides not to wait.
+    """
+    driver = FakePgError("57P03", "the database system is in recovery mode")
+    try:
+        raise RuntimeError("Could not connect to PostgreSQL store postgres@h:5433/db") from driver
+    except RuntimeError as wrapped:
+        assert store_outage.sqlstate(wrapped) == "57P03"
+        assert store_outage.is_transient(wrapped)
+
+
+def test_an_implicit_context_counts_as_well_as_an_explicit_cause():
+    """A wrapper raised inside an `except` block chains through __context__ without `from`."""
+    driver = FakePgError("08006", "connection failure")
+    try:
+        try:
+            raise driver
+        except FakePgError:
+            # noqa is the subject, not an oversight: the missing `from` is what makes this an
+            # implicit __context__ chain, which is the case being tested.
+            raise RuntimeError("Could not connect to PostgreSQL store")  # noqa: B904
+    except RuntimeError as wrapped:
+        assert store_outage.sqlstate(wrapped) == "08006"
+        assert store_outage.is_transient(wrapped)
+
+
+def test_walking_the_chain_does_not_make_a_permanent_error_retryable():
+    """The negative that matters. Reading deeper must not widen what counts as transient: a missing
+    table wrapped in the same connect-shaped message is still a definite answer."""
+    driver = FakePgError("42P01", 'relation "job_runs" does not exist')
+    try:
+        raise RuntimeError("Could not connect to PostgreSQL store postgres@h:5433/db") from driver
+    except RuntimeError as wrapped:
+        assert store_outage.sqlstate(wrapped) == "42P01"
+        assert not store_outage.is_transient(wrapped)
+
+
+def test_a_self_referential_chain_terminates():
+    """`__context__` can point at the exception itself. Bounded by identity, not by depth."""
+    error = ValueError("no code here")
+    error.__context__ = error
+
+    assert store_outage.sqlstate(error) == ""
+
+
+def test_the_other_wording_of_57P03_is_in_the_phrase_list():
+    """Second-line defence, for a driver that carries no mapping at all. The server said "in
+    recovery mode" on 2026-09-22; the list only had "starting up"."""
+    assert store_outage.is_transient(Exception("FATAL: the database system is in recovery mode"))

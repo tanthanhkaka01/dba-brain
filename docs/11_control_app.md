@@ -321,6 +321,33 @@ side is right is the one thing this gate must not do — both alternatives destr
 master's old value and the deploy then overwrites the worker's file with it. `--merge` rescues
 things the worker **added**; the drift gate is what rescues things it **changed**.
 
+**Since 0.21.0 it says so.** Every shared record whose worker copy differs prints one line, before
+the per-file summary and regardless of whether anything else happened:
+
+```
+  OVERRIDE sql_targets.json: master keeps 29|1 (active, time_window) STOPS A JOB THAT IS ACTIVE ON THE WORKER
+```
+
+A record that differs **only** in per-node state is not reported: `node_role` is *"THIS node's role,
+resolved per-node"*, so it differs between any two nodes that have ever existed, and the first live
+run of this printed nine `OVERRIDE` lines for nine app commands with `node_role` as the only
+difference in all nine. A report that is nine-tenths inevitable is one its reader learns to skip.
+`node_role` is dropped from the *line*, never the line from the report — a record differing in
+`node_role` **and** `active` is still named, without `node_role` in it. The merge itself is unchanged.
+
+A file with overrides but nothing to carry back reads `KEPT … nothing to carry back; the master's
+copy stands`, not `SAME`: `SAME` is true — nothing is applied — and after nine differences it says
+the opposite of them.
+
+The rule has not changed; the silence has. A file whose only news was "the master is about to
+overwrite three of the worker's records" previously printed `SAME`, because nothing was added and
+nothing was written — and the upload that followed applied the master's copy anyway. `active` is
+called out in words because it is the only field whose override does not ship a changed
+configuration but a **stopped job**, and that does not read as urgent from inside a list of field
+names. An override is reported but **not counted** in "applied N change(s) to the master config" and
+does not rewrite the master's file: the master keeps what it already had, so there is nothing to
+write, and rewriting it would only move the mtime.
+
 
 ## Part B — Docker Deployment (manual mechanism)
 

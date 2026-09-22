@@ -765,3 +765,19 @@ read-write `assets/` mount; sync it back to the master with `control worker-pull
 
 > Runtime writes happen on the worker's `data/` and `assets/` mounts. The master stays authoritative
 > for secrets; pull config back explicitly rather than pushing from the worker.
+
+
+## Which engines a task can run on
+
+`sqlserver` and `oracle`, named once in `db_ops/lib/sql_access.py` as `SQL_TASK_DB_TYPES` and read
+by both the runner's dispatch and the two registration commands.
+
+It is deliberately narrower than `KNOWN_DB_TYPES`, which is the config vocabulary for the whole
+estate: a PostgreSQL instance is perfectly legitimate there — metrics collect from it, and
+`backup_restore` backs it up. What no layer supports is *executing a task script* on one.
+
+The two were related only by a literal until 0.21.0, and the gap had a cost. On 2026-09-21 three
+probe tasks were registered with `db_type: "postgresql"`; `sql-command-add` accepted them,
+`check-references` passed them, and nothing said a word until the first came due nine hours later
+and errored `Unsupported db_type: postgresql` — on a soak node, where a wasted run costs clock.
+`sql-command-add` and `add-sql` now both refuse at registration, and widening the set is one edit.

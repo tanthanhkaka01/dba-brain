@@ -179,3 +179,52 @@ def test_a_target_writes_the_notify_object_in_its_canonical_nested_form(estate):
     assert target["notify"]["logging_on_run"]["enabled"] is False
     assert target["notify"]["alert_on_error"]["enabled"] is True
     assert "logging_on_run" not in target, "never the old top-level spelling"
+
+
+# --------------------------------------------------------------------------- #
+# The engine: a valid engine for the estate is not automatically a runnable one
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("db_type", ["postgresql", "mysql"])
+def test_an_engine_no_task_can_run_on_is_refused_at_registration(estate, db_type):
+    """What this cost, on the node where it costs most.
+
+    On 2026-09-21 three probe tasks were registered with ``db_type: "postgresql"`` on a soak node.
+    `sql-command-add` accepted them, `check-references` passed them, and nothing said a word until
+    the first one came due nine hours later and errored ``Unsupported db_type: postgresql``. The
+    engine is a perfectly valid one for this estate — metrics collect from it and backup_restore
+    backs it up — so the wide vocabulary was right and the narrow question was simply never asked.
+    """
+    with pytest.raises(sql_task_admin.SqlTaskAdminError) as raised:
+        add_command(estate, db_type=db_type)
+
+    message = str(raised.value)
+    assert db_type in message
+    # The message has to say the engine is not *wrong*, only not runnable - otherwise its reader
+    # goes looking for a typo in an inventory that is correct.
+    assert "sqlserver" in message and "oracle" in message
+    assert "first run" in message
+
+
+def test_the_refusal_writes_nothing(estate):
+    """A registration that half-applied would leave a script file with no command pointing at it."""
+    with pytest.raises(sql_task_admin.SqlTaskAdminError):
+        add_command(estate, db_type="postgresql")
+
+    commands = json.loads((estate / "data" / "sql_commands.json").read_text(encoding="utf-8"))
+    assert commands["sql_commands"] == []
+    assert not (estate / "assets" / "tasks" / "postgresql").exists()
+
+
+def test_the_registrar_and_the_runner_read_the_same_tuple():
+    """The wiring, not the behaviour. Two literals spelling the same pair is how they drifted the
+    first time: the runner has always refused postgresql and the registrar has always accepted it.
+    """
+    import inspect
+
+    from db_ops.lib.sql_access import SQL_TASK_DB_TYPES
+    from db_ops.sql_tasks import runner
+
+    assert SQL_TASK_DB_TYPES == ("sqlserver", "oracle")
+    source = inspect.getsource(runner)
+    assert "sql_access.SQL_TASK_DB_TYPES" in source
+    assert '{"sqlserver", "oracle"}' not in source

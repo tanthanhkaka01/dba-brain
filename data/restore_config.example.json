@@ -89,11 +89,11 @@
                 "db_type": "postgresql",
                 "server_id": "ACME-192-0-2-20-PG-5432",
                 "backup_dir": "/opt/pgbackup/dbops",
-                "note": "Weekly baseline plus daily incrementals; the script picks the level from the day of the week. 'backup_dir' must match the directory the archive metric checks, or a cluster that is backed up daily is reported as never backed up.",
+                "note": "Weekly baseline plus daily incrementals, expressed as TWO jobs: the level is stated in env.BACKUP_LEVEL and the day in time_window.weekdays (ISO 1-7, read on this node's configured clock). The script does not derive a level from the weekday - it used to, reading the container host's clock rather than the node's, which is a different day for part of every day. 'backup_dir' must match the directory the archive metric checks, or a cluster that is backed up daily is reported as never backed up.",
                 "env_secrets": {},
                 "jobs": [
                     {
-                        "job": "database",
+                        "job": "database_full",
                         "active": false,
                         "script": "assets/backup/postgresql/pg_basebackup_database.sh",
                         "cleanup_retention": 1814400,
@@ -102,7 +102,10 @@
                             "to_hour": 5,
                             "repeat_interval": 72000,
                             "retry_interval": 3600,
-                            "timeout": 10800
+                            "timeout": 10800,
+                            "weekdays": [
+                                7
+                            ]
                         },
                         "notify": {
                             "logging_on_run": {
@@ -115,7 +118,48 @@
                                 "telegram_chat": "backup",
                                 "chat_id": ""
                             }
-                        }
+                        },
+                        "env": {
+                            "BACKUP_LEVEL": "full"
+                        },
+                        "_note": "Sunday only. Together with the sibling job these cover all seven days exactly once - a gap is a night with no backup, and an overlap is two levels racing for the same night."
+                    },
+                    {
+                        "job": "database",
+                        "active": false,
+                        "script": "assets/backup/postgresql/pg_basebackup_database.sh",
+                        "cleanup_retention": 1814400,
+                        "time_window": {
+                            "from_hour": 1,
+                            "to_hour": 5,
+                            "repeat_interval": 72000,
+                            "retry_interval": 3600,
+                            "timeout": 10800,
+                            "weekdays": [
+                                1,
+                                2,
+                                3,
+                                4,
+                                5,
+                                6
+                            ]
+                        },
+                        "notify": {
+                            "logging_on_run": {
+                                "enabled": true,
+                                "telegram_chat": "backup",
+                                "chat_id": ""
+                            },
+                            "alert_on_error": {
+                                "enabled": true,
+                                "telegram_chat": "backup",
+                                "chat_id": ""
+                            }
+                        },
+                        "env": {
+                            "BACKUP_LEVEL": "incr"
+                        },
+                        "_note": "Monday to Saturday. Keep repeat_interval well under a day: weekdays says WHICH day and repeat_interval says whether it is due, so a multi-day interval lets the due moment walk past the window and skip whole weeks."
                     }
                 ]
             }

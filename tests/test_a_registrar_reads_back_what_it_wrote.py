@@ -26,7 +26,7 @@ from db_ops.lib import time_window
 def test_the_registrar_accepts_exactly_the_fields_the_runtime_reads():
     """One list, not two. A second copy is what drifted."""
     assert tuple(config_admin._TIME_WINDOW_KEYS) == tuple(time_window.NEW_FIELDS)
-    assert len(config_admin._TIME_WINDOW_KEYS) == 13
+    assert len(config_admin._TIME_WINDOW_KEYS) == 14
 
 
 def test_every_accepted_field_has_a_default():

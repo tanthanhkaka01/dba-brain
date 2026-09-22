@@ -224,12 +224,60 @@ def check_value(constraint: dict[str, Any], value: Any, *, where: str, field: st
                     findings.append(_finding("value", where, field, detail))
         return findings
 
+    if kind == "array":
+        # An empty array is a *value*, not an absence: `time_window.weekdays: []` means no day is
+        # permitted. So it is never reported as empty here; whether it means something is the
+        # field's own business, stated in its `special_values`.
+        if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple)):
+            findings.append(_finding("value", where, field,
+                                     f"must be an array; got {type(value).__name__}"))
+            return findings
+        item_enum = constraint.get("item_enum")
+        item_kind = str(constraint.get("item_kind") or "")
+        seen: list[Any] = []
+        for item in value:
+            if item_kind == "integer":
+                number = _as_int(item)
+                if number is None:
+                    findings.append(_finding("value", where, field,
+                                             f"every item must be a whole number; got {item!r}"))
+                    continue
+                item = number
+            if item_enum is not None and item not in item_enum:
+                findings.append(_finding(
+                    "value", where, field,
+                    f"every item must be one of {', '.join(str(i) for i in item_enum)}; got {item!r}"))
+                continue
+            # Refused, not de-duplicated. A repeat in a set is a hand-edit that meant something
+            # else, and quietly collapsing it hides which of the two readings was intended.
+            if constraint.get("unique_items") and item in seen:
+                findings.append(_finding("value", where, field, f"lists {item!r} twice"))
+                continue
+            seen.append(item)
+        return findings
+
     if kind == "object":
         if isinstance(value, bool) and "boolean" in (constraint.get("also_accepts") or []):
             return findings
         if not isinstance(value, dict):
             findings.append(_finding("value", where, field,
                                      f"must be an object; got {type(value).__name__}"))
+            return findings
+        # `checked_by` names the entry that already walks this path, and stops the recursion here.
+        # Two reasons, and both are real: the same mistake would otherwise be reported twice, and a
+        # nested finding raised from a `kind: field` entry is *dropped* on the way out anyway —
+        # check_data_dir keeps only findings whose field name is one that entry declares, so a
+        # violation called `repeat_interval` coming out of an `app_command` walk would vanish. The
+        # shape is still checked; what it contains is checked where that object is declared.
+        if constraint.get("checked_by"):
+            return findings
+        # `free_form: true` says the CONTENTS are deliberately not described, only the shape. It is
+        # distinct from `checked_by`, which names the entry that walks this path: here there is no
+        # such entry and never will be, because the keys are the operator's own. A backup job's
+        # `env`, a restore's `target`, `server_metadata` - all maps whose names come from the
+        # estate rather than from db_ops. Without this they fell through to `check_record(None)` and
+        # the whole reference stopped validating.
+        if constraint.get("free_form"):
             return findings
         return check_record(str(constraint.get("object")), value,
                             where=f"{where}.{field}", in_config=in_config)

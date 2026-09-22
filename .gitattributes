@@ -32,3 +32,13 @@ docker/**       text eol=lf
 # PowerShell runs on Windows and Linux both; CRLF is what a Windows editor expects to find, and
 # pwsh on Linux reads either.
 *.ps1           text eol=crlf
+
+# The shared-object reference ships as three copies that a test compares BYTE FOR BYTE, because a
+# difference between them is drift rather than configuration. Left to `text=auto` they diverge for
+# a reason nobody would guess: `git checkout` of one of them rewrites it to CRLF under the client's
+# `core.autocrlf`, while the two nobody touched stay LF — 956 lines became 956 extra bytes and the
+# guard failed on files whose content was identical. `git diff` reports no change at all in that
+# state, only "LF will be replaced by CRLF the next time Git touches it", so the hunt is long and
+# the fix is one line. Pinned here so reverting any of the three cannot break the other two.
+shared_config_objects.json              text eol=lf
+shared_config_objects.example.json      text eol=lf

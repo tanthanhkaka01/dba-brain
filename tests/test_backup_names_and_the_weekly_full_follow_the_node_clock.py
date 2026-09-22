@@ -48,12 +48,29 @@ def test_a_job_can_still_pin_the_weekday(monkeypatch):
         job, target=target, secrets={})["env"]["DB_OPS_WEEKDAY"] == "3"
 
 
-def test_the_weekly_full_reads_the_weekday_db_ops_passes():
+def test_no_backup_script_decides_the_weekday_for_itself():
+    """The level is the scheduler's decision, and the weekday is config.
+
+    These two scripts used to choose FULL against ``$DB_OPS_WEEKDAY``, falling back to ``date +%u``
+    on the container host. db_ops only began passing that variable in 0.20.0, so every older node
+    took the fallback — and on a host set to UTC that is a different day from the one the scheduler
+    read the same job's ``from_hour`` on. One backup, two clocks: on 2026-09-19 the host said
+    Saturday while the node's own +07 said Sunday, so five incrementals ran and failed where the
+    weekly full was due.
+
+    The day is now ``time_window.weekdays``, evaluated on the node's configured clock beside every
+    other bound. A comparison against a weekday literal anywhere in these scripts would put the
+    second clock back.
+    """
     for script in ("assets/backup/postgresql/pg_basebackup_database.sh",
                    "assets/backup/oracle/oracle_rman_database.sh"):
-        text = _script(script)
-        assert '"${DB_OPS_WEEKDAY:-$(date +%u)}" = "7"' in text, script
-        assert '"$(date +%u)" = "7"' not in text, script
+        # Comments may still explain what was removed and why; code may not do it.
+        code = "\n".join(line for line in _script(script).splitlines()
+                         if not line.lstrip().startswith("#"))
+
+        assert "date +%u" not in code, script
+        assert "DB_OPS_WEEKDAY" not in code, script
+        assert 'BACKUP_LEVEL' in code, script
 
 
 def test_a_sql_server_backup_name_marks_its_stamp_as_utc():

@@ -2929,3 +2929,30 @@ share, and no db_ops backup entry covers it. Its block is therefore present and 
 turning it on would warn once per run and change nothing else. Closing that needs a bundle source
 first: a db_ops backup entry for the instance, or an export taken from the live source at restore
 time.
+
+
+## `app-command-set`
+
+The only command that edits `data/app_commands.json`. Until 2026-09-22 nothing did — every other kind
+of record had a registrar and the nine that decide *when every app runs* did not — which is how the
+estate, a soak node and the shipped catalogue came to hold three different schedules for
+`APP-BACKUP-RESTORE` at the same time (60/300, 30/30, 300/300). A hand-applied fix on one node is
+invisible from every other.
+
+```bash
+python -m db_ops.common.cli app-command-set '{"app_code": "APP-BACKUP-RESTORE",
+                                              "time_window": {"repeat_interval": 30}}'
+```
+
+* **A `time_window` edit is partial.** The fields named change and the rest of the window is kept, so
+  retuning an interval cannot silently drop a `weekdays` or a `timeout` somebody else set.
+* **The answer names the old and new value of every field it touched.** An edit reporting only "ok"
+  would reproduce, in a new place, the fault the command exists to end. A value already in place
+  reports `written: false` rather than claiming a write.
+* **Editable fields come from the reference**, not from a list in the module: `app_command` is
+  described field by field in `data/shared_config_objects.json`, and a second list would be a second
+  opinion.
+* **It refuses identity and wiring** — `app_command_id`, `app_code`, `app_name`, `log_scope`,
+  `command_text`, `working_dir`. `command_text` names the module that runs, so pointing it elsewhere
+  is a release, not a configuration edit. It also will not create or delete an app command: the
+  records correspond to code that exists.

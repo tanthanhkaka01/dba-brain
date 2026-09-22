@@ -80,13 +80,14 @@ def test_add_sql_task_writes_file_and_config_and_runner_loads(tmp_path):
 def test_add_sql_task_from_bytes_and_inactive(tmp_path):
     data = _seed(tmp_path)
     result = add_sql_task(
-        db_type="postgresql", server_id="pg-01", sql_name="vacuum",
-        sql_bytes="VACUUM ANALYZE;".encode("utf-8"), active=False,
+        db_type="oracle", server_id="ora-01", sql_name="shrink",
+        sql_bytes="ALTER TABLE staging SHRINK SPACE;".encode("utf-8"), active=False,
         data_dir=data, tool_root=tmp_path,
     )
-    assert result["active"] is False and result["db_type"] == "postgresql"
-    # folder keyed by server_id only
-    assert result["script_path"] == "assets/tasks/postgresql/pg_01/006_vacuum.sql"
+    assert result["active"] is False and result["db_type"] == "oracle"
+    # Deliberately not sqlserver: the folder is keyed by engine + server_id, and a test that only
+    # ever registered the default engine could not tell the two apart.
+    assert result["script_path"] == "assets/tasks/oracle/ora_01/006_shrink.sql"
     commands = json.loads((data / "sql_commands.json").read_text(encoding="utf-8"))
     entry = [c for c in commands["sql_commands"] if c["sql_id"] == result["sql_id"]][0]
     assert entry["active"] is False
@@ -98,13 +99,13 @@ def test_add_sql_task_rejects_bad_input(tmp_path):
         add_sql_task(db_type="mongodb", server_id="s", sql_name="n", sql_text="x",
                      data_dir=data, tool_root=tmp_path)
     with pytest.raises(ConfigAdminError):
-        add_sql_task(db_type="mysql", server_id="", sql_name="n", sql_text="x",
+        add_sql_task(db_type="sqlserver", server_id="", sql_name="n", sql_text="x",
                      data_dir=data, tool_root=tmp_path)
     with pytest.raises(ConfigAdminError):  # both text and bytes
-        add_sql_task(db_type="mysql", server_id="s", sql_name="n", sql_text="x",
+        add_sql_task(db_type="sqlserver", server_id="s", sql_name="n", sql_text="x",
                      sql_bytes=b"y", data_dir=data, tool_root=tmp_path)
     with pytest.raises(ConfigAdminError):  # empty content
-        add_sql_task(db_type="mysql", server_id="s", sql_name="n", sql_text="   ",
+        add_sql_task(db_type="sqlserver", server_id="s", sql_name="n", sql_text="   ",
                      data_dir=data, tool_root=tmp_path)
 
 
@@ -112,7 +113,7 @@ def test_add_sql_task_atomic_no_partial_on_bad_timewindow(tmp_path):
     data = _seed(tmp_path)
     before_cmds = (data / "sql_commands.json").read_text(encoding="utf-8")
     with pytest.raises(ConfigAdminError):
-        add_sql_task(db_type="mysql", server_id="s", sql_name="n", sql_text="SELECT 1;",
+        add_sql_task(db_type="sqlserver", server_id="s", sql_name="n", sql_text="SELECT 1;",
                      time_window={"repeat_interval": -5}, data_dir=data, tool_root=tmp_path)
     # config unchanged and no stray .sql file
     assert (data / "sql_commands.json").read_text(encoding="utf-8") == before_cmds
@@ -145,7 +146,7 @@ def test_add_sql_answers_in_the_response_envelope(tmp_path, monkeypatch, capsys)
     data = _seed(tmp_path)
     code, answer = _run_cli(monkeypatch, capsys, [
         "add-sql",
-        json.dumps({"db_type": "mysql", "server_id": "s1", "sql_name": "nightly",
+        json.dumps({"db_type": "sqlserver", "server_id": "s1", "sql_name": "nightly",
                     "sql_text": "SELECT 1;", "data_dir": str(data)}),
     ], data_dir=data)
 
@@ -176,7 +177,7 @@ def test_an_unknown_field_is_refused_as_a_response_too(tmp_path, monkeypatch, ca
     data = _seed(tmp_path)
     code, answer = _run_cli(monkeypatch, capsys, [
         "add-sql",
-        json.dumps({"db_type": "mysql", "server_id": "s1", "sql_name": "n",
+        json.dumps({"db_type": "sqlserver", "server_id": "s1", "sql_name": "n",
                     "sql_text": "SELECT 1;", "sql_nmae": "typo", "data_dir": str(data)}),
     ], data_dir=data)
 

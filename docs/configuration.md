@@ -269,8 +269,23 @@ and two declared paths pointing at `backups[]` where the schedule actually lives
 }
 ```
 
-Ten **bounds** and three **intervals**, answering two different questions.
+Ten **bounds**, one **day-of-week set** and three **intervals**, answering three different questions.
 
+- `weekdays` is *may it run today?* — an array of **ISO weekdays, 1 = Monday to 7 = Sunday**, the
+  same numbering `isoweekday()`, `date +%u` and `DB_OPS_WEEKDAY` use. Absent means any day. `[]`
+  means **no day is permitted, so the record never runs on a schedule** — which is not the same as
+  `repeat_interval: -1` (still runnable on request) or `active: false` (not listed at all); what
+  `weekdays: []` parks is the window, leaving the interval and the hour bounds as written. `0` is
+  **refused**, not ignored: it is the cron spelling of Sunday, and dropping it would leave `[]`.
+  A day listed twice is refused too — it is a set, not a weighting.
+  - **It gates due-ness, it does not grant it.** So "the weekly full, Sunday, in the small hours"
+    is `weekdays: [7]` **plus** `from_hour: 1, to_hour: 5` **plus** an interval well under a day
+    (72000 works). With a multi-day interval the due moment walks, and the week it lands after
+    Sunday's window has closed the record skips a whole cycle.
+  - It is the one field that is a set rather than a `from_`/`to_` pair, because a pair cannot say
+    "Monday and Thursday". Added 2026-09-21; before it, the two engine backup scripts carried the
+    weekday as a shell literal and read it on the container host's clock, which is how one backup
+    came to evaluate its hour window and its FULL/INCR choice on two different days.
 - The ten bounds are a wall-clock question — *may it run at this moment?* — read in the node's
   configured timezone. Every bound is inclusive, every one is optional, `null` means no restriction
   on that dimension, and a pair whose `from_` exceeds its `to_` **wraps** (`from_hour: 22,
