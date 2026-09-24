@@ -179,12 +179,12 @@ def _plan_sqlserver(job: Any, secrets: dict[str, str], *, point_in_time: str,
     databases = [d for d in (job.env.get("MSSQL_DATABASES", "") or "").split(",") if d.strip()]
     if not databases:
         found = _list_backup_files({**base, "kinds": ["full"]})
-        databases = sorted({f["database"] for f in found["files"] if f["database"]})
+        databases = sorted({f["database_name"] for f in found["files"] if f["database_name"]})
     if not databases:
         raise RestoreByIdError(f"{job.restore_id}: no databases found under {directory}.")
 
     for database in databases:
-        scoped = {**base, "database": database}
+        scoped = {**base, "database_name": database}
         full = _list_backup_files({**scoped, "kinds": ["full"], "latest": True,
                                   **({"before": point_in_time} if point_in_time else {})})
         if not full["files"]:
@@ -200,20 +200,20 @@ def _plan_sqlserver(job: Any, secrets: dict[str, str], *, point_in_time: str,
         # rest of its chain, and the only fix is to start the whole restore again.
         tail = "log" if logs["files"] else ("diff" if diff["files"] else "full")
         steps.append({"op": "restore-full", "request": {
-            "db_type": "sqlserver", "database": database, "target": target,
+            "db_type": "sqlserver", "database_name": database, "target": target,
             "backup_path": full["files"][0]["path"], "with_recovery": tail == "full"}})
         if diff["files"]:
             steps.append({"op": "restore-diff", "request": {
-                "db_type": "sqlserver", "database": database, "target": target,
+                "db_type": "sqlserver", "database_name": database, "target": target,
                 "backup_path": diff["files"][0]["path"], "with_recovery": tail == "diff"}})
         if logs["files"]:
             steps.append({"op": "restore-log", "request": {
-                "db_type": "sqlserver", "database": database, "target": target,
+                "db_type": "sqlserver", "database_name": database, "target": target,
                 "backup_paths": [f["path"] for f in logs["files"]], "with_recovery": True,
                 **({"stopat": point_in_time} if point_in_time else {})}})
 
     steps.append({"op": "verify-restore", "request": {
-        "db_type": "sqlserver", "databases": databases, "target": target}})
+        "db_type": "sqlserver", "database_names": databases, "target": target}})
     return steps
 
 

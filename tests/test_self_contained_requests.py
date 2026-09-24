@@ -118,7 +118,7 @@ def test_run_sql_reads_no_inventory_when_the_request_carries_the_connection(monk
     assert result["server_id"] == "lab-mssql"
     assert opened["ip"] == "10.0.0.5"
     # Every fact is attributed to the request, which is the same statement as "nothing was read".
-    assert result["engine"]["sources"]["major_version"] == "request"
+    assert result["target_profile"]["sources"]["major_version"] == "request"
     assert result["tool"]["chosen_by"] == "default"
 
 

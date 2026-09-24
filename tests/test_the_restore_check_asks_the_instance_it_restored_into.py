@@ -24,13 +24,14 @@ from __future__ import annotations
 import pytest
 
 from db_ops.backup_restore.cli import _verify_request
+from db_ops.backup_restore.config import DatabaseRestoreMapping
 from db_ops.lib import sql_instance
 
 
-class Mapping:
-    def __init__(self, name):
-        self.restore_database_name = name
-        self.source_database_name = name
+def Mapping(name):  # noqa: N802 - reads as the class it stands for, and now IS that class
+    """The real mapping class. A hand-written stand-in here carried the attribute names the code
+    asked for rather than the ones the parser produces, and hid that verification never ran."""
+    return DatabaseRestoreMapping(source_database=name, target_database=name)
 
 
 class Entry:
@@ -83,7 +84,7 @@ def test_a_named_instance_is_skipped_rather_than_asked_on_a_guessed_port():
 def test_the_databases_asked_about_are_the_target_names():
     request = _verify_request(Entry(), SECRETS)
 
-    assert request["databases"] == ["SALES_Stg", "PAYROLL_Stg", "ORDERS_Stg"]
+    assert request["database_names"] == ["SALES_Stg", "PAYROLL_Stg", "ORDERS_Stg"]
 
 
 # --------------------------------------------------------------------------- #
@@ -129,7 +130,7 @@ def test_oracle_is_told_which_instance_to_look_at(monkeypatch):
     answer = verifyrestore.verify({"db_type": "oracle", "host": {}, "oracle_sid": "LTR"})
 
     assert "ORACLE_SID=LTR sqlplus" in seen["command"]
-    assert answer["databases"][0]["database"] == "LTR", "the row names what was actually asked"
+    assert answer["databases"][0]["database_name"] == "LTR", "the row names what was actually asked"
 
 
 def test_oracle_without_a_sid_behaves_exactly_as_before(monkeypatch):

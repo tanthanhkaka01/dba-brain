@@ -219,7 +219,7 @@ def add_remote_credential(request: dict[str, Any] | None = None, *,
         "password_ref": ref,
         "role": str(payload.get("role") or DEFAULT_ROLE),
         "account_owner": str(payload.get("account_owner") or ""),
-        "notes": str(payload.get("notes") or ""),
+        "note": str(payload.get("note") or payload.get("notes") or ""),
     }
     if group is None:
         group = {"server_id": server_id, "host": host,

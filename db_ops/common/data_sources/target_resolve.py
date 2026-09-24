@@ -179,7 +179,7 @@ def resolve_sql_target_fields(
     return {
         "db_type": db_type,
         "server_id": str(entry.get("server_id") or server_id),
-        "service_name": _blank_to_none(entry.get("service_name") or entry.get("db_name")),
+        "service_name": _blank_to_none(entry.get("service_name")),
         "instance_name": _blank_to_none(entry.get("instance_name")),
         "credential_name": _blank_to_none(entry.get("default_credential_name")),
     }

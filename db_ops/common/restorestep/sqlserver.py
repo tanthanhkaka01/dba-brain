@@ -28,7 +28,7 @@ def _quote_literal(value: str) -> str:
 
 def build_statements(level: str, request: dict[str, Any], paths: list[str]) -> list[str]:
     """The RESTORE statements this step will send. Pure — nothing is executed here."""
-    database = str(request.get("database") or "").strip()
+    database = str(request.get("database_name") or request.get("database") or "").strip()
     if not database:
         raise RestoreStepError("database is required for sqlserver.")
 
@@ -73,7 +73,7 @@ def build_statements(level: str, request: dict[str, Any], paths: list[str]) -> l
 def apply(level: str, request: dict[str, Any], paths: list[str]) -> dict[str, Any]:
     statements = build_statements(level, request, paths)
     if request.get("dry_run"):
-        return {"engine": "sqlserver", "level": level, "applied": [], "statements": statements,
+        return {"db_type": "sqlserver", "level": level, "applied": [], "statements": statements,
                 "dry_run": True}
 
     target = request.get("target") or {}
@@ -101,7 +101,7 @@ def apply(level: str, request: dict[str, Any], paths: list[str]) -> dict[str, An
     finally:
         connection.close()
 
-    return {"engine": "sqlserver", "level": level, "applied": paths,
+    return {"db_type": "sqlserver", "level": level, "applied": paths,
             "statements": statements,
             "recovered": bool(request.get("with_recovery", False)),
             "stopat": str(request.get("stopat") or "") or None}

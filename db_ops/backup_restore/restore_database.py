@@ -757,7 +757,9 @@ def run_restore_database(
                 {"step": "restore-log", "status": "DRY_RUN" if selected_log_backups else "SKIPPED", "selected_backups": [str(path) for path in selected_log_backups]},
                 {"step": "recovery", "status": "DRY_RUN", "sql": build_recovery_if_restoring_sql(candidate) if point_in_time_utc is not None else build_recovery_sql(candidate)},
                 {"step": "set-recovery-model", "status": "DRY_RUN", "sql": build_set_recovery_model_full_sql(candidate)},
-                {"step": "dbcc-checkdb", "status": "DRY_RUN", "sql": build_checkdb_sql(candidate)},
+                ({"step": "dbcc-checkdb", "status": "DRY_RUN", "sql": build_checkdb_sql(candidate)}
+                 if restore_config.checkdb else
+                 {"step": "dbcc-checkdb", "status": "SKIPPED", "reason": CHECKDB_OFF_REASON}),
             ],
             "certificate": certificate_result,
         }
@@ -788,7 +790,23 @@ def run_restore_database(
             steps.append(recovery_result)
         recovery_model_result = run_set_recovery_model_full(config=restore_config, candidate=candidate, logger=logger)
         steps.append(recovery_model_result)
-        checkdb_result = run_restore_checkdb(config=restore_config, candidate=candidate, logger=logger)
+        if restore_config.checkdb:
+            try:
+                checkdb_result = run_restore_checkdb(config=restore_config, candidate=candidate, logger=logger)
+            except Exception as exc:
+                # Its own type, so the caller can say "restored and recovered, check failed" rather
+                # than "restore failed": the data IS there. The restore still counts as failed.
+                raise IntegrityCheckFailed(str(exc)) from exc
+        else:
+            checkdb_result = {"step": "dbcc-checkdb", "status": "SKIPPED", "reason": CHECKDB_OFF_REASON}
+            _emit_restore_log(
+                logger,
+                "restore-db dbcc-checkdb skipped "
+                + _format_metadata(restore_id=restore_config.restore_id or None,
+                                   database=candidate.source_database_name,
+                                   target_database=candidate.restore_database_name,
+                                   reason="checkdb_false_on_the_entry"),
+            )
         steps.append(checkdb_result)
     except Exception as exc:
         history.finish_restore(
@@ -1039,6 +1057,23 @@ def run_set_recovery_model_full(*, config: BackupRestoreConfig, candidate: Resto
     )
 
 
+#: Why the check did not run, where a step result or a log line says so.
+CHECKDB_OFF_REASON = "switched off on this restore entry (checkdb: false)"
+
+#: A database restored and recovered whose `DBCC CHECKDB` failed. Not `FAILED`: the data is there,
+#: and "restore failed" sent the reader to the backups and the copy, which were fine (2026-09-24,
+#: Msg 1823 / 7928 on a container target). It still fails the run.
+CHECK_FAILED = "CHECK_FAILED"
+
+
+class IntegrityCheckFailed(RuntimeError):
+    """`DBCC CHECKDB` failed on a database that was restored and recovered."""
+
+
+def _failed_status(exc: BaseException) -> str:
+    return CHECK_FAILED if isinstance(exc, IntegrityCheckFailed) else "FAILED"
+
+
 def run_restore_checkdb(*, config: BackupRestoreConfig, candidate: RestoreCandidate, logger: object | None = None) -> dict[str, object]:
     return _run_restore_step(
         step_name="dbcc-checkdb",
@@ -1238,7 +1273,8 @@ def run_restore_server(
                 _emit_restore_log(logger, f"restore-database FAILED database={db_label} error={str(exc).replace(chr(10), ' ')[:300]}", level="error")
                 if point_in_time_utc is not None:
                     raise
-                results.append({"database_name": db_label, "status": "FAILED", "error": str(exc)[:500]})
+                results.append({"database_name": db_label, "status": _failed_status(exc),
+                                "error": str(exc)[:500]})
     else:
         backups = (
             find_full_backups_for_pitr(restore_config, point_in_time_utc)
@@ -1270,7 +1306,8 @@ def run_restore_server(
                 _emit_restore_log(logger, f"restore-database FAILED database={db_label} error={str(exc).replace(chr(10), ' ')[:300]}", level="error")
                 if point_in_time_utc is not None:
                     raise
-                results.append({"database_name": db_label, "status": "FAILED", "error": str(exc)[:500]})
+                results.append({"database_name": db_label, "status": _failed_status(exc),
+                                "error": str(exc)[:500]})
     if not results:
         raise FileNotFoundError(f"No latest FULL .bak files found under {restore_config.vm_import_unc}.")
     per_database_status = {
@@ -1333,6 +1370,13 @@ def run_restore_server(
             for skipped in result.get("skipped_backups", [])
         ],
         "per_database_restore_status": per_database_status,
+        # What each failed database said, so a message can name the step and the SQL Server
+        # message number instead of "restore failed" for a database that was restored.
+        "per_database_error": {
+            str(result.get("database_name")): str(result.get("error") or "")
+            for result in results
+            if isinstance(result, dict) and result.get("database_name") and result.get("error")
+        },
         "final_recovery_status": {
             str(result.get("database_name")): result.get("final_recovery_status")
             for result in results

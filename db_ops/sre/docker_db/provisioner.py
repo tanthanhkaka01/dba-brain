@@ -182,16 +182,37 @@ _TAG_HINTS: dict[str, str] = {
 }
 
 
+#: What docker prints when the tag really is not in the registry. Anything else - a rate limit
+#: (`toomanyrequests`), a timeout, a network or auth error - is the registry not answering, not a
+#: wrong --version.
+_TAG_MISSING_MARKERS = ("manifest unknown", "no such manifest", "not found")
+
+
 def check_image_exists(spec: DockerDbSpec, runner) -> None:
-    """Fail before anything is created when ``--version`` is not a real image tag."""
+    """Fail before anything is created when ``--version`` is not a real image tag.
+
+    *Not found* only when docker says so. Every other failure of ``docker manifest inspect`` was
+    reported as a missing tag too, with docker's own words thrown away: on 2026-09-24 a transient
+    registry error on a lab host read *"Image not found: postgres:18 … Valid postgres tags include:
+    18, 17, 16"* - refusing 18 and recommending it in the next line - and the retry a minute later
+    worked. That is reported as what it is, with docker's message, so nobody goes hunting for a typo.
+    """
     image = f"{spec.meta.image_repo}:{spec.version}"
     try:
         result = runner(["docker", "manifest", "inspect", image],
                         capture_output=True, text=True, check=False)
     except FileNotFoundError:
         return  # no docker CLI here; `compose up` will report it
-    if getattr(result, "returncode", 1) == 0:
+    returncode = getattr(result, "returncode", 1)
+    if returncode == 0:
         return
+    said = " ".join(str(getattr(result, "stderr", "") or getattr(result, "stdout", "") or "").split())
+    if not any(marker in said.lower() for marker in _TAG_MISSING_MARKERS):
+        raise ProvisionError(
+            f"Could not ask the registry whether {image} exists "
+            f"({said[:300] or f'docker manifest inspect exited {returncode}'}). This is not a wrong "
+            "--version: the registry did not answer - retry, or check the host's network, its DNS and "
+            "Docker Hub's pull limits (toomanyrequests).")
     lines = [
         f"Image not found: {image}. --version must be a tag that exists in the registry.",
         f"Valid {spec.engine} tags include: {_TAG_HINTS.get(spec.engine, 'see the image registry')}.",

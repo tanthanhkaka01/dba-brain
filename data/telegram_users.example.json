@@ -14,7 +14,7 @@
       "last_name": "Byron",
       "username": "acme_dba_lead",
       "language_code": "en",
-      "status": "active",
+      "active": true,
       "note": "Lead DBA. user_type 100 is the only level that may restart a host or patch an instance."
     },
     {
@@ -25,7 +25,7 @@
       "last_name": "Hopper",
       "username": "acme_dba_oncall",
       "language_code": "en",
-      "status": "active",
+      "active": true,
       "note": "On-call DBA. May run the read-only reports and the level-50 operations (kill a session, start a job), not the level-100 ones."
     },
     {
@@ -36,7 +36,7 @@
       "last_name": "Turing",
       "username": "",
       "language_code": "en",
-      "status": "active",
+      "active": true,
       "note": "Registered automatically the first time they messaged the bot. Level 0 until somebody decides otherwise - that default is the whole point."
     }
   ]

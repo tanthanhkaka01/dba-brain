@@ -41,6 +41,7 @@ from typing import Any
 
 from db_ops.common import data_sources, db_connect, host_probe, oracle_bridge, remote_exec, sql_run
 from db_ops.common.password_rotation import target_from_ref_name
+from db_ops.lib import field_names
 from db_ops.lib import sql_access
 
 DEFAULT_TIMEOUT_SECONDS = 8
@@ -167,7 +168,7 @@ def resolve_check_target(
 
     # 2. a container connection - carries the published, non-default port
     for entry in _load(base / "docker_db_connections.json").get("docker_db_connections", []):
-        if str(entry.get("password_env") or "") != ref:
+        if str(field_names.read(entry, "docker_db_connection", "password_ref", "") or "") != ref:
             continue
         host = str(entry.get("host") or "")
         if not host:
@@ -245,11 +246,12 @@ def _restore_config_target(base: Path, ref: str, remotes: list[dict[str, Any]]) 
     for job in list(config.get("backups", [])) + list(config.get("restores", [])):
         for side in ("source", "target"):
             block = job.get(side) or {}
-            if str(block.get("password_env") or "") == ref:
+            object_name = "restore_source" if side == "source" else "restore_target"
+            if str(field_names.read(block, object_name, "password_ref", "") or "") == ref:
                 return {"kind": "remote", "source": f"restore_config.json {side}", "method": "",
                         "host": str(block.get("host") or ""), "port": None,
                         "username": str(block.get("username") or "")}
-            if str(block.get("sql_password_env") or "") == ref:
+            if str(field_names.read(block, "restore_target", "sql_password_ref", "") or "") == ref:
                 engine = _engine_from_name(ref)
                 return {"kind": "db", "source": f"restore_config.json {side}", "db_type": engine,
                         "ip": str(block.get("host") or ""), "port": block.get("sql_port"),

@@ -307,9 +307,37 @@ def _init_command(argv: list[str]) -> int:
         print(f"  created  {name}")
     for name in result.skipped:
         print(f"  kept     {name} (already there; --force overwrites)")
+    if result.guide_saved_copy:
+        print(f"  saved    the edited AGENTS.md as {result.guide_saved_copy} - AGENTS.md is now this "
+              "version's guide")
     print("")
     print(scaffold.next_steps(result.root))
+    _say_whether_the_config_needs_upgrading(Path(result.root) / "data")
     return 0
+
+
+def _say_whether_the_config_needs_upgrading(data_dir) -> None:
+    """After an upgrade, `init` over an existing root is the moment the operator is looking.
+
+    The files it kept are the estate's own, in whatever shape the version that wrote them used.
+    Every reader takes both shapes, so nothing breaks - which is exactly why nobody would notice
+    that the files never moved. A plan is computed, never applied: moving an estate's files is the
+    operator's call, and this names the command that makes it.
+    """
+    from db_ops.common import config_upgrade
+
+    try:
+        _, plan = config_upgrade.upgrade({"data_dir": str(data_dir)})
+    except Exception:  # noqa: BLE001 - a hint must never be the reason init fails.
+        return
+    if not plan["records_changed"]:
+        return
+    print("")
+    print(f"This root's configuration was written by an older version: {plan['records_changed']} "
+          "record(s) use shapes this version has moved.")
+    print("  See the plan:   python -m db_ops.common.cli upgrade-config \"{}\"")
+    print("  Apply it:       python -m db_ops.common.cli upgrade-config "
+          "\"{\\\"dry_run\\\": false}\"   (each file is copied to runtime/config_upgrade/ first)")
 
 
 ENCRYPT_SECRET_USAGE = (
@@ -664,6 +692,9 @@ def _import_data_command(argv: list[str]) -> int:
         print("DB_OPS_SECRET_KEY to the source machine's passphrase, then verify with:")
         print("  db-ops check-credentials")
     _report_node_role_of_import(root)
+    # A bundle carries the source's files in the source version's shapes; a newer install reads
+    # them, and the files never move unless somebody says so.
+    _say_whether_the_config_needs_upgrading(root / "data")
     return 0
 
 
@@ -809,11 +840,27 @@ def _guide_command(argv: list[str]) -> int:
     know what they are getting should not have to create a directory tree to find out.
     """
     if argv and argv[0] in {"-h", "--help"}:
-        print("usage: dbabrain guide\n\nPrint the getting-started guide. Writes nothing.")
+        print("usage: dbabrain guide [--write]\n\n"
+              "Print the operating guide for this build. Writes nothing.\n"
+              "  --write   put it here as AGENTS.md, where an AI agent opened in this directory\n"
+              "            reads it - before `init`, or to refresh one after an upgrade. An edited\n"
+              "            AGENTS.md is saved in runtime/agents_guide/ first.")
         return 0
-    from db_ops.scaffold import AGENTS_GUIDE
+    from pathlib import Path
 
-    print(AGENTS_GUIDE)
+    from db_ops import scaffold
+
+    if "--write" in argv:
+        outcome, saved = scaffold.write_guide(Path.cwd())
+        target = Path.cwd() / "AGENTS.md"
+        messages = {
+            "written": f"wrote {target}",
+            "unchanged": f"{target} is already this build's guide",
+            "replaced": f"wrote {target}; the edited copy it replaced is saved as {saved}",
+        }
+        print(messages[outcome])
+        return 0
+    print(scaffold.AGENTS_GUIDE)
     return 0
 
 

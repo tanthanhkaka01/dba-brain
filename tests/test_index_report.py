@@ -339,8 +339,11 @@ def test_no_separate_scheduled_command_builds_the_index_report():
     ids = {entry.get("app_command_id") for entry in commands[key]}
 
     assert "APP-REPORTS-INDEX-USAGE" not in ids
-    # the workflow that does publish them must still be scheduled
-    assert "APP-REPORTS-INVENTORY-WORKFLOW" in ids
+    # The workflow that publishes them must still be scheduled - since 0.22.0 as a report of the
+    # reports app, not as an app command of its own.
+    assert "APP-REPORTS-INVENTORY-WORKFLOW" not in ids
+    reports = json.loads(shipped_config("reports_config.json").read_bytes().decode("utf-8-sig"))
+    assert "rp_inventory_health" in {entry.get("report_code") for entry in reports["reports"]}
 
 
 # ---------------------------------------------------------------------------

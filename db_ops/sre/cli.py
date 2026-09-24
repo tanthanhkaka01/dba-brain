@@ -302,7 +302,7 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Host port to publish the (primary) instance on. Default: the engine's "
                           "own port (postgres 5432, mysql 3306, mssql 1433) — pick another when it "
                           "is already taken on the worker.")
-    cdd.add_argument("--password-env", dest="password_env", default=None,
+    cdd.add_argument("--password-ref", "--password-env", dest="password_env", default=None,
                      help="Env var / secret ref holding the DB password (never hardcoded). "
                           "Default: <NAME>_PASSWORD, so each instance has its own ref.")
     cdd.add_argument("--password-text", dest="password_text", default=None,
@@ -430,7 +430,9 @@ def build_parser() -> argparse.ArgumentParser:
     rdc.add_argument("--port", type=int, required=True)
     rdc.add_argument("--database", default=None, help="Default database (defaults to the engine default).")
     rdc.add_argument("--username", default=None, help="Login user (defaults to the engine default).")
-    rdc.add_argument("--password-env", dest="password_env", required=True)
+    rdc.add_argument("--password-ref", "--password-env", dest="password_env", required=True,
+                     help="The secret REF the password is stored under (--password-env is the old "
+                          "spelling, still taken).")
     rdc.add_argument("--version", default="", help="Optional image version to record.")
     rdc.add_argument("--mode", default="single", choices=list(VALID_MODES))
     rdc.add_argument("--compose-path", dest="compose_path", default="", help="Optional compose path to record.")
@@ -734,8 +736,10 @@ def _handle_create_db_docker(args: argparse.Namespace, logger, *, sre_config=Non
             # provisioned with one command. Reconnects internally so docker works as the user.
             if getattr(args, "install_docker", False):
                 from db_ops.sre.remote import ensure_docker
+                # The backup mount too: the provisioner creates it later over SFTP, without sudo.
                 summary = ensure_docker(remote_host_obj, sudo_password=ssh_password,
-                                        containers_dir=args.containers_dir)
+                                        containers_dir=args.containers_dir,
+                                        backup_mount=spec.resolved_backup_mount)
                 log_event(logger, level="logging",
                           message=f"sre.create_db_docker.ensure_docker|host={summary['host']} "
                                   f"already_present={summary['already_present']} installed={summary['installed']}")
@@ -870,7 +874,7 @@ def _supplied_password_text(args: argparse.Namespace) -> str | None:
     if not value:
         raise ProvisionError(
             f"--password-text-env {env_name} names an environment variable that is empty; "
-            "pass the password there, or give --password-env alone to reuse a stored ref."
+            "pass the password there, or give --password-ref alone to reuse a stored ref."
         )
     return value
 
@@ -913,12 +917,12 @@ def _handle_register_db_connection(args: argparse.Namespace, logger, *, sre_conf
         docker["compose_path"] = args.compose_path
     entry = {
         "id": docker_register.connection_id(args.name),
-        "engine": args.engine,
+        "db_type": args.engine,
         "host": args.host,
         "port": args.port,
-        "database": args.database or meta.database,
+        "database_name": args.database or meta.database,
         "username": args.username or meta.username,
-        "password_env": args.password_env,
+        "password_ref": args.password_env,
         "docker": docker,
         "created_by": docker_register.CREATED_BY,
     }

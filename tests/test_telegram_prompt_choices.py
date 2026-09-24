@@ -179,4 +179,4 @@ def test_the_shipped_xlsx_command_lists_both_database_and_schema():
 
     assert by_name["database"]["prompt_choices"]["command"] == "list-databases"
     assert by_name["schema"]["prompt_choices"]["command"] == "list-schemas"
-    assert by_name["schema"]["prompt_choices"]["request"]["database"] == "{database}"
+    assert by_name["schema"]["prompt_choices"]["request"]["database_name"] == "{database}"

@@ -36,7 +36,8 @@ from db_ops.db import config_sync
 from db_ops.db.config_store import ConfigStore
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-COMMAND = "APP-REPORTS-INVENTORY-WORKFLOW"
+# Any app command will do; the inventory one this used moved into reports_config.json in 0.22.0.
+COMMAND = "APP-REPORTS-CREATE"
 
 
 @pytest.fixture(scope="module")

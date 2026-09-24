@@ -218,7 +218,7 @@ def _under(path: str, root: str, *, host: Host) -> bool:
 
 
 def _row(path: str, status: str, *, size: int = 0, reason: str = "") -> dict[str, Any]:
-    return {"path": path, "status": status, "size": size, "reason": reason}
+    return {"path": path, "status": status, "size_bytes": size, "reason": reason}
 
 
 def _totals(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -228,6 +228,6 @@ def _totals(rows: list[dict[str, Any]]) -> dict[str, Any]:
                    for status in (DELETED, NOT_FOUND, SKIPPED, FAILED)},
         # Only what was actually removed. Counting a dry run's bytes here would report space freed
         # by a command that freed none.
-        "bytes_freed": sum(row["size"] for row in rows if row["status"] == DELETED),
+        "freed_bytes": sum(row["size_bytes"] for row in rows if row["status"] == DELETED),
         "failed": [row["path"] for row in rows if row["status"] == FAILED],
     }

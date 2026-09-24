@@ -52,7 +52,7 @@ def _fields(reference: list[dict], name: str) -> list[str]:
 # --------------------------------------------------------------------------- #
 # Every described object exists, and every shared object is described
 # --------------------------------------------------------------------------- #
-def test_the_eleven_shared_objects_are_described_and_nothing_else_is(reference):
+def test_the_eighteen_shared_objects_are_described_and_nothing_else_is(reference):
     """Eight: six objects, one shared field, and one whole record.
 
     ``app_command`` was added 2026-09-21, and it is the first entry that describes a *record* rather
@@ -61,10 +61,31 @@ def test_the_eleven_shared_objects_are_described_and_nothing_else_is(reference):
     ``"record"`` kind would send it looking for a nested block called ``app_command``, find none, and
     certify clean for ever.
     """
-    assert [item.get("object") for item in reference] == [
+    # Inputs and outputs are listed and guarded in test_every_json_the_tool_reads_or_writes_is_described.
+    assert [item.get("object") for item in reference
+            if item.get("kind") not in ("input", "output")] == [
         "time_window", "notify", "notify_rule", "output", "cmd_access", "sql_access",
         "cleanup_retention", "app_command",
-    "backup_entry", "backup_job", "restore_entry"]
+        "backup_entry", "backup_job", "restore_entry",
+        # 0.22.0: the records a person edits by hand or through a registrar.
+        "sql_command", "sql_target", "db_instance", "telegram_support_command",
+        "telegram_cli_execute", "metric_definition", "metric_variant",
+        # 0.22.0, second pass: the logins, the Telegram chats and people, the reports, the console.
+        "database_credential_group", "database_credential", "remote_credential_group",
+        "remote_credential", "telegram_group", "telegram_user", "report_entry", "webhost_app",
+        # 0.22.0, third pass: every file the data catalogue calls `config`.
+        "restore_source", "restore_target", "docker_db_connection", "store_config", "store_sqlite",
+        "store_postgresql", "telegram_settings", "telegram_bot", "backup_policy",
+        "backup_policy_override", "backup_type_rule", "capacity_defaults", "capacity_override",
+        "restore_drill_defaults", "restore_drill_override", "maintenance_settings", "emergency_level",
+        "emergency_operation", "importance_scale", "importance_override", "network_range",
+        "ops_status_request", "sla_policy", "sla_notification", "sqlserver_instance_policy",
+        "sqlserver_artifact_rule", "sre_config", "sre_settings",
+        # found by the coverage test: blocks between a file's root and its described records.
+        "webhost_settings", "monitor_user", "metric_collection", "reports_config",
+        "backup_restore_config", "maintenance_policy",
+        # 0.23.0: the reference describes itself - an entry, a field, a site, a constraint.
+        "reference_entry", "reference_field", "reference_site", "reference_constraint"]
 
 
 def test_every_entry_states_its_shape_before_a_reader_has_to_count(reference):
@@ -199,14 +220,14 @@ def test_it_is_valid_json_with_the_schema_version_every_data_file_carries():
 def test_every_field_carries_a_constraint_a_program_can_evaluate(reference):
     """`range_text` is for a person and cannot be tested. `constraint` is the testable half, and a
     field with only the prose is a field nothing can hold the estate to."""
-    kinds = {"integer", "string", "boolean", "object", "array"}
+    kinds = {"integer", "number", "string", "boolean", "object", "array"}
     for item in reference:
         for entry in item.get("fields") or []:
             constraint = entry.get("constraint")
             where = f"{item['object']}.{entry.get('field')}"
             assert isinstance(constraint, dict), f"{where} has no constraint"
             assert constraint.get("kind") in kinds, f"{where}: kind={constraint.get('kind')!r}"
-            if constraint["kind"] == "integer":
+            if constraint["kind"] in {"integer", "number"}:
                 low, high = constraint.get("min"), constraint.get("max")
                 assert low is not None or high is not None, f"{where}: an integer with no bound"
                 if low is not None and high is not None:
@@ -232,13 +253,11 @@ def test_the_paths_it_declares_exist_in_the_files_it_names(reference):
             file_name = str(site.get("file") or "")
             if not file_name:
                 continue
-            # The same fallback `check_data_dir` makes: a public checkout ships only the
-            # `*.example.json`, and a guard that cannot read what the code reads is a guard that
-            # fails for the wrong reason.
-            path = REPO_ROOT / "data" / file_name
-            if not path.is_file():
-                path = REPO_ROOT / "data" / file_name.replace(".json", ".example.json")
-            assert path.is_file(), f"{item['object']} names a file that is not there: {file_name}"
+            # The same lookup `check_data_dir` makes: a public checkout ships only the
+            # `*.example.json` and the packaged defaults, and a guard that cannot read what the code
+            # reads is a guard that fails for the wrong reason.
+            path = shared_objects.site_file(REPO_ROOT / "data", site)
+            assert path is not None, f"{item['object']} names a file that is not there: {file_name}"
             payload = json.loads(path.read_text(encoding="utf-8-sig"))
             records = shared_objects.walk_records(payload, str(site.get("path")))
             assert records, (
@@ -256,11 +275,44 @@ def test_this_estate_obeys_its_own_reference():
         for item in result["violations"])
 
 
+def test_a_packaged_copy_is_the_one_init_writes_the_file_from(reference):
+    """`packaged` is the fallback for a file that ships no example. A site naming a copy other than
+    the one `init` writes from would check a document no node ever receives - so the two are pinned
+    to each other, and every site whose file ships no example must name one."""
+    from db_ops import scaffold
+
+    for item in reference:
+        for site in item.get("used_in") or []:
+            file_name = str(site.get("file") or "")
+            if not file_name:
+                continue
+            example = REPO_ROOT / "data" / file_name.replace(".json", ".example.json")
+            if not example.is_file() and not site.get("packaged"):
+                raise AssertionError(f"{file_name} ships no example; its site must name `packaged`")
+            if site.get("packaged"):
+                assert scaffold.PACKAGED_DEFAULTS.get(f"data/{file_name}") == site["packaged"], file_name
+                assert (Path(scaffold.__file__).parent / site["packaged"]).is_file(), file_name
+
+
 def test_the_shipped_examples_obey_it_too():
     """A public checkout has only the examples, and they are what a new operator copies. One that
     violates the reference teaches the mistake."""
     result = shared_objects.check_data_dir(REPO_ROOT / "data")
     assert result["files_missing"] == []
+
+
+def test_a_root_init_just_wrote_obeys_it(tmp_path):
+    """What `init` writes is not the examples - it has its own templates - and it is the first
+    thing a new operator's `check-objects` reads. The 0.22.0 soak node's fresh root reported three
+    violations: `schema_version` undescribed on the two Telegram files, and the bot's empty token
+    ref, which is the "not configured" state `init` means to write, called an error."""
+    from db_ops import scaffold
+
+    scaffold.initialise(tmp_path / "root")
+    result = shared_objects.check_data_dir(tmp_path / "root" / "data")
+
+    assert result["violations"] == []
+    assert result["deprecated"] == []
 
 
 # --------------------------------------------------------------------------- #
@@ -346,3 +398,63 @@ def test_a_bridge_url_is_required_only_when_the_method_asks_for_one():
     assert _violations("sql_access", {"method": "direct"}) == []
     findings = _violations("sql_access", {"method": "api", "bridge_url": ""})
     assert [item["kind"] for item in findings] == ["missing"]
+
+
+def test_a_docker_connection_is_described_with_the_provisioners_own_engines(reference):
+    from db_ops.sre.docker_db.models import VALID_ENGINES
+
+    entry = next(item for item in reference if item["object"] == "docker_db_connection")
+    field = next(f for f in entry["fields"] if f["field"] == "db_type")
+    assert set(field["constraint"]["enum"]) == set(VALID_ENGINES)
+
+
+# --------------------------------------------------------------------------- #
+# The reference describes itself
+# --------------------------------------------------------------------------- #
+#: The four entries that describe this file: an entry, a field, a site, a constraint.
+SELF_ENTRIES = {
+    "reference_entry": "shared_config_objects[]",
+    "reference_field": "shared_config_objects[].fields[]",
+    "reference_site": "shared_config_objects[].used_in[]",
+    "reference_constraint": "shared_config_objects[].fields[].constraint",
+}
+
+
+def test_the_reference_has_an_entry_for_each_of_its_own_layers(reference):
+    """The operator, 2026-09-24: the shared-object reference must have an object of its own, so
+    that it cannot be wrong unnoticed. Every other file was held to it; nothing held it."""
+    by_name = {item["object"]: item for item in reference}
+    for name, path in SELF_ENTRIES.items():
+        assert name in by_name, name
+        assert by_name[name].get("whole_record") is True, name
+        assert by_name[name]["used_in"] == [
+            {**by_name[name]["used_in"][0], "file": "shared_config_objects.json", "path": path}], name
+
+
+def test_the_reference_obeys_itself():
+    """Its first run found 14 real defects: two `legacy_fields` written as a list where every other
+    entry has an object, and twelve empty `rule`s."""
+    result = shared_objects.check_data_dir(REPO_ROOT / "data")
+    own = [v for v in result["violations"] if v["where"].startswith("shared_config_objects")]
+    assert own == []
+
+
+@pytest.mark.parametrize("layer,plant", [
+    ("site", lambda ref: ref["shared_config_objects"][0]["used_in"][0].update(packged="x")),
+    ("constraint", lambda ref: ref["shared_config_objects"][0]["fields"][0]["constraint"].update(allow_emtpy=True)),
+    ("field", lambda ref: ref["shared_config_objects"][0]["fields"][0].update(purpsoe="x")),
+    ("entry", lambda ref: ref["shared_config_objects"][0].update(legacy_fields=["old"])),
+])
+def test_a_mistake_in_the_reference_is_caught(tmp_path, layer, plant):
+    """A misspelt key in the reference was read by nothing and passed silently - `packaged` was
+    added to a site on 2026-09-24 with no check that the key was even spelt right."""
+    data = tmp_path / "data"
+    data.mkdir()
+    # The packaged copy, which every tree has: a public checkout ships no data/shared_config_objects.json.
+    document = json.loads(COPIES[0].read_text(encoding="utf-8-sig"))
+    plant(document)
+    (data / "shared_config_objects.json").write_text(json.dumps(document), encoding="utf-8")
+
+    result = shared_objects.check_data_dir(data)
+
+    assert [v for v in result["violations"] if v["where"].startswith("shared_config_objects")], layer

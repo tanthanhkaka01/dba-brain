@@ -69,10 +69,10 @@ def list_backup_files(request: dict[str, Any]) -> dict[str, Any]:
     # without naming one mixes them: the "diff after the full" would be some other database's.
     # Oracle and PostgreSQL report no database, so asking for one there finds nothing - which is
     # the honest answer rather than a filter that silently does nothing.
-    database = str(request.get("database") or "").strip()
+    database = str(request.get("database_name") or request.get("database") or "").strip()
     if database:
         files = [row for row in files
-                 if str(row.get("database") or "").lower() == database.lower()]
+                 if str(row.get("database_name") or "").lower() == database.lower()]
     files = _in_window(files, after=request.get("after"), before=request.get("before"))
     files.sort(key=lambda row: (row.get("finished_at") or "", row["path"]))
     if request.get("latest"):
@@ -140,7 +140,7 @@ def _latest_only(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     newest: dict[tuple[str, str], dict[str, Any]] = {}
     for row_ in files:  # already sorted oldest-first, so the last write wins
-        newest[(str(row_.get("database") or ""), row_["kind"])] = row_
+        newest[(str(row_.get("database_name") or ""), row_["kind"])] = row_
     return sorted(newest.values(), key=lambda r: (r.get("finished_at") or "", r["path"]))
 
 
@@ -152,8 +152,8 @@ def row(*, path: str, kind: str, database: str | None = None,
     Built through here so the three engines cannot drift into naming the same field differently -
     the whole point of the command is that a caller does not have to branch per engine.
     """
-    return {"path": path, "kind": kind, "database": database,
-            "size": size, "finished_at": _stamp(finished_at), **extra}
+    return {"path": path, "kind": kind, "database_name": database,
+            "size_bytes": size, "finished_at": _stamp(finished_at), **extra}
 
 
 def _stamp(value: Any) -> str | None:

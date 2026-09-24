@@ -36,7 +36,8 @@ from db_ops.common.config_admin import (
     _read_json,
     normalize_time_window,
 )
-from db_ops.lib import shared_objects
+from db_ops.lib import field_names, shared_objects
+from db_ops.lib.json_io import indent_of
 
 FILE_NAME = "app_commands.json"
 LIST_KEY = "app_commands"
@@ -174,28 +175,41 @@ def set_app_command(request: dict[str, Any], *,
             # is technically the change and tells nobody which number moved.
             applied.extend(inner)
             continue
+        # Stage C (0.22.0 section 1.4): the standard name is written, and a legacy spelling still on
+        # the record is taken off in the same edit - leaving `app_ord` beside `sort_order` would be
+        # one record saying the same thing twice, and the stale half is the one a reader finds.
+        legacy = [old for old, standard in field_names.RENAMES["app_command"].items()
+                  if standard == name and old in row]
+        before = row.get(name, row.get(legacy[0]) if legacy else None)
         after = value
-        if before == after:
+        if before == after and not legacy:
             continue
-        row[name] = after
+        rebuilt = {(name if key in legacy else key): (after if key in legacy else item)
+                   for key, item in row.items()}
+        rebuilt[name] = after
+        row.clear()
+        row.update(rebuilt)
         applied.append({"field": name, "from": before, "to": after})
 
     if not applied:
-        return {"ok": True, "app_code": key, "written": False, "changed": [],
+        return {"ok": True, "app_code": key, "written": False, "changes": [],
                 "message": f"{key} already carries those values; nothing written."}
 
     # Validate the edited record against the reference before it reaches disk, so a bad value is
     # refused rather than written and found by the next daemon sweep.
-    findings = shared_objects.check_record(
+    # Notices are counted, never refused: a `deprecated` spelling is one the daemon still reads, and
+    # a record written before stage C may still carry one on a field this edit did not touch.
+    findings = [item for item in shared_objects.check_record(
         "app_command", row, where=f"{FILE_NAME}[{key}]", data_dir=root)
+        if item["kind"] not in shared_objects.NOTICE_KINDS]
     if findings:
         detail = "; ".join(f"{f.get('field')}: {f.get('detail')}" for f in findings)
         raise AppCommandAdminError(
             f"the edit would make {key} invalid, so nothing was written: {detail}")
 
-    _atomic_write(path, _dump_json(payload, indent=_indent_of(path)))
+    _atomic_write(path, _dump_json(payload, indent=indent_of(path)))
     return {"ok": True, "app_code": key, "written": True, "file": str(path),
-            "changed": applied,
+            "changes": applied,
             "message": f"{key}: " + ", ".join(
                 f"{c['field']} {_short(c['from'])} -> {_short(c['to'])}" for c in applied)}
 
@@ -203,15 +217,3 @@ def set_app_command(request: dict[str, Any], *,
 def _short(value: Any) -> str:
     text = json.dumps(value, sort_keys=True) if isinstance(value, (dict, list)) else str(value)
     return text if len(text) <= 60 else text[:57] + "..."
-
-
-def _indent_of(path: Path, default: int = 4) -> int:
-    """Keep the file's own indent, so a one-field edit is a one-field diff."""
-    try:
-        for line in path.read_text(encoding="utf-8-sig").splitlines()[1:]:
-            stripped = line.lstrip(" ")
-            if stripped and stripped != line:
-                return len(line) - len(stripped)
-    except OSError:
-        pass
-    return default

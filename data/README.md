@@ -52,11 +52,11 @@ scheduler, which is why a few field names still read like columns.
 - `telegram_support_commands.json`: Telegram bot support command configuration, based on Oracle `TLG_SUPPORT_COMMAND`.
 - `db_instances.example.json`: sample DB instance inventory and metric/status fields for batch Telegram notification.
 - `db_instances.json`: current DB instance inventory imported from `architecture/database-inventory.json`; SQL Server metrics are explicitly enabled per target.
-  - **`service_name` / the target's `db_name` are labels, not databases.** On SQL Server they are
+  - **`service_name` is a label, not a database.** On SQL Server it is
     the instance's service tag (`APPDB-PROD`, `SALESDB-PROD`) and no database of that name exists.
     Metric collection therefore connects to **`master`** and the metric SQL issues its own
     `USE <db>`; using the label as the connection database fails with
-    `Cannot open database "..." requested by the login (4060)`. Set `database` only where the
+    `Cannot open database "..." requested by the login (4060)`. Set `database_name` only where the
     engine genuinely needs one (PostgreSQL, MySQL) — see `docs/04_metrics_engine.md`.
   - **`cmd_access.method: "local"` means *this* machine**, i.e. inside the worker container. With
     a remote `host` it does not fail, it reports the container's CPU/memory/disk under that
@@ -154,7 +154,7 @@ This is **not** about the databases db_ops monitors — those live in `db_instan
 {
   "backend": "sqlite",
   "sqlite": { "path": "runtime/db_ops.sqlite", "connection_string": "sqlite:///runtime/db_ops.sqlite" },
-  "postgresql": { "host": "...", "port": 5433, "database": "db_ops", "schema": "db_ops",
+  "postgresql": { "host": "...", "port": 5433, "database_name": "db_ops", "schema": "db_ops",
                   "username": "postgres", "password_ref": "POSTGRES_WORKER",
                   "connection_string": "postgresql://postgres:{password}@.../db_ops?..." }
 }
@@ -362,9 +362,12 @@ data/db_instances.json
 data/db_instances.example.json
 ```
 
-Important fields:
+Important fields (the full list, with what each one means: `describe-object '{"object": "db_instance"}'`):
 
-- `ord`
+- `sort_order` (was `ord`)
+- `active` (was `enabled`)
+- `environment` (was `env`)
+- `database_name` (was `database`) - PostgreSQL and MySQL only
 - `ip`
 - `instance_name`
 - `db_type`
@@ -435,18 +438,18 @@ This file is written/updated automatically by:
 
 ```bash
 python -m db_ops.sre.cli create-db-docker --name pg_lab_01 --engine postgres \
-  --version 16 --mode single --host-port 5433 --password-env POSTGRES_PASSWORD
+  --version 16 --mode single --host-port 5433 --password-ref POSTGRES_PASSWORD
 ```
 
-Each entry records `id`, `engine`, `host`, `port`, `database`, `username`,
-`password_env` (a **reference**, never the password value), a `docker` block
+Each entry records `id`, `db_type`, `host`, `port`, `database_name`, `username`,
+`password_ref` (a **reference**, never the password value), a `docker` block
 (`instance_name`, `mode`, `version`, `compose_path`, and `replicas` for ha-lab),
 and `created_by`. Registration is an idempotent upsert keyed by `id`
 (`<NAME>` upper-cased); pass `--no-register` to skip it.
 
 The instance files themselves (compose + `.env`) live on the worker under
 `/opt/db_ops/containers/<name>/`. The `.env` holds `DB_PASSWORD`, resolved at
-provision time from the `--password-env` environment variable or the encrypted
+provision time from an environment variable named like the `--password-ref`, or the encrypted
 secret store — it is intentionally not committed.
 
 Run it inside the worker container from the master, then pull the updated config
@@ -455,7 +458,7 @@ back, with the control app:
 ```bash
 python -m db_ops.control.cli worker-create-db-docker --key-base64 "<key>" \
   --name pg_lab_01 --engine postgres --version 16 --mode single \
-  --host-port 5433 --password-env POSTGRES_PASSWORD --pull-config
+  --host-port 5433 --password-ref POSTGRES_PASSWORD --pull-config
 
 python -m db_ops.control.cli worker-pull-data-config --key-base64 "<key>" \
   --all-json --merge-secrets --overwrite

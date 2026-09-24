@@ -138,8 +138,8 @@ def disable_job(
     }
     if db_type == "sqlserver":
         exec_request["database"] = "msdb"
-    elif request.get("database"):
-        exec_request["database"] = request["database"]
+    elif request.get("database_name") or request.get("database"):
+        exec_request["database"] = request.get("database_name") or request.get("database")
     if request.get("timeout_seconds"):
         exec_request["timeout_seconds"] = request["timeout_seconds"]
 

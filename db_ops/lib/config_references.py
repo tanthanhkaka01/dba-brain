@@ -28,6 +28,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from db_ops.lib import field_names
 from db_ops.lib.json_io import load_json_file
 from db_ops.lib.paths import DEFAULT_DATA_DIR, reference_file
 from db_ops.lib.shared_objects import walk_records
@@ -125,6 +126,13 @@ def _is_active(record: dict[str, Any], active_field: str) -> bool:
     if not active_field:
         return True
     value = _dotted(record, active_field)
+    if value is None:
+        # A file not yet moved to the standard names says `enabled` where the rule says `active`
+        # (0.22.0 section 1.4). Reading only the rule's spelling counted a switched-off instance as
+        # active, and its dangling pointer as a failure.
+        legacy = [old for renames in field_names.RENAMES.values()
+                  for old, new in renames.items() if new == active_field]
+        value = next((record[old] for old in legacy if old in record), None)
     if value is None:
         return True  # absent means active everywhere in this tree
     if isinstance(value, bool):

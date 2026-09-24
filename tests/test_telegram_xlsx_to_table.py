@@ -52,7 +52,7 @@ def test_the_four_prompted_answers_become_the_json_request(monkeypatch):
 
     def fake_create(request):
         seen.update(request)
-        return {"server_id": "ACME-1", "db_type": "sqlserver", "database": "Staging",
+        return {"server_id": "ACME-1", "db_type": "sqlserver", "database_name": "Staging",
                 "schema": "dbo", "table_name": "temp_ab12cd34",
                 "qualified_name": "[dbo].[temp_ab12cd34]", "column_count": 3,
                 "rows_inserted": 42, "column_type": "NVARCHAR(4000)"}
@@ -67,7 +67,7 @@ def test_the_four_prompted_answers_become_the_json_request(monkeypatch):
         command=_command(), args=["ACME-1", "Staging", "dbo", "UEsDBBQ="])
 
     assert seen["target"] == "ACME-1"
-    assert seen["database"] == "Staging"
+    assert seen["database_name"] == "Staging"
     assert seen["schema"] == "dbo"
     assert seen["file_base64"] == "UEsDBBQ="
     assert result["table_name"] == "temp_ab12cd34"
@@ -91,7 +91,7 @@ def test_the_reply_actually_renders_every_field_it_promises(monkeypatch):
     """
     from db_ops.lib import common_cli
     monkeypatch.setattr(common_cli, "run", lambda command, request: {
-        "server_id": "ACME-192-0-2-248", "db_type": "sqlserver", "database": "Globex_Prod",
+        "server_id": "ACME-192-0-2-248", "db_type": "sqlserver", "database_name": "Globex_Prod",
         "schema": "guest", "table_name": "temp_e24623de",
         "qualified_name": "[guest].[temp_e24623de]", "column_count": 19,
         "rows_inserted": 7, "column_type": "NVARCHAR(4000)"})
@@ -124,7 +124,7 @@ def test_the_handler_returns_unprefixed_keys_because_the_renderer_adds_the_prefi
     scalar as `{result_<key>}`. A handler that prefixes its own keys double-prefixes them."""
     from db_ops.lib import common_cli
     monkeypatch.setattr(common_cli, "run", lambda command, request: {
-        "server_id": "s", "database": "d", "schema": "sc", "table_name": "t",
+        "server_id": "s", "database_name": "d", "schema": "sc", "table_name": "t",
         "qualified_name": "[sc].[t]", "column_count": 1, "rows_inserted": 0,
         "column_type": "NVARCHAR(4000)"})
 
@@ -140,7 +140,7 @@ def test_the_generated_table_name_comes_back_because_nothing_else_names_it(monke
     table_name in the request is what asks for one."""
     from db_ops.lib import common_cli
     monkeypatch.setattr(common_cli, "run", lambda command, request: {
-        "server_id": "ACME-1", "database": "d", "schema": "s", "table_name": "temp_deadbeef",
+        "server_id": "ACME-1", "database_name": "d", "schema": "s", "table_name": "temp_deadbeef",
         "qualified_name": "[s].[temp_deadbeef]", "column_count": 1, "rows_inserted": 0,
         "column_type": "NVARCHAR(4000)"})
 
@@ -155,7 +155,7 @@ def test_a_fifth_word_names_the_table_instead_of_generating_one(monkeypatch):
     from db_ops.lib import common_cli
     monkeypatch.setattr(common_cli, "run",
                         lambda command, request: seen.update(request) or {
-                            "server_id": "ACME-1", "database": "d", "schema": "s",
+                            "server_id": "ACME-1", "database_name": "d", "schema": "s",
                             "table_name": "chosen", "qualified_name": "[s].[chosen]",
                             "column_count": 1, "rows_inserted": 0,
                             "column_type": "NVARCHAR(4000)"})
@@ -213,7 +213,7 @@ def test_a_deployment_may_still_pin_the_options_in_its_own_config(monkeypatch):
     from db_ops.lib import common_cli
     monkeypatch.setattr(common_cli, "run",
                         lambda command, request: seen.update(request) or {
-                            "server_id": "ACME-1", "database": "d", "schema": "s",
+                            "server_id": "ACME-1", "database_name": "d", "schema": "s",
                             "table_name": "t", "qualified_name": "[s].[t]",
                             "column_count": 1, "rows_inserted": 0,
                             "column_type": "NVARCHAR(4000)"})
@@ -345,11 +345,8 @@ def test_telegrams_own_refusal_explains_whose_limit_it_is(monkeypatch):
 
 
 def test_the_action_type_is_wired_into_the_dispatcher():
-    """A handler that exists but is not in the allowlist replies 'ok' and does nothing at all."""
-    import inspect
+    """A handler that exists but is not in the allowlist replies 'ok' and does nothing at all.
 
-    source = inspect.getsource(command_processor)
-    allowlist_line = next(line for line in source.splitlines()
-                          if '"sql_execute", "cli_execute"' in line)
-
-    assert "create_table_from_xlsx" in allowlist_line
+    The allowlist is `command_processor.ACTION_TYPES` since 0.22.0, one set the dispatcher reads and
+    the reference is held to; this used to find it as a literal line in the source."""
+    assert "create_table_from_xlsx" in command_processor.ACTION_TYPES

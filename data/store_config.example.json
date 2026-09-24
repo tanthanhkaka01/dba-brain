@@ -27,7 +27,7 @@
     "note": "'database', 'schema' AND the 'username' login must already exist - the toolkit creates only its own tables inside them. 'password_ref' must already be in data/encrypted_secret_text.json. See the notes above.",
     "host": "127.0.0.1",
     "port": 5432,
-    "database": "db_ops",
+    "database_name": "db_ops",
     "schema": "db_ops",
     "username": "db_ops",
     "password_ref": "DB_OPS_STORE_PASSWORD",

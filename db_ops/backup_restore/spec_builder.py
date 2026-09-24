@@ -151,8 +151,9 @@ def spec_from_engine_entry(
             "ssh_password": _secret(config.vm_password_env, secrets,
                                     where=f"{config.restore_id}.target.password_env"),
         },
-        "databases": [m.source_database_name for m in (config.databases or ())
-                      if getattr(m, "source_database_name", "")],
+        # The mapping's own field; `source_database_name` belongs to the entry, and asking a mapping
+        # for it through getattr emptied this list for every entry until 2026-09-23.
+        "database_names": [m.source_database for m in (config.databases or ()) if m.source_database],
         "point_in_time": point_in_time,
         "copy_hours": config.copy_recent_hours,
         "dry_run": dry_run,

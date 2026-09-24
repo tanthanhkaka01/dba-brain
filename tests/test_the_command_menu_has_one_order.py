@@ -36,20 +36,20 @@ def _configured() -> list[dict]:
 
 
 def _ranks() -> dict[str, float]:
-    return {c["command_text"]: float(c["menu_order"]) for c in _configured()}
+    return {c["command_text"]: float(c["sort_order"]) for c in _configured()}
 
 
 def test_every_command_carries_a_menu_order() -> None:
-    missing = [c["command_text"] for c in _configured() if c.get("menu_order") is None]
+    missing = [c["command_text"] for c in _configured() if c.get("sort_order") is None]
 
-    assert not missing, f"no menu_order: {missing}"
+    assert not missing, f"no sort_order: {missing}"
 
 
 def test_no_two_commands_claim_the_same_place() -> None:
     """A tie is resolved by whatever sort happens to do, which is the unstated order this replaces."""
-    ranks = [float(c["menu_order"]) for c in _configured()]
+    ranks = [float(c["sort_order"]) for c in _configured()]
 
-    assert len(ranks) == len(set(ranks)), "menu_order repeats"
+    assert len(ranks) == len(set(ranks)), "sort_order repeats"
 
 
 def test_the_number_is_a_float_so_a_command_fits_between_two_others() -> None:

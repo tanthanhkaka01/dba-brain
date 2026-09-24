@@ -65,7 +65,8 @@ def build_parser() -> argparse.ArgumentParser:
     # node gets its OWN store on a server that already holds somebody else's.
     use.add_argument("--host", default=None, help="PostgreSQL host to write to.")
     use.add_argument("--port", default=None, type=int, help="PostgreSQL port (default: unchanged).")
-    use.add_argument("--database", default=None, help="Database name on that server.")
+    use.add_argument("--database-name", "--database", dest="database_name", default=None,
+                     help="Database name on that server (--database is the old spelling).")
     use.add_argument("--schema", default=None,
                      help="Schema inside that database. Its own schema is how a node shares a "
                           "server without sharing a store.")
@@ -765,7 +766,7 @@ def _restore_drill_command(argv: list[str]) -> int:
         rows, override_hours=float(override) if override is not None else None)
     wanted_db = str(request.get("database") or "").strip().lower()
     if wanted_db:
-        results = [r for r in results if r["database"].lower() == wanted_db]
+        results = [r for r in results if r["database_name"].lower() == wanted_db]
     wanted_status = str(request.get("status") or "").strip().upper()
     if wanted_status:
         results = [r for r in results if r["status"] == wanted_status]
@@ -986,6 +987,92 @@ OPS_STATUS_USAGE = (
 )
 
 
+SELF_STATUS_USAGE = (
+    "usage: python -m db_ops.db.cli self-status <json>|@<file>|- "
+    "[--config ...] [--key ... | --key-base64 ...]\n"
+    "\n"
+    "The same report as `python -m db_ops.common.cli self-status` - version, host, store, cpu,\n"
+    "memory, disk, links and the app commands this node schedules - plus each app command's\n"
+    "LAST RUN from job_runs. That column is the one part that needs the store, which is why this\n"
+    "front door lives in db: common may not import it. /spbot_self_status calls this one.\n"
+    "\n"
+    "A store that cannot be read costs the column and names why; the report still prints.\n"
+    "\n"
+    '  {"format": "txt"}      // optional; txt for the chat listing, json (default) for the envelope\n'
+)
+
+
+def _self_status_command(argv: list[str]) -> int:
+    """``self-status`` with the last-run column - see :data:`SELF_STATUS_USAGE`.
+
+    Asked for on 2026-09-23: with two schedulers running disjoint sets on two schemas, the answer
+    an operator can get from a phone described the machine and not what it schedules.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from db_ops.common import cli as common_cli
+    from db_ops.common import self_status
+    from db_ops.db import DbOpsStore
+    from db_ops.db import ops_status as ops
+    from db_ops.lib.secret_text import set_key_env
+
+    source = ""
+    config_path = None
+    key = key_base64 = None
+    rest = list(argv)
+    while rest:
+        token = rest.pop(0)
+        if token in {"-h", "--help"}:
+            print(SELF_STATUS_USAGE)
+            return 0
+        if token == "--config":
+            config_path = rest.pop(0) if rest else None
+        elif token == "--key":
+            key = rest.pop(0) if rest else None
+        elif token in {"--key-base64", "--key_base64"}:
+            key_base64 = rest.pop(0) if rest else None
+        elif not source:
+            source = token
+        else:
+            print(f"Unexpected argument: {token}\n\n{SELF_STATUS_USAGE}", file=sys.stderr)
+            return 2
+    try:
+        set_key_env(key, key_base64)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    request, code = _read_json_request(source or "{}", SELF_STATUS_USAGE)
+    if request is None:
+        return code
+
+    facts, config = common_cli.collect_self_status(config_path)
+    try:
+        commands = common_cli.read_app_commands()
+    except Exception:  # noqa: BLE001 - collect_self_status has already named the unreadable file.
+        commands = None
+    if commands is not None:
+        last_runs = None
+        store_error = ""
+        if config is None:
+            store_error = "no config.json, so no store to read"
+        else:
+            try:
+                store = DbOpsStore.from_config(config)
+                since = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime(
+                    "%Y-%m-%dT%H:%M:%SZ")
+                codes = sorted({str(c.get("app_command_id") or c.get("app_code") or "")
+                                for c in commands} - {""})
+                last_runs = ops.latest_runs(store, codes, since=since)
+            except Exception as exc:  # noqa: BLE001 - the column is optional; the report is not.
+                first = (str(exc).splitlines() or [type(exc).__name__])[0]
+                store_error = f"store not read: {first[:160]}"
+        facts["apps"] = self_status.summarize_apps(
+            commands, node_role=str(facts.get("node_role") or ""), last_runs=last_runs,
+            store_error=store_error)
+    return common_cli.emit_self_status(facts, request)
+
+
 def _ops_status_command(argv: list[str]) -> int:
     """``ops-status`` - the CLI face of :mod:`db_ops.db.ops_status`.
 
@@ -1154,10 +1241,12 @@ def _active_group_levels(data_dir: Path) -> dict[str, str]:
     where to report their failure is the dependency it exists without. An import is not a
     process, so the constraint holds and the file still has exactly one reader.
     """
+    from db_ops.lib.target_flags import is_record_active
+
     levels: dict[str, str] = {}
     for group in data_sources.load_telegram_groups(data_dir=data_dir):
         level = str(group.get("notify_level") or "").strip().lower()
-        if level and str(group.get("status") or "active").strip().lower() == "active":
+        if level and is_record_active(group):
             levels[level] = str(group.get("group_id") or "").strip()
     return levels
 
@@ -1519,6 +1608,7 @@ def _run_app_command(argv: list[str]) -> int:
 _JSON_COMMANDS = {
     "queue-telegram-message": lambda rest: _queue_telegram_message_command(rest),
     "ops-status": lambda rest: _ops_status_command(rest),
+    "self-status": lambda rest: _self_status_command(rest),
     "restore-drill-status": lambda rest: _restore_drill_command(rest),
     "sql-run-history": lambda rest: _sql_run_history_command(rest),
     "telegram-command-history": lambda rest: _telegram_command_history_command(rest),

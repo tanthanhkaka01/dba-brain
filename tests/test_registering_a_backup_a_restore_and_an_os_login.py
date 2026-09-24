@@ -74,7 +74,7 @@ def _restore(**over):
                    "restore_data_dir": "/var/opt/mssql/data",
                    "vm_import_linux_path": "/opt/restore/import",
                    "vm_import_linux_log_path": "/opt/restore/import"},
-        "databases": [{"source_database": "APPDB", "target_database": "APPDB_DRILL"}],
+        "database_mappings": [{"source_database": "APPDB", "target_database": "APPDB_DRILL"}],
     }
     request.update(over)
     return request
@@ -372,7 +372,7 @@ def test_a_restore_entry_is_registered_and_loads_back(tmp_path):
     outcome = registration.add_restore(_restore(), data_dir=tmp_path, key=KEY)
 
     assert outcome["loaded"] is True
-    assert outcome["databases"] == 1
+    assert outcome["database_mappings"] == 1
 
 
 def test_a_restore_without_cleanup_retention_is_refused(tmp_path):
@@ -430,9 +430,9 @@ def test_the_three_inline_passwords_become_refs_and_the_values_go_to_the_store(t
     assert len(outcome["secrets_stored"]) == 3
     for value in ("share-pass", "os-pass", "sa-pass"):
         assert value not in text
-    assert stored[entry["source"]["password_env"]] == "share-pass"
-    assert stored[entry["target"]["password_env"]] == "os-pass"
-    assert stored[entry["target"]["sql_password_env"]] == "sa-pass"
+    assert stored[entry["source"]["password_ref"]] == "share-pass"
+    assert stored[entry["target"]["password_ref"]] == "os-pass"
+    assert stored[entry["target"]["sql_password_ref"]] == "sa-pass"
     assert "password" not in entry["source"] and "sql_password" not in entry["target"]
 
 
@@ -583,7 +583,7 @@ def test_a_postgres_target_without_a_database_is_refused(tmp_path):
         instance_admin.add_instance(request, data_dir=tmp_path)
 
     message = str(caught.value)
-    assert "db_name" in message
+    assert "database_name" in message
     assert "ACME-STORE" in message, "the refusal quotes the label that would have been used"
     assert '"postgres"' in message, "and names the neutral database for monitoring the instance"
 
@@ -600,9 +600,23 @@ def test_the_refusal_falls_back_to_the_server_id_when_there_is_no_label(tmp_path
 def test_a_named_database_is_accepted(tmp_path):
     outcome = instance_admin.add_instance(
         {"server_id": "ACME-192-0-2-50-PG-5432", "db_type": "postgresql", "ip": "192.0.2.50",
-         "service_name": "ACME-STORE", "db_name": "acmedb"}, data_dir=tmp_path)
+         "service_name": "ACME-STORE", "database_name": "acmedb"}, data_dir=tmp_path)
 
     assert outcome["server_id"] == "ACME-192-0-2-50-PG-5432"
+
+
+def test_the_old_database_spellings_are_accepted_and_written_as_database_name(tmp_path):
+    """`db_name` was this command's own word for the database until 0.22.0, and no connection
+    ever read it: a target registered with only `db_name` connected to its LABEL. Either old
+    spelling is still taken, and what reaches the file is the one name the connection reads."""
+    for old in ("db_name", "database"):
+        instance_admin.add_instance(
+            {"server_id": f"ACME-PG-{old}", "db_type": "postgresql", "ip": "192.0.2.50",
+             "service_name": "ACME-STORE", old: "acmedb"}, data_dir=tmp_path)
+        record = next(item for item in json.loads(
+            (tmp_path / "db_instances.json").read_text(encoding="utf-8"))["db_instances"]
+            if item["server_id"] == f"ACME-PG-{old}")
+        assert record["database_name"] == "acmedb" and old not in record
 
 
 def test_sqlserver_and_oracle_are_not_asked_for_one(tmp_path):

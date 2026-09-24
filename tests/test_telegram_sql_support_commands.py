@@ -83,7 +83,7 @@ def test_the_chat_argument_is_bound_not_pasted(stub):
     sql_commands.execute_sql_support_command(command=_Command(_config()), args=["4711"])
 
     assert stub["params"] == ["4711"]
-    assert "4711" not in stub["sql"]
+    assert "4711" not in stub["sql_text"]
 
 
 def test_the_target_database_and_login_come_from_the_command_config(stub):
@@ -92,7 +92,7 @@ def test_the_target_database_and_login_come_from_the_command_config(stub):
     sql_commands.execute_sql_support_command(command=_Command(_config()), args=["4711"])
 
     assert stub["target"] == "ACME-192-0-2-111"
-    assert stub["database"] == "APPDB_Testing"
+    assert stub["database_name"] == "APPDB_Testing"
     assert stub["credential_name"] == "sqlserver_2.111_dba"
 
 

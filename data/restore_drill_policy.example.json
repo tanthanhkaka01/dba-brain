@@ -14,12 +14,12 @@
     "overrides": [
       {
         "_note": "A multi-terabyte database. Restoring it takes most of a night, so it is drilled fortnightly and the policy says so instead of reporting a violation every week.",
-        "database": "SALESDB",
+        "database_name": "SALESDB",
         "max_age_hours": 336
       },
       {
         "_note": "Small, and the one nobody can work without. Drilled daily.",
-        "database": "FINDB",
+        "database_name": "FINDB",
         "max_age_hours": 24
       }
     ]

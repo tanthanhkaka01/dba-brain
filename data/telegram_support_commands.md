@@ -4,7 +4,7 @@ Paste into BotFather `/setcommands` to register the bot menu.
 
 ```
 spbot_status - Get bot status
-spbot_self_status - What this installation is: product, version, host, ip, cpu, memory, disk
+spbot_self_status - What this installation is: product, version, host, ip, cpu, memory, disk, and the apps it schedules
 spbot_list_all_command - List every command you can run here, built from the bot's own config
 spbot_list_my_commands - List your own 10 most recent commands, each as one line you can run again
 spbot_list_server_id - List the database targets (server_id, db_type, ip:port) you can query
@@ -39,7 +39,7 @@ spbot_restart_server - EMERGENCY: restart a server (asks yes, then the server id
 | Command | Description |
 |---|---|
 | `/spbot_status` | Get bot status |
-| `/spbot_self_status` | What the installation answering you actually is: product (published **DBA Brain** or a private **db_ops** build), version, whether it runs in Docker or straight on the OS, which OS, host name and ip, node role, store, cpu, memory and disk. Reads itself - no SSH and no store - so it still answers when the store is the thing that is down. No parameters. |
+| `/spbot_self_status` | What the installation answering you actually is: product (published **DBA Brain** or a private **db_ops** build), version, whether it runs in Docker or straight on the OS, which OS, host name and ip, node role, store, cpu, memory and disk, then one line per app command with its last run. Reads itself - no SSH - and the store only for the last-run column, so it still answers when the store is the thing that is down. No parameters. |
 | `/spbot_list_all_command` | List every command **you** can run in **this** chat, with its real arguments and clearance. Built from `telegram_support_commands.json` at run time — a command added to that file appears here with no other edit. Commands above your clearance, commands that only run in the other kind of chat, and disabled ones are hidden, each counted with its own reason. Public (clearance 0), no parameters. |
 | `/spbot_list_my_commands` | Your own last 10 **distinct** commands, newest first, each written back as the one line that runs it again — including the ones you answered a prompt at a time, whose arguments are separate messages in the chat and cannot be copied out of it. Repeats are counted, not listed twice. Private chat only: the history spans every chat, so a group would hear a private command read out. No parameters. |
 | `/spbot_list_server_id` | List the database targets you can address in other commands: `server_id`, `db_type`, `ip:port`, instance name. Use it to find the value to pass as a target. |
@@ -55,7 +55,7 @@ spbot_restart_server - EMERGENCY: restart a server (asks yes, then the server id
 | `/spbot_sql_to_xlsx` | Run a **read-only SELECT** on a server and send the first result set back as an `.xlsx` document. Asks for a **target** (a `server_id`, or `<db_type> <ip> [port]`) and the SQL text (paste it or attach a `.sql` file). Works on **any** engine in the inventory — SQL Server, PostgreSQL, MySQL, Oracle. Any statement that changes rows is refused and rolled back — but rollback is **not** a sandbox (see `db_ops/common/sql_run.py`), so this runs as the instance's DBA login. Clearance 10, runs on the worker. |
 | `/spbot_sql_export` | The same read-only SELECT as `/spbot_sql_to_xlsx`, but you choose the file: **xlsx**, **csv**, **txt** (aligned table) or **xml**. Asks for a **target**, then the **format**, then the SQL text. The format comes *before* the SQL because the SQL argument consumes the rest of the message. Clearance 10, runs on the worker. |
 | `/spbot_xlsx_to_table` | Attach an `.xlsx` **or a delimited text file** (`.txt` / `.csv` / `.tsv`, including a block copied straight out of Excel — tab, comma, semicolon or pipe) and get a **queryable table**. Asks for a **server_id**, a **database**, a **schema**, then the file; the format is read from the file itself, not from its name. Every column is created `NVARCHAR(4000)` (or the engine's equivalent) — a type guessed from a spreadsheet is wrong on the row nobody checked; `ALTER` afterwards, having seen the data. Row 1 (of the first sheet, for a workbook) is the column names; blanks become `column_2`, duplicates get a suffix. For a text file the reply says how it was read (`tab-delimited text (utf-16-le)`), because the delimiter and encoding are guessed. The table name is **not** asked for: it is `temp_<random>` and the reply tells you what it was. Pass a 5th word to choose one. **An existing table is never overwritten** — the command fails and says so. **No size limit of ours**, but Telegram itself will not serve a bot more than **20 MB** per file, whatever you attached; above that, put the file on the worker and use the `create-table-from-xlsx` CLI with `"file_path"`. Private chat only, clearance 10, runs on the worker. |
-| `/spbot_add_sql` | Register and enable a new SQL task from a conversation: **server_id → sql_name → schedule → output → sql_text**. `db_type`, instance and credential are read from `db_instances.json` by `server_id`, never typed. Schedule accepts `manual` (runs only via `/spbot_run_sql_task`), `default`, or `from_hour to_hour repeat_interval timeout`. Output accepts `xlsx` (send a workbook), `plain` (rows as text), `none` (status only). Private chat only. |
+| `/spbot_add_sql` | Register and enable a new SQL task from a conversation: **server_id → display_name → schedule → output → sql_text**. `db_type`, instance and credential are read from `db_instances.json` by `server_id`, never typed. Schedule accepts `manual` (runs only via `/spbot_run_sql_task`), `default`, or `from_hour to_hour repeat_interval timeout`. Output accepts `xlsx` (send a workbook), `plain` (rows as text), `none` (status only). Private chat only. |
 | `/spbot_run_sql_task` | Run one SQL task now by `sql_id`, `--force`: it ignores the schedule, the interval and the active flag, but never a run already in flight. Each target replies separately. **Optional second argument and beyond: `NAME=VALUE` pairs** for the parameters that task declares in `sql_commands.json` — e.g. `/spbot_run_sql_task 12 spid=505 db=SALESDB`. The script reads them as `@spid` / `@db`; the values are **bound**, never pasted into the SQL, so a chat message cannot become a statement. A value containing spaces goes in quotes. A task that declares no parameters takes no extra arguments. Use `/spbot_list_sql_tasks` for the id. |
 | `/spbot_run_sql_task` | Run one SQL task now by `sql_id` (the number `/spbot_list_sql_tasks` shows). Runs every target configured for that task, in the background, and each target reports its own result as a separate message — the runner already queues those. Always `--force`, which the CLI requires for a targeted run: it ignores the time window, the repeat interval **and the active flag**, so an id that `/spbot_list_sql_tasks` hides as inactive will still run if you name it. Requires clearance 10, the same as `/spbot_restore` and `/spbot_add_sql`, because a task may be an UPDATE against production. |
 | `/spbot_metric_toggle` | Enable/disable metric collection for one `server_id` in `db_instances.json` (atomic write; the bot runs the `common.cli metric-toggle` command itself, so there is one engine and one caller path). Scope: `all` (the target's `metrics.enabled`), `collector:<sql\|cmd\|docker\|k8s>` (one collector class via `disabled_collector_types`), or one metric_code (`metric_overrides.<CODE>.enabled`; enabling also removes the code from the legacy `report_policy.disabled_metric_codes`). Clearance 10, private chat only — switching collection off produces no alert of its own. Afterwards, pull the change back to the master with `control worker-pull-data-config --all-json --overwrite`. |
@@ -112,6 +112,12 @@ cpu       : 8 core(s), load 1.24 / 0.98 / 0.71 (0.16 per core)
 memory    : 3.1 GiB used of 7.8 GiB (40%), 4.7 GiB free
             source: cgroup
 disk      : 351.0 GiB free of 489.0 GiB (26% used)
+
+apps      : 9 configured, 9 scheduled on this node (role worker)
+  APP-SQL_TASKS                  on          async x4 every 1s 00-23h   last done 3s ago
+  APP-METRICS                    on          sync     every 2m 00-23h   last done 83s ago
+  APP-BACKUP-RESTORE             on          async x4 every 30s 00-23h  last done 12s ago
+  ...
 ```
 
 **The product line comes before the version, because the version cannot be read without it.** The
@@ -123,6 +129,12 @@ hour. `[pip: ...]` is the installed distribution; a tree that was never installe
 memory, not the limit the process actually has, so the cgroup is read first and the source travels
 with the number. A figure that quotes the host's 64 GiB while the cgroup allows 2 is the number
 somebody uses to wrongly rule memory out.
+
+**The `apps` block says what this node schedules** (0.22.0): every app command in
+`data/app_commands.json`, including inactive ones (`off`) and ones for another role (`worker only`),
+with how it runs, when, and its last run. It runs `python -m db_ops.db.cli self-status`, because the
+last run is read from `job_runs`; when the store cannot be read the column is replaced by one line
+saying why, and the rest of the reply still arrives.
 
 Anything the platform cannot answer — a load average on Windows, memory without `/proc` or a
 cgroup — is reported as unavailable rather than guessed. No parameters.
@@ -413,7 +425,7 @@ One command, one parameter set, every engine — deploys either **in-container o
 | 3 | `version` | Image tag. oracle 26ai = `23.26.2` or `latest`. |
 | 4 | `mode` | `single` / `ha-lab`. |
 | 5 | `host_port` | Host port, or `-` for the engine default. |
-| 6 | `password_env` | **DB password — secret ref** (`-` = default `<NAME>_PASSWORD`). |
+| 6 | `password_ref` | **DB password — secret ref** (`-` = default `<NAME>_PASSWORD`). |
 | 7 | `password_text` | **DB password — value** (stored in the secret store, passed via env). Send `-` to **reuse the ref in position 6 exactly as it is stored** — nothing is written, and an existing ref is neither overwritten nor treated as a collision. |
 | 8 | `deploy_target` | `worker` = in-container on the worker host (192.0.2.249); or an **IP** = provision on that Ubuntu VM over SSH. |
 | 9 | `remote_user` | SSH user on the VM (`-` when `deploy_target=worker`). |
@@ -425,7 +437,7 @@ One command, one parameter set, every engine — deploys either **in-container o
 
 SSH auth for a remote VM has three mutually exclusive forms — an SSH **password ref** (pos 10), an SSH **password value** (pos 11), or an SSH **key** (pos 12, a file placed in `data/ssh_keys/` on the worker). Give one and set the others to `-`. The DB password (pos 6/7) likewise takes a ref or a text value. Both password values are handed to the CLI through the environment, never on a command line.
 
-Order: `name engine version mode host_port password_env password_text deploy_target remote_user remote_password_ref remote_password_text remote_key_name recreate install_docker`.
+Order: `name engine version mode host_port password_ref password_text deploy_target remote_user remote_password_ref remote_password_text remote_key_name recreate install_docker`.
 
 **Inline, one message — deploy on the worker host (the old path):**
 ```

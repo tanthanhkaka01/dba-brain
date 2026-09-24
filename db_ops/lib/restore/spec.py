@@ -14,7 +14,7 @@ So the spec names the engine, both ends, and the credentials:
      "target": {"platform": "linux", "host": "192.0.2.249", "port": 1433,
                 "username": "sa", "password": "...",
                 "data_dir": "/var/opt/mssql/data", "import_dir": "/opt/.../SQLBK_IMPORT"},
-     "databases": ["APPDB"],
+     "database_names": ["APPDB"],
      "point_in_time": "2026-08-06 14:00:00 +07:00"}
 
 **Resolving that spec is the app's job**, and stays there: ``backup_restore`` reads the entry, asks
@@ -166,8 +166,9 @@ def parse_restore_spec(raw: Any) -> RestoreSpec:
     if not isinstance(raw, dict):
         raise RestoreSpecError("request must be a JSON object.")
 
-    known = {"db_type", "source", "target", "databases", "point_in_time", "copy_hours",
-             "dry_run", "label", "extras"}
+    # `database_names` since 0.22.0 - a list of NAMES, the standard spelling; `databases` still read.
+    known = {"db_type", "source", "target", "database_names", "databases", "point_in_time",
+             "copy_hours", "dry_run", "label", "extras"}
     unknown = sorted(set(raw) - known)
     if unknown:
         raise RestoreSpecError(
@@ -175,9 +176,9 @@ def parse_restore_spec(raw: Any) -> RestoreSpec:
         )
 
     db_type = _one_of(raw.get("db_type"), SUPPORTED_DB_TYPES, "db_type")
-    databases = raw.get("databases") or []
+    databases = raw.get("database_names") or raw.get("databases") or []
     if isinstance(databases, str):
-        raise RestoreSpecError("databases must be an array, not a string.")
+        raise RestoreSpecError("database_names must be an array, not a string.")
 
     target = parse_target(raw.get("target"))
     source = parse_source(raw.get("source"))
@@ -217,7 +218,7 @@ def redacted(spec: RestoreSpec) -> dict[str, Any]:
         "label": spec.label,
         "source": _clean(spec.source),
         "target": _clean(spec.target),
-        "databases": list(spec.databases),
+        "database_names": list(spec.databases),
         "point_in_time": spec.point_in_time,
         "copy_hours": spec.copy_hours,
         "dry_run": spec.dry_run,

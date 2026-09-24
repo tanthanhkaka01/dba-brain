@@ -132,7 +132,7 @@ differently in two places.
 | `task_input.py` | the reserved `{target_*}` placeholders a task's `input.args` may use without declaring them — the runner fills them from the `sql_targets` entry it is running for. Here because both sides need it and neither may import the other: `common.sql_task_admin` validates the args at registration, `sql_tasks.python_source` substitutes them at run time. It was spelled out in both until `test_no_duplicate_definitions.py` found the two copies |
 | `instance_bundle.py` | what a SQL Server instance-metadata bundle is — layout, two phases, order |
 | `ssh_errors.py` | what can go wrong reaching a host over SSH, as four names |
-| `target_flags.py` | per-target on/off flags |
+| `target_flags.py` | per-target on/off flags, and `is_record_active` - one rule for a Telegram chat or person switched on by `active` or the older `status: "active"`, absent meaning on |
 | `webhost_endpoints.py` | where this node's own pages are — parses `--port`/`--mount` out of the webhost serve `command_text`, builds the console and reports base URLs, and names the pages that exist under stable names. A per-server page stays a `{server_id}` template: a real server id in shipped code is what `check-identifiers` refuses |
 | `report_links.py` | `page_relative` / `href_for_page` — turning an absolute report URL into a relative href when it is one of our own pages. The report text stays absolute for Telegram; the rendered page gets the relative form, which resolves against whatever host served it rather than the one that rendered it |
 | `page_banner.py` | the one head banner every published page leads with — product, page title, scope, `snapshot <time>`, and relative links to the sibling pages that **exist**. Pure: the stamp is passed in already rendered, so a page rebuilt for a past day says that day. `siblings_present(exists)` takes a predicate rather than a directory, because touching the filesystem is an operation. `snapshot_stamp(markup)` reads that stamp back out, so a page copied off a node can be named after the moment it states rather than the moment it was copied. `pick_index_usage(names)` + `siblings_present(..., index_usage=)` add the per-server index report to the head - it cannot be a `SIBLING_PAGES` entry because its file name is a `server_id`, so the href is the caller's and only the label lives here |
@@ -235,7 +235,7 @@ as data, not literals — and `db_ops.control.cli worker-status` is what runs it
 passed around as values. A per-app copy of any of them is a bug — the reason they are here rather
 than in `common` is exactly the class-does-not-survive-a-subprocess point above.
 
-**The field-level reference for all seven is data**: `data/shared_config_objects.json`, read by
+**The field-level reference is data** - for these blocks, for every config record, and (from 0.22.0) for every `common.cli` request and answer: `data/shared_config_objects.json`, read by
 `shared_objects.py` and answered by `python -m db_ops.common.cli describe-object`. Each field
 carries both a `range_text` for a person and a `constraint` a program can evaluate — kind, nullable,
 min, max, enum, special values — because a prose range cannot be checked and an unchecked reference
@@ -246,9 +246,11 @@ the default while looking configured). `python -m db_ops.common.cli check-object
 and `tests/test_shared_config_objects_reference.py` runs it over this estate.
 [`configuration.md` §5](./configuration.md) is the same material for a reader.
 
+A `used_in` path says where records live: `a.b[]` is each item of a list, `a{}` each value of a map (a policy keyed by level), an empty path the file itself. A field's `kind` is `string`, `integer`, `number` (a quantity with a fraction - `integer` refused 15.0 GB), `boolean`, `object` or `array`. An entry whose record is a file's root lists that file's own documentation keys in `document_keys`. A site is read from `data/<file>`, else its `.example.json`, else - for a file that ships as a packaged default rather than an example (`ops_status_request.json`) - the copy its `packaged` names inside the package, the one `init` writes the file from; `shared_objects.site_file` is that lookup, and the test pins `packaged` to `scaffold.PACKAGED_DEFAULTS`. Entries of kind `input` and `output` describe `common.cli` requests and answers; they are held to the code by `tests/test_every_json_the_tool_reads_or_writes_is_described.py`, not walked by `check_data_dir`.
+
 `config_references.py` is the second half of that idea and a different guarantee: not *is
 this field valid* but *does this field's pointer land anywhere*.
-`data/config_references.json` declares seven pointers between config files — a backup job's
+`data/config_references.json` declares ten pointers between config files — a backup job's
 `server_id` into `db_instances.json`, a SQL target's `credential_name` into `users.json` —
 and `check` follows them, failing only on **active** records. It was written the morning an
 active backup failed every cycle with `server_id not found in db_instances.json`: both files
@@ -286,9 +288,13 @@ were valid, and nothing in the tree compared one against the other.
 | `telegram_command_text.py` | read a `/spbot...` message into a command and arguments, and write one back as the line that runs it |
 | `process_liveness.py` | is this PID a *running* process — the zombie trap on POSIX and the `OpenProcess` one on Windows, in one place |
 | `daemon_state.py` | the daemon's own start, left in `runtime/` so something that is not the daemon can say how long DBA Brain has been up — believed only while its pid is alive |
+| `sql_task_target.py` | where a SQL task target runs, in true words - `server/instance.database` on SQL Server, `master` when no database is named, never the `service_name` SQL Server does not have - and which part of a failed connection failed: `classify_connect_failure` (4060 database / 18456 login / unreachable), `near_match` (the same name in another case first), and the messages naming the instances or databases the server does have |
+| `driver_warnings.py` | is a driver error only a **warning** - every SQLSTATE it carries class `01` (pyodbc joins all the diagnostic records into one message, so the first is not enough) - and `read_next_set`, the `nextset()` every result loop calls: a warning is recorded and ends the reading instead of failing the run. Measured, not assumed: pyodbc closes the statement there, the rest of the batch still runs on the server, and nothing after it - result sets or errors - reaches the client, so the caller decides what an open transaction may conclude |
 | `store_outage.py` | which store failures are worth waiting out — the PostgreSQL SQLSTATEs that mean *not now* (`08xxx`, `57P01`–`57P03`, `53300`), the socket failures that carry no code, and a **bounded** backoff. A two-second restart of the store's container used to end the daemon on `FATAL 57P03`, which is what abandoned candidate 0.18.0 at hour 21.8; past the budget the error is raised exactly as before, because a daemon that waits forever schedules nothing while looking alive |
 | `restore_space.py` | the room a restore must find before it starts: `free >= bytes_to_copy x factor`, default **1.5**, **2.0** when the restored database will live on the same filesystem as the staged files. Arithmetic and vocabulary only — no filesystem, no SSH — so the rule can be read without a host to run it against. A drill copied 115 GB onto the host carrying the runtime store on 2026-09-17, `/` reached 42 MB free and the daemon died with it |
 | `run_claim.py` | who owns a run that is still `running`, and when that ownership may be taken away: a live pid on this host holds its claim **however long it has run**, a dead one frees it at once, and another host's row waits for its timeout plus an hour. Reaping a row is what releases its key, so this and “may another run start?” are the same question — and answering it on age alone is how a task that outran its timeout got a second copy started on top of it |
+| `field_names.py` | one name per concept (0.22.0): `RENAMES` is the one table of old -> standard field names per object - an instance's `enabled`/`env`/`ord`/`database`/`db_name`, app and Telegram commands' sort order, a SQL task's `sql_name`, a restore entry's `databases` and its blocks' `password_env` / `sql_password_env`, a docker connection's `engine`/`database`/`password_env`, the store's and the policy overrides' `database`, an SLA policy's `name` and synonyms, credentials' `notes`, a console block's `ord`. `MOVED_ONLY` holds names moved in the files but not handed out under both (`sqlserver_major_version`); `STATUS_TO_ACTIVE` the records whose string `status` became the boolean `active`. `read` / `with_both_names` let a reader take either spelling; `standardize` moves one record in place and reports - never chooses - when its two spellings disagree. `common.cli upgrade-config` runs it over `data/`, and the reference's `legacy_fields` are held to this table by the suite |
+| `node_role.py` | whether a record declaring a `node_role` runs on a node of a given role (`runs_on`). The daemon, the Telegram processor and `self-status` ask the same question; the first two had separate copies that already disagreed about what an empty role means, so each caller now passes its own `default` (`all` for an app command, `worker` for a support command) and the rest of the rule is written once |
 | `run_mode.py` | whether the daemon waits for an app command to finish before starting it again: `sync` (the default, and what every command did before the field existed) or `async` with a `max_parallel` cap. An `async` command **must** refuse its own duplicate work, because the daemon will not — which is safe only because each unit of work claims a `running` row the store's unique index will not issue twice |
 | `telegram_severity.py` | the severity emoji, applied once at the send layer |
 | `powershell.py` | quoting, encoding, and the `Invoke-Command` wrapper |
@@ -708,7 +714,7 @@ A request may now carry a `connection` block instead, and then **nothing is read
 {"connection": {"db_type": "sqlserver", "host": "192.0.2.5", "port": 1433,
                 "username": "monitor", "password": "…", "major_version": 16,
                 "label": "lab-mssql"},
- "sql": "SELECT 1"}
+ "sql_text": "SELECT 1"}
 ```
 
 Three fields are required because no default can invent them — **which engine, which machine,

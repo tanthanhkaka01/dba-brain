@@ -54,7 +54,10 @@ See [01_runtime_store.md](01_runtime_store.md) for the table and
 
 A long-running service (e.g. `APP-WEBHOST`, the report web host) combines all three: `repeat_interval: 0` (started once), `timeout: 0` (never killed while serving), `retry_interval: 0` (restarted at once if it dies). Leave the `from_*`/`to_*` date-time bounds `null` for such services — do **not** set them to `0` (e.g. `to_hour: 0` would only open the window at midnight).
 
-The current configured commands are `APP-SQL_TASKS`, `APP-METRICS`, `APP-REPORTS-CREATE`, `APP-SLA-VALIDATE`, `APP-BACKUP-RESTORE`, `APP-TELEGRAM`, `APP-REPORTS-INVENTORY-WORKFLOW`, and `APP-WEBHOST`.
+The current configured commands are `APP-SQL_TASKS`, `APP-METRICS`, `APP-REPORTS-CREATE`, `APP-SLA-VALIDATE`, `APP-BACKUP-RESTORE`, `APP-TELEGRAM`, and `APP-WEBHOST`. The inventory was an app command of its own
+(`APP-REPORTS-INVENTORY-WORKFLOW`) until 0.22.0; it is a report now - `rp_inventory_health` in
+`reports_config.json`, built by `APP-REPORTS-CREATE`'s pass - and `upgrade-config` moves an older
+node's app command there, keeping its schedule.
 
 ## Data Flow
 

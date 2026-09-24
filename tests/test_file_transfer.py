@@ -42,7 +42,7 @@ def test_packing_named_files_reports_a_checksum_of_what_it_actually_wrote(tmp_pa
     assert result["file_count"] == 2
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     assert result["sha256"] == digest
-    assert result["bytes"] == archive.stat().st_size
+    assert result["size_bytes"] == archive.stat().st_size
     with tarfile.open(archive) as opened:
         assert sorted(opened.getnames()) == ["a.bkp", "b.bkp"]
 

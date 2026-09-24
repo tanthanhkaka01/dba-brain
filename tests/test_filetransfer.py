@@ -107,7 +107,7 @@ def test_a_successful_pack_reports_the_hash_and_size(monkeypatch):
                       "host": {"runtime": "linux", "host": "h", "username": "u"}})
 
     assert result["sha256"] == "abc123"
-    assert result["size"] == 4096
+    assert result["size_bytes"] == 4096
 
 
 # --------------------------------------------------------------------------- #

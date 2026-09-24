@@ -36,7 +36,7 @@ def test_add_sql_command_is_registered_multistep_admin():
     # enter something that does not resolve (SQLSERVER-017 got a null instance that way and could
     # never find its database). server_id is the one identifier the operator actually knows.
     assert [p["name"] for p in params] == [
-        "server_id", "sql_name", "schedule", "output", "sql_text"]
+        "server_id", "display_name", "schedule", "output", "sql_text"]
     assert all(p.get("prompt_text") for p in params)  # every step prompts
 
 
@@ -93,7 +93,7 @@ def test_execute_add_sql_fills_in_what_it_no_longer_asks_for(monkeypatch):
     assert captured["service_name"] == "APPDB-PROD"
     assert captured["credential_name"] == "cred_appdb"
     assert captured["server_id"] == "ACME-192-0-2-250"
-    assert captured["sql_name"] == "Nightly cleanup"
+    assert captured["display_name"] == "Nightly cleanup"
     assert captured["sql_text"] == "DELETE FROM staging;"
     assert captured["output"] == "xlsx"
     # The window travels as the command's own four fields, not as a nested object: `add-sql` has

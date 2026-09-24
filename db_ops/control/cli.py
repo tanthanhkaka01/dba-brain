@@ -469,10 +469,10 @@ def parse_args(argv):
     wc.add_argument("--replicas", type=int, default=None)
     wc.add_argument("--host-port", dest="host_port", type=int, default=None,
                     help="Default: the engine's own port (postgres 5432, mysql 3306, mssql 1433).")
-    wc.add_argument("--password-env", dest="password_env", default=None,
+    wc.add_argument("--password-ref", "--password-env", dest="password_env", default=None,
                     help="Secret ref for the password. Default: <NAME>_PASSWORD.")
     wc.add_argument("--password-text", dest="password_text", default=None,
-                    help="Password value to store under --password-env in the encrypted secret "
+                    help="Password value to store under --password-ref in the encrypted secret "
                          "store before provisioning (visible in the process list while it runs).")
     wc.add_argument("--containers-dir", dest="containers_dir", default=None)
     wc.add_argument("--network-subnet", dest="network_subnet", default=None,
@@ -794,7 +794,7 @@ def _run(args) -> int:
         if args.host_port is not None:
             sre_args += ["--host-port", str(args.host_port)]
         if args.password_env:
-            sre_args += ["--password-env", args.password_env]
+            sre_args += ["--password-ref", args.password_env]
         if args.password_text:
             sre_args += ["--password-text", args.password_text]
         if args.replicas is not None:

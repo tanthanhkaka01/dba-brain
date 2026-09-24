@@ -98,6 +98,18 @@ def dump_json_text(data: dict[str, Any], *, indent: int = 4) -> str:
     return json.dumps(data, ensure_ascii=False, indent=indent) + "\n"
 
 
+def indent_of(path: Path, default: int = 4) -> int:
+    """The file's own indent, so a rewrite of one field is a one-field diff."""
+    try:
+        for line in path.read_text(encoding="utf-8-sig").splitlines()[1:]:
+            stripped = line.lstrip(" ")
+            if stripped and stripped != line:
+                return len(line) - len(stripped)
+    except OSError:
+        pass
+    return default
+
+
 def atomic_write_text(path: Path, text: str) -> None:
     """Write ``text`` to ``path`` atomically (temp file in the same dir + replace).
 
@@ -105,8 +117,8 @@ def atomic_write_text(path: Path, text: str) -> None:
     These files live on a bind mount shared between the worker container and its host. The
     container runs as root; ``mkstemp`` creates 0600 and ``os.replace`` keeps the temp file's
     metadata, so a single ``/spbot_metric_toggle`` turned ``db_instances.json`` from
-    ``tuser 0600`` into ``root 0600`` — and the master, which reads the worker over SFTP as
-    ``tuser``, could no longer open it. ``merge_worker_config`` reported it as "not on worker"
+    ``labuser 0600`` into ``root 0600`` — and the master, which reads the worker over SFTP as
+    ``labuser``, could no longer open it. ``merge_worker_config`` reported it as "not on worker"
     and the deploy's copy step then overwrote the operator's toggle with the master's file.
     The write succeeded, the change was real, and the next deploy silently destroyed it.
     """

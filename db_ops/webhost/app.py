@@ -46,6 +46,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote
 
+from db_ops.lib import field_names
 from db_ops.lib import web_auth
 from db_ops.lib.timezone import format_display
 from db_ops.webhost import pages
@@ -774,7 +775,8 @@ class WebApp:
                 })
             result.append({
                 "app_code": block["app_code"],
-                "ord": block.get("ord") or 0,
+                # `sort_order` since 0.22.0; `ord` is still read. The key below is the page's own.
+                "ord": field_names.read(block, "webhost_app", "sort_order", 0) or 0,
                 "display_name": block.get("display_name") or block["app_code"],
                 "summary": block.get("summary") or "",
                 "doc": block.get("doc") or "",

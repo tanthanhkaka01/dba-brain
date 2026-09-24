@@ -60,4 +60,4 @@ def test_save_updates_adds_new_chat_members_to_users_json(tmp_path):
     assert users_by_id["300"]["first_name"] == "New"
     assert users_by_id["300"]["last_name"] == "User"
     assert users_by_id["300"]["username"] == "new_user"
-    assert users_by_id["300"]["status"] == "active"
+    assert users_by_id["300"]["active"] is True

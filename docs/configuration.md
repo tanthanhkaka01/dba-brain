@@ -202,7 +202,7 @@ is a property of a machine, not its identity.
 | `encrypted_secret_text.json` | The encrypted secret store. Generated, never hand-edited — see [`docs/security.md`](./security.md). |
 | `config_catalog.json` | Which of the files above are mirrored into the store for the web console to read and edit, and how a record inside each is identified. A file missing from here is invisible to the console. |
 | `sre_config.json` | How lab environments are built: hypervisor, templates, network, and per-engine install defaults. |
-| `shared_config_objects.json` | **Reference, not configuration.** Every field of the seven shared objects in §5 — required or not, range, default, and what its number is measured against. Identical on every node; read by `common.cli describe-object`, and editing it changes nothing an app does. |
+| `shared_config_objects.json` | **Reference, not configuration.** Every field of the shared objects in §5 and of the records an operator edits (`sql_command`, `sql_target`, `db_instance`, `telegram_support_command`, `metric_definition` and the rest - from 0.22.0 every config file in `data/`, plus every request and answer of `common.cli`, and from 0.23.0 the reference's own shape: 153 entries) — required or not, range, default, and what its number is measured against. Identical on every node; read by `common.cli describe-object` and held to the estate by `check-objects`; editing it changes nothing an app does. |
 
 ---
 
@@ -228,7 +228,7 @@ does, whether it is required, what values it takes, its default, and **what its 
 against**. Ask it rather than reading it:
 
 ```bash
-python -m db_ops.common.cli describe-object '{}'                     # the seven, with field counts
+python -m db_ops.common.cli describe-object '{}'                     # every entry, with field counts
 python -m db_ops.common.cli describe-object '{"object": "time_window"}'
 python -m db_ops.common.cli describe-object '{"object": "time_window", "field": "retry_interval"}'
 ```

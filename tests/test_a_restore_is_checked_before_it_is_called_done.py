@@ -19,10 +19,14 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from db_ops.backup_restore.cli import _verify_request, _verify_targets
+from db_ops.backup_restore.config import DatabaseRestoreMapping
 
 
-def _mapping(source: str, restored: str = "") -> SimpleNamespace:
-    return SimpleNamespace(source_database_name=source, restore_database_name=restored)
+def _mapping(source: str, restored: str = "") -> DatabaseRestoreMapping:
+    """The REAL mapping class, not a stand-in. A SimpleNamespace here carried the attribute names
+    the code asked for rather than the ones the parser produces, so the suite passed while every
+    engine restore's verification was skipped for want of a single name."""
+    return DatabaseRestoreMapping(source_database=source, target_database=restored or source)
 
 
 def _config(**kwargs) -> SimpleNamespace:
@@ -59,7 +63,7 @@ def test_the_request_carries_the_target_login_and_the_restored_names() -> None:
 
     assert request == {
         "db_type": "sqlserver",
-        "databases": ["SALES_STG"],
+        "database_names": ["SALES_STG"],
         "target": {"host": "192.0.2.10", "port": 1433, "username": "sa", "password": "s3cret"},
     }
 

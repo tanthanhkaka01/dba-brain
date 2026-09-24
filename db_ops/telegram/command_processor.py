@@ -13,6 +13,9 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from db_ops.common import data_sources
+from db_ops.lib.target_flags import is_record_active
+from db_ops.lib import field_names
+from db_ops.lib import node_role as node_role_rule
 from db_ops.lib.listing import active_only, choice_lines, hidden_note
 from db_ops.lib.secret_text import SECRET_KEY_ENV_VAR
 from db_ops.config import DEFAULT_CONFIG_PATH, load_config
@@ -554,7 +557,7 @@ def process_one_command_message(
     queued_reply = 0
     action_result: dict[str, Any] | None = None
     action_error: str | None = None
-    if command.action_type in {"sql_execute", "cli_execute", "add_sql_task", "sql_to_xlsx", "list_server_id", "list_all_command", "list_sql_tasks", "list_metrics", "metric_toggle", "create_table_from_xlsx"}:
+    if command.action_type in ACTION_TYPES:
         missing_parameter = first_missing_prompt_parameter(command, parsed_message["args"])
         if missing_parameter is not None:
             return queue_missing_parameter_prompt(
@@ -658,15 +661,21 @@ def load_support_commands(path: str | Path = DEFAULT_COMMANDS_PATH) -> list[Supp
     return commands
 
 
+#: Every action a support command can take. One set, read by the dispatcher and held against
+#: `telegram_support_command.action_type` in shared_config_objects.json by the suite, so a new action
+#: cannot be added to one and not the other.
+ACTION_TYPES = frozenset({
+    "sql_execute", "cli_execute", "add_sql_task", "sql_to_xlsx", "list_server_id",
+    "list_all_command", "list_sql_tasks", "list_metrics", "metric_toggle", "create_table_from_xlsx",
+})
+
+
 def _command_runs_on_node(command_node_role: str, node_role: str) -> bool:
     """Telegram support-command role match, mirroring the app-command daemon. ``all``/``both``/
     ``any`` run on every node; otherwise the command's role must equal the node's role. A
     command with no role defaults to ``worker`` (set at load), so undefined/legacy ``spbot_*``
     commands keep being handled by the worker as before."""
-    role = (command_node_role or "worker").strip().lower()
-    if role in ("all", "both", "any"):
-        return True
-    return role == (node_role or "master").strip().lower()
+    return node_role_rule.runs_on(command_node_role, node_role, default="worker")
 
 
 def _resolve_node_role(config_path: str | Path | None = None) -> str:
@@ -715,14 +724,14 @@ def command_permission(*, row: Any, command: SupportCommand, data_dir: Path) -> 
 def telegram_group_allow_command(path: Path, *, chat_id: str) -> int:
     # Through the one reader (common.data_sources); this app still owns what the records mean.
     for item in data_sources.load_telegram_groups(path):
-        if str(item.get("group_id", "")) == chat_id and str(item.get("status", "active")) == "active":
+        if str(item.get("group_id", "")) == chat_id and is_record_active(item):
             return int(item.get("allow_command", 0))
     return 0
 
 
 def telegram_user_type(path: Path, *, user_id: str) -> int:
     for item in data_sources.load_telegram_users(path):
-        if str(item.get("user_id", "")) == user_id and str(item.get("status", "active")) == "active":
+        if str(item.get("user_id", "")) == user_id and is_record_active(item):
             return int(item.get("user_type", 0))
     return 0
 
@@ -1012,7 +1021,7 @@ def prompt_choice_text(parameter: dict[str, Any], parameters: list[dict[str, Any
     Declared per parameter in ``telegram_support_commands.json``::
 
         "prompt_choices": {"command": "list-schemas", "data_key": "schemas",
-                           "request": {"target": "{server_id}", "database": "{database}"}}
+                           "request": {"target": "{server_id}", "database_name": "{database}"}}
 
     ``{name}`` in the request is filled from the answer already given for that parameter, which is
     what makes the two steps of ``/spbot_xlsx_to_table`` chain: the database list needs the server
@@ -1616,7 +1625,7 @@ def execute_create_table_from_xlsx_command(*, command: SupportCommand,
 
     request: dict[str, Any] = {
         "target": _arg(1),
-        "database": _arg(2),
+        "database_name": _arg(2),
         "schema": _arg(3),
         "file_base64": _arg(4),
         "table_name": _arg(5),
@@ -1648,7 +1657,7 @@ def execute_create_table_from_xlsx_command(*, command: SupportCommand,
     return {
         "status": "success",
         "server_id": data["server_id"],
-        "database": data["database"],
+        "database": data["database_name"],
         "schema": data["schema"],
         "table_name": data["table_name"],
         "qualified_name": data["qualified_name"],
@@ -1720,7 +1729,9 @@ def menu_order_of(entry: Any) -> float:
     somebody forgot to place should be visible, not first.
     """
     try:
-        return float(entry.get("menu_order"))
+        # sort_order is the standard name (0.22.0 section 1.0); menu_order is what the file says
+        # until every node reads both.
+        return float(field_names.read(entry, "telegram_support_command", "sort_order"))
     except (TypeError, ValueError):
         return float("inf")
 
@@ -2367,7 +2378,7 @@ def parse_add_sql_time_window(spec: str) -> dict[str, int] | None:
 def execute_add_sql_task_command(*, command: SupportCommand, args: list[str]) -> dict[str, Any]:
     """Register + enable a new SQL task from the collected conversation parameters.
 
-    Parameter order (from action_config.parameters): server_id, sql_name, schedule, output,
+    Parameter order (from action_config.parameters): server_id, display_name, schedule, output,
     sql_text. **db_type, instance and target database are not asked for** — they are already
     recorded against the server in ``db_instances.json``, so asking made the conversation four
     messages longer and let the operator enter values that do not resolve (that is how
@@ -2402,7 +2413,7 @@ def execute_add_sql_task_command(*, command: SupportCommand, args: list[str]) ->
             "service_name": resolved["service_name"],
             "instance_name": resolved["instance_name"],
             "credential_name": resolved["credential_name"],
-            "sql_name": arg(2),
+            "display_name": arg(2),
             "sql_text": arg(5),
             "output": output,
             # The window's four keys are the command's own flags, so they travel as fields rather

@@ -201,7 +201,7 @@ def test_the_named_database_is_the_one_the_query_runs_in(monkeypatch):
     data = db_catalog.list_schemas({"target": "TEST-1", "database": "APPDB"})
 
     assert seen["database"] == "APPDB"
-    assert data["database"] == "APPDB"
+    assert data["database_name"] == "APPDB"
     # `sys` is machinery and hidden; `dbo` is not — it is where user tables live by default and
     # the schema a load is most often aimed at. Hiding it would empty the list on most databases.
     assert [s["name"] for s in data["schemas"]] == ["dbo", "staging"]

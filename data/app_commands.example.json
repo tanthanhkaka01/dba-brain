@@ -2,7 +2,7 @@
   "app_commands": [
     {
       "node_role": "all",
-      "app_ord": 1,
+      "sort_order": 1,
       "app_command_id": "APP-SQL_TASKS",
       "app_code": "APP-SQL_TASKS",
       "app_name": "APP-SQL_TASKS",
@@ -31,7 +31,7 @@
     },
     {
       "node_role": "all",
-      "app_ord": 2,
+      "sort_order": 2,
       "app_command_id": "APP-METRICS",
       "app_code": "APP-METRICS",
       "app_name": "db_ops_metrics",
@@ -59,7 +59,7 @@
     },
     {
       "node_role": "all",
-      "app_ord": 3,
+      "sort_order": 3,
       "app_command_id": "APP-REPORTS-CREATE",
       "app_code": "APP-REPORTS-CREATE",
       "app_name": "db_ops_reports_create",
@@ -81,12 +81,12 @@
         "to_minute": null,
         "repeat_interval": 120,
         "retry_interval": 60,
-        "timeout": 600
+        "timeout": 2400
       }
     },
     {
       "node_role": "all",
-      "app_ord": 4,
+      "sort_order": 4,
       "app_command_id": "APP-SLA-VALIDATE",
       "app_code": "APP-SLA-VALIDATE",
       "app_name": "db_ops_sla_validate",
@@ -113,7 +113,7 @@
     },
     {
       "node_role": "all",
-      "app_ord": 6,
+      "sort_order": 6,
       "app_command_id": "APP-TELEGRAM",
       "app_code": "APP-TELEGRAM",
       "app_name": "db_ops_telegram",
@@ -140,34 +140,7 @@
     },
     {
       "node_role": "all",
-      "app_ord": 8,
-      "app_command_id": "APP-REPORTS-INVENTORY-WORKFLOW",
-      "app_code": "APP-REPORTS-INVENTORY-WORKFLOW",
-      "app_name": "db_ops_reports_inventory_workflow",
-      "display_name": "Build inventory health + summary (local, reads the store directly)",
-      "log_scope": "reports_inventory_workflow",
-      "working_dir": "tools/db_ops",
-      "command_text": "python -m db_ops.reports.cli inventory-workflow --days 7 --beauty 1",
-      "active": true,
-      "time_window": {
-        "from_year": null,
-        "to_year": null,
-        "from_month": null,
-        "to_month": null,
-        "from_day": 1,
-        "to_day": 31,
-        "from_hour": 0,
-        "to_hour": 23,
-        "from_minute": null,
-        "to_minute": null,
-        "repeat_interval": 3600,
-        "retry_interval": 600,
-        "timeout": 1800
-      }
-    },
-    {
-      "node_role": "all",
-      "app_ord": 9,
+      "sort_order": 9,
       "app_command_id": "APP-WEBHOST",
       "app_code": "APP-WEBHOST",
       "app_name": "db_ops_webhost",
@@ -194,7 +167,7 @@
     },
     {
       "node_role": "all",
-      "app_ord": 11,
+      "sort_order": 11,
       "app_command_id": "APP-BACKUP-RESTORE",
       "app_code": "APP-BACKUP-RESTORE",
       "app_name": "db_ops_backup_restore",
@@ -223,7 +196,7 @@
     },
     {
       "node_role": "all",
-      "app_ord": 12,
+      "sort_order": 12,
       "app_command_id": "APP-CONTROL",
       "app_code": "APP-CONTROL",
       "app_name": "db_ops_control",

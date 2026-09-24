@@ -68,9 +68,16 @@ SQL Server's is authoritative and must not be doubled by adding its per-database
 
 Published by **`inventory-workflow --beauty 1`**, the same step that writes
 `database-inventory.html` and `server-metrics.html`. All three are pages that land in the directory
-the webhost serves, so they share one schedule (`APP-REPORTS-INVENTORY-WORKFLOW`). It briefly had a
+the webhost serves, so they share one schedule: the report **`rp_inventory_health`** in
+`reports_config.json`, built by `run-scheduled` like the metrics and backup reports. It briefly had a
 scheduled command of its own; that meant two commands reading the same store on two clocks to write
-into the same directory, which can only disagree about how fresh "the reports" are.
+into the same directory, which can only disagree about how fresh "the reports" are. The inventory
+itself was one too - the app command `APP-REPORTS-INVENTORY-WORKFLOW` - until 0.22.0, for the same
+reason moved into the reports app. It builds files and sends nothing, so its run is recorded as
+`built` (or `failed`, with the reason) and `repeat_interval` counts from it; a failure never stops
+the other reports of the pass. `metric_max_age_seconds` is the workflow's `--days`, in seconds,
+rounded up to whole days. `APP-REPORTS-CREATE`'s timeout is the budget for the whole pass, the
+inventory included.
 
 The standalone command remains for ad-hoc use — one server, or a different window:
 
@@ -249,6 +256,21 @@ picker is HTML only: the stored copy feeds Telegram, where a fleet-sized nav blo
 ## Config Files
 
 `data/reports_config.json` defines scheduled reports, report codes, enabled state, timing/dedupe behavior, target filters, and destination/routing behavior. Report type metadata is seeded into `report_types`.
+
+The reports `run-scheduled` produces, one entry each (`describe-object '{"object": "report_entry"}'`
+for every field):
+
+| `report_code` | What it is | Sends |
+| --- | --- | --- |
+| `rp_metric_daily_logging` | the day's metrics, logging level | Telegram |
+| `rp_metric_hourly_warning` | metrics at WARNING | Telegram |
+| `rp_metric_hourly_critical` | metrics at CRITICAL | Telegram |
+| `rp_backup_health_daily` | backup age against `backup_policy.json` | Telegram |
+| `rp_inventory_health` | the inventory: health overlay, merged `database-inventory.json`, its summary and the styled pages (`database-inventory.html`, `server-metrics.html`, index usage) | nothing - files the webhost serves; its run is recorded `built` / `failed` |
+
+Each entry's `time_window` is its own schedule; `APP-REPORTS-CREATE` is the pass that evaluates
+them, and its `timeout` is the budget for the whole pass, the inventory build included.
+`report_base_url` is the address every page and message links to.
 
 ## Data Flow
 

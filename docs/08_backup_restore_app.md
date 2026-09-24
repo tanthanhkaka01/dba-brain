@@ -474,7 +474,7 @@ The workflow uses a different transport mechanism depending on `vm_platform` in 
 | **Backup file selection** | `Path.rglob("*.bak")` over UNC mount | SSH `find ... -name "*.bak"` on remote Linux fs |
 | **Restore execution** | PowerShell `Invoke-Command -ComputerName` → sqlcmd on remote Windows | SSH `sqlcmd` executed on the remote Linux host |
 | **Delete old files** | PowerShell `Get-ChildItem -Include *.bak,*.trn` + `Remove-Item` over UNC | SSH `find ... -name "*.bak" -o -name "*.trn"` + `rm` |
-| **Credentials** | `cmdkey /add:<host>` sets up Windows credential manager for SMB | `vm_username` + `vm_password_env` used for paramiko SSH auth |
+| **Credentials** | `cmdkey /add:<host>` sets up Windows credential manager for SMB | the target's `username` + `password_ref` used for paramiko SSH auth |
 | **Log file** | `copy_sqlbk.log` written to `vm_log_unc` | Skipped (log not written for Linux targets) |
 | **Retention filter** | `*.bak` and `*.trn` only (no other files deleted) | `*.bak` and `*.trn` only |
 | **Cleanup timing** | After restore (copy → restore → delete) | After restore (copy → restore → delete) |
@@ -491,7 +491,7 @@ read a Windows UNC share directly, so the copy step reads the source with
   `*.bak`/`*.trn` mask is **not** used: with `recurse ON`, smbclient applies the
   mask to subdirectory names too and never descends into `FULL`/`LOG`. Pattern
   filtering happens locally afterward (`copy_file_patterns`).
-- When `databases[]` is configured, only those `<db>` subdirectories are fetched.
+- When `database_mappings[]` is configured, only those `<db>` subdirectories are fetched.
 - `smbclient` does not preserve file mtimes, so each backup's real time is
   recovered from its filename (`..._YYYYMMDD_HHMMSS[Z]`). A trailing `Z` (what db_ops' own
   backup scripts write since 0.20.0) means UTC; a name without it, as other tools on the source
@@ -518,7 +518,7 @@ Agent maintenance plan writing to `D:\DBA\SqlBK\<instance>\<db>\LOG`. A PITR att
 **The answer is a second entry, not a second mechanism.** `192.0.2.250` already shows the
 pattern: `ACME_TO_MSSQL2025_DOCKER` reads that host's Agent tree (`\...\SQLBK\APPDB-DB$APPDB`,
 where FULL and LOG sit together) and `ACME_MSSQL_DBOPS_TO_MSSQL2025_DOCKER` reads db_ops' own.
-One share each, no special support. `ACME_MSSQL_2_248_AGENT_PITR_TO_MSSQL25_2_116` is the same
+One share each, no special support. `ACME_MSSQL_2_248_AGENT_PITR_TO_LABSQL_2_116` is the same
 split for 2.248.
 
 Pointing the *existing* entry at the Agent tree instead would work, but it silently stops
@@ -530,7 +530,7 @@ Three things a second entry against the same source must get right:
   sets in one tree.
 - **Its own target database names.** Both restore the same source databases onto the same
   instance; the PITR entry maps each to `<name>_PITR`.
-- **An explicit `databases` list.** `databases: []` means "everything found under the import
+- **An explicit `database_mappings` list.** `database_mappings: []` means "everything found under the import
   directory", and a long-lived maintenance-plan tree accumulates: 2.248's still holds
   `SALESDB_Prod`, `APPDB_Org`, `APPDB_Prod`, `APPDB_Testing` and `GLOBEX` with fulls from 2025 and
   ~190 logs each.
@@ -990,6 +990,20 @@ built; the drill's hosts were simply outside it.
 **Do not "clean up" these records by turning metrics off again.** A drill whose hosts are unmonitored
 fails at 3 a.m. as a hung transfer, which is the most expensive shape a failure can take here.
 
+### A restore names both machines by `server_id` (since 0.22.0)
+
+Every restore entry carries `server_id` (the machine the backup is read from) and
+`target_server_id` (the instance it is restored onto), on the entry itself. The script-driven
+entries always did; the SQL Server engine entries put an `id` inside `source` and `target`, and
+three of those `target.id` values were labels with an address baked in (`LABSQL-DOCKER-…`) that
+matched nothing in `db_instances.json`. `source` and `target` now hold connection details only;
+`source.id` / `target.id` are still read, and lose to the entry's own ids when both are present.
+
+`check-references` holds both ids to the inventory (`restore source -> instance`,
+`restore target -> instance`). A target nobody monitors is registered **inactive** —
+`instance-add` with `"active": false` — rather than named by a label: the restore then points at a
+record that says what the machine is, and switching it on later is one field.
+
 ## The Transfer Copies the Chain, Not the Backup History
 
 A drill needs the pieces it will actually restore from, and nothing else. How that set is decided
@@ -1213,6 +1227,13 @@ Two properties are deliberate:
 - Restore SQL is wrong: run `restore-latest --dry-run` first and inspect generated SQL/log output.
 - Certificate problem: run `import-certificate --dry-run` and verify certificate config.
 - Restore succeeded but verification failed: run `verify-restore` and inspect SQL Server CHECKDB output.
+- *N database(s) restored and recovered, but the integrity check (DBCC CHECKDB) failed*: the data was
+  restored; the `DBCC CHECKDB` run on each database afterwards failed, and the database is recorded
+  `CHECK_FAILED` (not `FAILED`). It still fails the run and holds back retention cleanup. Msg 1823 /
+  7928 on a SQL Server container means the check could not create its internal snapshot on that
+  volume. **`"checkdb": false` on the restore entry skips the check** (default `true`); the run then
+  logs `dbcc-checkdb skipped … reason=checkdb_false_on_the_entry` and its step says so. Until
+  2026-09-24 the check had no switch and a failed one was reported as *restore failed*.
 - PITR fails with "no log backups found": log backups are required in the import folder covering the target point in time; verify that log files were copied with `copy-backup` before using `--point-in-time`.
 - PITR fails with "cannot parse point-in-time": use the exact format `YYYY-MM-DD HH:MM:SS +HH:MM` (space before the timezone offset, not a colon-less `+HHMM`).
 - `--restore-id` not found: the value must match the `restore_id` key exactly (case-sensitive) in `restore_config.json`.

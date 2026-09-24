@@ -195,7 +195,7 @@ def trace_sessions(request: Any) -> dict[str, Any]:
     return {
         "ok": True,
         "server_id": result.get("server_id", ""),
-        "database": result.get("database", ""),
+        "database_name": result.get("database_name", ""),
         "transaction_count": len(sessions),
         "session_count": len({record.get("session_id") for record in sessions}),
         "sessions": [_json_safe(record) for record in sessions],

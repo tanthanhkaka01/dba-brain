@@ -38,6 +38,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from db_ops.lib.field_names import with_both_names
 from db_ops.lib.paths import DEFAULT_DATA_DIR, TOOL_ROOT  # noqa: F401 - one definition
 
 from db_ops.lib import secret_text as _secret_text
@@ -337,11 +338,19 @@ def load_remote_credentials(data_dir: str | Path | None = None) -> list[dict[str
 
 
 def load_db_instances(data_dir: str | Path | None = None) -> list[dict[str, Any]]:
-    """Load the raw db instance records from ``db_instances.json``."""
+    """Load the db instance records from ``db_instances.json``, each under both field spellings.
+
+    ``lib.field_names.with_both_names`` gives every renamed field (0.22.0 section 1.0: ``enabled``/
+    ``active``, ``env``/``environment``, ``ord``/``sort_order``, ``database``/``database_name``) both
+    names on the copy returned here, so every reader downstream finds the value whichever spelling
+    the file uses. This is a read path only: the writers read the file themselves and keep its own
+    spelling, so nothing here is written back.
+    """
     path = db_instances_path(data_dir)
     if not path.exists():
         return []
-    return list(load_json_file(path).get("db_instances", []))
+    return [with_both_names(item, "db_instance") if isinstance(item, dict) else item
+            for item in load_json_file(path).get("db_instances", [])]
 
 
 def load_inventory(data_dir: str | Path | None = None) -> list[dict[str, Any]]:
@@ -553,7 +562,9 @@ def webhost_endpoints(data_dir: str | Path | None = None, *,
         parsed = endpoints_lib.parse_serve_options(str(record.get("command_text") or ""))
         if parsed:
             options = parsed
-            options["enabled"] = bool(record.get("enabled", True))
+            # An app command is switched off by `active`; it has no `enabled`, so reading that
+            # reported a stopped web host as enabled whatever the record said.
+            options["enabled"] = bool(record.get("active", True))
             break
 
     console_mount = endpoints_lib.DEFAULT_CONSOLE_MOUNT

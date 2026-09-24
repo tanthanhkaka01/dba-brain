@@ -46,8 +46,10 @@ from db_ops.common.config_admin import (
     normalize_time_window,
     slugify,
 )
-from db_ops.lib import task_output
+from db_ops.lib import field_names, shared_objects, task_output
+from db_ops.lib.notify import NotifyConfigError, parse_notify_config
 from db_ops.lib.sql_access import SQL_TASK_DB_TYPES
+from db_ops.lib.sql_task_target import instance_matches, instance_not_found_message
 from db_ops.lib.task_input import TARGET_PLACEHOLDERS
 from db_ops.lib.task_output import TaskOutputError
 
@@ -69,11 +71,26 @@ INPUT_TYPES = ("none", "python")
 
 _PLACEHOLDER = re.compile(r"\{([^{}]*)\}")
 
+#: What a request may carry beyond the record's own fields: how to write it, not what it holds.
+#: Everything else a request names must be a field of the record, and the record's fields are read
+#: from the reference (``sql_command`` / ``sql_target`` in shared_config_objects.json) rather than
+#: listed here, so this module cannot keep a second opinion about the shape. Until 0.22.0 a key it
+#: did not recognise was dropped in silence: ``"databse_name"`` registered a target on the default
+#: database and answered ``ok``.
+COMMAND_REQUEST_OPTIONS = frozenset({"sql_text", "replace"})
+TARGET_REQUEST_OPTIONS = frozenset({
+    "replace", "manual_only",
+    # The flat spelling of the two notify rules and of output, kept for callers that predate the
+    # blocks; each is folded into the block before the record is written.
+    "logging_on_run", "alert_on_error", "logging_chat", "error_chat",
+    "logging_chat_id", "error_chat_id", "output_chat", "output_chat_id", "output_max_rows",
+})
+
 USAGE_COMMAND = """usage: python -m db_ops.common.cli sql-command-add <json>|@<file>|- [--data-dir ...]
 
 Registers WHAT a SQL task runs, in data/sql_commands.json. Where it runs is sql-target-add.
 
-  {"sql_name": "Drain the working-hour queue",     // required
+  {"display_name": "Drain the working-hour queue", // required (sql_name is still read)
    "db_type": "sqlserver",                          // required: sqlserver|oracle (what a task can run on)
    "script_type": "single",                         // single (default) | array | folder
    "script_path": "assets/tasks/sqlserver/030_x.sql",   // single/folder: a file that EXISTS
@@ -235,12 +252,43 @@ def _write_script(root: Path, request: dict[str, Any], *, sql_id: int, sql_name:
     return relpath
 
 
+def _refuse_unknown_keys(request: dict[str, Any], *, object_name: str,
+                        options: frozenset[str], data_root: Path) -> None:
+    """Refuse a request key that is neither a field of the record nor an option of the command."""
+    fields = shared_objects.field_names(object_name, data_dir=data_root)
+    unknown = sorted(name for name in request
+                     if name not in fields and name not in options and not str(name).startswith("_"))
+    if unknown:
+        raise SqlTaskAdminError(
+            f"{', '.join(unknown)}: not a field of {object_name}, so nothing would read "
+            f"{'it' if len(unknown) == 1 else 'them'}. Fields ({object_name} in "
+            f"shared_config_objects.json): {', '.join(fields)}. Options: {', '.join(sorted(options))}.")
+
+
+def _refuse_invalid_record(entry: dict[str, Any], *, object_name: str, data_root: Path) -> None:
+    """Hold the record about to be written to the reference - the same check check-objects makes."""
+    findings = [item for item in shared_objects.check_record(
+        object_name, entry, where=object_name, data_dir=data_root)
+        if item["kind"] not in shared_objects.NOTICE_KINDS]
+    if findings:
+        detail = "; ".join(f"{item['field']}: {item['detail']}" for item in findings)
+        raise SqlTaskAdminError(
+            f"the {object_name} would not match its reference, so nothing was written: {detail}")
+
+
 def add_sql_command(request: dict[str, Any], *, data_dir: str | Path | None = None,
                     tool_root: str | Path | None = None) -> dict[str, Any]:
     """Write one entry into ``data/sql_commands.json``. Returns what was written."""
     if not isinstance(request, dict):
         raise SqlTaskAdminError("request must be a JSON object.")
     data_root, root = _root(data_dir, tool_root)
+    # `sql_name` is still accepted and written as `display_name` (0.22.0 section 1.4).
+    request, _renamed, conflicts = field_names.standardize(request, "sql_command")
+    if conflicts:
+        raise SqlTaskAdminError("sql_name and display_name were both given, with different "
+                                "values - give display_name only.")
+    _refuse_unknown_keys(request, object_name="sql_command", options=COMMAND_REQUEST_OPTIONS,
+                         data_root=data_root)
 
     db_type = str(request.get("db_type") or "").strip().lower()
     if db_type not in KNOWN_DB_TYPES:
@@ -253,9 +301,10 @@ def add_sql_command(request: dict[str, Any], *, data_dir: str | Path | None = No
             f"db_type {db_type!r} is a valid engine for this estate, but a scheduled SQL task can "
             f"only be run on {SQL_TASK_DB_TYPES}. The task would register and then fail at its "
             f"first run with 'Unsupported db_type: {db_type}'.")
-    sql_name = str(request.get("sql_name") or "").strip()
+    sql_name = str(request.get("display_name") or "").strip()
     if not sql_name:
-        raise SqlTaskAdminError("sql_name is required.")
+        raise SqlTaskAdminError("display_name is required - the sentence a person reads for this "
+                                "task in Telegram and in list-tasks.")
 
     script_type = str(request.get("script_type") or "single").strip().lower()
     if script_type not in SCRIPT_TYPES:
@@ -284,7 +333,7 @@ def add_sql_command(request: dict[str, Any], *, data_dir: str | Path | None = No
         "sql_id": sql_id,
         "sql_code": str(request.get("sql_code") or
                         f"{db_type.upper()}-{sql_id:03d}-{slugify(sql_name).upper()}").strip(),
-        "sql_name": sql_name,
+        "display_name": sql_name,
         "db_type": db_type,
         "script_type": script_type,
     }
@@ -338,10 +387,15 @@ def add_sql_command(request: dict[str, Any], *, data_dir: str | Path | None = No
     entry["active"] = bool(request.get("active", True))
     if request.get("autocommit"):
         entry["autocommit"] = True
+    # A field the reference describes and this command accepts must reach the file - accepting it
+    # and not writing it is the silent drop the reference check exists to end.
+    if request.get("progress_per_file") is not None:
+        entry["progress_per_file"] = bool(request["progress_per_file"])
     note = str(request.get("note") or "").strip()
     if note:
         entry["note"] = note
 
+    _refuse_invalid_record(entry, object_name="sql_command", data_root=data_root)
     if existing:
         index = commands["sql_commands"].index(existing[0])
         commands["sql_commands"][index] = entry
@@ -367,12 +421,42 @@ def add_sql_command(request: dict[str, Any], *, data_dir: str | Path | None = No
     }
 
 
+def _refuse_an_instance_the_inventory_lacks(request: dict[str, Any], *, command: dict[str, Any],
+                                            server_id: str, data_root: Path) -> None:
+    """The server and the instance a target names must be in ``db_instances.json``.
+
+    It is what the runner checks before it connects, and a target that fails it fails on its
+    schedule - `SQL033` named instance `APPINST` on a server whose instance is `MSSQLSERVER` and failed
+    every 30 minutes from 02:00 (2026-09-24). Here it is refused when it is written, naming the
+    instances the server has. The database is not checked: whether it exists is the server's to
+    say, and the runner asks the server. A root with no inventory yet is not configured, not
+    wrong, so nothing is checked there.
+    """
+    path = data_root / "db_instances.json"
+    if not path.is_file():
+        return
+    records = [record for record in _read_json(path).get("db_instances", []) or []
+               if isinstance(record, dict)]
+    if not records:
+        return  # an inventory with nothing in it yet: not configured, like no file at all
+    db_type = str(request.get("db_type") or command.get("db_type") or "").strip().lower()
+    wanted = request.get("instance_name")
+    if not any(str(record.get("server_id") or "") == server_id
+               and str(record.get("db_type") or "").strip().lower() == db_type
+               and instance_matches(record.get("instance_name") or record.get("sid"), wanted, db_type)
+               for record in records):
+        raise SqlTaskAdminError(instance_not_found_message(
+            server_id=server_id, db_type=db_type, instance_name=wanted, records=records))
+
+
 def add_sql_target(request: dict[str, Any], *,
                    data_dir: str | Path | None = None) -> dict[str, Any]:
     """Write one entry into ``data/sql_targets.json``. Returns what was written."""
     if not isinstance(request, dict):
         raise SqlTaskAdminError("request must be a JSON object.")
     data_root, _ = _root(data_dir, None)
+    _refuse_unknown_keys(request, object_name="sql_target", options=TARGET_REQUEST_OPTIONS,
+                         data_root=data_root)
 
     raw_id = request.get("sql_id")
     try:
@@ -391,6 +475,9 @@ def add_sql_target(request: dict[str, Any], *,
         # else would ever say so.
         raise SqlTaskAdminError(
             f"no SQL command with sql_id {sql_id}. Register it with sql-command-add first.")
+
+    _refuse_an_instance_the_inventory_lacks(request, command=command, server_id=server_id,
+                                            data_root=data_root)
 
     targets_path = data_root / "sql_targets.json"
     targets = _read_json(targets_path)
@@ -429,20 +516,20 @@ def add_sql_target(request: dict[str, Any], *,
         "credential_name": request.get("credential_name"),
         "time_window": window,
         "active": bool(request.get("active", True)),
-        "notify": {
-            "logging_on_run": _notify_rule_dict(
-                enabled=bool(request.get("logging_on_run", True)),
-                telegram_chat=logging_chat, chat_id=request.get("logging_chat_id")),
-            "alert_on_error": _notify_rule_dict(
-                enabled=bool(request.get("alert_on_error", True)),
-                telegram_chat=error_chat, chat_id=request.get("error_chat_id")),
-        },
+        "notify": _notify_block(request, logging_chat=logging_chat, error_chat=error_chat),
         "output": output,
     }
+    # The transport normally belongs to the server (db_instances.json). A target may override it,
+    # and a field the reference describes must reach the file rather than be accepted and dropped.
+    if request.get("sql_access"):
+        if not isinstance(request["sql_access"], dict):
+            raise SqlTaskAdminError("sql_access must be an object; see describe-object sql_access.")
+        entry["sql_access"] = dict(request["sql_access"])
     note = str(request.get("note") or "").strip()
     if note:
         entry["note"] = note
 
+    _refuse_invalid_record(entry, object_name="sql_target", data_root=data_root)
     if existing:
         index = targets["sql_targets"].index(existing[0])
         targets["sql_targets"][index] = entry
@@ -464,6 +551,35 @@ def add_sql_target(request: dict[str, Any], *,
         "files_written": ["sql_targets.json"],
         "next": [f"db-ops sql_tasks list-tasks --sql-id {sql_id}"],
     }
+
+
+def _notify_block(request: dict[str, Any], *, logging_chat: str, error_chat: str) -> dict[str, Any]:
+    """The target's ``notify`` block: the block itself when the request gives one, else the flat keys.
+
+    The block is the shape the file holds and the reference describes, so a request copied out of
+    ``sql_targets.json`` carries it - and until 0.22.0 it was dropped in favour of the flat defaults,
+    which re-routed a moved task's messages without a word.
+    """
+    block = request.get("notify")
+    if block is None:
+        return {
+            "logging_on_run": _notify_rule_dict(
+                enabled=bool(request.get("logging_on_run", True)),
+                telegram_chat=logging_chat, chat_id=request.get("logging_chat_id")),
+            "alert_on_error": _notify_rule_dict(
+                enabled=bool(request.get("alert_on_error", True)),
+                telegram_chat=error_chat, chat_id=request.get("error_chat_id")),
+        }
+    if not isinstance(block, dict):
+        raise SqlTaskAdminError("notify must be an object with logging_on_run and alert_on_error.")
+    try:
+        parsed = parse_notify_config({"notify": block}, context="notify")
+    except NotifyConfigError as exc:
+        raise SqlTaskAdminError(str(exc)) from exc
+    return {name: _notify_rule_dict(enabled=rule.enabled, telegram_chat=rule.telegram_chat,
+                                    chat_id=rule.chat_id)
+            for name, rule in (("logging_on_run", parsed.logging_on_run),
+                               ("alert_on_error", parsed.alert_on_error))}
 
 
 def _describe(outcome: dict[str, Any]) -> str:

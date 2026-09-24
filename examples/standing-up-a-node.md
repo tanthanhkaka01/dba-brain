@@ -215,7 +215,7 @@ resolves to the chat you meant, and a message arrives there.
 ```powershell
 '{"server_id": "ACME-192-0-2-10-SQL01", "db_type": "sqlserver", "ip": "192.0.2.10",
   "port": 1433, "major_version": 16, "service_name": "MSSQLSERVER", "platform": "windows",
-  "env": "prod", "username": "monitor_user", "password": "<password>"}' | db-ops common instance-add -
+  "environment": "prod", "username": "monitor_user", "password": "<password>"}' | db-ops common instance-add -
 ```
 
 It writes the inventory record, the credential in `users.json`, and the password **encrypted only** —
@@ -235,7 +235,7 @@ Anything else in the object is passed through to the record: `cmd_access`, `sql_
 ```powershell
 db-ops check-credentials                     # every target resolves to a real login
 db-ops common check-secret '{}'              # each secret actually logs in
-'{"target": "ACME-192-0-2-10-SQL01", "sql": "SELECT @@VERSION"}' | db-ops common run-sql -
+'{"target": "ACME-192-0-2-10-SQL01", "sql_text": "SELECT @@VERSION"}' | db-ops common run-sql -
 ```
 
 **Proves:** the credential resolves, the login works, and the driver can reach the instance. A target
@@ -326,7 +326,7 @@ then **where**, once per server.
 
 ```powershell
 # WHAT runs. `sql_text` writes the script for you; `script_path` names one that already exists.
-'{"sql_name": "Row count of the audit table", "db_type": "sqlserver",
+'{"display_name": "Row count of the audit table", "db_type": "sqlserver",
   "sql_text": "SELECT COUNT(*) AS n FROM dbo.audit_log;"}' |
   db-ops common sql-command-add -
 
@@ -389,7 +389,7 @@ And on the pages it publishes, at `http://<this node>:8080/`:
 | `/report_dba/sla.html` | SLA / SLO compliance |
 | `/db_ops/login` | the console: config, logs, run a command |
 
-The inventory page is built by `APP-REPORTS-INVENTORY-WORKFLOW`, hourly. On its first run it **seeds**
+The inventory page is built by the report `rp_inventory_health` (reports_config.json), every 30 minutes. On its first run it **seeds**
 `runtime/reports/database-inventory.json` from your `db_instances.json` and merges fresh health into
 it on every run after that; with no instance registered it reports `NOT_CONFIGURED` and publishes
 nothing. The per-server page needs **two** collections before any rate exists, and 24-hour columns

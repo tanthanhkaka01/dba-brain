@@ -260,9 +260,18 @@ def ensure_docker(
     *,
     sudo_password: str | None,
     containers_dir: str = "/opt/db_ops/containers",
+    backup_mount: str = "",
 ) -> dict:
     """Make sure the remote Ubuntu host can run ``docker`` + ``docker compose`` as the SSH user,
-    and that the containers dir exists and is writable — installing Docker over SSH if missing.
+    and that every directory a lab writes exists and is the user's — installing Docker over SSH
+    if missing.
+
+    ``backup_mount`` is the lab's backup bind mount (``/opt/db_ops/backup`` by default). It is
+    prepared here with the containers dir because the provisioner creates it later over SFTP as
+    the plain SSH user, which cannot write in a root-owned ``/opt/db_ops``: on 2026-09-24
+    ``/spbot_create_db_docker ... install_docker=yes`` failed with *Cannot create /opt/db_ops/backup
+    ... Permission denied* from a user with full sudo rights, because only the containers dir had
+    ever been prepared with them.
 
     Steps (all idempotent; a host that already has Docker only gets the group + dir touched):
 
@@ -272,7 +281,7 @@ def ensure_docker(
        (``docker.io`` + ``docker-compose-v2``) when ``curl`` is absent — needs root, run through
        ``sudo -S``;
     3. enable + start the docker service, add the SSH user to the ``docker`` group, and create
-       the containers dir owned by that user;
+       the containers dir and the backup mount owned by that user;
     4. reconnect (so the new group membership applies) and re-probe.
 
     Returns a summary dict. Raises :class:`RemoteHostError` if Docker still is not usable —
@@ -299,13 +308,22 @@ def ensure_docker(
             )
         installed = True
 
-    # Service up, user in the docker group, containers dir owned by the user — all via root.
-    host.run_sudo(
+    # Service up, user in the docker group, every directory a lab writes owned by the user - all
+    # via root. The result is checked: it used to be ignored, so a sudo that failed here surfaced
+    # only later, as an SFTP "Permission denied" on a directory nobody could explain.
+    folders = [folder for folder in (containers_dir, backup_mount) if folder]
+    quoted = " ".join(shlex.quote(folder) for folder in folders)
+    prepared = host.run_sudo(
         "systemctl enable --now docker 2>/dev/null || service docker start || true; "
         f"getent group docker >/dev/null || groupadd docker; usermod -aG docker {host.user}; "
-        f"mkdir -p {containers_dir}; chown -R {host.user}: {containers_dir}",
+        f"mkdir -p {quoted} && chown -R {shlex.quote(host.user)}: {quoted}",
         sudo_password, capture_output=True,
     )
+    if prepared.returncode != 0:
+        raise RemoteHostError(
+            f"Could not prepare {', '.join(folders)} on {host.host} as root for '{host.user}' "
+            f"(exit {prepared.returncode}). Detail: {str(prepared.stderr or '').strip()[:300]}"
+        )
     # New login session so the docker group membership takes effect for plain `docker` calls.
     host.reconnect()
 
@@ -319,7 +337,7 @@ def ensure_docker(
             f"Log out/in on the host or add the user to the docker group, then re-run."
         )
     return {"host": host.host, "already_present": already, "installed": installed,
-            "containers_dir": containers_dir}
+            "containers_dir": containers_dir, "backup_mount": backup_mount}
 
 
 def open_ubuntu_host(target: str, *, data_dir=None, connect_timeout_seconds: int | None = None) -> "RemoteUbuntuHost":

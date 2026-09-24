@@ -34,7 +34,7 @@ reason ``common`` ever did.
 
 Usage::
 
-    python -m db_ops.common.cli add-sql '{"db_type": "sqlserver", "server_id": "...", "sql_name": "...", "sql_file": "..."}'
+    python -m db_ops.common.cli add-sql '{"db_type": "sqlserver", "server_id": "...", "display_name": "...", "sql_file": "..."}'
     python -m db_ops.common.cli metric-toggle '{"server_id": "...", "state": "off", "scope": "collector:cmd"}'
     python -m db_ops.common.cli list-targets
     python -m db_ops.common.cli run-sql '{"target": "ACME-192-0-2-115", "database": "SALESDB", "sql": "SELECT 1 AS x"}'
@@ -45,6 +45,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 from db_ops.common import config_admin
 from db_ops.lib.json_io import looks_like_json_request
@@ -109,6 +110,8 @@ USAGE = (
     "  due-check        Would this time_window run now, and if not why not (see --help)\n"
     "  check-objects    Does this node's config obey the shared-object reference (see --help)\n"
     "  check-references  Which config pointer lands nowhere: server_id, credential_name (see --help)\n"
+    "  upgrade-config   After upgrading dbabrain: move data/*.json to this version's shapes (see --help)\n"
+    "  standardize-field-names  Move data/*.json to the standard field names; plan first (see --help)\n"
     "  timezone         Which clock this node shows, and record it in the store (see --help)\n"
     "  host-service     Start/stop/restart services on a host and wait for the end state (see --help)\n"
     "  host-restart     Restart a host and prove it came back (see --help)\n"
@@ -441,7 +444,7 @@ the shipped catalogue came to hold three different schedules for the same app at
                                                    // of the window is kept
     "data_dir": "data"}                            // optional; defaults to data/
 
-Editable: active, node_role, run_mode, max_parallel, time_window, note, app_ord, display_name.
+Editable: active, node_role, run_mode, max_parallel, time_window, note, sort_order, display_name.
 The field list comes from the app_command entry in data/shared_config_objects.json, not from here.
 
 Refused, and not by oversight: app_command_id, app_code, app_name, log_scope, command_text and
@@ -642,7 +645,7 @@ def _lift_example_command(argv: list[str]) -> int:
         return response.emit(response.fail(
             "lift-example", "'source' is required: the file to lift from."))
     default_dest = Path(source).with_suffix("").with_suffix(".example.json")
-    dest = str(request.get("dest") or default_dest)
+    dest = str(request.get("destination") or request.get("dest") or default_dest)
 
     try:
         summary = lift_example(
@@ -1048,8 +1051,12 @@ def _run_sql_command(argv: list[str]) -> int:
             message=(f"{safe.get('row_count', 0)} row(s)"
                      + (f", {safe['affected_rows']} affected" if safe.get("affected_rows") else "")
                      + f" from {safe.get('server_id')}"
-                     + (f".{safe['database']}" if safe.get("database") else "")
-                     + (" (truncated)" if safe.get("truncated") else "")),
+                     + (f".{safe['database_name']}" if safe.get("database_name") else "")
+                     + (" (truncated)" if safe.get("truncated") else "")
+                     # A warning ended the reading: say so where the reader looks first, and the
+                     # text itself is in data.warnings.
+                     + (f"; {len(safe['warnings'])} SQL Server warning(s), nothing after the first "
+                        "could be read" if safe.get("warnings") else "")),
             data=safe,
             metrics={"row_count": safe.get("row_count", 0),
                      "affected_rows": safe.get("affected_rows", 0),
@@ -1261,13 +1268,13 @@ def _run_cmd_command(argv: list[str]) -> int:
             answer("run-cmd",
                    message=f"exit={outcome.exit_code} on {target.describe()}",
                    data=data, metrics={"exit_code": outcome.exit_code,
-                                       "duration_seconds": outcome.duration_seconds})
+                                       "duration_ms": int(round(outcome.duration_seconds * 1000))})
             if outcome.ok else
             answer("run-cmd",
                    f"exit={outcome.exit_code}" + (f": {detail[:400]}" if detail else ""),
                    message=f"exit={outcome.exit_code} on {target.describe()}",
                    data=data, metrics={"exit_code": outcome.exit_code,
-                                       "duration_seconds": outcome.duration_seconds})
+                                       "duration_ms": int(round(outcome.duration_seconds * 1000))})
         )
     # **The one command whose exit code is not a summary of its response**, and deliberately so:
     # it passes through the REMOTE command's code. `run-cmd ... ; echo $?` is asking what the
@@ -1312,7 +1319,7 @@ FILE_TRANSFER_USAGE = (
     "whole trip. Linux/SSH on both sides. Two commands would stage the bytes here and\n"
     "verify each hop separately, which names the wrong hop when the hashes differ:\n"
     '  {"source": {"target": "ACME-192-0-2-249-HOST", "path": "/tmp/bundle.tar.gz"},\n'
-    '   "destination": {"target": "ACME-192-0-2-11-MSSQL25-1433", "path": "/tmp/b.tar.gz"},\n'
+    '   "destination": {"target": "ACME-192-0-2-11-LABSQL-1433", "path": "/tmp/b.tar.gz"},\n'
     '   "overwrite": false, "make_dirs": true}\n'
 )
 
@@ -1397,7 +1404,7 @@ def _file_transfer_command(argv: list[str], direction: str) -> int:
         message=f"{command} {status or 'done'}"
                 + (f" ({size} bytes)" if isinstance(size, int) else "") + ".",
         data=result,
-        metrics={"bytes": size} if isinstance(size, int) else {},
+        metrics={"size_bytes": size} if isinstance(size, int) else {},
     ))
 
 
@@ -2132,8 +2139,9 @@ SELF_STATUS_USAGE = (
     "usage: python -m db_ops.common.cli self-status <json>|@<file>|- [--config ...]\n"
     "\n"
     "What THIS installation is and how much room it has left: version, host name and ip,\n"
-    "node role, cpu, memory and disk. Reads itself - no SSH, no store - so it still\n"
-    "answers when the store is unreachable.\n"
+    "node role, cpu, memory and disk, and the app commands it schedules. Reads itself - no\n"
+    "SSH, no store - so it still answers when the store is unreachable. Each app command's\n"
+    "last run needs the store: `python -m db_ops.db.cli self-status` adds it.\n"
     "\n"
     "The request is a JSON object, given inline, as @path/to/request.json, or on stdin (-):\n"
     '  {"format": "txt"}      // optional; txt for the chat listing, json (default) for the envelope\n'
@@ -2191,36 +2199,34 @@ def _db_status_command(argv: list[str]) -> int:
     ))
 
 
-def _self_status_command(argv: list[str]) -> int:
-    """``self-status`` - the installation describing itself.
+def read_app_commands(data_dir: str | Path | None = None) -> list[dict[str, Any]] | None:
+    """The records in ``data/app_commands.json``, or ``None`` when the file is not there.
 
-    Distinct from the three status answers that already exist, and the distinction is the point:
-    ``ops-status`` reads the store for whether the apps ran, ``host-facts`` reaches a monitored
-    host over its cmd_access, ``worker-status`` drives the worker from the master. This one is
-    the process reporting on itself and the machine under it, which is what nothing answered.
+    ``None`` and ``[]`` are different answers: no file is "not configured", an empty list is a node
+    configured to run nothing. Read here with the shared JSON reader rather than through
+    ``db_ops.db.ops_status``, because ``common`` may not import ``db``
+    (``tests/test_import_boundaries.py``).
+    """
+    from db_ops.lib.json_io import load_json_file
+    from db_ops.lib.paths import DEFAULT_DATA_DIR
+
+    path = Path(data_dir or DEFAULT_DATA_DIR) / "app_commands.json"
+    if not path.is_file():
+        return None
+    payload = load_json_file(path)
+    items = payload.get("app_commands") if isinstance(payload, dict) else payload
+    return [item for item in (items or []) if isinstance(item, dict)]
+
+
+def collect_self_status(config_path: str | None = None) -> tuple[dict[str, Any], Any]:
+    """Everything ``self-status`` reports, as facts, and the config it was read with (or ``None``).
+
+    Public because there are two front doors to one report. ``common.cli self-status`` answers
+    without a store and lists the app commands from config alone; ``db_ops.db.cli self-status``
+    calls this, then adds each command's last run from ``job_runs`` - the one part of the report
+    that needs the store, and therefore the one part ``common`` is not allowed to fetch.
     """
     from db_ops.common import self_status
-    from db_ops.lib import response
-
-    source = ""
-    config_path = None
-    rest = list(argv)
-    while rest:
-        token = rest.pop(0)
-        if token in {"-h", "--help"}:
-            print(SELF_STATUS_USAGE)
-            return 0
-        if token == "--config":
-            config_path = rest.pop(0) if rest else None
-        elif not source:
-            source = token
-        else:
-            print(f"Unexpected argument: {token}\n\n{SELF_STATUS_USAGE}", file=sys.stderr)
-            return 2
-
-    request, code = _read_json_request(source or "{}", SELF_STATUS_USAGE)
-    if request is None:
-        return code
 
     import db_ops
     from db_ops.lib.paths import TOOL_ROOT
@@ -2239,6 +2245,7 @@ def _self_status_command(argv: list[str]) -> int:
     # UnboundLocalError instead. The private tree has a config.json at its root, so only the
     # public suite saw it.
     runtime_dir = None
+    config = None
     try:
         from db_ops.config import load_config, resolve_config_path
 
@@ -2263,6 +2270,7 @@ def _self_status_command(argv: list[str]) -> int:
             store_text = f"{backend} {getattr(getattr(store_config, 'sqlite', None), 'path', '')}"
     except Exception:  # noqa: BLE001 - no config is a fact about the install, not an error here.
         store_text = None
+        config = None
 
     # Resolved here rather than inside self_status: this is the composition root, and everything
     # else that module reports comes from the machine rather than from data/.
@@ -2282,8 +2290,26 @@ def _self_status_command(argv: list[str]) -> int:
         tool_root=Path(TOOL_ROOT), version=db_ops.__version__,
         public_version=public_version, store=store_text,
         runtime_dir=runtime_dir, web=web_facts)
-    listing = self_status.render(facts)
 
+    # What this node schedules, from config. The last-run column is filled by db.cli's front door;
+    # here it is named as not read rather than left looking like "never ran".
+    try:
+        commands = read_app_commands()
+        facts["apps"] = self_status.summarize_apps(
+            commands, node_role=str(facts.get("node_role") or ""), last_runs=None,
+            store_error="read by `db_ops.db.cli self-status`, which /spbot_self_status calls")
+    except Exception as exc:  # noqa: BLE001 - an unreadable file is a line, not a lost report.
+        facts["apps"] = {"configured": 0, "state": "not configured", "items": [],
+                         "error": f"app_commands.json cannot be read: {exc}"}
+    return facts, config
+
+
+def emit_self_status(facts: dict[str, Any], request: dict[str, Any]) -> int:
+    """Print the report the way the request asked, from either front door, with one render."""
+    from db_ops.common import self_status
+    from db_ops.lib import response
+
+    listing = self_status.render(facts)
     if str(request.get("format") or "json").strip().lower() == "txt":
         print(listing)
         return 0
@@ -2296,6 +2322,37 @@ def _self_status_command(argv: list[str]) -> int:
         data={"listing": listing, **facts},
         metrics={"cores": (facts.get("cpu") or {}).get("cores")},
     ))
+
+
+def _self_status_command(argv: list[str]) -> int:
+    """``self-status`` - the installation describing itself.
+
+    Distinct from the three status answers that already exist, and the distinction is the point:
+    ``ops-status`` reads the store for whether the apps ran, ``host-facts`` reaches a monitored
+    host over its cmd_access, ``worker-status`` drives the worker from the master. This one is
+    the process reporting on itself and the machine under it, which is what nothing answered.
+    """
+    source = ""
+    config_path = None
+    rest = list(argv)
+    while rest:
+        token = rest.pop(0)
+        if token in {"-h", "--help"}:
+            print(SELF_STATUS_USAGE)
+            return 0
+        if token == "--config":
+            config_path = rest.pop(0) if rest else None
+        elif not source:
+            source = token
+        else:
+            print(f"Unexpected argument: {token}\n\n{SELF_STATUS_USAGE}", file=sys.stderr)
+            return 2
+
+    request, code = _read_json_request(source or "{}", SELF_STATUS_USAGE)
+    if request is None:
+        return code
+    facts, _config = collect_self_status(config_path)
+    return emit_self_status(facts, request)
 
 
 TIMEZONE_USAGE = (
@@ -2520,7 +2577,8 @@ def main(argv: list[str] | None = None) -> int:
         from db_ops.common import cli_restorestep
 
         return cli_restorestep.run(argv[0], argv[1:], read_request=_read_json_request)
-    if argv[0] in {"describe-object", "due-check", "check-objects", "check-references"}:
+    if argv[0] in {"describe-object", "due-check", "check-objects", "check-references",
+                   "standardize-field-names", "upgrade-config"}:
         from db_ops.common import cli_config_objects
 
         return cli_config_objects.run(argv[0], argv[1:], read_request=_read_json_request)

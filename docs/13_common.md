@@ -523,7 +523,7 @@ the same reason `pack-backup` does not.
 
 ```json
 {"source":      {"target": "ACME-192-0-2-249-HOST", "path": "/tmp/bundle.tar.gz"},
- "destination": {"target": "ACME-192-0-2-11-MSSQL25-1433", "path": "/tmp/bundle.tar.gz"},
+ "destination": {"target": "ACME-192-0-2-11-LABSQL-1433", "path": "/tmp/bundle.tar.gz"},
  "overwrite": false, "make_dirs": true}
 ```
 
@@ -941,8 +941,8 @@ would have grown a second one.
 ```jsonc
 {
   "target": "ACME-192-0-2-115",   // server_id, or "<db_type> <ip> [port]"
-  "sql": "SELECT TOP 10 * FROM sys.objects",   // or "sql_file": "assets/tasks/query.sql"
-  "database": "SALESDB",               // optional; default = the instance's database
+  "sql_text": "SELECT TOP 10 * FROM sys.objects",   // or "sql_file": "assets/tasks/query.sql"
+  "database_name": "SALESDB",          // optional; default = the instance's database
   "credential_name": "sqlserver_2.115_..._readonly",  // optional; alias "user_ref";
                                     // default = the instance's default_credential_name
   "max_rows": 50000,                // optional; the result is truncated past this
@@ -993,6 +993,16 @@ Rules worth knowing:
   `result_sets_truncated` at the top for `max_result_sets`. How many sets exist to keep is the
   **driver's** answer — `nextset` is probed, so three `SELECT`s come back as three sets through
   pyodbc and as one through pg8000, which has no `nextset`.
+- **A SQL Server warning is not a failure** (2026-09-24). pyodbc can raise a warning - SQLSTATE
+  class `01`, e.g. `01003` / 8153 *Null value is eliminated by an aggregate* - out of `nextset()`.
+  When every SQLSTATE in what it raised is class `01`, reading stops there and the warning is put
+  in `data.warnings`, with the message saying so. Measured on a lab server: pyodbc closes the
+  statement at that point and the driver runs the rest of the batch to its end on the server, but
+  **nothing after the warning reaches the client - its result sets, and any error raised after it**.
+  So with `autocommit` (every statement already committed) the run succeeds with the warning; under
+  a wrapping transaction it is **rolled back**, with the reason, because all-or-nothing cannot be
+  checked past that point. A warning mixed with a real error is an error.
+  `lib/driver_warnings.py` is the rule; `execute_cursor_batches` (metrics) follows it too.
 - **Rollback is the default, not a sandbox.** With `commit: false` the whole batch is undone,
   so `SELECT ... INTO #tmp` + a final `SELECT` works and a stray write to a real table is
   reverted (SQL Server rolls back DDL too). It does **not** undo non-transactional side
@@ -1003,14 +1013,14 @@ Rules worth knowing:
 - **`GO` splits batches** (`split_sql_batches`), so a script pasted out of SSMS runs as-is.
 - **`rows` holds native driver values** (`datetime`, `Decimal`); `json_safe_result()` returns
   a serializable copy.
-- **`database` beats `USE <db>;`** — pin the database in the request instead of opening the
+- **`database_name` beats `USE <db>;`** — pin the database in the request instead of opening the
   SQL with a `USE`, so the run is one batch and the target is visible in the request object.
 - **An Oracle 8i target is not connected to at all.** When the instance (or the request) sets
   `sql_access.method` to `api`/`subprocess`, the SQL goes to the legacy tool via
   [`oracle_bridge`](#modules) and comes back in this same result shape, plus `transport`
   and `db_version` — so an export does not care which path answered it. `committed` is False
   and `affected_rows` 0 because there is no connection to commit, not because they went
-  unmeasured. On this transport **`database` means *schema*** (Oracle connects to a service):
+  unmeasured. On this transport **`database_name` means *schema*** (Oracle connects to a service):
   it issues `ALTER SESSION SET CURRENT_SCHEMA`, which is what lets a DBA login run an
   application's unqualified script instead of hitting ORA-00942.
 - **`define` expands SQL*Plus `&substitutions`.** An archived `.sql` opens with
@@ -1025,13 +1035,13 @@ Rules worth knowing:
 ```python
 from db_ops.common import sql_run
 
-result = sql_run.run_sql({"target": "ACME-192-0-2-115", "database": "SALESDB",
-                          "sql": "SELECT query_id, last_execution_time FROM sys.query_store_query"})
+result = sql_run.run_sql({"target": "ACME-192-0-2-115", "database_name": "SALESDB",
+                          "sql_text": "SELECT query_id, last_execution_time FROM sys.query_store_query"})
 result["columns"], result["rows"], result["row_count"], result["truncated"]
 ```
 
 ```bash
-python -m db_ops.common.cli run-sql '{"target": "ACME-192-0-2-115", "sql": "SELECT 1 AS x"}'
+python -m db_ops.common.cli run-sql '{"target": "ACME-192-0-2-115", "sql_text": "SELECT 1 AS x"}'
 python -m db_ops.common.cli run-sql @request.json     # or - to read the object from stdin
 ```
 
@@ -1071,7 +1081,8 @@ so a request that states nothing behaves exactly as it always has:
 | `runtime` | both | `host` (default) / `docker` / `k8s` |
 | `profile` | both | the same keys as one block, for a caller that has them all |
 
-**The answer says what they selected.** `run-sql` returns `engine` (the merged profile, with a
+**The answer says what they selected.** `run-sql` returns `target_profile` (was `engine` until
+0.22.0; the merged profile, with a
 `sources` map naming request-vs-config per field) and `tool` — `{tool, chosen_by, reason}` — on
 *both* the direct and the legacy-bridge path, so one shape reads either transport. `run-cmd`
 returns `host_profile`, `shell` and `shell_dialect`. `chosen_by` is `request | config | rule |
@@ -1090,7 +1101,7 @@ both ways out named in the message:
 
 ```bash
 python -m db_ops.common.cli run-sql '{"target": "ACME-192-0-2-136", "major_version": 8,
-  "sql": "select * from v$version"}'
+  "sql_text": "select * from v$version"}'
 # Oracle 8 cannot be reached by python-oracledb in thin mode (it speaks 12.1 and newer).
 # Either route this target through the legacy bridge with sql_access {"method": "api", ...},
 # or install an Oracle client and set "oracle_client_mode": "thick".
@@ -1130,7 +1141,7 @@ task. A **`connection` block** replaces it and then no inventory file is opened
 ```bash
 python -m db_ops.common.cli run-sql '{"connection": {"db_type": "sqlserver", "host": "192.0.2.5",
   "username": "monitor", "password_ref": "MSSQL_…", "major_version": 16, "label": "lab-mssql"},
-  "sql": "SELECT 1"}'
+  "sql_text": "SELECT 1"}'
 ```
 
 `run-cmd` has the same door and always half-had it: an inline `access` block skipped the inventory
@@ -1200,7 +1211,7 @@ a task that already has one.
 
 ```bash
 # WHAT runs. The script may already exist, or arrive as text and be written here.
-python -m db_ops.common.cli sql-command-add '{"sql_name": "Drain the queue",
+python -m db_ops.common.cli sql-command-add '{"display_name": "Drain the queue",
   "db_type": "sqlserver", "input_type": "python",
   "script_path": "assets/tasks/sqlserver/030_summary.sql",
   "input": {"script": "assets/tasks/python/drain.py",
@@ -1429,6 +1440,7 @@ odd one out among the status answers, and the distinction is the whole reason it
 | `common.cli host-facts` | a **monitored host** | that host, over its `cmd_access` |
 | `control.cli worker-status` | the **worker**, from the master | SSH |
 | `common.cli self-status` | **this installation and this machine** | nothing |
+| `db.cli self-status` | the same, **plus each app command's last run** | the store, and only for that column |
 
 Reaching nothing is the point: it still answers when the store is unreachable, which is one of the
 times somebody most wants to know what version they are talking to.
@@ -1436,7 +1448,22 @@ times somebody most wants to know what version they are talking to.
 ```bash
 python -m db_ops.common.cli self-status '{}'              # JSON envelope
 python -m db_ops.common.cli self-status '{"format":"txt"}' # the chat listing
+python -m db_ops.db.cli self-status '{"format":"txt"}'     # + last run per app command (/spbot_self_status)
 ```
+
+**What this node schedules (0.22.0).** The listing ends with one line per app command from
+`data/app_commands.json`, inactive ones and other roles' included, so the list says what exists:
+on/off or `<role> only`, `run_mode` with its `max_parallel`, the interval, the hour window and the
+weekdays. Whether a command runs here is decided by `db_ops.lib.node_role.runs_on` — the same rule
+the daemon uses, so the report cannot disagree with the scheduler. Asked for on 2026-09-23, when two
+schedulers ran disjoint sets on two schemas and nothing a phone could reach said which was which.
+
+The **last run** needs `job_runs`, and `common` may not import `db` — so there are two front doors
+to one report: `collect_self_status` and `emit_self_status` build and print it once, and
+`db.cli self-status` adds the column through `ops_status.latest_runs` (one query for every code).
+That column is the only part allowed to fail: a store that cannot be read prints
+`(last run unknown: <why>)` and the rest of the report stands. `/spbot_self_status` calls the `db`
+front door.
 
 Three things it takes care to get right rather than merely report:
 
@@ -1664,7 +1691,7 @@ drift in one direction: your file gains records as the estate grows, the example
 nobody notices until the shipped suite runs against the shipped examples and finds the metric
 catalogue describing ten of the ninety collectors the package carries.
 
-`dest` defaults to the `*.example.json` beside the source. `write: false` reports what would happen
+`destination` (`dest` until 0.22.0, still read) defaults to the `*.example.json` beside the source. `write: false` reports what would happen
 and writes nothing.
 
 ### It refuses; it does not scrub
@@ -1749,7 +1776,8 @@ module to look everywhere and to ask the right question. Resolution order:
 2. `docker_db_connections.json` — carries the **published, non-default port** a container listens on
    (5442, 1522, 5435). Skipping this source is how a working PostgreSQL secret gets probed on 5432,
    answers nothing, and is written up as unusable;
-3. `restore_config.json` — `password_env` / `sql_password_env` on a backup or restore job;
+3. `restore_config.json` — `password_ref` / `sql_password_ref` in a restore's `source` / `target`
+   (`password_env` / `sql_password_env` until 0.22.0, still read);
 4. `users.json` `remote_credentials` — an OS account no instance references;
 5. the standard key name, which carries the IP **and an optional port**
    (`ORACLE_203_0_113_121_1522_SYS`). A name is a label, so it is last.
@@ -2031,8 +2059,8 @@ outside db_ops, and every requirement below is something that cost time on that 
 
 ```bash
 python -m db_ops.common.cli copy-schema '{
-  "source": {"target": "SRC-SERVER-ID", "database": "APPDB_TEST", "schema": "schedule"},
-  "dest":   {"target": "DST-SERVER-ID", "database": "APPDB_PROD", "schema": "schedule"},
+  "source":      {"target": "SRC-SERVER-ID", "database_name": "APPDB_TEST", "schema": "schedule"},
+  "destination": {"target": "DST-SERVER-ID", "database_name": "APPDB_PROD", "schema": "schedule"},
   "assert_dest_instance": "APPHOST\INSTANCE",
   "exclude_tables": ["dataLock", "*Staging"],
   "with_data": ["sql", "sql_version", "CalendarDay"],
@@ -2093,10 +2121,12 @@ Three questions that had no answer a program could ask for:
 
 | Command | Answers | Reads |
 | --- | --- | --- |
-| `describe-object` | what a field of a shared object means, and what it accepts | `data/shared_config_objects.json` |
+| `describe-object` | what a field of a shared object or an edited record means, and what it accepts | `data/shared_config_objects.json` |
 | `due-check` | would this `time_window` run now, and if not why not | nothing — it evaluates the request |
 | `check-objects` | does this node's own `data/*.json` obey the reference | that file, and every file it names |
 | `check-references` | which pointer between two config files lands nowhere | `data/config_references.json`, and every file it names |
+| `upgrade-config` | after `pip install --upgrade`: every config migration this version carries, in order - the shipped reference files (replaced when they say something else, compared as documents, so a copy `init` wrote with another layout is current), the field renames, a restore's machine ids, a Telegram record's switch, the inventory into the reports - then `check-objects` and `check-references`; a plan unless `dry_run: false`, each written file copied to `runtime/config_upgrade/<stamp>/` first | the reference this version ships, and every file it names |
+| `standardize-field-names` | moves `data/*.json` to the standard field names (stage C of one name per concept); a plan unless `dry_run: false` | the reference's `used_in`, and every file it names with its `.example.json` |
 
 `due-check` calls `db_ops.lib.time_window.explain_due` — **the same function the schedulers call** —
 so its explanation cannot disagree with the behaviour. It is not how the daemon checks due-ness: the
@@ -2104,6 +2134,91 @@ daemon sweeps once a second and metrics evaluate a verdict per target per metric
 imported there. A subprocess per verdict would cost more than the work it schedules, which is the
 `lib` / `common` split in one sentence. `check-objects` exits 1 when it finds a violation, so it can
 stand in a gate.
+
+**What the reference describes: 153 entries in four families.** The CONFIG a node reads (60 - every
+`data/` file the catalogue calls `config`, and every block between a file's root and its records),
+the REQUESTS `common.cli` takes (45, kind `input`), the ANSWERS it gives (44, kind `output`, with
+`cli_response` the envelope) and, from 0.23.0, **the reference itself** (4: `reference_entry`,
+`reference_field`, `reference_site`, `reference_constraint`). An input or output entry names its
+`commands` and the modules that parse or produce it; one entry per SHAPE, not per command, so the
+fourteen gated commands share `output_gate_report`.
+
+**The reference describes itself** (the operator, 2026-09-24: "so that it cannot be wrong"). Every
+other file was held to it and nothing held it: a key added to a `used_in` site that day was read by
+nothing, spelt right or not. The four entries are `whole_record`, so `check-objects` walks the
+reference like any other file and reports a key it does not name. Their first run found 14 real
+defects - two `legacy_fields` written as a list where every other entry has an object, twelve empty
+`rule`s - and `tests/test_shared_config_objects_reference.py` plants a misspelt key in each of the
+four layers and expects it caught. `check_data_dir` loads the reference once per walk and passes it
+down: the lookup used to re-read the 1 MB file for every record, and walking the reference itself
+made that 50 s (now 0.13 s).
+
+`tests/test_every_json_the_tool_reads_or_writes_is_described.py` holds it to the code both ways:
+every catalogued config file and every key on the way to a described record; every command covered
+by exactly one input and one output entry; every key a request parser reads (`request.get`) is a
+declared field or its legacy spelling; every declared field is a key its module names; every
+object has its own id; and no two objects describe exactly the same fields.
+
+**The names requests and answers use** are the configuration's, one per concept - and a new
+command takes these rather than coining its own:
+
+| Concept | Name | Not |
+| --- | --- | --- |
+| one database | `database_name` | `database` (still read in a request) |
+| several database names | `database_names` | `databases` (still read in a request) |
+| per-database result objects | `databases` | - a list of objects, not of names |
+| the SQL to run | `sql_text` (or `sql_file`) | `sql` (still read) |
+| an engine | `db_type` | `engine` |
+| what a target IS (engine, version, platform) | `target_profile` / `host_profile` | `engine` |
+| a size | `size_bytes`, `<what>_bytes` | `size`, `bytes`, `bytes_<what>` |
+| a duration | `duration_ms` | `elapsed_seconds`, `duration_seconds` |
+| where something goes | `destination` | `dest` (still read) |
+| a secret reference | `password_ref`, `refs` | `password_env` - that is an environment variable's name |
+| a list of what changed / whether anything did | `changes` / `changed` | one for the other |
+| the command ran / what it found | `success` (envelope) / `ok` (in `data`) | - two questions |
+
+The config part, from before: Six blocks shared inside records
+(`time_window`, `notify`, `notify_rule`, `output`, `cmd_access`, `sql_access`), one shared field
+(`cleanup_retention`), and forty-seven whole records - `app_command`; `backup_entry`, `backup_job`,
+`restore_entry`; and, added in 0.22.0, `sql_command`, `sql_target`, `db_instance`,
+`telegram_support_command` with `telegram_cli_execute`, `metric_definition` with `metric_variant`,
+the logins in `users.json` (`database_credential_group`, `database_credential`,
+`remote_credential_group`, `remote_credential`), `telegram_group`, `telegram_user`, `report_entry`
+and the console's `webhost_app`; then the rest of `data/`: a restore's `restore_source` and
+`restore_target`, `docker_db_connection`, the store (`store_config`, `store_sqlite`,
+`store_postgresql`), `telegram_settings` and `telegram_bot`, the backup, capacity, restore-drill
+and maintenance policies, `emergency_level` / `emergency_operation`, the metric importance
+scale and overrides, `network_range`, `ops_status_request`, `sla_policy` / `sla_notification`,
+`sqlserver_instance_policy` with `sqlserver_artifact_rule`, and `sre_config` / `sre_settings`.
+`describe-object '{}'` lists them. A path may now say `{}` - each value of a map, such as a
+policy keyed by level - and an empty path means the file itself; a `number` kind takes a
+quantity with a fraction (15.0 GB), which `integer` refused.
+
+Not described, deliberately: files the catalogue calls `catalog`, `reference`, `manifest`,
+`generated`, `secret_store`, `sample` or `fixture` - nobody edits them as configuration.
+
+**`password_env` meant two things**, and the second is gone: the name of an ENVIRONMENT VARIABLE
+(`ssh_auth`, `remote_exec`, a credential object, `sre_config`'s `<name>_password_env`,
+`--remote-password-env`) - which it still means - and a secret-store REF in a restore's blocks,
+a docker connection and `create-db-docker`'s flag, which are `password_ref` now. Also moved:
+a docker connection's `engine` -> `db_type` and `database` -> `database_name`, the store's and
+the backup and restore-drill overrides' `database` -> `database_name`, and an SLA policy's
+`name` -> `display_name` (with the parser's own synonyms `slo_target`, `aggregation_method`,
+`operator`). `sid` was measured and kept: it is the Oracle SID and differs from `instance_name`
+on every record that carries both.
+
+Describing them found four names that meant one thing twice and one that meant two things: a
+credential's `notes` (every other record says `note`), a console block's `ord` (`sort_order`), and a
+Telegram chat's or person's `status: "active"` - a string standing in for the `active` switch every
+other record carries, which the permission check read as on when absent and the level routing read
+as off. `upgrade-config` moves all three; every reader takes both.
+
+An entry for a whole record carries **`whole_record: true`**, and `check-objects` then reports a key
+the entry does not describe as `unknown`. Without it the checker dropped such a key as belonging to
+another schema, the loader ignored it, and a misspelled `databse_name` ran a task against the
+default database while its config looked right. Keys starting with `_` are the estate's own comments
+and are never reported. `telegram_cli_execute` is the one record entry without the flag: it is
+walked over every `action_config`, and the other action types share that path.
 
 **The store travels in the request, like every other value.** `common` performs work and reads
 nothing; that already held for a target database (`run-sql` carries host, login and password) but
@@ -2113,7 +2228,7 @@ read it. `db_ops/db/declaration.py` closes that:
 ```bash
 python -m db_ops.db.cli queue-telegram-message - <<'EOF'
 {"store": {"backend": "postgresql",
-           "postgresql": {"host": "...", "port": 5433, "database": "db_ops", "schema": "db_ops",
+           "postgresql": {"host": "...", "port": 5433, "database_name": "db_ops", "schema": "db_ops",
                           "username": "postgres", "password": "<resolved by the caller>"}},
  "chat_id": "-100...", "text": "...", "level": "logging", "phase": "START",
  "source_type": "backup_restore_events", "source_id": "backup:CLOUD_PG_DB"}
@@ -2580,7 +2695,7 @@ unless a blocking gate failed, evidence under `runtime/evidence/`.
 ### An export taken by a login that cannot see everything
 
 Both of these were found by the first real migration through this path (192.0.2.248 → the
-MSSQL25 container, 2026-08-10) and neither is exotic — they are what happens when the export login
+LABSQL container, 2026-08-10) and neither is exotic — they are what happens when the export login
 is a DBA account rather than `sysadmin`, which is the normal case.
 
 **One refused artifact used to destroy the whole bundle.** `msdb.dbo.sysmail_server` denied SELECT

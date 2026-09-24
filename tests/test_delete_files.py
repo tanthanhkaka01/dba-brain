@@ -145,7 +145,7 @@ def test_a_directory_is_refused_by_the_host_and_reported_as_failed(ran):
     assert "directory" in result["file"]["reason"]
 
 
-def test_bytes_freed_counts_only_what_was_actually_removed(ran):
+def test_freed_bytes_counts_only_what_was_actually_removed(ran):
     """A dry run frees nothing, and reporting its bytes as freed space is a report that lies about
     a disk the operator is deciding about."""
     ran["answers"]["a.bkp"] = "WOULD 5000"
@@ -154,8 +154,8 @@ def test_bytes_freed_counts_only_what_was_actually_removed(ran):
         {"paths": ["/backup/a.bkp"], "host": {"runtime": "linux"}, "dry_run": True})
 
     assert result["files"][0]["status"] == SKIPPED
-    assert result["files"][0]["size"] == 5000
-    assert result["bytes_freed"] == 0
+    assert result["files"][0]["size_bytes"] == 5000
+    assert result["freed_bytes"] == 0
 
 
 def test_a_dry_run_command_contains_no_delete(ran):

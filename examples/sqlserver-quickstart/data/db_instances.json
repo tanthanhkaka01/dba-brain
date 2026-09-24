@@ -9,11 +9,11 @@
 
   "db_instances": [
     {
-      "ord": 1,
+      "sort_order": 1,
       "db_instance_name": "quickstart_sqlserver",
       "server_id": "QUICKSTART-MSSQL-1433",
       "site": "LOCAL",
-      "env": "lab",
+      "environment": "lab",
       "ip": "127.0.0.1",
       "port": 1433,
       "db_type": "sqlserver",
@@ -24,7 +24,7 @@
       "default_credential_name": "sqlserver_quickstart_monitor_user",
       "os": "Linux (Docker)",
       "owner": "DBA",
-      "enabled": true,
+      "active": true,
       "status_os": "unknown",
       "status_db": "unknown",
       "status_connect": "unknown",

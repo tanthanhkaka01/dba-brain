@@ -101,7 +101,6 @@ def load_metric_targets(
         sqlserver_driver = str(item.get("sqlserver_driver") or "").strip()
         if not sqlserver_driver and isinstance(metrics_cfg, dict):
             sqlserver_driver = str(metrics_cfg.get("sqlserver_driver") or "").strip()
-        sqlserver_major_version = item.get("sqlserver_major_version")
         major_version = item.get("major_version") or item.get(f"{item_db_type}_major_version")
         platform = _resolve_platform(item)
         # A target whose cmd_access is unusable must fail ALONE. These resolvers raise on a bad
@@ -147,7 +146,6 @@ def load_metric_targets(
                     "platform": platform,
                     "sid": (inventory_match or {}).get("sid"),
                     "sqlserver_driver": sqlserver_driver,
-                    "sqlserver_major_version": sqlserver_major_version,
                     "major_version": major_version,
                     f"{item_db_type}_major_version": major_version,
                     "database": item.get("database") or service_name or db_name,

@@ -11,6 +11,7 @@ from typing import Any
 
 # Re-exported: five modules already import load_json_file from here, and the function is
 # not SQL-specific. It now lives in common/json_io.py as the tool's single JSON reader.
+from db_ops.lib.driver_warnings import read_next_set
 from db_ops.lib.packaging import install_hint
 from db_ops.lib.json_io import load_json_file  # noqa: F401 - re-exported for compatibility
 # Re-exported: the SQL text vocabulary — limits, the DECLARE prelude, parameter types and the
@@ -447,6 +448,8 @@ def execute_cursor_batches(
     result_sets = []
     total_row_count = 0
     truncated = False
+    # A driver warning ends the reading of a batch without failing it (lib/driver_warnings.py).
+    warnings: list[str] = []
     for batch in batches:
         # The prelude re-declares the script's parameters in front of every batch, because a T-SQL
         # variable does not survive a GO, and the same values are bound again with it.
@@ -475,12 +478,19 @@ def execute_cursor_batches(
             elif cursor.rowcount and cursor.rowcount > 0:
                 total_row_count += int(cursor.rowcount)
 
-            nextset = getattr(cursor, "nextset", None)
-            if not callable(nextset) or not nextset():
+            if not read_next_set(cursor, warnings):
                 break
     if commit:
+        if warnings:
+            # The same rule as run-sql: past a warning the driver shows nothing, not even an error,
+            # so a caller that asked for a commit cannot be told the whole batch succeeded.
+            raise RuntimeError(
+                "stopped reading at a SQL Server warning, and nothing after it could be checked, "
+                f"so nothing was committed: {warnings[0]}"
+            )
         conn.commit()
-    return {"row_count": total_row_count, "result_sets": result_sets[:5], "truncated": truncated}
+    return {"row_count": total_row_count, "result_sets": result_sets[:5], "truncated": truncated,
+            "warnings": warnings}
 
 
 def make_json_safe(value: Any) -> Any:
@@ -685,7 +695,7 @@ def load_remote_credentials_file(path: Path) -> list[dict[str, Any]]:
                 "username": str(item.get("username") or item.get("login_name") or ""),
                 "password_ref": str(item.get("password_ref") or item.get("authentication_info_ref") or ""),
                 "role": str(item.get("role") or "REMOTE"),
-                "notes": str(item.get("note") or ""),
+                "note": str(item.get("note") or ""),
             }
         )
     return list(groups.values())

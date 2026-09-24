@@ -9,8 +9,8 @@ and each time the thing that went wrong was something ``sys.tables`` scripting d
 **Input is a JSON object**, like every other ``common`` operation::
 
     {
-      "source": {"target": "ACME-192-0-2-111", "database": "APPDB_TEST", "schema": "sched"},
-      "dest":   {"target": "ACME-192-0-2-250", "database": "APPDB",      "schema": "sched"},
+      "source": {"target": "ACME-192-0-2-111", "database_name": "APPDB_TEST", "schema": "sched"},
+      "destination": {"target": "ACME-192-0-2-250", "database_name": "APPDB", "schema": "sched"},
       "assert_dest_instance": "APP-DB\\\\PROD",     // SERVERPROPERTY('ServerName') must match
       "exclude_tables": ["dataLock", "*Staging"], // shell globs, case-insensitive
       "with_data":      ["config", "config_version", "CalendarDay"],
@@ -120,7 +120,7 @@ class Endpoint:
         if not isinstance(payload, Mapping):
             raise SchemaCopyError(f'"{side}" must be an object with target/database/schema.')
         target = str(payload.get("target") or "").strip()
-        database = str(payload.get("database") or payload.get("database_name") or "").strip()
+        database = str(payload.get("database_name") or payload.get("database") or "").strip()
         if not target:
             raise SchemaCopyError(f'"{side}.target" is required (a server_id, or "<db_type> <ip>").')
         if not database:
@@ -177,7 +177,7 @@ class SchemaCopyRequest:
             raise SchemaCopyError("Request must be a JSON object.")
 
         source = Endpoint.from_json(payload.get("source"), side="source")
-        dest = Endpoint.from_json(payload.get("dest") or payload.get("destination"), side="dest")
+        dest = Endpoint.from_json(payload.get("destination") or payload.get("dest"), side="dest")
         if (source.target.lower() == dest.target.lower()
                 and source.database.lower() == dest.database.lower()
                 and source.schema.lower() == dest.schema.lower()):
@@ -588,7 +588,7 @@ def build_plan(cursor: Any, request: SchemaCopyRequest) -> dict[str, Any]:
                                         if step.detail.get("partitioned") is True)
     return {
         "source": request.source.label(),
-        "dest": request.dest.label(),
+        "destination": request.dest.label(),
         "phases": list(request.phases),
         "tables": context.tables,
         "skipped_tables": context.skipped_tables,

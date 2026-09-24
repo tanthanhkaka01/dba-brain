@@ -15,6 +15,166 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-09-24
+
+0.22.0 was built and soaked, then abandoned on 2026-09-24 before its day was out (the operator:
+skip 0.22, fix and run again). Its content ships in the next release, with what follows it.
+
+### Added
+
+- **`checkdb` on a restore entry** (default `true`): `false` skips the `DBCC CHECKDB` after each
+  restored database, and the run says it did.
+- **`upgrade-config`: one command after `pip install --upgrade`.** It moves your `data/*.json`
+  to the shapes this version writes: it refreshes the shipped reference files, renames fields,
+  and moves a restore's machine ids. By default it only shows the plan. `{"dry_run": false}`
+  applies it and copies every changed file to `runtime/config_upgrade/<UTC stamp>/` first. A
+  second run changes nothing. `init` and `import-data` say when there is something to move.
+- **`AGENTS.md` is the operating guide for an AI agent.** `init` writes it into the tool root:
+  300-400 lines covering the rules, the secret key and the clock, adding a database with
+  `instance-add`, every config file and the command that writes it, `describe-object` /
+  `check-objects` / `check-references`, schedules, the daemon, the status questions, and the
+  commands that change a database or a host. **Every `init` replaces it with the installed
+  version's guide**, so it always matches the build; a copy somebody edited is saved to
+  `runtime/agents_guide/` first. `dbabrain guide --write` puts it in the current directory before a
+  root exists.
+- **`/spbot_self_status` lists what the node schedules**: one line per app command with its
+  `run_mode`, interval, hours, weekdays and last run. `python -m db_ops.db.cli self-status` is the
+  front door with the last-run column; `common.cli self-status` still answers without a store.
+- **Fifteen more records are described field by field** in `shared_config_objects.json`:
+  `sql_command`, `sql_target`, `db_instance`, `telegram_support_command`, `telegram_cli_execute`,
+  `metric_definition`, `metric_variant`, the logins in `users.json` (database and OS, group and
+  credential), `telegram_group`, `telegram_user`, `report_entry`, `webhost_app`, and every other
+  config file in `data/` - policies, store, Telegram settings, SLA, docker connections, the SRE
+  lab. `check-objects` now reports a misspelled key on a whole record instead of ignoring it.
+- **The shared-object reference describes itself.** Four entries - `reference_entry`,
+  `reference_field`, `reference_site`, `reference_constraint` - so `check-objects` holds
+  `shared_config_objects.json` to the same rules as every other file, and reports a key it does not
+  name. Their first run found two `legacy_fields` written as a list and twelve empty `rule`s, fixed.
+
+### Changed
+
+- **`sql-command-add` and `sql-target-add` refuse a key they do not know** instead of dropping it,
+  check the record against the reference before writing, and now write `progress_per_file`, a
+  target's `sql_access` and a `notify` block given as a block.
+- **One name per concept.** The standard names are `active`, `environment`, `sort_order`,
+  `database_name` and `major_version` on an instance, `sort_order` on app and Telegram commands,
+  `database_mappings` on a restore entry, and `display_name` on a SQL task (was `sql_name`; also
+  the `/spbot_add_sql` parameter and `add-sql --display-name`). Every reader accepts both
+  spellings, every writer
+  writes the standard one, and the shipped examples use it.
+  **To move your own files:** `python -m db_ops.common.cli upgrade-config '{}'` shows the
+  plan; `'{"dry_run": false}'` writes it. A record whose two spellings disagree is reported and its
+  file left untouched. Do this only once every node that reads these files runs this version: an
+  older one does not know `active` and reads an instance switched off as switched on.
+- **A restore entry names its machines as `server_id` and `target_server_id`**, on the entry,
+  like the script-driven entries already did. `source.id` / `target.id` are still read;
+  `restore-add` moves them. `check-references` now fails a restore that names a machine the
+  inventory does not have.
+- **A Telegram chat or person is switched on by `active: true`**, like every other record,
+  instead of `status: "active"`. Both are read; `upgrade-config` moves your files. A credential's
+  `notes` is `note`, and a console block's `ord` is `sort_order`.
+- **A secret ref is `password_ref` everywhere.** A restore's `source` / `target` blocks say
+  `password_ref` / `sql_password_ref`, a docker connection `password_ref`, and `create-db-docker`
+  takes `--password-ref`. `password_env` now means only what it says - an environment
+  variable's name. The old spellings are still read and still accepted as flags.
+- **A docker connection says `db_type` and `database_name`** (was `engine`, `database`); the
+  store and the backup and restore-drill policy overrides say `database_name`; an SLA policy's
+  title is `display_name` (was `name`).
+- **Every request and answer of `common.cli` is described** in `shared_config_objects.json` (kinds
+  `input` and `output`, 149 entries in all); `describe-object` answers for them like for config.
+- **Requests use the configuration's names too**, and the old ones still work: one database is
+  `database_name` (was `database`), a list of names `database_names` (was `databases`), the SQL
+  `sql_text` (was `sql`), `destination` (was `dest`), `job_name` (was `job`), `file_path` /
+  `file_base64` (were `xlsx_path` / `xlsx_base64`), `refs` (was `password_refs`); a store
+  block's `database_name` (was `database`) and `db use-store --database-name`. The tool's own
+  callers - the Telegram commands, the restore steps - send the new names.
+- **`common.cli` answers use the same names as the configuration.** Renamed outright, with every
+  in-tree consumer: a byte count is `size_bytes` (was `size` in list-backup-files, delete-file(s),
+  pack-backup, pull-file, push-file, and `bytes` in fetch/send/pack/relay-file), a duration is
+  `duration_ms` (was `elapsed_seconds`), one database is `database_name` (was `database` in
+  run-sql, list-databases/-schemas/-jobs, create-table-from-xlsx, trace-session, list-backup-files,
+  verify-restore and restore-drill-status), a restore step names its engine `db_type` (was
+  `engine`), run-sql's profile is `target_profile` (was `engine`), and app-command-set lists what
+  it changed under `changes` (was `changed`, which elsewhere is a yes/no). Also: delete-file(s)
+  report `freed_bytes` (was `bytes_freed`), pack-backup `file_count` (was `packed`), run-cmd
+  `duration_ms` (was `duration_seconds`), copy-schema's plan and lift-example `destination` (was
+  `dest`), a restore-database plan `database_names` (was `databases`). **A script parsing these
+  answers must follow.**
+- **The inventory is a report, not an app.** `APP-REPORTS-INVENTORY-WORKFLOW` is gone; the inventory
+  is the report `rp_inventory_health` in `reports_config.json`, built by the reports app's pass
+  like the metrics and backup reports. `upgrade-config` moves an existing node's app command into
+  it - keeping its schedule and switch - raises `APP-REPORTS-CREATE`'s timeout by the inventory's,
+  and removes the app command, so the inventory is never built twice. `reports.cli
+  inventory-workflow` still runs it by hand.
+- **`instance-add` takes the database as `database_name`.** `db_name` and `database` are still
+  accepted and written as `database_name`.
+- **A restore entry's list of `{source_database, target_database}` is `database_mappings`.**
+  `databases` is still read; `restore-add` accepts either and writes `database_mappings`.
+
+### Fixed
+
+- **`create-db-docker` called any registry failure "Image not found".** A rate limit or a timeout
+  read *Image not found: postgres:18 … Valid tags include: 18*. *Not found* is now said only when docker
+  says the tag is not there; otherwise the message quotes docker and says the registry did not answer.
+- **The Oracle Data Guard lab's standby crash-looped after a restart.** It ran under the image's own
+  start, which opens every database as a primary and failed its check on a physical standby - under
+  `restart: unless-stopped`, for ever, after one host reboot. Once converted it now starts through its
+  own script (mount, never open, clean shutdown on stop), and its healthcheck reports a mounted
+  standby as healthy instead of *unhealthy* for the life of the lab.
+- **The Oracle Data Guard lab's shipper never shipped.** It read the standby's `resetlogs_id` and
+  archive-log format once, when it started - before the setup had converted the standby - and skipped
+  every cycle after; the standby held only what the setup shipped itself. It reads them every cycle.
+- **`install_docker = yes` prepared only one of the two folders a lab writes.** `/spbot_create_db_docker`
+  then failed with *Cannot create /opt/db_ops/backup … Permission denied* for an SSH user with full
+  sudo rights: the backup bind mount is created later over SFTP, without sudo, inside a
+  `/opt/db_ops` the preparation had left root-owned. Both folders are now created and handed to the
+  SSH user with sudo, and a preparation that fails says so instead of surfacing later.
+- **A SQL task refused a database it could have run on, in the wrong words.** Before connecting it
+  compared `database_name` case-sensitively with the instance record's `database_names` - a list no
+  code writes - so `APPDB_PROD` failed against `APPDB_Prod` and a database created yesterday would have
+  failed too, with *Target database not found in database-inventory.json*, a file never read, and a
+  `service_name` SQL Server does not have in the path. It now looks up the instance only (ignoring
+  case on SQL Server), connects, and asks the server when the database does not open: *does not
+  exist ... did you mean*, *use the server's spelling*, *this login cannot open it*, a refused login,
+  an unreachable instance. An instance the server lacks is named with the ones it has - and
+  `sql-target-add` refuses it. SQL Server messages say `server/instance.database`, `master` when no
+  database is named.
+- **A restore whose `DBCC CHECKDB` failed was reported as a failed restore.** The database is
+  `CHECK_FAILED`, and the message says *restored and recovered, but the integrity check failed*, with
+  SQL Server's message numbers. It still fails the run and holds back retention cleanup.
+- The shipped `sql_commands` example carried a `postgresql` task, which no runner executes.
+- **A SQL Server restore with a database list was never verified.** The check after a restore read
+  the wrong field names off each mapping, found no database to ask about, and reported the
+  verification as not configured. It now asks the target about every mapped database under its
+  target name. Expect restore runs that listed databases to start reporting their real state.
+- **A PostgreSQL or MySQL instance registered with `db_name` connected to its label.**
+  `instance-add` asked for `db_name`, but no connection read that field, so it fell back to
+  `service_name`. It now writes `database_name`, the field the connection reads.
+- **`check-objects` reported every instance registered by `instance-add` as broken**: the
+  reference marked `metrics` as required, and `instance-add` deliberately writes none (collection
+  follows `active`).
+- **A Telegram group with no `status` field could run commands but was never sent an alert.**
+  The permission check read it as active and the level routing as inactive; both now read it
+  as active.
+- **`check-secret` guessed a docker connection's engine from the ref's name**: it read a field
+  the file did not carry.
+- **The status report showed a stopped web host as enabled.** It read `enabled` on the app
+  command, which only has `active`.
+- **`check-objects` re-read the reference for every record** - 1 MB, parsed about 4,400 times once
+  the reference described itself (50 s). It is loaded once per walk: 0.13 s. A nested object was
+  also looked up in the default data dir's reference rather than the one being checked.
+
+- **A SQL Server warning failed the run.** pyodbc raises a warning (SQLSTATE class `01`, e.g. 8153
+  *Null value is eliminated by an aggregate*) out of `nextset()`, and every result loop treated it as
+  an error: a task that had finished and committed was recorded `error`. A warning now ends the
+  reading without failing: `run-sql` answers it in `warnings` and says so in its message, a SQL task
+  is `done` at level `warning` with *SQL task done with a warning* in Telegram. Nothing after the
+  warning can be read - the driver runs the rest of the batch on the server and hides even a later
+  error - so a run under a wrapping transaction is rolled back with that reason instead of
+  committed. A warning mixed with a real error is still an error.
+- `run-sql`'s message named no database since 0.22.0 renamed its answer key; it says
+  `<server_id>.<database_name>` again.
+
 ## [0.21.0] - 2026-09-22
 
 ### Added

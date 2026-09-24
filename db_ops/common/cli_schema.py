@@ -33,8 +33,8 @@ COPY_SCHEMA_USAGE = (
     "PLAN IS THE DEFAULT. A plan reads only the source, prints every statement and count, and\n"
     "opens no connection to the destination at all. Pass \"plan\": false (or --apply) to write.\n"
     "\n"
-    '  {"source": {"target": "ACME-192-0-2-111", "database": "APPDB_TEST", "schema": "sched"},\n'
-    '   "dest":   {"target": "ACME-192-0-2-250", "database": "APPDB",      "schema": "sched"},\n'
+    '  {"source": {"target": "ACME-192-0-2-111", "database_name": "APPDB_TEST", "schema": "sched"},\n'
+    '   "destination": {"target": "ACME-192-0-2-250", "database_name": "APPDB", "schema": "sched"},\n'
     '   "assert_dest_instance": "APP-DB\\\\PROD",\n'
     '   "exclude_tables": ["dataLock", "*Staging"],\n'
     '   "with_data": ["config", "config_version", "CalendarDay"],\n'

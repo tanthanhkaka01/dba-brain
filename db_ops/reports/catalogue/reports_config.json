@@ -84,6 +84,28 @@
         "repeat_interval": 72000,
         "timeout": 1800
       }
+    },
+    {
+      "report_code": "rp_inventory_health",
+      "display_name": "Inventory health + summary",
+      "metric_max_age_seconds": 604800,
+      "active": true,
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": 1,
+        "to_day": 31,
+        "from_hour": 0,
+        "to_hour": 23,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 3600,
+        "retry_interval": 600,
+        "timeout": 1800
+      },
+      "note": "Moved from the app command APP-REPORTS-INVENTORY-WORKFLOW by upgrade-config (0.22.0): the inventory is a report, built by the reports app's own pass."
     }
   ]
 }

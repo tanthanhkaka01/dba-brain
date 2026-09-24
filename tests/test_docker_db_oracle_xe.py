@@ -46,8 +46,8 @@ def test_it_serves_the_non_cdb_service_not_a_pluggable_database():
 def test_the_connection_entry_points_at_the_xe_service():
     entry = build_connection_entry(_spec(), host="10.0.0.9", compose_path="/tmp/x.yml")
 
-    assert entry["engine"] == "oracle-xe"
-    assert entry["database"] == "XE"
+    assert entry["db_type"] == "oracle-xe"
+    assert entry["database_name"] == "XE"
     assert entry["port"] == 1521
     assert entry["username"] == "system"
 

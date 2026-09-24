@@ -24,14 +24,14 @@ def test_build_connection_entry_shape():
         worker_host="10.0.0.1",
     )
     assert entry["id"] == "PG_LAB_01"
-    assert entry["engine"] == "postgres"
+    assert entry["db_type"] == "postgres"
     assert entry["port"] == 5433
     assert entry["username"] == "postgres"
-    assert entry["password_env"] == "POSTGRES_PASSWORD"
+    assert entry["password_ref"] == "POSTGRES_PASSWORD"
     assert entry["docker"]["instance_name"] == "pg_lab_01"
     assert entry["created_by"] == "db_ops.sre.create-db-docker"
     # No password value anywhere in the entry.
-    assert "password" not in json.dumps(entry).replace("password_env", "")
+    assert "password" not in json.dumps(entry).replace("password_ref", "")
 
 
 def test_ha_entry_records_replicas():

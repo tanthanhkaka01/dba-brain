@@ -10,12 +10,12 @@
   "docker_db_connections": [
     {
       "id": "PG_LAB_01",
-      "engine": "postgres",
+      "db_type": "postgres",
       "host": "",
       "port": 5433,
-      "database": "postgres",
+      "database_name": "postgres",
       "username": "postgres",
-      "password_env": "POSTGRES_192_0_2_40_LAB",
+      "password_ref": "POSTGRES_192_0_2_40_LAB",
       "docker": {
         "instance_name": "pg_lab_01",
         "mode": "ha-lab",
@@ -27,12 +27,12 @@
     },
     {
       "id": "MSSQL_LAB_01",
-      "engine": "mssql",
+      "db_type": "mssql",
       "host": "192.0.2.40",
       "port": 1433,
-      "database": "master",
+      "database_name": "master",
       "username": "sa",
-      "password_env": "MSSQL_192_0_2_40_SA",
+      "password_ref": "MSSQL_192_0_2_40_SA",
       "docker": {
         "instance_name": "mssql_lab_01",
         "mode": "single",
@@ -45,12 +45,12 @@
     },
     {
       "id": "ORA_LAB_01",
-      "engine": "oracle-xe",
+      "db_type": "oracle-xe",
       "host": "192.0.2.40",
       "port": 1521,
-      "database": "XE",
+      "database_name": "XE",
       "username": "system",
-      "password_env": "ORACLE_192_0_2_40_LAB",
+      "password_ref": "ORACLE_192_0_2_40_LAB",
       "docker": {
         "instance_name": "ora_lab_01",
         "mode": "single",

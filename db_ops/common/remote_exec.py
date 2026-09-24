@@ -202,7 +202,7 @@ class RemoteResult:
             "exit_code": self.exit_code,
             "stdout": self.stdout,
             "stderr": self.stderr,
-            "duration_seconds": self.duration_seconds,
+            "duration_ms": int(round(self.duration_seconds * 1000)),
         }
 
     def to_completed_process(self) -> subprocess.CompletedProcess:

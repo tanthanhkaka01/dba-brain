@@ -180,48 +180,6 @@
           "chat_id": ""
         }
       }
-    },
-    {
-      "sql_id": 5,
-      "target_no": 1,
-      "server_id": "ACME-192-0-2-20-PG-5432",
-      "db_type": "postgresql",
-      "service_name": "SALESDB-PROD",
-      "instance_name": "salesdb_primary",
-      "database_name": "salesdb",
-      "credential_name": "postgresql_192.0.2.20_monitor_user",
-      "active": true,
-      "time_window": {
-        "from_year": null,
-        "to_year": null,
-        "from_month": null,
-        "to_month": null,
-        "from_day": 1,
-        "to_day": 31,
-        "from_hour": 2,
-        "to_hour": 4,
-        "from_minute": null,
-        "to_minute": null,
-        "repeat_interval": 604800,
-        "timeout": 3600
-      },
-      "notify": {
-        "logging_on_run": {
-          "enabled": true,
-          "telegram_chat": "sql",
-          "chat_id": ""
-        },
-        "alert_on_error": {
-          "enabled": true,
-          "telegram_chat": "sql",
-          "chat_id": ""
-        }
-      },
-      "output": {
-        "format": "plain",
-        "telegram_chat": "sql",
-        "chat_id": ""
-      }
     }
   ]
 }

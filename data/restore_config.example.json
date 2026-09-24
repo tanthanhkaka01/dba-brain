@@ -167,6 +167,8 @@
         "restores": [
             {
                 "restore_id": "ACME_APPDB_TO_DRILL",
+                "server_id": "ACME-192-0-2-10",
+                "target_server_id": "ACME-192-0-2-40-HOST",
                 "active": true,
                 "cleanup_retention": 86400,
                 "space_check": {
@@ -176,26 +178,24 @@
                 },
                 "note": "The drill. It restores yesterday's backup onto a disposable instance, verifies it, and drops the copy a day later. Scoped to the databases that matter - an empty list would go on restoring whatever it found, including files nobody produces any more.",
                 "source": {
-                    "id": "ACME-192-0-2-10",
                     "backup_share": "\\\\192.0.2.10\\SQLBK\\APPDB",
                     "credential_target": "192.0.2.10",
                     "username": "192.0.2.10\\svc_backup",
-                    "password_env": "REMOTE_192_0_2_10_SVC_BACKUP"
+                    "password_ref": "REMOTE_192_0_2_10_SVC_BACKUP"
                 },
                 "target": {
-                    "id": "ACME-192-0-2-40-HOST",
                     "vm_platform": "linux",
                     "credential_target": "192.0.2.40",
                     "username": "dba_user",
-                    "password_env": "REMOTE_192_0_2_40_DBA_USER",
+                    "password_ref": "REMOTE_192_0_2_40_DBA_USER",
                     "sql_instance": "localhost,1433",
                     "sql_username": "sa",
-                    "sql_password_env": "MSSQL_192_0_2_40_SA",
+                    "sql_password_ref": "MSSQL_192_0_2_40_SA",
                     "restore_data_dir": "/var/opt/mssql/data",
                     "vm_import_linux_path": "/opt/restore/import/ACME-192-0-2-10",
                     "vm_import_linux_log_path": "/opt/restore/import/ACME-192-0-2-10"
                 },
-                "databases": [
+                "database_mappings": [
                     {
                         "source_database": "APPDB",
                         "target_database": "APPDB_DRILL"

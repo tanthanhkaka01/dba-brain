@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from db_ops.sla.models import SlaPolicy
+from db_ops.lib import field_names
 from db_ops.lib.paths import DEFAULT_DATA_DIR
 
 
@@ -47,8 +48,10 @@ def parse_sla_policy(raw: dict[str, Any]) -> SlaPolicy:
         raise ValueError(f"SLA policy {policy_id} requires target_ids or db_types.")
     if not metric_codes:
         raise ValueError(f"SLA policy {policy_id} requires metric_codes.")
-    objective = float(raw.get("objective_percent", raw.get("slo_target", 99.0)))
-    aggregation = str(raw.get("aggregation") or raw.get("aggregation_method") or "success_ratio").lower()
+    # Each of these was accepted under two names; the standard ones are read first (0.22.0).
+    objective = float(field_names.read(raw, "sla_policy", "objective_percent", 99.0))
+    aggregation = str(field_names.read(raw, "sla_policy", "aggregation", "")
+                      or "success_ratio").lower()
     supported_aggregations = {"success_ratio", "average", "minimum", "maximum", "sum", "count", "latest", "percentile"}
     if aggregation not in supported_aggregations:
         raise ValueError(f"SLA policy {policy_id} has invalid aggregation: {aggregation}.")
@@ -66,7 +69,8 @@ def parse_sla_policy(raw: dict[str, Any]) -> SlaPolicy:
         # bound. Left at the default ">= 99" a backlog of 1,503 stale statistics would compare as
         # 1503 >= 99 and report PASSED — a silent inversion that reads as healthy precisely when
         # the backlog is worst. Refuse the config instead of guessing which way it meant.
-        if str(raw.get("comparison_operator") or raw.get("operator") or "").strip() not in ("<=", "<"):
+        if str(field_names.read(raw, "sla_policy", "comparison_operator", "") or "").strip() \
+                not in ("<=", "<"):
             raise ValueError(
                 f"SLA policy {policy_id} is a finding_inventory and must set comparison_operator "
                 f'to "<=" or "<": its actual value is a count of affected objects, and a ">=" '
@@ -80,7 +84,7 @@ def parse_sla_policy(raw: dict[str, Any]) -> SlaPolicy:
     percentile = float(raw.get("percentile", 95.0))
     if aggregation == "percentile" and not 0 < percentile <= 100:
         raise ValueError(f"SLA policy {policy_id} percentile must be > 0 and <= 100.")
-    operator = str(raw.get("comparison_operator") or raw.get("operator") or ">=")
+    operator = str(field_names.read(raw, "sla_policy", "comparison_operator", "") or ">=")
     if operator not in {">=", ">", "<=", "<", "==", "!="}:
         raise ValueError(f"SLA policy {policy_id} has invalid comparison operator: {operator}.")
     minimum_sample_count = int(raw.get("minimum_sample_count", 1))
@@ -95,7 +99,7 @@ def parse_sla_policy(raw: dict[str, Any]) -> SlaPolicy:
         raise ValueError(f"SLA policy {policy_id} window_hours must be >= 1.")
     return SlaPolicy(
         policy_id=policy_id,
-        name=str(raw.get("name") or policy_id),
+        name=str(field_names.read(raw, "sla_policy", "display_name", "") or policy_id),
         target_ids=target_ids,
         db_types=db_types,
         metric_codes=metric_codes,

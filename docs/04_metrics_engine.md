@@ -741,9 +741,9 @@ entirely and connects by **service**.
 | Engine | Connects to | Set by |
 | --- | --- | --- |
 | `sqlserver` | `master`, always | fixed; metric SQL does its own `USE` |
-| `postgresql` | `database` from the inventory, else `postgres` | `db_instances.json` → `database` |
-| `mysql` | `database` from the inventory, else `information_schema` | `db_instances.json` → `database` |
-| `oracle` | the **service**, not a database | `service_name`, else `database` |
+| `postgresql` | `database_name` from the inventory, else `postgres` | `db_instances.json` → `database_name` |
+| `mysql` | `database_name` from the inventory, else `information_schema` | `db_instances.json` → `database_name` |
+| `oracle` | the **service**, not a database | `service_name`, else `database_name` |
 
 ## Data Flow
 

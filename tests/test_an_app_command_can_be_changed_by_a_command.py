@@ -81,7 +81,7 @@ def test_a_window_edit_names_the_field_that_moved_not_the_whole_block(estate):
 
     assert out["written"] is True
     assert out["message"] == "APP-BACKUP-RESTORE: time_window.repeat_interval 300 -> 30"
-    assert out["changed"] == [
+    assert out["changes"] == [
         {"field": "time_window.repeat_interval", "from": 300, "to": 30}]
 
 
@@ -95,7 +95,7 @@ def test_changing_nothing_says_so_and_writes_nothing(estate):
     out = set_it(estate, time_window={"repeat_interval": 300})
 
     assert out["written"] is False
-    assert out["changed"] == []
+    assert out["changes"] == []
     assert "already carries those values" in out["message"]
     assert (estate / "app_commands.json").read_text(encoding="utf-8") == before
 
@@ -104,7 +104,7 @@ def test_several_fields_are_all_reported(estate):
     out = set_it(estate, active=False, max_parallel=2,
                  time_window={"repeat_interval": 30, "weekdays": [1, 7]})
 
-    moved = {c["field"] for c in out["changed"]}
+    moved = {c["field"] for c in out["changes"]}
     assert moved == {"active", "max_parallel",
                      "time_window.repeat_interval", "time_window.weekdays"}
 

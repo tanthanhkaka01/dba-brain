@@ -6,6 +6,7 @@ import sys
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
+from db_ops.lib import field_names
 from db_ops.lib import timezone as timezone_lib
 from db_ops.lib.paths import TOOL_ROOT  # noqa: F401 - one definition, see that module
 
@@ -675,7 +676,7 @@ def _parse_postgres_store(raw: Any, *, store_dir: Path) -> PostgresStoreConfig:
     return PostgresStoreConfig(
         host=str(raw.get("host", "")).strip(),
         port=int(raw.get("port") or 5432),
-        database=str(raw.get("database", "")).strip(),
+        database=str(field_names.read(raw, "store_postgresql", "database_name", "") or "").strip(),
         schema=str(raw.get("schema", "")).strip(),
         username=str(raw.get("username", "")).strip(),
         password_ref=str(raw.get("password_ref") or raw.get("password_env") or "").strip(),
@@ -830,7 +831,9 @@ def _load_telegram_groups_file(path: Path | None) -> dict[str, str]:
     groups: dict[str, str] = {}
 
     for item in data_sources.load_telegram_groups(path):
-        if str(item.get("status", "")).lower() != "active":
+        from db_ops.lib.target_flags import is_record_active
+
+        if not is_record_active(item):
             continue
         group_id = str(item.get("group_id", "")).strip()
         if not group_id:

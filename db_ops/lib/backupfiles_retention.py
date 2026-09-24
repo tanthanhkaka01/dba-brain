@@ -91,8 +91,8 @@ def plan_retention(files: list[dict[str, Any]], *, retention_days: int = DEFAULT
         # this is 0 for an RMAN directory whose files are gigabytes each — `delete-files` stats
         # each file as it goes and reports the bytes actually freed. Stated rather than guessed at:
         # a plan that invented a size would be a plan an operator sized a disk against.
-        "reclaimable_bytes": sum(int(row.get("size") or 0) for row in obsolete),
-        "sizes_known": all(row.get("size") is not None for row in obsolete),
+        "reclaimable_bytes": sum(int(row.get("size_bytes") or 0) for row in obsolete),
+        "sizes_known": all(row.get("size_bytes") is not None for row in obsolete),
     }
 
 
@@ -144,7 +144,7 @@ def _by_database(files: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]
     their backups are whole-instance."""
     groups: dict[str, list[dict[str, Any]]] = {}
     for row in files:
-        groups.setdefault(str(row.get("database") or ""), []).append(row)
+        groups.setdefault(str(row.get("database_name") or ""), []).append(row)
     return groups
 
 

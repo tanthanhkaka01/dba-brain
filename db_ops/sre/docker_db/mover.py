@@ -60,6 +60,7 @@ import shlex
 import time
 from dataclasses import dataclass, field
 
+from db_ops.lib import field_names
 from db_ops.sre.docker_db import healthcheck, register_config
 from db_ops.sre.docker_db.models import ENGINE_META
 from db_ops.sre.docker_db.provisioner import DEFAULT_CONTAINERS_DIR
@@ -677,7 +678,8 @@ def resolve_engine(spec: MoveSpec, *, data_dir=None) -> str:
             registry = {}
         for entry in registry.get(register_config.REGISTRY_ROOT_KEY, []):
             if isinstance(entry, dict) and entry.get("id") == register_config.connection_id(spec.name):
-                engine = str(entry.get("engine") or "")
+                # `db_type` since 0.22.0; a record written earlier says `engine`.
+                engine = str(field_names.read(entry, "docker_db_connection", "db_type", "") or "")
                 if engine in ENGINE_META:
                     return engine
     raise MoveError(

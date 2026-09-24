@@ -58,7 +58,7 @@ def test_a_chat_nobody_has_posted_in_is_registered(groups_file, telegram) -> Non
     record = _records(groups_file)[0]
     assert record["group_id"] == "-1001234567890"
     assert record["notify_level"] == "critical"
-    assert record["status"] == "active"
+    assert record["active"] is True and "status" not in record
 
 
 def test_the_title_comes_back_from_telegram_not_from_the_operator(groups_file, telegram) -> None:

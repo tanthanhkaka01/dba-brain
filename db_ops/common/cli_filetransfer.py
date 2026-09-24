@@ -34,7 +34,7 @@ backup set is thousands of small files.
    "format": "tar",                  // tar | zip. Windows gets tar.exe / Compress-Archive
 {_HOST_BLOCK}}}
 
-data: {{"archive_path", "format", "sha256", "size", "packed", "folder"}}
+data: {{"archive_path", "format", "sha256", "size_bytes", "file_count", "folder"}}
 The sha256 is the point: size alone catches a truncated copy, not a corrupted one.
 """
 
@@ -48,7 +48,7 @@ archive is hashed on the host and again here, and a mismatch is refused rather t
    "local_path": "/opt/db_ops/stage/pieces.tar",
 {_HOST_BLOCK}}}
 
-data: {{"remote_path", "local_path", "sha256", "size", "verified"}}
+data: {{"remote_path", "local_path", "sha256", "size_bytes", "verified"}}
 """
 
 PUSH_USAGE = f"""\
@@ -62,13 +62,13 @@ gives names the file rather than the directory that is not there.
    "remote_path": "D:\\\\restore\\\\pieces.tar",
 {_HOST_BLOCK}}}
 
-data: {{"local_path", "remote_path", "sha256", "size", "verified"}}
+data: {{"local_path", "remote_path", "sha256", "size_bytes", "verified"}}
 """
 
 _COMMANDS = {
-    "pack-backup": ("pack", PACK_USAGE, "Packed {sha256} ({size} bytes) to {archive_path}."),
-    "pull-file": ("pull", PULL_USAGE, "Pulled {size} bytes to {local_path}, sha256 {sha256}."),
-    "push-file": ("push", PUSH_USAGE, "Pushed {size} bytes to {remote_path}, sha256 {sha256}."),
+    "pack-backup": ("pack", PACK_USAGE, "Packed {sha256} ({size_bytes} bytes) to {archive_path}."),
+    "pull-file": ("pull", PULL_USAGE, "Pulled {size_bytes} bytes to {local_path}, sha256 {sha256}."),
+    "push-file": ("push", PUSH_USAGE, "Pushed {size_bytes} bytes to {remote_path}, sha256 {sha256}."),
 }
 
 
@@ -96,11 +96,11 @@ def run(operation: str, argv: list[str], *, read_request: Any) -> int:
 
     return response.emit(response.ok(
         operation,
-        message=template.format(**{k: data.get(k) for k in ("sha256", "size", "archive_path",
+        message=template.format(**{k: data.get(k) for k in ("sha256", "size_bytes", "archive_path",
                                                             "local_path", "remote_path")}),
         data=data,
         metrics={"duration_ms": int((time.monotonic() - started) * 1000),
-                 "bytes": data.get("size") or 0},
+                 "size_bytes": data.get("size_bytes") or 0},
     ))
 
 

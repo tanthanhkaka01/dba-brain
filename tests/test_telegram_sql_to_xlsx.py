@@ -234,7 +234,7 @@ def _patch_run_sql(monkeypatch, answer):
         seen.clear()
         seen.update(request)
         resolved = dict(answer)
-        resolved.setdefault("database", request.get("database") or "master")
+        resolved.setdefault("database_name", request.get("database_name") or "master")
         resolved.setdefault("credential_name", request.get("credential_name") or "default_cred")
         return True, resolved, ""
 
@@ -269,10 +269,10 @@ def test_run_sql_to_xlsx_allows_temp_table_then_select(monkeypatch):
 
 def test_run_sql_to_xlsx_returns_first_result_set(monkeypatch):
     seen = _patch_run_sql(monkeypatch, _answer(rows=[[1], [2], [3]], row_count=3,
-                                               database="AppDb"))
+                                               database_name="AppDb"))
 
     result = run_sql_to_xlsx(target="mssql 192.0.2.248", sql_text="SELECT Id FROM t")
-    assert seen["target"] == "mssql 192.0.2.248" and seen["sql"] == "SELECT Id FROM t"
+    assert seen["target"] == "mssql 192.0.2.248" and seen["sql_text"] == "SELECT Id FROM t"
     assert result["columns"] == ["Id"]
     assert result["row_count"] == 3
     assert result["affected_rows"] == 0
@@ -285,7 +285,7 @@ def test_run_sql_to_xlsx_database_argument_pins_the_database(monkeypatch):
     seen = _patch_run_sql(monkeypatch, _answer())
 
     result = run_sql_to_xlsx(target="ACME-x", sql_text="SELECT Id FROM t", database="SALESDB")
-    assert seen["database"] == "SALESDB"       # it reaches the command...
+    assert seen["database_name"] == "SALESDB"       # it reaches the command...
     assert result["database"] == "SALESDB"     # ...and the command's answer is what is reported
 
 

@@ -157,7 +157,7 @@ def test_every_engine_returns_the_same_row_shape(monkeypatch):
     pg = list_backup_files({"db_type": "postgresql", "path": "/b"})["files"][0]
     ora = list_backup_files({"db_type": "oracle", "path": "/b"})["files"][0]
 
-    required = {"path", "kind", "database", "size", "finished_at"}
+    required = {"path", "kind", "database_name", "size_bytes", "finished_at"}
     assert required <= set(pg) and required <= set(ora)
 
 
@@ -272,9 +272,9 @@ def test_latest_is_per_database_not_per_kind(monkeypatch):
     from db_ops.common.backupfiles import _latest_only
 
     files = [
-        {"path": "a.bak", "kind": FULL, "database": "APPDB", "finished_at": "2026-08-07 01:00:00"},
-        {"path": "b.bak", "kind": FULL, "database": "APP", "finished_at": "2026-08-07 02:00:00"},
-        {"path": "c.bak", "kind": FULL, "database": "APPDB", "finished_at": "2026-08-07 03:00:00"},
+        {"path": "a.bak", "kind": FULL, "database_name": "APPDB", "finished_at": "2026-08-07 01:00:00"},
+        {"path": "b.bak", "kind": FULL, "database_name": "APP", "finished_at": "2026-08-07 02:00:00"},
+        {"path": "c.bak", "kind": FULL, "database_name": "APPDB", "finished_at": "2026-08-07 03:00:00"},
     ]
 
     assert sorted(f["path"] for f in _latest_only(files)) == ["b.bak", "c.bak"]
@@ -315,9 +315,9 @@ def test_a_database_filter_narrows_a_shared_directory():
     import db_ops.common.backupfiles.postgresql as pg
 
     rows = [
-        {"path": "appdb.bak", "kind": FULL, "database": "APPDB", "size": None,
+        {"path": "appdb.bak", "kind": FULL, "database_name": "APPDB", "size_bytes": None,
          "finished_at": "2026-08-07 01:00:00"},
-        {"path": "app.bak", "kind": FULL, "database": "APP", "size": None,
+        {"path": "app.bak", "kind": FULL, "database_name": "APP", "size_bytes": None,
          "finished_at": "2026-08-07 02:00:00"},
     ]
     original = pg.list_files

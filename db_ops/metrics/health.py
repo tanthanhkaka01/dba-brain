@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from db_ops.lib.field_names import with_both_names
 from db_ops.levels import ERROR, LOGGING, WARNING
 from db_ops.lib.paths import DEFAULT_DATA_DIR
 
@@ -46,8 +47,11 @@ def load_instances(path: str | Path) -> list[InstanceHealth]:
         data = json.load(file)
 
     instances: list[InstanceHealth] = []
-    for item in data.get("db_instances", []):
-        if not bool(item.get("enabled", True)):
+    for raw in data.get("db_instances", []):
+        # Both spellings of the renamed fields (0.22.0 section 1.0) - this parses the file itself
+        # rather than through data_sources, so it has to ask for them itself.
+        item = with_both_names(raw, "db_instance")
+        if not bool(item.get("active", True)):
             continue
         instances.append(
             InstanceHealth(
@@ -57,7 +61,7 @@ def load_instances(path: str | Path) -> list[InstanceHealth]:
                 ip=str(item.get("ip", "")),
                 port=int(item["port"]) if item.get("port") not in (None, "") else None,
                 db_type=str(item.get("db_type", "")),
-                service_name=str(item.get("service_name") or item.get("db_name") or ""),
+                service_name=str(item.get("service_name") or ""),
                 database_names=[str(name) for name in item.get("database_names", []) or []],
                 instance_name=str(item.get("instance_name", "")),
                 os=str(item.get("os", "")),

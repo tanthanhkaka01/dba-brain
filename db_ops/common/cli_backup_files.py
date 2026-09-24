@@ -55,7 +55,7 @@ How each engine answers: SQL Server by RESTORE HEADERONLY (names are unreliable)
 asking RMAN (an RMAN directory is flat), PostgreSQL by reading the layout (the directory names
 are what the backup job wrote on purpose).
 
-data: {{"files":  [{{"path", "kind", "database", "size", "finished_at"}}, ...],
+data: {{"files":  [{{"path", "kind", "database_name", "size_bytes", "finished_at"}}, ...],
        "counts": {{"full": n, "diff": n, "log": n, "controlfile": n}},
        "newest_finished_at": "..."}}   // pass as `after` on the next call
 
@@ -107,7 +107,7 @@ RMAN still listing it. Prefer `DELETE OBSOLETE` inside RMAN for an RMAN-managed 
 this to report on one, or to clean files RMAN does not own.
 
 data: {{"mode", "retention_days", "cutoff",
-       "obsolete": [{{"path", "kind", "database", "size", "finished_at", "verdict", "reason"}}, ...],
+       "obsolete": [{{"path", "kind", "database_name", "size_bytes", "finished_at", "verdict", "reason"}}, ...],
        "keep":     [ ...same shape... ],
        "obsolete_paths": [path, ...], "counts", "reclaimable_bytes",
        "deleted": {{...}}}}   // only when delete=true; the delete-files answer verbatim
@@ -213,7 +213,7 @@ def _prune(request: dict) -> int:
 
     data = {**plan, "deleted": deleted}
     metrics = {**metrics, "deleted": deleted["counts"]["deleted"],
-               "bytes_freed": deleted["bytes_freed"]}
+               "freed_bytes": deleted["freed_bytes"]}
     if deleted["counts"]["failed"]:
         return response.emit(response.fail(
             operation,
@@ -224,7 +224,7 @@ def _prune(request: dict) -> int:
     return response.emit(response.ok(
         operation,
         message=(f"{counts['obsolete']} obsolete file(s) {verb} "
-                 f"({deleted['bytes_freed']} bytes freed), {counts['keep']} kept."),
+                 f"({deleted['freed_bytes']} bytes freed), {counts['keep']} kept."),
         data=data, metrics=metrics))
 
 

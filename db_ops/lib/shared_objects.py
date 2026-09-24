@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from db_ops.lib.json_io import load_json_file
-from db_ops.lib.paths import DEFAULT_DATA_DIR, reference_file
+from db_ops.lib.paths import DEFAULT_DATA_DIR, PACKAGE_DIR, reference_file
 
 #: The file, by the name it has in every one of its three homes.
 FILENAME = "shared_config_objects.json"
@@ -58,24 +58,30 @@ def names(data_dir: str | Path | None = None) -> list[str]:
 
 
 def describe(name: str, *, data_dir: str | Path | None = None,
-             field: str = "") -> dict[str, Any]:
+             field: str = "", reference: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """One object's entry, or — with ``field`` — one field's.
 
     Names are matched case-insensitively and a ``time-window`` spelling is accepted for
     ``time_window``: the person asking is typing into a chat, not writing a config file.
+
+    ``reference`` is an already-loaded :func:`load`, for a caller that looks up many records:
+    without it every lookup re-reads and re-parses the whole file, which made ``check-objects``
+    take 50 s once the reference described itself (4,412 parses of a 1 MB file).
     """
     wanted = str(name or "").strip().lower().replace("-", "_")
+    entries = reference if reference is not None else load(data_dir)
     if not wanted:
         raise SharedObjectError(
-            f"name is required. This build describes: {', '.join(names(data_dir))}.")
-    for item in load(data_dir):
+            f"name is required. This build describes: "
+            f"{', '.join(str(i.get('object') or '') for i in entries)}.")
+    for item in entries:
         if str(item.get("object") or "").strip().lower() == wanted:
             if not field:
                 return item
             return _field(item, field)
     raise SharedObjectError(
         f"no shared config object named '{name}'. This build describes: "
-        f"{', '.join(names(data_dir))}.")
+        f"{', '.join(str(i.get('object') or '') for i in entries)}.")
 
 
 def _field(item: dict[str, Any], field: str) -> dict[str, Any]:
@@ -146,7 +152,8 @@ def _as_int(value: Any) -> int | None:
 
 def check_value(constraint: dict[str, Any], value: Any, *, where: str, field: str,
                 record: dict[str, Any] | None = None,
-                in_config: bool = True) -> list[dict[str, str]]:
+                in_config: bool = True,
+                reference: list[dict[str, Any]] | None = None) -> list[dict[str, str]]:
     """Every way ``value`` fails one field's ``constraint``, as findings.
 
     Pure, and it takes the constraint rather than looking it up, so a caller can check a value it
@@ -164,6 +171,23 @@ def check_value(constraint: dict[str, Any], value: Any, *, where: str, field: st
     if value is None:
         if not constraint.get("nullable", True):
             findings.append(_finding("value", where, field, "must not be null"))
+        return findings
+
+    if kind == "number":
+        # A quantity that may carry a fraction: 15.0 GB free, 99.5 percent. Held to `integer` it
+        # read every one of those as broken; a bool is still refused, for the reason _as_int gives.
+        try:
+            amount = None if isinstance(value, bool) else float(value)
+        except (TypeError, ValueError):
+            amount = None
+        if amount is None:
+            findings.append(_finding("value", where, field, f"must be a number; got {value!r}"))
+            return findings
+        low, high = constraint.get("min"), constraint.get("max")
+        if low is not None and amount < float(low):
+            findings.append(_finding("value", where, field, f"must be >= {low}; got {amount}"))
+        if high is not None and amount > float(high):
+            findings.append(_finding("value", where, field, f"must be <= {high}; got {amount}"))
         return findings
 
     if kind == "integer":
@@ -279,17 +303,23 @@ def check_value(constraint: dict[str, Any], value: Any, *, where: str, field: st
         # the whole reference stopped validating.
         if constraint.get("free_form"):
             return findings
+        # The same reference the outer record was checked against - without it the nested object
+        # was looked up in the default data dir's copy, whichever one was being checked.
         return check_record(str(constraint.get("object")), value,
-                            where=f"{where}.{field}", in_config=in_config)
+                            where=f"{where}.{field}", in_config=in_config, reference=reference)
 
     return findings
 
 
 def check_record(object_name: str, record: Any, *, where: str,
                  data_dir: str | Path | None = None,
-                 in_config: bool = True) -> list[dict[str, str]]:
-    """Check one occurrence of one shared object: required fields, values, unknown fields."""
-    entry = describe(object_name, data_dir=data_dir)
+                 in_config: bool = True,
+                 reference: list[dict[str, Any]] | None = None) -> list[dict[str, str]]:
+    """Check one occurrence of one shared object: required fields, values, unknown fields.
+
+    ``reference``: an already-loaded :func:`load` - see :func:`describe`.
+    """
+    entry = describe(object_name, data_dir=data_dir, reference=reference)
     if not isinstance(record, dict):
         return [_finding("value", where, object_name,
                          f"must be an object; got {type(record).__name__}")]
@@ -302,17 +332,23 @@ def check_record(object_name: str, record: Any, *, where: str,
         constraint = spec.get("constraint") or {}
         if name in record:
             findings.extend(check_value(constraint, record[name], where=where, field=name,
-                                        record=record, in_config=in_config))
+                                        record=record, in_config=in_config, reference=reference))
         elif spec.get("required"):
             # A legacy spelling satisfies the requirement — the parser reads it, so refusing here
             # would report a file that loads correctly as broken.
             satisfied = [alias for alias in constraint.get("satisfied_by") or [] if alias in record]
+            # Any legacy spelling of this very field satisfies it too: a record written before a
+            # rename is read under its old name, and calling its required field missing would
+            # report a file that loads correctly as broken.
+            satisfied += [old for old, new in legacy.items() if new == name and old in record]
             if not satisfied:
                 findings.append(_finding("missing", where, name,
                                          f"required: {spec.get('purpose') or ''}".strip()))
 
+    # A settings file's root is its record, and it also carries the file's own documentation.
+    document_keys = set(entry.get("document_keys") or ())
     for name in record:
-        if name in specs:
+        if name in specs or name in document_keys:
             continue
         if name in legacy:
             findings.append(_finding(DEPRECATED_KIND, where, name,
@@ -327,7 +363,9 @@ def check_record(object_name: str, record: Any, *, where: str,
 
 
 def walk_records(payload: Any, path: str) -> list[tuple[str, Any]]:
-    """Every record at a dotted path, where ``[]`` means "each item of this list".
+    """Every record at a dotted path: ``[]`` means "each item of this list", ``{}`` "each value of
+    this map" (a policy keyed by level or by backup type), and an empty path the document itself
+    (a settings file whose root IS the record).
 
     Public because :mod:`db_ops.lib.config_references` walks the same declared paths to follow a
     pointer from one config file into another, and two walkers would disagree about what
@@ -335,7 +373,8 @@ def walk_records(payload: Any, path: str) -> list[tuple[str, Any]]:
     """
     found: list[tuple[str, Any]] = [("", payload)]
     for step in [part for part in path.split(".") if part]:
-        name, is_list = (step[:-2], True) if step.endswith("[]") else (step, False)
+        is_list, is_map = step.endswith("[]"), step.endswith("{}")
+        name = step[:-2] if (is_list or is_map) else step
         nxt: list[tuple[str, Any]] = []
         for label, node in found:
             if not isinstance(node, dict) or name not in node:
@@ -345,10 +384,40 @@ def walk_records(payload: Any, path: str) -> list[tuple[str, Any]]:
                 if isinstance(value, list):
                     nxt.extend((f"{label}.{name}[{index}]".lstrip("."), item)
                                for index, item in enumerate(value))
+            elif is_map:
+                if isinstance(value, dict):
+                    nxt.extend((f"{label}.{name}{{{key}}}".lstrip("."), item)
+                               for key, item in value.items())
             else:
                 nxt.append((f"{label}.{name}".lstrip("."), value))
         found = nxt
     return found
+
+
+def data_root(data_dir: str | Path | None = None) -> Path:
+    """The ``data/`` folder the reference's ``used_in`` paths are read against.
+
+    One default for every walker of those paths - ``check-objects`` here and
+    ``standardize-field-names`` in ``common`` - so the two cannot look at different folders.
+    """
+    return Path(data_dir or DEFAULT_DATA_DIR)
+
+
+def site_file(root: Path, site: dict[str, Any]) -> Path | None:
+    """The file a ``used_in`` site is read from: the first of its homes that exists, else None.
+
+    ``data/<file>`` is the node's own. The example stands in for it because the export ships
+    tests/ and a public checkout has only ``*.example.json``: without it the check would pass there
+    by walking nothing, which is the one result a guard must never produce. ``packaged`` names the
+    copy inside the package that ``init`` writes the file from, for a file that ships as a packaged
+    default instead of an example - ``ops_status_request.json``, where an example would be a third
+    copy of one small document. The 0.22.0 public suite failed on exactly that file.
+    """
+    file_name = str(site.get("file") or "")
+    homes = [root / file_name, root / file_name.replace(".json", ".example.json")]
+    if site.get("packaged"):
+        homes.append(PACKAGE_DIR / str(site["packaged"]))
+    return next((home for home in homes if home.is_file()), None)
 
 
 def check_data_dir(data_dir: str | Path | None = None) -> dict[str, Any]:
@@ -357,14 +426,16 @@ def check_data_dir(data_dir: str | Path | None = None) -> dict[str, Any]:
     Walks the reference's own ``used_in`` list, so a new place an object is used is declared in the
     file rather than discovered by a scan that cannot tell a record from a note.
     """
-    root = Path(data_dir or DEFAULT_DATA_DIR)
+    root = data_root(data_dir)
     findings: list[dict[str, str]] = []
     notices: list[dict[str, str]] = []
     checked_records = 0
     checked_objects = 0
     files_missing: list[str] = []
+    # Loaded once for the whole walk and passed down: see describe().
+    reference = load(root)
 
-    for entry in load(root):
+    for entry in reference:
         object_name = str(entry.get("object"))
         is_field = str(entry.get("kind")) == "field"
         for site in entry.get("used_in") or []:
@@ -372,13 +443,8 @@ def check_data_dir(data_dir: str | Path | None = None) -> dict[str, Any]:
             if not file_name:
                 continue  # reached through another object; checked there
             path = str(site.get("path") or "")
-            # The example stands in for the real file, because the export ships tests/ and a public
-            # checkout has only `*.example.json`: without this the check would pass there by
-            # walking nothing, which is the one result a guard must never produce.
-            payload_path = root / file_name
-            if not payload_path.is_file():
-                payload_path = root / file_name.replace(".json", ".example.json")
-            if not payload_path.is_file():
+            payload_path = site_file(root, site)
+            if payload_path is None:
                 files_missing.append(file_name)
                 continue
             try:
@@ -394,17 +460,28 @@ def check_data_dir(data_dir: str | Path | None = None) -> dict[str, Any]:
                 if is_field:
                     # A shared FIELD lives on the record itself, so the record IS the occurrence.
                     checked_objects += 1
-                    for item in check_record(object_name, record, where=where, data_dir=root):
+                    # `whole_record` says the entry describes the ENTIRE record, so every key on it
+                    # is this entry's business. Without the flag the filter below drops any key the
+                    # entry does not declare - right for cleanup_retention, which shares its record
+                    # with a backup job's other fields, and wrong for sql_target, where a misspelled
+                    # `databse_name` would be dropped here and ignored by the loader, and the task
+                    # would run against the default database while looking configured.
+                    whole = bool(entry.get("whole_record"))
+                    own = {str(f.get("field")) for f in entry["fields"]} | set(
+                        entry.get("legacy_fields") or {})
+                    for item in check_record(object_name, record, where=where, data_dir=root,
+                                             reference=reference):
                         # Only this field's own names matter here; the record's other keys belong
                         # to its own file's schema, not to the shared field.
-                        if item["field"] in {str(f.get("field")) for f in entry["fields"]}:
+                        if whole or item["field"] in own:
                             (notices if item["kind"] in NOTICE_KINDS else findings).append(item)
                     continue
                 if object_name not in record:
                     continue
                 checked_objects += 1
                 for item in check_record(object_name, record[object_name],
-                                         where=f"{where}.{object_name}", data_dir=root):
+                                         where=f"{where}.{object_name}", data_dir=root,
+                                         reference=reference):
                     (notices if item["kind"] in NOTICE_KINDS else findings).append(item)
 
     return {

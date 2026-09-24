@@ -237,7 +237,7 @@ def add_sql_task(
         raise ConfigAdminError("server_id is required.")
     sql_name = str(sql_name or "").strip()
     if not sql_name:
-        raise ConfigAdminError("sql_name is required.")
+        raise ConfigAdminError("display_name is required.")
 
     if (sql_text is None) == (sql_bytes is None):
         raise ConfigAdminError("Provide exactly one of sql_text or sql_bytes.")
@@ -281,7 +281,7 @@ def add_sql_task(
     command_entry = {
         "sql_id": sql_id,
         "sql_code": sql_code,
-        "sql_name": sql_name,
+        "display_name": sql_name,
         "db_type": db_type,
         "script_type": "single",
         "script_path": script_relpath,
@@ -686,7 +686,8 @@ def _build_parser() -> argparse.ArgumentParser:
     add = sub.add_parser("add-sql", help="Add a single-script SQL task + target.")
     add.add_argument("--db-type", required=True, choices=SQL_TASK_DB_TYPES)
     add.add_argument("--server-id", required=True)
-    add.add_argument("--sql-name", required=True)
+    # `--display-name` since 0.22.0; `--sql-name` (and the JSON key `sql_name`) still work.
+    add.add_argument("--display-name", "--sql-name", dest="sql_name", required=True)
     src = add.add_mutually_exclusive_group(required=True)
     src.add_argument("--sql-file", help="Path to a .sql file whose contents to register.")
     src.add_argument("--sql-text", help="Inline SQL text to register.")
@@ -741,10 +742,10 @@ ADD_SQL_USAGE = (
     "\n"
     'Register a SQL task + target and (by default) enable it:\n'
     '  {"db_type": "sqlserver", "server_id": "ACME-192-0-2-115",\n'
-    '   "sql_name": "index_fragmentation", "sql_file": "assets/tasks/frag.sql"}\n'
+    '   "display_name": "index_fragmentation", "sql_file": "assets/tasks/frag.sql"}\n'
     "\n"
     "Every --flag documented by `add-sql --help` is a key here, without the leading dashes\n"
-    "and with underscores: --sql-name -> \"sql_name\". Store-true flags take true/false.\n"
+    "and with underscores: --server-id -> \"server_id\". Store-true flags take true/false.\n"
     "\n"
     "Legacy form (still accepted): add-sql --db-type ... --server-id ...\n"
 )

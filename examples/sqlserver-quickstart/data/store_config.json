@@ -15,7 +15,7 @@
   "postgresql": {
     "host": "127.0.0.1",
     "port": 5432,
-    "database": "db_ops",
+    "database_name": "db_ops",
     "schema": "db_ops",
     "username": "db_ops",
     "password_ref": "DB_OPS_STORE_PASSWORD",

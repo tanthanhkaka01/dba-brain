@@ -13,7 +13,7 @@
     {
       "sql_id": 1,
       "sql_code": "SQLSERVER-001-INDEX-USAGE-REPORT",
-      "sql_name": "Index usage report",
+      "display_name": "Index usage report",
       "db_type": "sqlserver",
       "script_type": "single",
       "script_path": "assets/tasks/sqlserver/001_index_usage_report.sql",
@@ -25,7 +25,7 @@
     {
       "sql_id": 2,
       "sql_code": "SQLSERVER-002-STOCK-EXPORT",
-      "sql_name": "Current stock export",
+      "display_name": "Current stock export",
       "db_type": "sqlserver",
       "script_type": "single",
       "script_path": "assets/tasks/sqlserver/002_current_stock_export.sql",
@@ -37,7 +37,7 @@
     {
       "sql_id": 3,
       "sql_code": "SQLSERVER-003-MONTH-END-BACKFILL",
-      "sql_name": "Month-end recalculation backfill",
+      "display_name": "Month-end recalculation backfill",
       "db_type": "sqlserver",
       "script_type": "folder",
       "script_path": "assets/tasks/sqlserver/003_month_end_backfill",
@@ -50,7 +50,7 @@
     {
       "sql_id": 4,
       "sql_code": "ORACLE-004-JOB-DETAIL",
-      "sql_name": "Job detail by number",
+      "display_name": "Job detail by number",
       "db_type": "oracle",
       "script_type": "single",
       "script_path": "assets/tasks/oracle/004_job_detail.sql",
@@ -68,24 +68,9 @@
       ]
     },
     {
-      "sql_id": 5,
-      "sql_code": "POSTGRES-005-BLOAT-CHECK",
-      "sql_name": "Table bloat check",
-      "db_type": "postgresql",
-      "script_type": "array",
-      "script_paths": [
-        "assets/tasks/postgresql/005_01_bloat_estimate.sql",
-        "assets/tasks/postgresql/005_02_bloat_summary.sql"
-      ],
-      "version_from": "12",
-      "version_to": null,
-      "active": true,
-      "_note": "Two files in a fixed order: the estimate populates what the summary reads. 'array' rather than 'folder' because the order matters and is stated here rather than implied by filenames."
-    },
-    {
       "sql_id": 6,
       "sql_code": "SQLSERVER-006-LOAD-SCANS-FROM-API",
-      "sql_name": "Load door scans from the attendance API",
+      "display_name": "Load door scans from the attendance API",
       "db_type": "sqlserver",
       "script_type": "single",
       "script_path": "assets/tasks/sqlserver/006_load_scans.sql",

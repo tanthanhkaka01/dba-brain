@@ -48,12 +48,13 @@ def build_connection_entry(
         docker["replicas"] = spec.replicas
     entry: dict = {
         "id": connection_id(spec.name),
-        "engine": spec.engine,
+        # Standard names since 0.22.0: db_type, database_name, password_ref (a secret REF).
+        "db_type": spec.engine,
         "host": host,
         "port": spec.host_port,
-        "database": meta.database,
+        "database_name": meta.database,
         "username": meta.username,
-        "password_env": spec.password_env,
+        "password_ref": spec.password_env,
         "docker": docker,
         "created_by": CREATED_BY,
     }

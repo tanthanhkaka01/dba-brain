@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from db_ops.lib import sql_access
+from db_ops.lib import field_names, sql_access
 from db_ops.sql_tasks import python_source as python_source_module
 from db_ops.sql_tasks.python_source import PythonSource, PythonSourceError, batches
 # Imported by name, not as a module: `sql_text` is also a local variable in this file
@@ -43,6 +43,7 @@ from db_ops.config import DEFAULT_CONFIG_PATH, load_config, resolve_config_path
 from db_ops.common import data_sources
 from db_ops.lib import common_cli
 from db_ops.lib import process_liveness
+from db_ops.lib import sql_task_target
 from db_ops.lib import run_claim
 from db_ops.lib.secret_text import add_key_argument, set_key_env
 # Connecting and executing are `common`'s, reached through `common.cli run-sql` — this app
@@ -486,7 +487,7 @@ def collect_sql_tasks(
         listed.append({
             "sql_id": int(command.sql_id),
             "sql_code": command.sql_code,
-            "sql_name": command.sql_name,
+            "display_name": command.sql_name,
             "db_type": command.db_type,
             "script_type": command.script_type,
             "script_files": list(command.script_files),
@@ -580,7 +581,7 @@ def authorize_forced_run(
         tasks = []
     if tasks:
         task = tasks[0]
-        name = str(task.get("sql_name") or task.get("sql_code") or "").strip()
+        name = str(task.get("display_name") or task.get("sql_code") or "").strip()
         label = f"sql_id {sql_id} {name}".strip()
         targets = list(task.get("targets") or [])
         where = ", ".join(str(item.get("server_id") or "?") for item in targets)
@@ -737,7 +738,7 @@ def run_scheduler_scan(
         if dry_run:
             print(
                 f"{command.sql_code} target={target.target_no} server={target.server_id} "
-                f"db={target.database_name or target.service_name} script_type={command.script_type} "
+                f"db={sql_task_target.connect_database(target.db_type, target.database_name, target.service_name)} script_type={command.script_type} "
                 f"files={len(command.script_files)} file_order={format_script_file_order(command)}"
             )
             continue
@@ -818,7 +819,7 @@ def run_sql_id_tasks(
         if dry_run:
             print(
                 f"{command.sql_code} target={target.target_no} server={target.server_id} "
-                f"db={target.database_name or target.service_name} script_type={command.script_type} "
+                f"db={sql_task_target.connect_database(target.db_type, target.database_name, target.service_name)} script_type={command.script_type} "
                 f"files={len(command.script_files)} file_order={format_script_file_order(command)} force={force}"
             )
             continue
@@ -930,7 +931,7 @@ def mark_stale_running_sql_runs(
                 target=target,
                 status="error",
                 message=(f"{message} The run process is gone, but the SQL it started may still be "
-                         f"executing on {target.server_id}/{target.service_name} - check for an "
+                         f"executing on {target_location(target)} - check for an "
                          f"orphaned session before the next cycle."),
                 sql_run_id=int(row["sql_run_id"]),
                 # There are no rows to show: the process died before it reported any.
@@ -1064,7 +1065,7 @@ def run_one_sql_task(
             command=command,
             target=target,
             status="running",
-            message=f"SQL task {command.sql_code} started on {target.server_id}/{target.service_name}.",
+            message=f"SQL task {command.sql_code} started on {target_location(target)}.",
             sql_run_id=sql_run_id,
         )
 
@@ -1074,10 +1075,15 @@ def run_one_sql_task(
     total_files = 0
     try:
         if database is None:
-            target_label = f"{target.server_id}/{target.service_name}"
-            if target.database_name:
-                target_label = f"{target_label}/{target.database_name}"
-            raise RuntimeError(f"Target database not found in database-inventory.json: {target_label}")
+            # Only what connecting needs is checked here - the instance. Whether the database exists
+            # is the server's to say, after connecting (see diagnose_connect_failure).
+            raise RuntimeError(sql_task_target.instance_not_found_message(
+                server_id=target.server_id, db_type=target.db_type,
+                instance_name=target.instance_name,
+                # Each record under its server's id: the loader copies it onto the record, but the
+                # server is what it belongs to, and a record without it read as "no such server".
+                records=[{**record, "server_id": server.get("server_id")}
+                         for server in inventory for record in server.get("databases") or []]))
         if target.credential_name == _AMBIGUOUS_CREDENTIAL:
             raise RuntimeError(
                 f"{target.server_id} runs more than one {target.db_type} instance, so server_id "
@@ -1088,6 +1094,7 @@ def run_one_sql_task(
             raise RuntimeError(f"Credential not found: {target.credential_name}")
         password = resolve_password(credential, secrets)
         total_row_count = 0
+        run_warnings: list[str] = []
         payloads = None
         if command.python_source is not None:
             # Before a single statement runs: a fetch that fails must cost nothing, and a task
@@ -1137,16 +1144,22 @@ def run_one_sql_task(
                 actual_file=str(sql_path),
             )
             sql_text = sql_path.read_text(encoding="utf-8-sig")
-            result = execute_sql(
-                command=command,
-                target=target,
-                database=database,
-                credential=credential,
-                password=password,
-                sql_text=sql_text,
-                parameter_values=step.parameter_values,
-                secrets=secrets,
-            )
+            try:
+                result = execute_sql(
+                    command=command,
+                    target=target,
+                    database=database,
+                    credential=credential,
+                    password=password,
+                    sql_text=sql_text,
+                    parameter_values=step.parameter_values,
+                    secrets=secrets,
+                )
+            except RuntimeError as exc:
+                explained = diagnose_connect_failure(target=target, error=str(exc))
+                if explained is None:
+                    raise
+                raise RuntimeError(f"{explained} ({exc})") from exc
             file_finished = datetime.now(timezone.utc)
             file_duration_ms = int((file_finished - file_started).total_seconds() * 1000)
             file_result = {
@@ -1159,6 +1172,9 @@ def run_one_sql_task(
                 "row_count": int(result.get("row_count") or 0),
                 "result_sets": result.get("result_sets", []),
             }
+            if result.get("warnings"):
+                file_result["warnings"] = list(result["warnings"])
+                run_warnings.extend(f"{step.label}: {text}" for text in result["warnings"])
             file_results.append(file_result)
             total_row_count += int(result.get("row_count") or 0)
             metadata["file_results"] = file_results
@@ -1176,7 +1192,7 @@ def run_one_sql_task(
                     status="running",
                     message=(
                         f"SQL task {command.sql_code} {step.label} done on "
-                        f"{target.server_id}/{target.service_name} in {file_duration_ms} ms, "
+                        f"{target_location(target)} in {file_duration_ms} ms, "
                         f"{file_result['row_count']} row(s)."
                     ),
                     sql_run_id=sql_run_id,
@@ -1219,11 +1235,15 @@ def run_one_sql_task(
                     error=str(exc),
                 )
         stored_result = trim_result_for_store(result)
+        # Done either way: a warning is not a failure. It is kept in the level and the message, so
+        # a run that finished past one is not indistinguishable from one that saw nothing.
+        warning_note = (f" {len(run_warnings)} SQL Server warning(s); the first: {run_warnings[0]}"
+                        if run_warnings else "")
         store.update_sql_run(
             sql_run_id=sql_run_id,
             status="done",
-            level="logging",
-            message=f"SQL task {command.sql_code} finished.",
+            level="warning" if run_warnings else "logging",
+            message=f"SQL task {command.sql_code} finished.{warning_note}",
             finished_at=finished.strftime("%Y-%m-%dT%H:%M:%SZ"),
             duration_ms=duration_ms,
             row_count=int(result.get("row_count") or 0),
@@ -1252,10 +1272,14 @@ def run_one_sql_task(
                 command=command,
                 target=target,
                 status="done",
-                message=f"SQL task {command.sql_code} finished on {target.server_id}/{target.service_name} in {duration_ms} ms.",
+                message=(f"SQL task {command.sql_code} finished on {target_location(target)} "
+                         f"in {duration_ms} ms.{warning_note}"),
                 sql_run_id=sql_run_id,
                 result=result,
                 include_result_table=not delivered_to_requester,
+                # The header is what the severity emoji is read from: "done with a warning" is a
+                # warning, not a success - and not the failure it used to be recorded as.
+                headline="done with a warning" if run_warnings else None,
             )
         # The workbook goes out on its own message, not attached to the run log. Two reasons:
         # the log is an audit line that belongs in the notify chat, while the file is a
@@ -1306,7 +1330,7 @@ def run_one_sql_task(
                 target=target,
                 status="error",
                 message=(f"SQL task {command.sql_code} failed on "
-                         f"{target.server_id}/{target.service_name}"
+                         f"{target_location(target)}"
                          f"{' at ' + failing_file if failing_file else ''} "
                          f"after {duration_ms} ms."
                          f"{_progress_summary(file_results, total_files)}"
@@ -1757,17 +1781,21 @@ def enqueue_sql_task_message(
     result: dict[str, Any] | None = None,
     document_path: Path | None = None,
     include_result_table: bool = True,
+    headline: str | None = None,
 ) -> None:
     level = rule.telegram_chat
     chat_id = rule.resolve_chat_id(telegram_groups)
     if not chat_id:
         return
     lines = [
-        f"[{level.upper()}] SQL task {status}",
+        f"[{level.upper()}] SQL task {headline or status}",
         f"sql_code: {command.sql_code}",
-        f"sql_name: {command.sql_name}",
+        f"display_name: {command.sql_name}",
         f"server_id: {target.server_id}",
-        f"service_name: {target.service_name}",
+        # SQL Server has no service name - `service_name` there is a label the connection never
+        # uses, and printing it made it read as part of the path. It shows the database opened.
+        (f"database_name: {sql_task_target.connect_database(target.db_type, target.database_name, target.service_name)}"
+         if sql_task_target.is_sqlserver(target.db_type) else f"service_name: {target.service_name}"),
         f"instance_name: {target.instance_name}",
         f"target_no: {target.target_no}",
         f"sql_run_id: {sql_run_id}",
@@ -1939,6 +1967,10 @@ def execute_on_target(
         # Any set cut, not just a kept one: the count above included the rows of sets six and up,
         # so their truncation is part of whether this answer is complete.
         "truncated": any(bool(item.get("truncated")) for item in sets),
+        # A SQL Server warning that ended the reading (lib/driver_warnings.py). The run is done;
+        # the warning, and what it hid, are said rather than turned into a failure. Only present
+        # when there is one, so a clean run's result keeps the shape every reader already has.
+        **({"warnings": [str(item) for item in result["warnings"]]} if result.get("warnings") else {}),
     }
 
 
@@ -2083,7 +2115,7 @@ def load_sql_commands(path: Path, *, logger: Any = None) -> dict[int, SqlCommand
             SqlCommand(
                 sql_id=int(item["sql_id"]),
                 sql_code=sql_code,
-                sql_name=str(item.get("sql_name", "")),
+                sql_name=str(field_names.read(item, "sql_command", "display_name", "")),
                 db_type=str(item.get("db_type", "")),
                 **load_sql_script_definition(item, data_dir=path.parent),
                 **load_input_definition(item, command_name=sql_code),
@@ -2352,7 +2384,7 @@ def load_default_credential_names(instances: list[dict[str, Any]]) -> dict[tuple
         key = _target_default_key(
             server_id=str(item.get("server_id") or _server_id_from_instance(item)),
             db_type=str(item.get("db_type", "")),
-            service_name=str(item.get("service_name") or item.get("db_name") or ""),
+            service_name=str(item.get("service_name") or ""),
             instance_name=str(item.get("instance_name", "")),
         )
         defaults[key] = default_credential_name
@@ -2438,6 +2470,53 @@ def scrub_credential(credential: dict[str, Any] | None) -> dict[str, Any] | None
     return clean
 
 
+def target_location(target: SqlTarget) -> str:
+    """Where this target runs, as a message names it: ``server/instance.database`` on SQL Server."""
+    return sql_task_target.location(server_id=target.server_id, db_type=target.db_type,
+                                    instance_name=target.instance_name,
+                                    service_name=target.service_name,
+                                    database_name=target.database_name)
+
+
+def diagnose_connect_failure(*, target: SqlTarget, error: str) -> str | None:
+    """What a failure to connect means, in the server's own terms - or ``None`` when ``error`` is
+    not about connecting (a SQL error inside the script is reported as it is).
+
+    Connect first, ask on failure: the database list is read from the server only when the
+    database could not be opened, so a working target costs nothing and a new database needs no
+    config change. The listing is a read of ``sys.databases`` in ``master`` with the same login.
+    """
+    kind = sql_task_target.classify_connect_failure(error)
+    if kind is None:
+        return None
+    where = target_location(target)
+    if kind == "login":
+        return (f"the login of {target.credential_name or 'this target'} was refused on {where} "
+                "(18456) - check its password_ref and that the login exists")
+    if kind == "unreachable":
+        return (f"could not reach {where} - the instance is down, its address or port is wrong, "
+                "or something between them blocks it")
+    database_name = sql_task_target.connect_database(target.db_type, target.database_name,
+                                                     target.service_name)
+    if not sql_task_target.is_sqlserver(target.db_type):
+        return f"database '{database_name}' could not be opened on {where}"
+    instance = f"{target.server_id}/{target.instance_name or sql_task_target.SQLSERVER_DEFAULT_INSTANCE}"
+    ok, answer, listing_error = common_cli.run_allowing_failure("run-sql", {
+        "target": target.server_id,
+        "database_name": "",
+        "credential_name": target.credential_name or "",
+        "sql_text": "SELECT name FROM sys.databases ORDER BY name;",
+        "timeout_seconds": 60,
+        "sql_access": target.sql_access or {},
+    })
+    if not ok:
+        return (f"database '{database_name}' could not be opened on {instance}, and the server's "
+                f"databases could not be listed either: {listing_error}")
+    names = [str(row[0]) for row in (answer or {}).get("rows") or [] if row]
+    return sql_task_target.missing_database_message(database_name=database_name, where=instance,
+                                                    existing=names)
+
+
 def find_database_inventory(target: SqlTarget, servers: list[dict[str, Any]]) -> dict[str, Any] | None:
     for server in servers:
         if str(server.get("server_id", "")) != target.server_id:
@@ -2446,14 +2525,12 @@ def find_database_inventory(target: SqlTarget, servers: list[dict[str, Any]]) ->
             if str(database.get("db_type", "")).lower() != target.db_type.lower():
                 continue
             instance_name = str(database.get("instance_name") or database.get("sid") or "")
-            database_names = [str(name) for name in database.get("database_names", []) or []]
-            # Identify the instance by server_id + db_type + instance_name only. The
-            # connection is made by IP (service_name is not part of the SQL Server conn
-            # string), so a target's service_name is NOT required to match here — the
-            # actual database is picked by target.database_name or `USE <db>` in the script.
-            if target.instance_name and instance_name and instance_name != target.instance_name:
-                continue
-            if target.database_name and database_names and target.database_name not in database_names:
+            # The instance only: server_id + db_type + instance_name, which is what connecting needs.
+            # `service_name` is not part of a SQL Server connection. `database_names` used to be a
+            # gate here too, compared case-sensitively - and it is a list no code writes, so a
+            # database created yesterday was refused and `APPDB_PROD` failed against `APPDB_Prod`
+            # (SQL033, 2026-09-24). The server says whether a database exists, after connecting.
+            if not sql_task_target.instance_matches(instance_name, target.instance_name, target.db_type):
                 continue
             resolved = dict(database)
             resolved["server_id"] = server.get("server_id")

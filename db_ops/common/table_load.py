@@ -293,7 +293,7 @@ def _parse_request(request: Any) -> dict[str, Any]:
 
     return {
         "target": target,
-        "database": str(request.get("database") or "").strip(),
+        "database": str(request.get("database_name") or request.get("database") or "").strip(),
         "schema": str(request.get("schema") or "").strip(),
         "table_name": str(request.get("table_name") or "").strip(),
         "payload": payload,
@@ -437,7 +437,7 @@ def create_table_from_xlsx(request: Any) -> dict[str, Any]:
     return {
         "server_id": resolved["server_id"],
         "db_type": db_type,
-        "database": resolved.get("database_name", ""),
+        "database_name": resolved.get("database_name", ""),
         "schema": schema,
         "table_name": table,
         "qualified_name": qualified,

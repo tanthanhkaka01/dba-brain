@@ -174,6 +174,17 @@ python -m venv .venv
 Full instructions, including the two prerequisites that are not pip-installable and the container
 image: **[`docs/installation.md`](./docs/installation.md)**.
 
+**Upgrading** an installed root: `pip install --upgrade dbabrain`, then
+
+```bash
+python -m db_ops.common.cli upgrade-config '{}'                   # the plan: what moves, file by file
+python -m db_ops.common.cli upgrade-config '{"dry_run": false}'   # apply; each file is copied first
+```
+
+A release that renames or moves a field keeps reading the old shape, so nothing breaks if you skip
+this - your files just stay in the old shape. `init` and `import-data` say when there is something
+to move. A record whose two spellings disagree is reported and its file left alone.
+
 ## What it produces
 
 Before installing anything, look at the output. **[`examples/showcase/`](./examples/showcase)** holds
@@ -287,7 +298,7 @@ long-running service. If something errors here, stop: it will not get better onc
 python -m db_ops.common.cli instance-add - <<'JSON'
 {"server_id": "ACME-192-0-2-9", "db_type": "sqlserver", "ip": "192.0.2.9",
  "port": 1433, "service_name": "MSSQLSERVER", "major_version": 16,
- "env": "prod", "username": "dba_monitor", "password": "<the password>"}
+ "environment": "prod", "username": "dba_monitor", "password": "<the password>"}
 JSON
 ```
 

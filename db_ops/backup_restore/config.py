@@ -15,7 +15,7 @@ from db_ops.lib.notify import (
     NotifyRule,
     parse_notify_config,
 )
-from db_ops.lib import cleanup_retention, restore_space
+from db_ops.lib import cleanup_retention, field_names, restore_space
 from db_ops.lib.time_window import TimeWindow, parse_time_window_config
 from db_ops.config import DEFAULT_CONFIG_PATH
 
@@ -189,6 +189,10 @@ class BackupRestoreConfig:
     certificate_api_verify_tls: bool = False
     execution_mode: str = "sync"
     active: bool = True
+    # `DBCC CHECKDB` on every restored database, after recovery. On unless the entry says
+    # `checkdb: false` - the check is what proves the restored data is consistent, and turning it
+    # off by default would silently weaken every drill on upgrade (the operator, 2026-09-24).
+    checkdb: bool = True
     # Opt-in: also replay the source instance's server-level metadata around this restore. The
     # same block, the same parser and the same two phases the script path uses - see
     # db_ops.backup_restore.server_metadata. Absent means this entry behaves exactly as it did
@@ -505,8 +509,12 @@ def parse_restore_config(raw: dict[str, Any]) -> BackupRestoreConfig:
             # script entry it carries no db_type field to check against.
             db_type="sqlserver",
         ),
-        source_id=str(values.get("source_id") or values.get("server_id") or values["prod_backup_share"]),
-        target_id=str(values.get("target_id") or values.get("vm_credential_target") or values["vm_import_unc"]),
+        # `server_id` / `target_server_id` name the machines on every restore since 0.22.0 - the
+        # script-driven entries always did. `source.id` / `target.id` (mapped to source_id /
+        # target_id above) are the legacy spelling, still read, and lose to the standard one.
+        source_id=str(values.get("server_id") or values.get("source_id") or values["prod_backup_share"]),
+        target_id=str(values.get("target_server_id") or values.get("target_id")
+                      or values.get("vm_credential_target") or values["vm_import_unc"]),
         restore_id=str(values.get("restore_id") or ""),
         vm_platform=str(values.get("vm_platform") or "windows").lower().strip(),
         prod_backup_share=Path(str(values["prod_backup_share"])),
@@ -539,12 +547,15 @@ def parse_restore_config(raw: dict[str, Any]) -> BackupRestoreConfig:
         restore_database_name=str(values.get("restore_database_name") or ""),
         restore_data_file_on_vm=_optional_path(values.get("restore_data_file_on_vm")),
         restore_log_file_on_vm=_optional_path(values.get("restore_log_file_on_vm")),
-        databases=_parse_database_mappings(values.get("databases")),
+        # `database_mappings` since 0.22.0; `databases` is the legacy spelling, still read.
+        databases=_parse_database_mappings(
+            field_names.read(values, "restore_entry", "database_mappings")),
         certificate_api_url=str(values.get("certificate_api_url") or values.get("api_link_get_cer") or ""),
         certificate_api_token_ref=str(values.get("certificate_api_token_ref") or "TOKEN_192_0_2_112_VAULT"),
         certificate_api_verify_tls=_parse_bool(values.get("certificate_api_verify_tls"), default=False),
         execution_mode=_parse_execution_mode(values.get("execution_mode")),
         active=_parse_bool(values.get("active"), default=True),
+        checkdb=_parse_bool(values.get("checkdb"), default=True),
         time_window=parse_time_window_config(
             values, context=f"backup_restore.restores[{values.get('restore_id') or '?'}]"
         ).time_window,
@@ -561,7 +572,10 @@ def _with_source_target_pair(raw: dict[str, Any]) -> dict[str, Any]:
     if source:
         if not isinstance(source, dict):
             raise ValueError("backup_restore.sources[].source must be an object.")
+        # Standard names first: a nested value is applied only while the flat one is empty, so the
+        # first key found wins, and a block carrying both spellings must be read by the new one.
         source_map = {
+            "password_ref": "prod_smb_password_env",
             "id": "source_id",
             "server_id": "source_id",
             "backup_share": "prod_backup_share",
@@ -583,6 +597,8 @@ def _with_source_target_pair(raw: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(target, dict):
             raise ValueError("backup_restore.sources[].target must be an object.")
         target_map = {
+            "password_ref": "vm_password_env",
+            "sql_password_ref": "restore_sql_password_env",
             "id": "target_id",
             "vm_import_unc": "vm_import_unc",
             "vm_import_local": "vm_import_local",
@@ -688,7 +704,7 @@ def _parse_database_mappings(value: Any) -> tuple[DatabaseRestoreMapping, ...]:
     if value is None:
         return ()
     if not isinstance(value, list):
-        raise ValueError("databases must be an array.")
+        raise ValueError("database_mappings must be an array.")
     mappings: list[DatabaseRestoreMapping] = []
     for item in value:
         if isinstance(item, str):

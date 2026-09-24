@@ -53,7 +53,7 @@ def describe(config: Any, *, key: str | None = None, password: str | None = None
     return {
         "backend": "postgresql",
         "postgresql": {
-            "host": pg.host, "port": int(pg.port), "database": pg.database,
+            "host": pg.host, "port": int(pg.port), "database_name": pg.database,
             "schema": pg.schema, "username": pg.username, "password": secret,
             "sslmode": pg.sslmode, "connect_timeout_seconds": int(pg.connect_timeout_seconds),
             "application_name": pg.application_name,
@@ -96,12 +96,16 @@ def parse(raw: Any) -> StoreTarget:
         from db_ops.config import PostgresStoreConfig, StoreConfig
 
         block = raw.get("postgresql") or {}
-        for required in ("host", "database", "username"):
-            if not str(block.get(required) or "").strip():
+        # `database_name` since 0.22.0, the name the store file uses; a block sent by an older
+        # node says `database`, and is read the same.
+        database = str(block.get("database_name") or block.get("database") or "").strip()
+        for required, value in (("host", block.get("host")), ("database_name", database),
+                                ("username", block.get("username"))):
+            if not str(value or "").strip():
                 raise StoreDeclarationError(f"store.postgresql.{required} is required.")
         pg = PostgresStoreConfig(
             host=str(block["host"]), port=int(block.get("port") or 5432),
-            database=str(block["database"]), schema=str(block.get("schema") or ""),
+            database=database, schema=str(block.get("schema") or ""),
             username=str(block["username"]), sslmode=str(block.get("sslmode") or "prefer"),
             connect_timeout_seconds=int(block.get("connect_timeout_seconds") or 10),
             application_name=str(block.get("application_name") or "db_ops"),
@@ -138,7 +142,7 @@ SWITCHABLE_BACKENDS: tuple[str, ...] = ("sqlite", "postgresql")
 #: named here is left exactly as the declaration has it — this command re-points a node, it does
 #: not rewrite its store block.
 POSTGRES_TARGET_FIELDS: dict[str, str] = {
-    "host": "--host", "port": "--port", "database": "--database", "schema": "--schema",
+    "host": "--host", "port": "--port", "database_name": "--database-name", "schema": "--schema",
     "username": "--username", "password_ref": "--password-ref",
 }
 
@@ -160,12 +164,17 @@ def _repoint_postgres(section: dict[str, Any], overrides: dict[str, Any]) -> dic
     if not changed:
         return updated
     updated.update(changed)
+    if "database_name" in changed:
+        # The standard name was written; an old `database` beside it would be the same value under
+        # two names, and the stale one is what an older reader would take.
+        updated.pop("database", None)
     if str(updated.get("connection_string") or "").strip():
         from db_ops.config import PostgresStoreConfig
 
         updated["connection_string"] = PostgresStoreConfig(
             host=str(updated.get("host") or ""), port=int(updated.get("port") or 5432),
-            database=str(updated.get("database") or ""), schema=str(updated.get("schema") or ""),
+            database=str(updated.get("database_name") or updated.get("database") or ""),
+            schema=str(updated.get("schema") or ""),
             username=str(updated.get("username") or ""),
             sslmode=str(updated.get("sslmode") or "prefer"),
             connect_timeout_seconds=int(updated.get("connect_timeout_seconds") or 10),

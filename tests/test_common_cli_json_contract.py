@@ -69,6 +69,8 @@ ALL_COMMANDS = [
     # 2026-09-19. The shared config objects, answerable from outside Python: what a field means,
     # whether a schedule is due, and whether the estate's own files obey the reference.
     "describe-object", "due-check", "check-objects", "check-references",
+    # 2026-09-23. Stage C of one name per concept: move data/*.json to the standard field names.
+    "standardize-field-names", "upgrade-config",
     # Left this file on 2026-08-15 and covered elsewhere now, for the same reason in each case —
     # they were not shared-layer work:
     #   check-credentials    -> db_ops/cli.py  (needs two apps' resolvers)

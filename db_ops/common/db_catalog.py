@@ -230,7 +230,7 @@ def _parsed_request(request: Any) -> dict[str, Any]:
         "target": target,
         "credential_name": str(request.get("credential_name")
                                or request.get("user_ref") or "").strip(),
-        "database": str(request.get("database") or "").strip(),
+        "database": str(request.get("database_name") or request.get("database") or "").strip(),
         "include_system": bool(request.get("include_system", False)),
         # list-jobs only. Parsed here rather than read off the raw request in `list_jobs` because
         # this function is the one place that decides what a catalog request contains, and a field
@@ -452,7 +452,7 @@ def list_schemas(request: Any) -> dict[str, Any]:
     return {
         "server_id": resolved["server_id"],
         "db_type": db_type,
-        "database": resolved.get("database_name", "") or database,
+        "database_name": resolved.get("database_name", "") or database,
         "credential_name": resolved.get("credential_name", ""),
         "username": resolved.get("username", ""),
         "schemas": normalized,

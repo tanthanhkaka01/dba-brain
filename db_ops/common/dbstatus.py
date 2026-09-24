@@ -154,7 +154,8 @@ def _check_databases(request: dict[str, Any], parsed: dict[str, Any],
                      engine: str) -> list[dict[str, Any]]:
     listed = db_catalog.list_databases({**request, "include_system": True})
     by_name = {str(d.get("name")): d for d in (listed.get("databases") or [])}
-    wanted = _wanted(request, "databases") or sorted(by_name)
+    wanted = (_wanted(request, "database_names") or _wanted(request, "databases")
+              or sorted(by_name))
 
     items: list[dict[str, Any]] = []
     for name in wanted:
@@ -176,7 +177,7 @@ def _check_databases(request: dict[str, Any], parsed: dict[str, Any],
 
 def _check_schemas(request: dict[str, Any], parsed: dict[str, Any],
                    engine: str) -> list[dict[str, Any]]:
-    database = str(request.get("database") or "").strip()
+    database = str(request.get("database_name") or request.get("database") or "").strip()
     if engine in {"sqlserver", "postgresql"} and not database:
         raise DbStatusError(
             'depth "schema" needs a "database" on sqlserver and postgresql: a schema lives inside '

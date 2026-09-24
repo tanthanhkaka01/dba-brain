@@ -27,6 +27,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from db_ops.lib import field_names
 from db_ops.lib.coerce import as_utc_datetime
 from db_ops.lib.paths import TOOL_ROOT  # noqa: F401 - one definition, see that module
 from db_ops.lib.timezone import format_display
@@ -71,7 +72,8 @@ def max_age_hours(policy: dict | None = None, *, database: str = "",
     hours = float((policy.get("defaults") or {}).get("max_age_hours", DEFAULT_MAX_AGE_HOURS)
                   or DEFAULT_MAX_AGE_HOURS)
     for entry in policy.get("overrides") or []:
-        wanted = str(entry.get("database") or "").strip().lower()
+        wanted = str(field_names.read(entry, "restore_drill_override", "database_name", "")
+                     or "").strip().lower()
         if wanted and wanted == str(database or "").strip().lower():
             hours = float(entry.get("max_age_hours", hours) or hours)
             break
@@ -127,7 +129,7 @@ def evaluate(rows: list[dict[str, Any]], *, policy: dict | None = None,
             reason = (f"the most recent attempt FAILED ({format_display(attempt)}); the last "
                       f"success before it was {age_hours}h ago")
         out.append({
-            "database": database,
+            "database_name": database,
             "status": status,
             "ageHours": age_hours,
             "maxAgeHours": limit,

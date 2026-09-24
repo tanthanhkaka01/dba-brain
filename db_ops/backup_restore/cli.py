@@ -5,6 +5,7 @@ import dataclasses
 import datetime as dt
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -19,7 +20,7 @@ from db_ops.backup_restore.backup import (
 from db_ops.lib import common_cli
 from db_ops.lib import sql_instance
 from db_ops.backup_restore.restore_script import load_script_restores
-from db_ops.lib.time_window import WEEKDAY_NAMES
+from db_ops.lib.time_window import weekdays_text
 from db_ops.lib.listing import active_only, hidden_note
 from db_ops.backup_restore.workflow import run_workflow
 from db_ops.backup_restore.config import (
@@ -381,8 +382,7 @@ def _format_backup_list(jobs: list) -> str:
         # runs one day in seven listed as "every 1200m" reads as a job that runs every 20 hours.
         # `[]` is a real configuration meaning never, so it is printed, not skipped.
         if window.weekdays is not None:
-            days = ",".join(WEEKDAY_NAMES[day][:3] for day in sorted(window.weekdays))
-            when = f"{when} on {days or 'no day'}"
+            when = f"{when} on {weekdays_text(window.weekdays)}"
         # A log/archive job has no full-vs-diff choice, so naming a derived level there would
         # invite --backup-type on a job that cannot take one.
         if job.job in ("archivelog", "wal", "log"):
@@ -1192,9 +1192,8 @@ def run_restore_workflow(
             # **And this deliberately stops before the retention cleanup.** A restore drill is what
             # proves the backups are restorable; pruning them in the same run that failed to restore
             # one is exactly backwards. Do not "fix" the early return.
-            raise RuntimeError(
-                f"restore failed for {len(failed_databases)} database(s): "
-                f"{', '.join(sorted(failed_databases))}. Retention cleanup was not run.")
+            raise RuntimeError(f"{_restore_failure_text(restore_outputs, failed_databases)} "
+                               "Retention cleanup was not run.")
 
         # **The last question, and the only one that matters to whoever asked for the restore:
         # can the database be opened?** Every step above reports on the command it ran, and a
@@ -1240,7 +1239,7 @@ def run_restore_workflow(
                         "databases": outcome.get("databases"),
                     })
             unusable = [
-                str(db.get("database"))
+                str(db.get("database_name"))
                 for item in verify_outputs
                 for db in (item.get("databases") or [])
                 if isinstance(db, dict) and not db.get("ok")
@@ -1427,9 +1426,13 @@ def _verify_targets(config: Any) -> list[str]:
     about a database it was never asked to create, and reports the drill broken when it worked.
     """
     names: list[str] = []
+    # `target_database` / `source_database` are DatabaseRestoreMapping's fields. This asked for
+    # `restore_database_name` / `source_database_name` - the ENTRY's single-database fields - through
+    # getattr with a default until 2026-09-23, so every mapping answered "", the list came back
+    # empty, and every engine restore's verification was skipped as "not configured". The test
+    # passed because its stand-in mapping carried the same wrong names.
     for mapping in (getattr(config, "databases", None) or ()):
-        name = (getattr(mapping, "restore_database_name", "")
-                or getattr(mapping, "source_database_name", ""))
+        name = mapping.target_database or mapping.source_database
         if name and name not in names:
             names.append(str(name))
     return names
@@ -1468,7 +1471,7 @@ def _verify_request(config: Any, secrets: dict[str, str]) -> dict[str, Any] | No
         # as this drill's verdict, which is the failure above wearing different numbers. Skipped
         # with a reason, the way every other "cannot check this" is.
         return None
-    return {"db_type": "sqlserver", "databases": databases,
+    return {"db_type": "sqlserver", "database_names": databases,
             "target": {"host": host, "port": address.port,
                        "username": username, "password": password}}
 
@@ -1479,6 +1482,36 @@ def _verify_request(config: Any, secrets: dict[str, str]) -> dict[str, Any] | No
 #: counted against the run.
 _RESTORE_SUCCESS_STATUSES = frozenset({"SUCCESS", "DRY_RUN"})
 _RESTORE_OK_STATUSES = _RESTORE_SUCCESS_STATUSES | {"SKIPPED"}
+
+
+def _restore_failure_text(source_outputs: list[dict[str, object]], failed: list[str]) -> str:
+    """Which databases failed, and at which step: a database whose `DBCC CHECKDB` failed was
+    restored and recovered, and is not reported as a failed restore.
+
+    "restore failed for 2 database(s): APPINST, SALESDB" on 2026-09-24 sent the operator to the
+    backups and the copy; both were fine - the target could not create the check's snapshot.
+    """
+    checked: list[str] = []
+    errors: dict[str, str] = {}
+    for source in source_outputs:
+        if not isinstance(source, dict):
+            continue
+        errors.update({str(k): str(v) for k, v in (source.get("per_database_error") or {}).items()})
+        checked.extend(str(name) for name, status in (source.get("per_database_restore_status") or {}).items()
+                       if str(status) == "CHECK_FAILED")
+    restore_failed = sorted(name for name in failed if name not in checked)
+    parts = []
+    if restore_failed:
+        parts.append(f"restore failed for {len(restore_failed)} database(s): {', '.join(restore_failed)}")
+    if checked:
+        numbers = sorted({number for name in checked
+                          for number in re.findall(r"Msg (\d+)", errors.get(name, ""))}, key=int)
+        parts.append(
+            f"{len(checked)} database(s) restored and recovered, but the integrity check "
+            f"(DBCC CHECKDB) failed: {', '.join(sorted(checked))}"
+            + (f" - SQL Server Msg {', '.join(numbers)}" if numbers else "")
+            + " (checkdb: false on the restore entry skips the check)")
+    return "; ".join(parts) + "."
 
 
 def _failed_restore_databases(source_outputs: list[dict[str, object]]) -> list[str]:

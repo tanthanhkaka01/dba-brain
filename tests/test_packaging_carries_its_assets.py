@@ -32,6 +32,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 MUST_BE_IN_THE_WHEEL: tuple[tuple[str, str], ...] = (
     ("db_ops/metrics/collectors/sqlserver/001_sqlserver_instance_status.sql", "a metric's query"),
     ("db_ops/common/backup_scripts/sqlserver/mssql_backup_database.sh", "a backup script"),
+    # scaffold reads it at import, so a wheel without it fails at the first command.
+    ("db_ops/agents_guide.md", "the AGENTS.md init writes and dbabrain guide prints"),
 )
 
 

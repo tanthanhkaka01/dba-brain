@@ -66,7 +66,7 @@ def test_a_worker_deploy_is_never_asked_about_ssh(command) -> None:
     asked = questions_asked(command, ["lab01", "mssql", "2025-latest", "single",
                                       "-", "-", "-", "worker", "no"])
 
-    assert asked == ["name", "engine", "version", "mode", "host_port", "password_env",
+    assert asked == ["name", "engine", "version", "mode", "host_port", "password_ref",
                      "password_text", "deploy_target", "recreate"]
     assert not [name for name in asked if name.startswith("remote_")]
     assert "install_docker" not in asked, "there is no remote VM to install docker on"

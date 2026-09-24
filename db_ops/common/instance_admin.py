@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from db_ops.common import data_sources
+from db_ops.lib import field_names
 from db_ops.lib import secret_text as _secret_text
 from db_ops.lib import sql_access as _sql_access
 from db_ops.lib.json_io import atomic_write_text
@@ -90,10 +91,11 @@ stopping is a target that collects nothing - the record exists and nothing can l
   replace        overwrite an existing server_id instead of refusing
 
 Anything else in the object is passed through to the inventory record, so major_version,
-service_name, env, platform, cmd_access and note all reach it unchanged.
+service_name, environment, platform, cmd_access and note all reach it unchanged. An older spelling
+(enabled, env, ord, database, db_name) is accepted and written under the standard name.
 
 Three fields fail in ways that do not name themselves, and the same warnings apply here as in the
-  db_name        REQUIRED for postgresql and mysql - the database to connect to. Use
+  database_name  REQUIRED for postgresql and mysql - the database to connect to. Use
                  "postgres" / "information_schema" to monitor the instance itself. Absent,
                  the connection falls back to service_name, or to the server_id, and the
                  server answers `database "<that>" does not exist`. SQL Server does not
@@ -146,12 +148,17 @@ def add_instance(request: dict[str, Any] | None = None, *,
     """Register one target: inventory, credential and secret, in one operation.
 
     Request fields: ``server_id``, ``db_type``, ``ip`` are required; ``port``, ``major_version``,
-    ``service_name``, ``env``, ``enabled``, ``note`` and anything else are passed through to the
-    inventory record. ``username`` plus either ``password`` or ``password_ref`` supply the login;
+    ``service_name``, ``environment``, ``active``, ``note`` and anything else are passed through to
+    the inventory record, under the standard names (``lib.field_names``) whatever spelling the
+    request used. ``username`` plus either ``password`` or ``password_ref`` supply the login;
     ``credential_name`` is derived from the target when it is not given. ``replace`` allows
     overwriting an existing ``server_id``.
     """
-    payload = dict(request or {})
+    payload, _renamed, conflicts = field_names.standardize(dict(request or {}), "db_instance")
+    if conflicts:
+        raise InstanceAdminError(
+            "the request names one field twice with different values: " + "; ".join(
+                f"{item['standard']} = {item['values']}" for item in conflicts))
     root = Path(data_dir) if data_dir else data_sources.DEFAULT_DATA_DIR
 
     missing = [name for name in REQUIRED_FIELDS if not str(payload.get(name) or "").strip()]
@@ -193,15 +200,14 @@ def add_instance(request: dict[str, Any] | None = None, *,
     # Measured 2026-09-15: a store registered with service_name "DBOPS-STORE" and no database
     # failed every collection with `database "DBOPS-STORE" does not exist`, which names the label
     # and not the mistake. Oracle is exempt: it connects BY service and ignores the database.
-    if db_type in _DATABASE_IS_NAMED and not str(
-            payload.get("database") or payload.get("db_name") or "").strip():
+    if db_type in _DATABASE_IS_NAMED and not str(payload.get("database_name") or "").strip():
         label = str(payload.get("service_name") or "").strip()
         raise InstanceAdminError(
-            f"a {db_type} target needs the database to connect to - give db_name. Without it the "
-            f"connection falls back to " + (f"service_name ({label!r}), which is a LABEL"
+            f"a {db_type} target needs the database to connect to - give database_name. "
+            f"Without it the connection falls back to " + (f"service_name ({label!r}), which is a LABEL"
                                             if label else f"the server_id ({server_id!r})")
             + f", and the server answers `database \"{label or server_id}\" does not exist`. "
-            f"Use db_name \"{_NEUTRAL_DATABASE[db_type]}\" to monitor the instance itself, or "
+            f"Use database_name \"{_NEUTRAL_DATABASE[db_type]}\" to monitor the instance itself, or "
             "name the database this target is actually about.")
 
     instances_path = data_sources.db_instances_path(root)
@@ -221,7 +227,7 @@ def add_instance(request: dict[str, Any] | None = None, *,
     record["server_id"] = server_id
     record["db_type"] = db_type
     record.setdefault("port", DEFAULT_PORTS.get(db_type, 0) or None)
-    record.setdefault("enabled", True)
+    record.setdefault("active", True)
     if username:
         record["default_credential_name"] = credential_name
 

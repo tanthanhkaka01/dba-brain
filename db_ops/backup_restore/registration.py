@@ -35,6 +35,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from db_ops.lib import field_names
 from db_ops.common import data_sources
 from db_ops.lib import secret_text
 from db_ops.lib.json_io import atomic_write_text
@@ -106,12 +107,17 @@ instance they are restored onto, and which databases to carry across.
                  300 seconds - and a restore that takes longer than that simply runs
                  back to back. A daily drill is {"from_hour": 2, "to_hour": 5,
                  "repeat_interval": 72000, "retry_interval": 600, "timeout": 7200}
-  source         required object: id, backup_share, credential_target, username,
-                 and password_env (a secret REF) or password (encrypted here)
-  target         required object: id, vm_platform, credential_target, username,
-                 password_env / password, sql_instance, sql_username,
-                 sql_password_env / sql_password, restore_data_dir, ...
-  databases      list of {source_database, target_database}. An empty list goes on
+  server_id      the machine the backup is read FROM - a server_id in db_instances.json
+  target_server_id  the instance it is restored ONTO - a server_id in db_instances.json.
+                 Register an unmonitored target inactive (instance-add ... "active": false)
+                 rather than inventing a label; check-references holds both to the inventory
+  source         required object: backup_share, credential_target, username,
+                 and password_ref (a secret REF) or password (encrypted here)
+  target         required object: vm_platform, credential_target, username,
+                 password_ref / password, sql_instance, sql_username,
+                 sql_password_ref / sql_password, restore_data_dir, ...
+                 (password_env / sql_password_env are the old spellings, still taken)
+  database_mappings  list of {source_database, target_database}. An empty list goes on
                  restoring whatever it finds, including files nobody produces any more
   server_metadata  optional {enabled, artifacts, phases}
   notify         REQUIRED {logging_on_run, alert_on_error}, each {enabled, telegram_chat,
@@ -222,7 +228,9 @@ def _instance_field(root: Path, server_id: str, field: str) -> Any:
         return None
     for item in data.get("db_instances") or []:
         if isinstance(item, dict) and str(item.get("server_id")) == server_id:
-            return item.get(field)
+            # Either spelling of a field 0.22.0 renamed; the file keeps the old one until every
+            # node reads both.
+            return field_names.read(item, "db_instance", field_names.standard_of("db_instance", field))
     return None
 
 
@@ -355,7 +363,21 @@ def add_restore(request: dict[str, Any] | None = None, *,
     from db_ops.backup_restore.config import (
         SCRIPT_RESTORE_DB_TYPES, is_script_restore, load_restore_configs)
 
-    payload = dict(request or {})
+    # `databases` is accepted and written as `database_mappings` (0.22.0 section 1.4): one name, one
+    # meaning, and a new entry is never written under the old one.
+    payload, _renamed, conflicts = field_names.standardize(dict(request or {}), "restore_entry")
+    if conflicts:
+        raise RegistrationError(
+            "databases and database_mappings were both given, with different values - give "
+            "database_mappings only.")
+    # The machines are named on the entry, by server_id (0.22.0 section 2.2). An id given the old way,
+    # inside source / target, is moved there - so what reaches the file is one spelling per concept.
+    for block_name, standard in (("source", "server_id"), ("target", "target_server_id")):
+        block = payload.get(block_name)
+        if isinstance(block, dict) and block.get("id") and not payload.get(standard):
+            block = dict(block)
+            payload[standard] = block.pop("id")
+            payload[block_name] = block
     root = Path(data_dir) if data_dir else data_sources.DEFAULT_DATA_DIR
     path = _config_path(data_dir)
     replace = bool(payload.get("replace"))
@@ -442,9 +464,17 @@ def add_restore(request: dict[str, Any] | None = None, *,
     entry.setdefault("active", True)
 
     #: The password fields each block may carry inline, and the ref field each becomes.
-    inline = (("source", "password", "password_env"),
-              ("target", "password", "password_env"),
-              ("target", "sql_password", "sql_password_env"))
+    inline = (("source", "password", "password_ref"),
+              ("target", "password", "password_ref"),
+              ("target", "sql_password", "sql_password_ref"))
+    # A ref given under the old spelling (`password_env`, `sql_password_env`) is written under the
+    # new one, so a new entry never carries a name this version has retired.
+    for block_name, object_name in (("source", "restore_source"), ("target", "restore_target")):
+        if isinstance(entry.get(block_name), dict):
+            entry[block_name], _renamed, clash = field_names.standardize(entry[block_name], object_name)
+            if clash:
+                raise RegistrationError(
+                    f"{block_name} names one secret ref twice with different values: {clash}")
     stored: list[tuple[str, str]] = []
     for block_name, value_field, ref_field in inline:
         block = dict(entry.get(block_name) or {})
@@ -480,7 +510,7 @@ def add_restore(request: dict[str, Any] | None = None, *,
               if str(getattr(item, "restore_id", "")) == restore_id]
     return {
         "restore_id": restore_id,
-        "databases": len(payload.get("databases") or []),
+        "database_mappings": len(payload.get("database_mappings") or []),
         "secrets_stored": [ref for ref, _value in stored],
         "loaded": bool(loaded),
         "replaced": bool(existing),

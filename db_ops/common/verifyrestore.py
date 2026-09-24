@@ -62,7 +62,8 @@ def _sqlserver(request: dict[str, Any]) -> dict[str, Any]:
     target = request.get("target") or {}
     if not str(target.get("host") or "").strip():
         raise VerifyError("target.host is required for sqlserver.")
-    wanted = [str(d).strip() for d in (request.get("databases") or []) if str(d).strip()]
+    wanted = [str(d).strip() for d in (request.get("database_names") or request.get("databases") or [])
+              if str(d).strip()]
 
     from db_ops.common.db_connect import connect_engine
 
@@ -94,16 +95,16 @@ def _sqlserver(request: dict[str, Any]) -> dict[str, Any]:
                     detail = str(exc)[:200]
             else:
                 detail = f"state is {state}"
-            rows.append({"database": name, "state": state, "recovery_model": recovery,
+            rows.append({"database_name": name, "state": state, "recovery_model": recovery,
                          "ok": answered, "detail": detail})
     finally:
         connection.close()
 
-    missing = [name for name in wanted if name not in {r["database"] for r in rows}]
+    missing = [name for name in wanted if name not in {r["database_name"] for r in rows}]
     for name in missing:
         # Asked about and not there at all - a restore that never created it. Silence here would
         # let an empty check pass for a database that does not exist.
-        rows.append({"database": name, "state": "ABSENT", "ok": False,
+        rows.append({"database_name": name, "state": "ABSENT", "ok": False,
                      "detail": "not present on the instance"})
     return _verdict(rows)
 
@@ -132,7 +133,7 @@ def _oracle(request: dict[str, Any]) -> dict[str, Any]:
             break
     # Mounted is exactly the trap: RMAN finished, the instance is up, and the database is not open.
     answered = open_mode in {"READ WRITE", "READ ONLY"} and "ORA-" not in text
-    return _verdict([{"database": str(request.get("database") or sid or "instance"),
+    return _verdict([{"database_name": str(request.get("database_name") or request.get("database") or sid or "instance"),
                       "state": open_mode, "ok": answered,
                       "detail": _detail(result, text)}])
 
@@ -171,5 +172,5 @@ def _postgresql(request: dict[str, Any]) -> dict[str, Any]:
         state = "IN RECOVERY"
     else:
         state = "ACCEPTING"
-    return _verdict([{"database": str(request.get("database") or "cluster"),
+    return _verdict([{"database_name": str(request.get("database_name") or request.get("database") or "cluster"),
                       "state": state, "ok": answered, "detail": _detail(result, text)}])

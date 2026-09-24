@@ -174,8 +174,8 @@ passphrase survive a shell. The encrypted file is exactly as safe as the passphr
 ### How a secret is named, and how it is resolved
 
 Configuration never carries a secret value. It carries a **reference** — `password_ref`,
-`password_env`, `secret_ref`, `authentication_info_ref` — and the reference is resolved at use
-time:
+`secret_ref`, `authentication_info_ref`, or `password_env` naming an environment variable —
+and the reference is resolved at use time:
 
 1. an environment variable of that name, if set;
 2. the encrypted store.

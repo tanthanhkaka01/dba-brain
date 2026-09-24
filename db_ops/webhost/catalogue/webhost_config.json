@@ -24,7 +24,7 @@
   "apps": [
     {
       "app_code": "db",
-      "ord": 1,
+      "sort_order": 1,
       "display_name": "Runtime Store",
       "doc": "docs/01_runtime_store.md",
       "summary": "The database the toolkit keeps its own data in: job runs, metric results, reports, the delivery queue, and the configuration mirror.",
@@ -32,7 +32,7 @@
     },
     {
       "app_code": "logging_ops",
-      "ord": 2,
+      "sort_order": 2,
       "display_name": "Logging Engine",
       "doc": "docs/02_logging_engine.md",
       "summary": "One logger per app: files under logs/, rows in job_runs, and the notify level that decides which chat hears about it.",
@@ -40,7 +40,7 @@
     },
     {
       "app_code": "jobs",
-      "ord": 3,
+      "sort_order": 3,
       "display_name": "App Command Daemon",
       "doc": "docs/03_app_command_daemon.md",
       "summary": "The scheduler. Reads app_commands.json and runs every other app on its own interval, forwarding the secret key to each child process.",
@@ -48,7 +48,7 @@
     },
     {
       "app_code": "metrics",
-      "ord": 4,
+      "sort_order": 4,
       "display_name": "Metrics Engine",
       "doc": "docs/04_metrics_engine.md",
       "summary": "Collects every metric from every enabled target and writes the results. Reports and SLA both read what it produces.",
@@ -58,7 +58,7 @@
     },
     {
       "app_code": "sql_tasks",
-      "ord": 5,
+      "sort_order": 5,
       "display_name": "SQL Task Runner",
       "doc": "docs/05_sql_task_runner.md",
       "summary": "Runs the scheduled SQL scripts against their configured targets and delivers the output as text or a spreadsheet.",
@@ -68,7 +68,7 @@
     },
     {
       "app_code": "reports",
-      "ord": 6,
+      "sort_order": 6,
       "display_name": "Reports App",
       "doc": "docs/06_reports_app.md",
       "summary": "Turns collected metrics into the scheduled reports and the inventory pages the web host publishes.",
@@ -78,7 +78,7 @@
     },
     {
       "app_code": "telegram",
-      "ord": 7,
+      "sort_order": 7,
       "display_name": "Telegram App",
       "doc": "docs/07_telegram_app.md",
       "summary": "Delivers the outgoing queue one message at a time, and executes the commands people send back.",
@@ -88,7 +88,7 @@
     },
     {
       "app_code": "backup_restore",
-      "ord": 8,
+      "sort_order": 8,
       "display_name": "Backup / Restore App",
       "doc": "docs/08_backup_restore_app.md",
       "summary": "Runs backups, proves them by restoring, and records what was verified and when.",
@@ -96,7 +96,7 @@
     },
     {
       "app_code": "sla",
-      "ord": 9,
+      "sort_order": 9,
       "display_name": "SLA / SLO Compliance",
       "doc": "docs/09_sla_slo_compliance_app.md",
       "summary": "Validates the objectives against collected metrics and reports the error budget left on each.",
@@ -106,7 +106,7 @@
     },
     {
       "app_code": "sre",
-      "ord": 10,
+      "sort_order": 10,
       "display_name": "SRE App",
       "doc": "docs/10_sre_app.md",
       "summary": "Provisions and moves the lab databases that drills and rehearsals run against.",
@@ -114,7 +114,7 @@
     },
     {
       "app_code": "control",
-      "ord": 11,
+      "sort_order": 11,
       "display_name": "Control App",
       "doc": "docs/11_control_app.md",
       "summary": "Builds and deploys the toolkit to another node, and watches the toolkit itself - the only app that reports on the others.",
@@ -122,7 +122,7 @@
     },
     {
       "app_code": "webhost",
-      "ord": 12,
+      "sort_order": 12,
       "display_name": "Web Host",
       "doc": "docs/12_webhost_app.md",
       "summary": "Serves the reports over HTTP and hosts this console. Runs once and stays up rather than repeating on an interval.",
@@ -132,7 +132,7 @@
     },
     {
       "app_code": "common",
-      "ord": 13,
+      "sort_order": 13,
       "display_name": "Common Operations",
       "doc": "docs/13_common.md",
       "summary": "The shared operations layer: run SQL, reach a host, move a file, rotate a password. Apps call it through its CLI, never by import.",
@@ -140,7 +140,7 @@
     },
     {
       "app_code": "lib",
-      "ord": 14,
+      "sort_order": 14,
       "display_name": "Shared Rules",
       "doc": "docs/14_lib.md",
       "summary": "Pure values and rules - time windows, notify routing, severity, formatting. Imported everywhere, runs nothing.",

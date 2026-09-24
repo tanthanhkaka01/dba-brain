@@ -15,7 +15,7 @@
       "notify_level": "warning",
       "source_notify_level": "warning",
       "allow_command": 0,
-      "status": "active",
+      "active": true,
       "note": "Where BACKUP_AGE's WARNING lands. Replace group_id with your own chat."
     },
     {
@@ -25,7 +25,7 @@
       "notify_level": "logging",
       "source_notify_level": "logging",
       "allow_command": 0,
-      "status": "active",
+      "active": true,
       "note": "Everything that ran, including the runs that found nothing."
     }
   ]

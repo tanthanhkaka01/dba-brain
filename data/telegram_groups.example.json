@@ -15,7 +15,7 @@
       "notify_level": "logging",
       "source_notify_level": "logging",
       "allow_command": 10,
-      "status": "active",
+      "active": true,
       "note": "Everything that ran and worked. High volume by design - it is the record, not the alarm."
     },
     {
@@ -25,7 +25,7 @@
       "notify_level": "warning",
       "source_notify_level": "warning",
       "allow_command": 10,
-      "status": "active",
+      "active": true,
       "note": "Findings that need follow-up but not tonight."
     },
     {
@@ -35,7 +35,7 @@
       "notify_level": "critical",
       "source_notify_level": "critical",
       "allow_command": 10,
-      "status": "active",
+      "active": true,
       "note": "Wakes somebody up. Keep the membership small and the threshold high, or it stops working."
     },
     {
@@ -45,7 +45,7 @@
       "notify_level": "backup",
       "source_notify_level": "",
       "allow_command": 10,
-      "status": "active",
+      "active": true,
       "note": "Backup and restore-drill traffic, split off so a nightly success stream does not bury a warning in the main channel."
     },
     {
@@ -55,7 +55,7 @@
       "notify_level": "sql",
       "source_notify_level": "",
       "allow_command": 10,
-      "status": "active",
+      "active": true,
       "note": "Scheduled SQL task output and failures."
     }
   ]

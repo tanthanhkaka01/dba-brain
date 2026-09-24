@@ -134,6 +134,7 @@ from db_ops.common import oracle_bridge
 from db_ops.common import sql_execution
 from db_ops.common import data_sources as target_resolve
 from db_ops.lib.connection_spec import ConnectionSpec, ConnectionSpecError
+from db_ops.lib.driver_warnings import read_next_set
 from db_ops.lib.target_profile import SOURCE_CONFIG, SOURCE_REQUEST, TargetProfile, ToolChoice
 # Re-exported: the row/timeout limits, the sqlplus DEFINE handling and SqlRunError moved to
 # db_ops/lib/sql_text.py so apps can prepare and validate a request without importing `common`.
@@ -225,7 +226,7 @@ class SqlRunRequest:
                 '"connection" object stating the whole connection, which reads no inventory file.'
             )
 
-        sql = str(payload.get("sql") or payload.get("sql_text") or "").strip()
+        sql = str(payload.get("sql_text") or payload.get("sql") or "").strip()
         sql_file = str(payload.get("sql_file") or "").strip()
         if sql and sql_file:
             raise SqlRunError("Pass either sql or sql_file, not both.")
@@ -241,7 +242,7 @@ class SqlRunRequest:
         return cls(
             target=target,
             sql=sql,
-            database=str(payload.get("database") or payload.get("database_name") or "").strip(),
+            database=str(payload.get("database_name") or payload.get("database") or "").strip(),
             credential_name=str(
                 payload.get("credential_name") or payload.get("user_ref") or ""
             ).strip(),
@@ -332,6 +333,7 @@ def run_sql(request: Any) -> dict[str, Any]:
                           autocommit=parsed.autocommit)
     # Nothing to roll back and nothing to commit: the driver committed each statement as it ran.
     committed = parsed.autocommit
+    warnings: list[str] = []
     try:
         cursor = conn.cursor()
         result_sets, affected_rows, sets_truncated = execute_capture(
@@ -340,7 +342,19 @@ def run_sql(request: Any) -> dict[str, Any]:
             prelude=parsed.prelude, params=parsed.params,
             capture_all=parsed.capture == CAPTURE_ALL,
             max_result_sets=parsed.max_result_sets,
+            warnings=warnings,
         )
+        if warnings and not parsed.autocommit:
+            # Under a wrapping transaction the promise is all or nothing, and past a warning the
+            # driver shows nothing - not even an error (lib/driver_warnings.py). "All" cannot be
+            # checked, so the finally below rolls back, and the reason is said instead of the bare
+            # warning that used to be reported as the failure. With autocommit every statement has
+            # already committed as it ran, and that run is not failed for a warning.
+            raise SqlRunError(
+                "stopped reading at a SQL Server warning, and nothing after it could be checked, so "
+                f"the transaction was rolled back: {warnings[0]}. A script that manages its own "
+                "transactions runs with autocommit."
+            )
         if parsed.commit and not parsed.autocommit:
             conn.commit()
             committed = True
@@ -379,7 +393,7 @@ def run_sql(request: Any) -> dict[str, Any]:
     return {
         "ok": True,
         "server_id": resolved["server_id"],
-        "database": resolved["database_name"],
+        "database_name": resolved["database_name"],
         "credential_name": resolved.get("credential_name", ""),
         "username": resolved.get("username", ""),
         # What this ran against and what opened it. The legacy bridge path has always returned
@@ -387,7 +401,7 @@ def run_sql(request: Any) -> dict[str, Any]:
         # confirmed; the direct path returned nothing equivalent, so the same question had two
         # answers and one of them was blank. `tool.chosen_by` is the half that matters when the
         # answer surprises someone: request, config, rule or default names where to go and edit.
-        "engine": engine_report,
+        "target_profile": engine_report,
         "tool": tool_report,
         # The top four stay the FIRST result set, unchanged, because every caller written before
         # 2026-08-16 reads them and an export still has one sheet.
@@ -401,6 +415,9 @@ def run_sql(request: Any) -> dict[str, Any]:
         "result_sets": result_sets,
         "result_sets_truncated": sets_truncated,
         "committed": committed,
+        # Driver warnings that ended the reading of a batch. Empty on almost every run; when not,
+        # the run succeeded but nothing after the warning was seen (lib/driver_warnings.py).
+        "warnings": warnings,
     }
 
 
@@ -478,13 +495,13 @@ def _run_legacy_oracle(parsed: SqlRunRequest, resolved: dict[str, Any]) -> dict[
     return {
         "ok": True,
         "server_id": resolved["server_id"],
-        "database": resolved["database_name"],
+        "database_name": resolved["database_name"],
         "credential_name": resolved.get("credential_name", ""),
         "username": resolved.get("username", ""),
         # Same two fields as the direct path, so a caller reads one shape whichever transport
-        # answered. The version below is what the bridge *observed*; the one inside `engine` is
+        # answered. The version below is what the bridge *observed*; the one inside `target_profile` is
         # what config claims — and a disagreement between them is worth seeing.
-        "engine": resolved["profile"].to_dict(),
+        "target_profile": resolved["profile"].to_dict(),
         "tool": resolved["tool"],
         "columns": result["columns"],
         "rows": rows,
@@ -777,8 +794,13 @@ def execute_capture(
     cursor: Any, sql_text: str, *, max_rows: int = DEFAULT_MAX_ROWS,
     db_type: str = "sqlserver", prelude: str = "", params: "Sequence[Any] | None" = None,
     capture_all: bool = False, max_result_sets: int = DEFAULT_MAX_RESULT_SETS,
+    warnings: "list[str] | None" = None,
 ) -> tuple[list[dict[str, Any]], int, bool]:
     """Execute ``sql_text`` and capture its result sets.
+
+    ``warnings``, when given, collects the driver warnings that ended the reading of a batch (see
+    :mod:`db_ops.lib.driver_warnings`): a warning is not raised, and a caller that passes no list
+    gets the same behaviour with the warnings dropped.
 
     Returns ``(result_sets, affected_rows, sets_truncated)``. Each entry is
     ``{"columns", "rows", "row_count", "truncated"}``; ``affected_rows`` sums the rowcount of
@@ -846,8 +868,7 @@ def execute_capture(
                 rowcount = cursor.rowcount
                 if rowcount and rowcount > 0:
                     affected_rows += int(rowcount)
-            nextset = getattr(cursor, "nextset", None)
-            if not callable(nextset) or not nextset():
+            if not read_next_set(cursor, warnings if warnings is not None else []):
                 break
     # Under the default, "there was a second set" is not truncation — it is the documented
     # behaviour. Only a caller that asked for all of them can be short-changed.

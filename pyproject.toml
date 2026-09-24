@@ -23,7 +23,7 @@ license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Trieu Tan Thanh" }]
 keywords = ["dba", "database", "sqlserver", "oracle", "postgresql", "mysql", "monitoring", "operations"]
-version = "0.21.0"
+version = "0.23.0"
 
 # Measured 2026-08-21, not guessed (D-05):
 #
@@ -195,6 +195,10 @@ namespaces = false
 # scaffold.PACKAGED_DEFAULTS instead of naming files by hand.
 "db_ops.backup_restore" = ["sql/**/*.sql", "**/*.ps1", "**/*.sh", "catalogue/*.json"]
 "db_ops.sql_tasks" = ["**/*.sql"]
+# The operating guide `init` writes as AGENTS.md and `dbabrain guide` prints. Read at import by
+# db_ops/scaffold.py, so an install without it fails at the first command rather than writing an
+# empty guide.
+"db_ops" = ["agents_guide.md"]
 
 
 # Lint and format. Added 2026-08-22 for go-live gate `G-08`, which requires CI green on tests,

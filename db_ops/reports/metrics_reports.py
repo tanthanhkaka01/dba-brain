@@ -37,6 +37,11 @@ DEFAULT_REPORTS_CONFIG_PATH = DEFAULT_DATA_DIR / "reports_config.json"
 DEFAULT_METRIC_DEFINITIONS_PATH = DEFAULT_DATA_DIR / "metric_definitions.json"
 BACKUP_HEALTH_CODE = "rp_backup_health_daily"
 BACKUP_HEALTH_TYPE = "BACKUP_HEALTH"
+#: The inventory is a report, not an app: until 0.22.0 it ran as its own app command
+#: (APP-REPORTS-INVENTORY-WORKFLOW) beside the reports it belongs with. It builds FILES - the health
+#: overlay, the merged inventory, the summary and the styled page - and sends nothing, so it has its
+#: own branch in the scheduled path. `metric_max_age_seconds` is the workflow's `--days`, in seconds.
+INVENTORY_CODE = "rp_inventory_health"
 DAILY_LOGGING_CODE = "rp_metric_daily_logging"
 LEGACY_DAILY_LOGGING_CODE = "rp_metric_hourly_logging"
 METRIC_REPORT_LEVELS = {
@@ -340,6 +345,7 @@ def run_scheduled_reports(
     backup_days: int = 7,
     logger: Any | None = None,
     scheduler_trigger_time: str | None = None,
+    config: Any | None = None,
 ) -> dict[str, Any]:
     store = DbOpsStore(sqlite_path)
     report_configs = load_report_configs(reports_config_path, logger=logger)
@@ -359,6 +365,7 @@ def run_scheduled_reports(
             evaluated_at=evaluated_at,
             scheduler_trigger_time=trigger_time,
             logger=logger,
+            config=config,
         )
         results.append(result)
 
@@ -717,6 +724,7 @@ def _run_one_scheduled_report(
     evaluated_at: datetime,
     scheduler_trigger_time: str,
     logger: Any | None,
+    config: Any | None = None,
 ) -> dict[str, Any]:
     report_code = str(report_config["report_code"])
     report_schedule_evaluated_at = _format_utc(evaluated_at)
@@ -752,6 +760,11 @@ def _run_one_scheduled_report(
             skipped_reason=skipped_reason,
         )
         return {"report_code": report_code, "created": 0, "queued": 0, "skipped_reason": skipped_reason}
+
+    if report_code == INVENTORY_CODE:
+        return _run_inventory_report(store=store, sqlite_path=sqlite_path, report_config=report_config,
+                                     channel=channel, started_at=report_schedule_evaluated_at,
+                                     config=config, logger=logger)
 
     created = _create_scheduled_report(
         sqlite_path=sqlite_path,
@@ -843,6 +856,37 @@ def _run_one_scheduled_report(
         "queued_ids": pushed.get("queued_ids", []),
         "skipped_reason": skipped_reason,
     }
+
+
+def _run_inventory_report(*, store: Any, sqlite_path: str | Path, report_config: dict[str, Any],
+                          channel: str, started_at: str, config: Any | None,
+                          logger: Any | None) -> dict[str, Any]:
+    """Build the inventory: overlay, merge, summary, styled page. Files only - nothing is queued.
+
+    A run is recorded as run whether it built or failed, so ``repeat_interval`` governs the next
+    attempt either way. Recorded as skipped instead, which is what a report with nothing to send
+    ends as, it would have no anchor and be due again on every pass of the reports app - a
+    minutes-long build every two minutes. A failure is logged and recorded, and the other reports
+    of the same pass still run: one broken report never takes the rest with it.
+    """
+    from db_ops.reports.inventory_summary import build_inventory_workflow
+
+    days = max(1, -(-_metric_max_age_seconds(report_config) // 86400))
+    report_code = INVENTORY_CODE
+    try:
+        built = build_inventory_workflow(sqlite_path=sqlite_path, config=config, days=days, beauty=1,
+                                         logger=logger)
+    except Exception as exc:  # noqa: BLE001 - recorded on the report, not raised through the pass.
+        reason = f"{type(exc).__name__}: {exc}"[:500]
+        store.upsert_report_send_state(report_code=report_code, channel=channel, last_run_at=started_at,
+                                       last_status="failed", last_skipped_reason=reason)
+        if logger is not None:
+            logger.error(f"report {report_code} failed: {reason}")
+        return {"report_code": report_code, "created": 0, "queued": 0, "error": reason}
+    store.upsert_report_send_state(report_code=report_code, channel=channel, last_run_at=started_at,
+                                   last_status="built", last_skipped_reason="")
+    return {"report_code": report_code, "created": 1, "queued": 0, "days": days,
+            "status": built.get("status"), "stamp": built.get("stamp")}
 
 
 def _create_scheduled_report(

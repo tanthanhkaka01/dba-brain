@@ -228,6 +228,17 @@ INT_FIELDS = tuple(name for name in NEW_FIELDS if name != WEEKDAYS_FIELD)
 WEEKDAY_NAMES = {1: "Monday", 2: "Tuesday", 3: "Wednesday", 4: "Thursday",
                  5: "Friday", 6: "Saturday", 7: "Sunday"}
 
+
+def weekdays_text(weekdays: Any) -> str:
+    """The days a window allows, as a person reads them: ``Mon,Tue``, or ``no day`` for ``[]``.
+
+    One spelling for every listing that shows a schedule. ``list-backups`` printed its own and
+    ``self-status`` would have been the second; an empty set is a real configuration meaning never,
+    so it is named rather than printed as nothing.
+    """
+    days = sorted(int(day) for day in (weekdays or []) if int(day) in WEEKDAY_NAMES)
+    return ",".join(WEEKDAY_NAMES[day][:3] for day in days) or "no day"
+
 LEGACY_TIME_WINDOW_FIELDS = {
     "day_from": "from_day",
     "day_to": "to_day",

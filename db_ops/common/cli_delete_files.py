@@ -53,8 +53,8 @@ reach the machine holding it.
   {{"path": "/opt/oracle/backup/dbops/SALESDB_STG_20260801_full.bkp",
 {_SHARED}
 
-data: {{"file": {{"path", "status", "size", "reason"}},
-       "counts", "bytes_freed", "failed", "dry_run"}}
+data: {{"file": {{"path", "status", "size_bytes", "reason"}},
+       "counts", "freed_bytes", "failed", "dry_run"}}
 status is one of deleted | not_found | skipped | failed.
 """
 
@@ -72,9 +72,9 @@ path, so the per-file answers are identical - this only saves reconnecting for e
 Every path is validated before the FIRST delete, so a bad path in the list stops the request while
 nothing has happened yet.
 
-data: {{"files": [{{"path", "status", "size", "reason"}}, ...],
+data: {{"files": [{{"path", "status", "size_bytes", "reason"}}, ...],
        "counts": {{"deleted", "not_found", "skipped", "failed"}},
-       "bytes_freed", "failed": [path, ...], "dry_run", "stopped_early"}}
+       "freed_bytes", "failed": [path, ...], "dry_run", "stopped_early"}}
 
 The request SUCCEEDS when no file failed; one failure makes it a failed response with the rest of
 the answers still in `data`, so a caller can retry exactly the paths in `failed`.
@@ -110,7 +110,7 @@ def run(operation: str, argv: list[str], *, read_request: Any) -> int:
 
     counts = data["counts"]
     metrics = {"duration_ms": int((time.monotonic() - started) * 1000),
-               "bytes_freed": data["bytes_freed"], **counts}
+               "freed_bytes": data["freed_bytes"], **counts}
     message = _message(counts, data)
 
     # A file that could not be deleted is a failed request even though the others went: the caller
@@ -127,7 +127,7 @@ def run(operation: str, argv: list[str], *, read_request: Any) -> int:
 def _message(counts: dict[str, int], data: dict[str, Any]) -> str:
     if data.get("dry_run"):
         return f"Dry run: {counts['skipped']} file(s) would be deleted, {counts['not_found']} already gone."
-    parts = [f"{counts['deleted']} file(s) deleted ({data['bytes_freed']} bytes freed)"]
+    parts = [f"{counts['deleted']} file(s) deleted ({data['freed_bytes']} bytes freed)"]
     if counts["not_found"]:
         parts.append(f"{counts['not_found']} already gone")
     if counts["failed"]:

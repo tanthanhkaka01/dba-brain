@@ -241,10 +241,14 @@ def run_scheduled_restores(
                 error_text = None
             else:
                 status = "error"
+                per_database = output.get("per_database_restore_status") or {}
+                checked = [name for name in failed_databases if str(per_database.get(name)) == "CHECK_FAILED"]
+                not_restored = [name for name in failed_databases if name not in checked]
                 error_text = (
                     f"restore reported {output.get('status')!s}"
-                    + (f"; databases not restored: {', '.join(failed_databases)}"
-                       if failed_databases else "")
+                    + (f"; databases not restored: {', '.join(not_restored)}" if not_restored else "")
+                    # Restored and recovered - only the check after it failed.
+                    + (f"; integrity check (DBCC CHECKDB) failed: {', '.join(checked)}" if checked else "")
                 )[-2000:]
         except Exception as exc:  # noqa: BLE001 - one restore must not stop the others.
             output = {"status": "ERROR", "error": str(exc)}

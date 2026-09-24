@@ -25,6 +25,36 @@
             "why": "The rule this file was written for. On 2026-09-19 an ACTIVE backup ran every cycle and every cycle failed with 'server_id not found in db_instances.json: A1A-...-PG-5433' - the instance had been renamed and the backup entry still named the old id. Nothing compared the two, so the first report was the outage."
         },
         {
+            "name": "restore source -> instance",
+            "from": {
+                "file": "restore_config.json",
+                "path": "backup_restore.restores[]",
+                "field": "server_id",
+                "active_field": "active"
+            },
+            "to": {
+                "file": "db_instances.json",
+                "path": "db_instances[]",
+                "field": "server_id"
+            },
+            "why": "A restore named its machines two ways until 0.22.0 - server_id on the script-driven entries, source.id / target.id on the SQL Server ones - and three target.id values were labels with an address inside them that matched nothing in the inventory."
+        },
+        {
+            "name": "restore target -> instance",
+            "from": {
+                "file": "restore_config.json",
+                "path": "backup_restore.restores[]",
+                "field": "target_server_id",
+                "active_field": "active"
+            },
+            "to": {
+                "file": "db_instances.json",
+                "path": "db_instances[]",
+                "field": "server_id"
+            },
+            "why": "The instance a restore writes into is the one most worth knowing by name. An unregistered target is registered inactive rather than named by a label."
+        },
+        {
             "name": "sql target -> instance",
             "from": {
                 "file": "sql_targets.json",
@@ -75,7 +105,7 @@
                 "file": "db_instances.json",
                 "path": "db_instances[]",
                 "field": "default_credential_name",
-                "active_field": "enabled"
+                "active_field": "active"
             },
             "to": {
                 "file": "users.json",
@@ -90,7 +120,7 @@
                 "file": "db_instances.json",
                 "path": "db_instances[]",
                 "field": "cmd_access.credential_name",
-                "active_field": "enabled"
+                "active_field": "active"
             },
             "to": {
                 "file": "users.json",

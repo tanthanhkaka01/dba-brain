@@ -35,7 +35,7 @@ def _file(kind, days_ago, *, database=None, size=1000, name=None):
     stamp = finished.strftime("%Y%m%d_%H%M%S")
     return {
         "path": f"/backup/{database or 'db'}/{kind.upper()}/{name or kind}_{stamp}.bak",
-        "kind": kind, "database": database, "size": size,
+        "kind": kind, "database_name": database, "size_bytes": size,
         "finished_at": finished.strftime("%Y-%m-%d %H:%M:%S"),
     }
 
@@ -102,8 +102,8 @@ def test_a_file_with_no_finished_at_is_kept():
     """An engine that could not state when it finished. "Unknown age" and "old" are not the same
     fact, and only one of them is a reason to delete something."""
     files = [_file("full", 40), _file("full", 20),
-             {"path": "/backup/db/LOG/mystery.trn", "kind": "log", "database": None,
-              "size": 10, "finished_at": None}]
+             {"path": "/backup/db/LOG/mystery.trn", "kind": "log", "database_name": None,
+              "size_bytes": 10, "finished_at": None}]
 
     plan = plan_retention(files, retention_days=14, now=NOW)
 

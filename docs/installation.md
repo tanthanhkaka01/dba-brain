@@ -230,12 +230,23 @@ sends anywhere.
 ## Upgrading
 
 ```bash
-pip install --upgrade db_ops
+pip install --upgrade dbabrain
 python -m db_ops.db.cli --config config.json init      # idempotent; applies any schema change
+python -m db_ops.common.cli upgrade-config '{}'        # what the new version would move in data/
+python -m db_ops.common.cli upgrade-config '{"dry_run": false}'   # move it; each file copied first
 ```
 
 `init` is safe to run against an existing store: it creates what is missing and upgrades what is
-out of date. Your `data/*.json` is yours and is never rewritten by an upgrade.
+out of date. It never rewrites your `data/*.json`; **`upgrade-config`** is the one command that
+does, and only when asked. It moves your files to the field names and shapes the new version
+writes - every reader still takes the old ones, so skipping it breaks nothing, but a file left in
+an old shape is reported `deprecated` by `check-objects`. It shows the plan first, copies every file
+it changes to `runtime/config_upgrade/<UTC stamp>/`, and a second run changes nothing. Run it
+**before starting the daemon** on an upgraded node: some moves (the 0.22.0 inventory report, for
+one) replace an app command, and the old one left beside the new would run the same work twice.
+
+**Every node that reads the same files must run the new version** before the files move - an older
+node does not know the new names and reads, for instance, an instance switched off as switched on.
 
 ## Uninstalling
 

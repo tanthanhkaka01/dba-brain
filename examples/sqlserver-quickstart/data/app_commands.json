@@ -9,7 +9,7 @@
   "app_commands": [
     {
       "node_role": "master",
-      "app_ord": 1,
+      "sort_order": 1,
       "app_command_id": "APP-METRICS",
       "app_code": "APP-METRICS",
       "app_name": "db_ops_metrics",
@@ -28,7 +28,7 @@
     },
     {
       "node_role": "master",
-      "app_ord": 2,
+      "sort_order": 2,
       "app_command_id": "APP-REPORTS-CREATE",
       "app_code": "APP-REPORTS-CREATE",
       "app_name": "db_ops_reports_create",

@@ -112,8 +112,8 @@ def pack(request: dict[str, Any]) -> dict[str, Any]:
     digest = run(host, _hash_command(host, archive))["stdout"].strip().split()[0].lower()
     size = run(host, _size_command(host, archive))["stdout"].strip()
     return {"archive_path": archive, "format": fmt, "sha256": digest,
-            "size": int(size) if size.isdigit() else None,
-            "packed": len(files) if files else None, "folder": folder or None}
+            "size_bytes": int(size) if size.isdigit() else None,
+            "file_count": len(files) if files else None, "folder": folder or None}
 
 
 def _sha256_local(path: str) -> str:
@@ -162,7 +162,7 @@ def pull(request: dict[str, Any]) -> dict[str, Any]:
     actual = _sha256_local(local)
     _verify(expected_hash, actual, where=f"pulling {remote}")
     return {"remote_path": remote, "local_path": local, "sha256": actual,
-            "size": os.path.getsize(local), "verified": bool(expected_hash)}
+            "size_bytes": os.path.getsize(local), "verified": bool(expected_hash)}
 
 
 def push(request: dict[str, Any]) -> dict[str, Any]:
@@ -194,7 +194,7 @@ def push(request: dict[str, Any]) -> dict[str, Any]:
     landed = run(host, _hash_command(host, remote))["stdout"].strip().split()
     _verify(expected, landed[0] if landed else "", where=f"pushing to {remote}")
     return {"local_path": local, "remote_path": remote, "sha256": expected,
-            "size": os.path.getsize(local), "verified": bool(landed)}
+            "size_bytes": os.path.getsize(local), "verified": bool(landed)}
 
 
 def _ensure_dir(host: Host, directory: str) -> None:

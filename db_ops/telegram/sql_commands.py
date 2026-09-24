@@ -55,9 +55,9 @@ def execute_sql_support_command(*, command: Any, args: list[str]) -> dict[str, A
     # message.
     success, result, error = common_cli.run_allowing_failure("run-sql", {
         "target": str(config.get("server_id") or ""),
-        "database": database_name,
+        "database_name": database_name,
         "credential_name": str(config.get("credential_name") or ""),
-        "sql": sql_text,
+        "sql_text": sql_text,
         "params": params,
         "commit": True,
         "timeout_seconds": int(config.get("connect_timeout_seconds",
@@ -104,8 +104,8 @@ def run_sql_to_xlsx(
     """
     success, result, error = common_cli.run_allowing_failure("run-sql", {
         "target": target,
-        "sql": sql_text,
-        "database": database,
+        "sql_text": sql_text,
+        "database_name": database,
         "credential_name": credential_name,
         "max_rows": max_rows,
         "timeout_seconds": timeout_seconds,
@@ -120,7 +120,7 @@ def run_sql_to_xlsx(
         )
     return {
         "server_id": result["server_id"],
-        "database": result["database"],
+        "database": result["database_name"],
         # Which login ran it: the command config rarely names one, so this is the instance
         # default — worth showing in the reply/log, since it decides what the SQL could touch.
         "credential_name": result.get("credential_name", ""),

@@ -198,7 +198,7 @@ def build_group_record(chat: dict[str, Any]) -> dict[str, Any]:
         "notify_level": "",
         "source_notify_level": "",
         "allow_command": 0,
-        "status": "active",
+        "active": True,
         "note": "Loaded from Telegram getUpdates.",
     }
 
@@ -224,7 +224,7 @@ def build_user_record(user: dict[str, Any]) -> dict[str, Any]:
         "last_name": str(user.get("last_name") or ""),
         "username": str(user.get("username") or ""),
         "language_code": str(user.get("language_code") or ""),
-        "status": "active",
+        "active": True,
         "note": "Loaded from Telegram getUpdates.",
     }
 
@@ -362,7 +362,9 @@ def add_group(
             existing["notify_level"] = level
         if allow_command is not None:
             existing["allow_command"] = int(allow_command)
-        existing["status"] = "active"
+        # `active` since 0.22.0; the string `status` it replaces is taken off, not left to disagree.
+        existing.pop("status", None)
+        existing["active"] = True
         write_json_list(path, root_key="telegram_groups", items=records)
         return {"group_id": wanted, "title": existing.get("title", ""), "created": False,
                 "verified": verified, "before": before, "after": dict(existing), "path": str(path)}
@@ -377,7 +379,7 @@ def add_group(
         # keeps that default: registering a chat says where alerts go, not who may drive the node
         # from it.
         "allow_command": int(allow_command) if allow_command is not None else 0,
-        "status": "active",
+        "active": True,
         "note": ("Registered with `telegram group-add`."
                  if verified else
                  "Registered with `telegram group-add` WITHOUT confirming the id with Telegram."),
@@ -524,7 +526,7 @@ def set_user_level(
             "last_name": "",
             "username": name,
             "language_code": "",
-            "status": "active",
+            "active": True,
             "note": "Pre-authorised by user-level; awaiting first contact.",
         }
         records.append(pending)

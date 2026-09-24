@@ -116,7 +116,7 @@ def test_an_sid_that_is_not_there_is_reported_with_oracle_s_own_error(monkeypatc
                   exit_code=1, oracle_sid="NOSUCHSID")["databases"][0]
 
     assert row["ok"] is False
-    assert row["database"] == "NOSUCHSID"
+    assert row["database_name"] == "NOSUCHSID"
     assert "ORA-01034" in row["detail"]
 
 

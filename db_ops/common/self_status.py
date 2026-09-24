@@ -7,8 +7,11 @@ question asked first when something looks wrong — *which build am I talking to
 and is it out of memory or disk*. On 2026-09-03 that was answered by hand four times: two versions
 were in play, one on a host and one in a container, and telling them apart took a shell.
 
-No SSH and no store: this process is already on the machine being described, so it reads itself.
-That is also why it is the one status that still answers when the store is unreachable.
+No SSH, and the store only for one column: this process is already on the machine being described,
+so it reads itself. From 0.22.0 it also lists the app commands this node schedules, with each one's
+last run read from ``job_runs`` - and that read is the one part allowed to fail. A store that is down
+costs the column and names why; it never costs the report, because this is still the status asked
+for first when the store is what is broken.
 
 **Inside a container, ``/proc/meminfo`` is the host's memory, not the limit this process has.** A
 report that quotes 64 GB while the cgroup allows 2 GB is worse than no report — it is the number
@@ -29,9 +32,13 @@ import socket
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from db_ops.lib import timezone as display_timezone
-from db_ops.lib.timezone import format_display_text
 from typing import Any
+
+from db_ops.lib import node_role as node_role_rule
+from db_ops.lib import run_mode as run_mode_lib
+from db_ops.lib import timezone as display_timezone
+from db_ops.lib.time_window import weekdays_text
+from db_ops.lib.timezone import format_display_text
 
 #: cgroup v2, then v1. A container that was given no limit reports "max" in v2 and a number near
 #: 2**63 in v1; both mean "the host's memory", so both fall through to /proc/meminfo.
@@ -321,7 +328,8 @@ def db_ops_uptime(runtime_dir: str | Path | None) -> dict[str, Any]:
 def collect(*, tool_root: Path, version: str, public_version: str | None = None,
             store: str | None = None, node_role: str | None = None,
             runtime_dir: str | Path | None = None,
-            web: dict[str, Any] | None = None) -> dict[str, Any]:
+            web: dict[str, Any] | None = None,
+            apps: dict[str, Any] | None = None) -> dict[str, Any]:
     """Everything the report needs, as data. Callers that want JSON stop here.
 
     ``web`` is passed in rather than looked up here: everything else in this module reads the
@@ -364,6 +372,7 @@ def collect(*, tool_root: Path, version: str, public_version: str | None = None,
         "store": store,
         "host": host_addresses(),
         "web": web or {},
+        "apps": apps,
         "cpu": cpu(),
         "memory": memory(),
         "disk": disk(tool_root),
@@ -478,6 +487,7 @@ def render(facts: dict[str, Any]) -> str:
         lines.append("db_ops up : unknown")
 
     lines.extend(_web_lines(facts.get("web") or {}))
+    lines.extend(_app_lines(facts.get("apps")))
     return "\n".join(lines)
 
 
@@ -525,4 +535,145 @@ def _web_lines(web_facts: dict[str, Any]) -> list[str]:
         lines.append(f"            WARNING: published links point at "
                      f"{web_facts.get('published_base')} - not this node. "
                      f"Fix report_base_url in data/reports_config.json")
+    return lines
+
+
+# --------------------------------------------------------------------------- #
+# What this node schedules
+# --------------------------------------------------------------------------- #
+def summarize_apps(commands: list[dict[str, Any]] | None, *, node_role: str,
+                   last_runs: dict[str, dict[str, Any]] | None,
+                   store_error: str = "",
+                   now: datetime | None = None) -> dict[str, Any]:
+    """The app commands as this node would run them, one entry each, inactive ones included.
+
+    Takes everything as data - the records, the role, the last runs - because deciding where they
+    come from is the CLI's job (``tests/test_common_layers.py``). ``last_runs`` of ``None`` means the
+    store was not read, which is different from "never ran": ``store_error`` says why.
+
+    Asked for on 2026-09-23 because two schedulers were running disjoint sets on two schemas, and
+    nothing a person could send from a phone said which set this one was.
+    """
+    if commands is None:
+        return {"configured": 0, "state": "not configured", "items": []}
+    moment = now or datetime.now(timezone.utc)
+    # "master (default)" is how collect() spells an unset role; the rule wants the role itself.
+    role = str(node_role or "").split(" ")[0].strip().lower()
+    items: list[dict[str, Any]] = []
+    for command in commands:
+        if not isinstance(command, dict):
+            continue
+        code = str(command.get("app_code") or command.get("app_command_id") or "").strip()
+        if not code:
+            continue
+        window = command.get("time_window") if isinstance(command.get("time_window"), dict) else {}
+        try:
+            mode = run_mode_lib.parse(command)
+            mode_text = (mode.mode if mode.mode == run_mode_lib.SYNC
+                         else f"{mode.mode} x{mode.max_parallel}")
+        except ValueError as exc:
+            mode_text = f"invalid ({exc})"
+        # job_runs records a run under app_command_id, which is the app_code on this estate; both
+        # are tried so a node whose ids differ still finds its rows.
+        run_key = str(command.get("app_command_id") or code)
+        last = (last_runs or {}).get(run_key) or (last_runs or {}).get(code) or {}
+        started = _parse_moment(last.get("started_at"))
+        items.append({
+            "app": code,
+            "active": bool(command.get("active", True)),
+            "runs_here": node_role_rule.runs_on(command.get("node_role"), role, default="all"),
+            "node_role": str(command.get("node_role") or "all"),
+            "run_mode": mode_text,
+            "repeat_interval": window.get("repeat_interval"),
+            "hours": _hours_text(window),
+            "weekdays": (None if window.get("weekdays") is None
+                         else weekdays_text(window.get("weekdays"))),
+            "last_status": str(last.get("status") or "").lower() if last else "",
+            "last_started_at": str(last.get("started_at") or ""),
+            "age_seconds": int((moment - started).total_seconds()) if started else None,
+        })
+    scheduled = [item for item in items if item["active"] and item["runs_here"]]
+    return {"configured": len(items), "scheduled_here": len(scheduled), "role": role or "master",
+            "state": "ok", "store_read": last_runs is not None,
+            "store_error": store_error, "items": items}
+
+
+def _parse_moment(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        moment = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+
+
+def _hours_text(window: dict[str, Any]) -> str:
+    start, end = window.get("from_hour"), window.get("to_hour")
+    start = 0 if start is None else int(start)
+    end = 23 if end is None else int(end)
+    return f"{start:02d}-{end:02d}h"
+
+
+def _interval_text(seconds: Any) -> str:
+    try:
+        value = int(seconds)
+    except (TypeError, ValueError):
+        return "-"
+    if value < 0:
+        return "manual"
+    if value == 0:
+        return "service"
+    if value >= 3600 and value % 3600 == 0:
+        return f"{value // 3600}h"
+    if value >= 60 and value % 60 == 0:
+        return f"{value // 60}m"
+    return f"{value}s"
+
+
+def _age_text(seconds: int | None) -> str:
+    if seconds is None:
+        return ""
+    if seconds < 120:
+        return f"{seconds}s ago"
+    if seconds < 7200:
+        return f"{seconds // 60}m ago"
+    return f"{seconds // 3600}h ago"
+
+
+def _app_lines(apps: dict[str, Any] | None) -> list[str]:
+    """One line per app command, for a phone: on/off, how it runs, when, and how it last went.
+
+    A note is never printed - it is the one field that can be long, and the body is capped at 4096.
+    """
+    if not apps:
+        return []
+    if apps.get("state") == "not configured":
+        return ["", "apps      : not configured (no data/app_commands.json)"]
+    lines = ["", f"apps      : {apps.get('configured', 0)} configured, "
+                 f"{apps.get('scheduled_here', 0)} scheduled on this node "
+                 f"(role {apps.get('role')})"]
+    for item in apps.get("items") or []:
+        if not item["active"]:
+            state = "off"
+        elif not item["runs_here"]:
+            # Named by the role it waits for, so a master reading a worker's list sees why.
+            state = f"{item['node_role']} only"
+        else:
+            state = "on"
+        interval = _interval_text(item["repeat_interval"])
+        when = interval if interval in ("manual", "service") else f"every {interval}"
+        when += f" {item['hours']}"
+        if item["weekdays"] is not None:
+            when += f" on {item['weekdays']}"
+        last = ""
+        if item["last_status"]:
+            last = f"last {item['last_status']} {_age_text(item['age_seconds'])}".rstrip()
+        elif apps.get("store_read") and item["active"] and item["runs_here"]:
+            last = "no run in 24 h"
+        lines.append(f"  {item['app']:<30} {state:<11} {item['run_mode']:<8} {when:<17} {last}".rstrip())
+    if not apps.get("store_read"):
+        reason = apps.get("store_error") or "the store was not read"
+        lines.append(f"            (last run unknown: {reason})")
     return lines

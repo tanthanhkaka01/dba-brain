@@ -139,7 +139,7 @@ def lift_example(
 
     summary: dict[str, Any] = {
         "source": str(source_path),
-        "dest": str(dest_path),
+        "destination": str(dest_path),
         "records": _record_count(payload),
         "referenced_files": len(referenced_files(payload)),
         "blanked": emptied,

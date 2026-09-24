@@ -240,24 +240,6 @@ def write_catalogued_data(data: Path) -> Path:
                 }
         },
         {
-                "app_command_id": "APP-REPORTS-INVENTORY-WORKFLOW",
-                "app_code": "APP-REPORTS-INVENTORY-WORKFLOW",
-                "app_name": "db_ops_reports",
-                "display_name": "Build inventory health + summary (local, reads the store directly)",
-                "log_scope": "reports",
-                "working_dir": "tools/db_ops",
-                "active": True,
-                "node_role": "worker",
-                "command_text": "python -m db_ops.reports.cli inventory-workflow --days 7 --beauty 1",
-                "time_window": {
-                        "from_hour": 0,
-                        "to_hour": 23,
-                        "repeat_interval": 3600,
-                        "retry_interval": 60,
-                        "timeout": 1800
-                }
-        },
-        {
                 "app_command_id": "APP-SLA-VALIDATE",
                 "app_code": "APP-SLA-VALIDATE",
                 "app_name": "db_ops_sla",
@@ -413,8 +395,7 @@ def write_catalogued_data(data: Path) -> Path:
                 "doc": "docs/06_reports_app.md",
                 "summary": "Turns collected metrics into the scheduled reports and the inventory pages the web host publishes.",
                 "app_command_ids": [
-                        "APP-REPORTS-CREATE",
-                        "APP-REPORTS-INVENTORY-WORKFLOW"
+                        "APP-REPORTS-CREATE"
                 ]
         },
         {
@@ -912,6 +893,27 @@ def _the_operator_s_passphrase_is_not_in_scope(monkeypatch):
     tomorrow gets the isolation without anybody remembering to ask for it.
     """
     monkeypatch.delenv("DB_OPS_SECRET_KEY", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _the_display_timezone_starts_at_its_default(monkeypatch):
+    """Every test starts with the display zone unbound — UTC — and leaves nothing bound behind.
+
+    `lib.timezone` holds the display zone as module state, bound by `parse_config` whenever a
+    config is read. Five Telegram test files read this tree's own `config.json` (+07) through the
+    command processor and never unbound it, so `test_metric_windows` and `test_daemon_state`'s
+    uptime line then failed in a combined run and passed alone — a failure that named a schedule
+    window or an uptime, never the test that had moved the clock seven hours.
+
+    Pinned for every test rather than for the five: the next test that reads a config gets the
+    isolation without anybody knowing it needed it. `monkeypatch` restores the pre-test value on
+    teardown, so a test that binds a zone on purpose still cannot leak it.
+    """
+    from db_ops.lib import timezone as display_timezone
+
+    monkeypatch.setattr(display_timezone, "_display_declaration", display_timezone.DEFAULT_TIMEZONE)
+    monkeypatch.setattr(display_timezone, "_display_zone", display_timezone.resolve(
+        display_timezone.DEFAULT_TIMEZONE))
 
 
 @pytest.fixture

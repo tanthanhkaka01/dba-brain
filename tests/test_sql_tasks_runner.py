@@ -23,14 +23,14 @@ class FakeSqlRunStore:
         self.updated.append(kwargs)
 
 
-def make_target(database_name="db", db_type="sqlserver", service_name="svc"):
+def make_target(database_name="db", db_type="sqlserver", service_name="svc", instance_name="inst"):
     return runner.SqlTarget(
         sql_id=9,
         target_no=1,
         server_id="server",
         db_type=db_type,
         service_name=service_name,
-        instance_name="inst",
+        instance_name=instance_name,
         credential_name="cred",
         time_window=TimeWindow(from_day=1, to_day=31, from_hour=0, to_hour=23, repeat_interval=60),
         active=True,
@@ -465,7 +465,11 @@ def test_a_failed_run_is_raised_with_its_reason(monkeypatch):
             database={}, credential={"username": "u"}, password="p", sql_text="SELECT 1;")
 
 
-def test_find_database_inventory_respects_target_database_name():
+def test_find_database_inventory_finds_the_instance_and_leaves_the_database_to_the_server():
+    """Until 2026-09-24 a database missing from the record's `database_names` - a list no code
+    writes - resolved to nothing, compared case-sensitively: `APPDB_PROD` against `APPDB_Prod` failed
+    every run of SQL033 before it connected. The lookup now finds the instance only; whether the
+    database exists is asked of the server after connecting (diagnose_connect_failure)."""
     inventory = [
         {
             "server_id": "server",
@@ -482,7 +486,11 @@ def test_find_database_inventory_respects_target_database_name():
     ]
 
     assert runner.find_database_inventory(make_target(database_name="Globex_Prod"), inventory) is not None
-    assert runner.find_database_inventory(make_target(database_name="WrongDb"), inventory) is None
+    assert runner.find_database_inventory(make_target(database_name="GLOBEX_PROD"), inventory) is not None
+    assert runner.find_database_inventory(make_target(database_name="NotInTheList"), inventory) is not None
+    assert runner.find_database_inventory(make_target(instance_name="INST"), inventory) is not None, (
+        "SQL Server instance names are compared ignoring case, as SQL Server does")
+    assert runner.find_database_inventory(make_target(instance_name="other"), inventory) is None
 
 
 def test_array_script_execution_uses_configured_order(tmp_path, monkeypatch):

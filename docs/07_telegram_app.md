@@ -221,7 +221,7 @@ Add or change commands in this order:
 4. If `action_type = "sql_execute"`, place the SQL file under `assets/sql_telegram_commands/` and use `?` placeholders. Do not use `GO` in these SQL files.
 5. Validate JSON and run the command tests.
 
-Important command fields include `command_id`, `menu_order`, `command_text`, `command_type`, `is_group`, `is_private`, `reply_default`, `reply_text`, `action_type`, `action_config`, and `node_role`.
+A chat in `telegram_groups.json` and a person in `telegram_users.json` are switched on by `active` (the string `status: "active"` until 0.22.0, still read; absent means on). Important command fields include `command_id`, `sort_order`, `command_text`, `command_type`, `is_group`, `is_private`, `reply_default`, `reply_text`, `action_type`, `action_config`, and `node_role`.
 
 **`telegram group-add` registers a chat nobody has posted in.** `save-updates` learns a group from
 `getUpdates`, which only reports a chat somebody has **written in** — so a chat created *for* alerts
@@ -242,7 +242,8 @@ operator reaching for the shape every `common.cli` command takes typed
 indistinguishable from broken routing, and the routing was fine. The three shapes of the contract
 (`{...}`, `@file`, `-`) are now refused with the form that works.
 
-**`menu_order` decides where a command is listed, and it is a float.** One order, used everywhere the
+**`sort_order` decides where a command is listed, and it is a float.** (It was `menu_order`
+until 0.22.0; the old name is still read.) One order, used everywhere the
 commands are listed: `/spbot_list_all_command`, and all three listings in
 `data/telegram_support_commands.md` — the BotFather block, the Command Details table and the Usage
 sections. Before 2026-09-16 those were four different hand-made orders that had drifted apart
@@ -255,7 +256,7 @@ holds the document and the config to it.
 
 It is a **float** so a new command can be slotted between two that exist — `2.5` between `2` and `3`
 — rather than renumbering every entry below it, which makes the diff unreadable and hides whether
-anything else moved. A command with no `menu_order` sorts **last**, not first: something nobody
+anything else moved. A command with no `sort_order` sorts **last**, not first: something nobody
 placed should be visible, not the first thing an operator sees. `command_id` is unchanged and stays
 the identity key the dispatcher and the store look rows up by.
 
@@ -612,7 +613,7 @@ parameter will actually accept listed under it:
 
 ```json
 "prompt_choices": {"command": "list-schemas", "data_key": "schemas",
-                   "request": {"target": "{server_id}", "database": "{database}"}}
+                   "request": {"target": "{server_id}", "database_name": "{database}"}}
 ```
 
 `command` is a `common` CLI command, `data_key` names the list inside its `data`, and each entry's
@@ -623,7 +624,7 @@ server, then lists that server's databases, then lists the chosen database's sch
 | Prompt | Runs |
 | --- | --- |
 | Database name? | `list-databases {"target": "<server_id>"}` |
-| Schema? | `list-schemas {"target": "<server_id>", "database": "<database>"}` |
+| Schema? | `list-schemas {"target": "<server_id>", "database_name": "<database>"}` |
 
 Two properties are deliberate and both are held by `tests/test_telegram_prompt_choices.py`:
 

@@ -152,7 +152,7 @@ def shrink_log(
     point-in-time restore at all. If the log will not shrink because it is waiting on
     ``LOG_BACKUP``, the fix is a log backup, not a smaller file.
     """
-    database = _require_name(request.get("database"), "database")
+    database = _require_name(request.get("database_name") or request.get("database"), "database_name")
     if request.get("size_mb") in (None, ""):
         raise EmergencyError('size_mb is required (target size of the log file in MB).')
     size_mb = int(request["size_mb"])

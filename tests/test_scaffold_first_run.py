@@ -60,8 +60,9 @@ def test_the_postgresql_block_is_present_but_not_live(root: Path) -> None:
     store = json.loads((root / "data" / "store_config.json").read_text(encoding="utf-8"))
 
     assert store["backend"] != "postgresql"
-    for field in ("host", "port", "database", "schema", "username", "password_ref"):
+    for field in ("host", "port", "database_name", "schema", "username", "password_ref"):
         assert field in store["postgresql"]
+    assert "database" not in store["postgresql"], "the name before 0.22.0; upgrade-config moves it"
 
 
 def test_the_inventory_starts_empty_and_explains_itself(root: Path) -> None:

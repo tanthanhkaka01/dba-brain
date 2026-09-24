@@ -26,6 +26,24 @@ The SQL Task Runner runs scheduled SQL task workflows against configured targets
 
 For SQL Server targets, set `database_name` in `data/sql_targets.json` when a task must execute inside a specific database, for example `"database_name": "Globex_Prod"`. `service_name` identifies the database service/instance target; it is not the execution database name. When `database_name` is omitted, SQL Server tasks connect to `master`.
 
+**Connect first, ask the server on failure** (0.23.0). Before a run, the target is looked up in
+`db_instances.json` by `server_id` + `db_type` + `instance_name` - what connecting needs, the
+instance compared ignoring case on SQL Server - and nothing else. The record's `database_names` is
+**not** a gate any more: it was a list no code writes, compared case-sensitively, and on 2026-09-24
+it failed `SQL033` every 30 minutes because the target said `APPDB_PROD` and the list `APPDB_Prod` -
+with *Target database not found in database-inventory.json*, a file that was never read. Now:
+
+- an instance the server's record does not have fails naming the ones it has (*`ACME-…-11` has no
+  sqlserver instance 'APPINST' in db_instances.json - it has: MSSQLSERVER*); `sql-target-add` refuses
+  it at registration, the same way, when the inventory has records;
+- a database that does not open (4060) is diagnosed by asking the server - `SELECT name FROM
+  sys.databases` in `master`, same login: *does not exist … did you mean 'APPDB_Testing'?*, *the
+  server has 'APPDB_Prod' - use that spelling*, or *exists, but this login cannot open it*; a login
+  refused (18456) and an instance not reached are named as such; the driver's own words follow;
+- messages and log lines name a SQL Server target as `server/instance.database` - `master` when no
+  database is named - and never by its `service_name`; the Telegram block shows `database_name`
+  instead. `lib/sql_task_target.py` is the rule.
+
 **Autocommit tasks.** By default a SQL Server task runs inside one transaction and commits at the end (atomic; a mid-script failure rolls back). Set `"autocommit": true` on the `sql_commands.json` entry to run with the connection in **autocommit mode** — no wrapping transaction, each batch commits on its own. Required for procedures that refuse to run inside an open transaction, e.g. `schedule.usp_Run_V2` raises `must not be called inside an active transaction because RUNNING logs must be committed before SQL execution`. Note two things also apply to such scripts: an EXEC parameter must be a **constant or variable**, never an inline expression (`@p = CAST(DATEADD(...) AS DATE)` fails with *Incorrect syntax near 'DATEADD'* — compute it into a `DECLARE`d variable first); and `GO` batch separators are honored (each batch runs in order).
 
 SQL files live under `assets/tasks/`, and a task fed by a program keeps that program in `assets/tasks/python/` (see `input_type` below). `script_type=array` runs multiple files in the configured order, `script_type=folder` runs discovered `*.sql` files sorted by filename, and execution stops at the first failed file. Folder tasks treat filenames as execution order: schema or table-structure changes that stored procedures depend on must have an earlier prefix such as `001_...`. Before running or approving a folder task, use dry-run output to inspect `file_order=[...]`, not just the file count.
@@ -137,7 +155,7 @@ an Oracle 8i target uses. `execute_on_target` now states the run and reads the a
 
 | What the task decides | Request field |
 | --- | --- |
-| where, and as whom | `target` (server_id), `database`, `credential_name` |
+| where, and as whom | `target` (server_id), `database_name`, `credential_name` |
 | the commit mode | `autocommit` / `commit` — an autocommit task commits per batch, which is what procs rejecting `@@TRANCOUNT > 0` need |
 | **two** timeouts, kept apart | `timeout_seconds` (statements) and `connect_timeout_seconds` — a task allowed twenty minutes must not wait twenty minutes to learn the host is down |
 | how many rows and sets to keep | `max_rows`, `capture: "all"`, `max_result_sets: 0` |
@@ -354,6 +372,15 @@ ORDER BY latest_run DESC;
 - Telegram alert is missing: check `logging_on_run`, `alert_on_error`, and pending rows in `telegram_send_messages`.
 - A run is `error` with `metadata_json` = `{"stale_running": true}`: nothing failed in the SQL — the
   run's *process* died and the row was reaped. See *Stale running rows*.
+- A run is `done` at level `warning`, and Telegram says *SQL task done with a warning*: SQL Server
+  sent a warning (SQLSTATE class `01`, e.g. 8153 *Null value is eliminated by an aggregate*) that
+  the driver raised. Until 2026-09-24 that failed the run - `SQL033-NIGHTLY-ENGINE` was recorded
+  `error` after its loop had finished and committed. The warning is in the message and in the
+  file's `file_results[].warnings`; **nothing the script did after it could be read**, so an error
+  after that point would not show either. A task **without** `autocommit` is rolled back and fails
+  there instead, saying why - all-or-nothing cannot be checked past the warning. A task that manages
+  its own transactions (an engine that commits as it goes) wants `autocommit: true`. See
+  `docs/13_common.md` (`run-sql`).
 
 ### Reading the history back
 
@@ -485,7 +512,7 @@ CLI — a JSON object, like every other `common` command:
 ```bash
 python -m db_ops.common.cli add-sql '{"db_type": "sqlserver",
   "server_id": "ACME-192-0-2-250", "instance_name": "APPDB",
-  "sql_name": "Nightly cleanup", "from_hour": 20, "to_hour": 23,
+  "display_name": "Nightly cleanup", "from_hour": 20, "to_hour": 23,
   "repeat_interval": 3600, "timeout": 600, "sql_file": "./cleanup.sql"}'
 ```
 
@@ -521,6 +548,15 @@ that exists) or `sql_text`, in which case the file is written for you. Both vali
 a missing script, an `input.parameter` no `parameters` entry declares, a `{name}` in `input.args`
 that is neither a declared parameter nor `{target_server_id}` / `{target_database}`, a `target_no`
 already taken, and a target whose `sql_id` has no command are all refused.
+
+**Both read their fields from the reference (0.22.0).** `sql_command` and `sql_target` are described
+field by field in `data/shared_config_objects.json` (`describe-object '{"object": "sql_target"}'`).
+A request key that is neither one of those fields nor an option of the command (`sql_text`,
+`replace`, `manual_only`, the flat notify/output spellings) is **refused by name** - until 0.22.0 it
+was dropped and the answer was `ok`, so `"databse_name"` registered a target on the default
+database. The record is checked against its entry before it is written, and a field the reference
+describes is written rather than accepted and dropped: `progress_per_file`, a target's own
+`sql_access`, and a `notify` block given as a block, which used to be replaced by the flat defaults.
 
 `add-sql` remains the shortest route to a one-server task, and `/spbot_add_sql` uses it.
 
@@ -734,7 +770,7 @@ document, suppress the inline table) and each was spelled `== "xlsx"` before the
 ### Telegram: `/spbot_add_sql` (admin, multi-step)
 
 The same engine is exposed as the Telegram command `spbot_add_sql` (`command_type=10`, private
-chat only). The bot walks the operator through five prompts — **server_id → sql_name → schedule
+chat only). The bot walks the operator through five prompts — **server_id → display_name → schedule
 → output → SQL body** — via the standard conversation-state machinery.
 
 **`db_type`, instance and target database are not asked for.** `db_instances.json` already

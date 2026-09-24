@@ -29,6 +29,7 @@ pass.
 """
 
 from __future__ import annotations
+from db_ops.lib import field_names
 from db_ops.lib.coerce import as_float
 from db_ops.lib import timezone as timezone_lib
 
@@ -73,7 +74,8 @@ def _type_rule(policy: dict, *, server_id: str, database: str, backup_type: str)
     rule: dict[str, Any] = dict(((policy.get("defaults") or {}).get("types") or {}).get(backup_type) or {})
     for override in policy.get("overrides") or []:
         wanted_server = str(override.get("server_id") or "").strip().lower()
-        wanted_db = str(override.get("database") or "").strip().lower()
+        wanted_db = str(field_names.read(override, "backup_policy_override", "database_name", "")
+                        or "").strip().lower()
         if wanted_server and wanted_server != str(server_id or "").strip().lower():
             continue
         if wanted_db and wanted_db != str(database or "").strip().lower():

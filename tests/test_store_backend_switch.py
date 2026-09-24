@@ -85,7 +85,7 @@ def test_a_declaration_with_no_connection_string_does_not_grow_one() -> None:
 def test_every_declared_target_field_can_actually_be_set() -> None:
     """POSTGRES_TARGET_FIELDS is what the CLI builds its flags from, so an entry it cannot apply
     is a flag that is accepted and ignored — the failure `instance-add`'s --key-base64 had."""
-    overrides = {"host": "192.0.2.200", "port": 5555, "database": "other", "schema": "elsewhere",
+    overrides = {"host": "192.0.2.200", "port": 5555, "database_name": "other", "schema": "elsewhere",
                  "username": "someone", "password_ref": "OTHER_REF"}
     assert set(overrides) == set(declaration.POSTGRES_TARGET_FIELDS)
 
@@ -156,3 +156,12 @@ def test_what_is_returned_is_something_this_build_can_parse() -> None:
 
     target = declaration.parse(switched)
     assert "db_ops.sqlite" in str(target.sqlite_path)
+
+
+def test_setting_the_database_takes_the_old_spelling_off_the_block() -> None:
+    """A block written before 0.22.0 says `database`; re-pointing it writes `database_name` and
+    removes the old key, so the file never holds one value under two names."""
+    raw = full()
+    raw["postgresql"]["database"] = raw["postgresql"].pop("database_name", "db_ops")
+    moved = declaration.switch_backend(raw, "postgresql", postgres={"database_name": "other"})
+    assert moved["postgresql"]["database_name"] == "other" and "database" not in moved["postgresql"]

@@ -200,7 +200,7 @@ def apply(level: str, request: dict[str, Any], paths: list[str]) -> dict[str, An
                  f"touch {shlex.quote(data_dir.rstrip('/') + '/recovery.signal')}"]
         command = " && ".join(steps)
         if dry_run:
-            return {"engine": "postgresql", "level": level, "command": command, "dry_run": True}
+            return {"db_type": "postgresql", "level": level, "command": command, "dry_run": True}
         # The WAL directory is read by the *server*, inside the container, through the
         # restore_command written just below - so it has to be reachable there for the same reason
         # the chain does. Writing a configuration that points at a host path the server cannot see
@@ -214,7 +214,7 @@ def apply(level: str, request: dict[str, Any], paths: list[str]) -> dict[str, An
         result = run(host, command)
         if result["exit_code"] != 0:
             raise RestoreStepError(f"writing recovery config failed: {result['stderr'][-300:]}")
-        return {"engine": "postgresql", "level": level, "wrote": conf,
+        return {"db_type": "postgresql", "level": level, "wrote": conf,
                 "recovery_target_time": target_time or None,
                 "staged_into_container": staged,
                 "note": "WAL is replayed by the server at startup; nothing was applied here"}
@@ -249,14 +249,14 @@ def apply(level: str, request: dict[str, Any], paths: list[str]) -> dict[str, An
     if host.runtime != DOCKER:
         command = f"{build} && {swap}"
         if dry_run:
-            return {"engine": "postgresql", "level": level, "command": command,
+            return {"db_type": "postgresql", "level": level, "command": command,
                     "action": action, "dry_run": True}
         result = run(host, command, timeout=int(request.get("timeout_seconds") or 7200))
         if result["exit_code"] != 0:
             raise RestoreStepError(
                 f"{action} failed (exit {result['exit_code']}): "
                 f"{(result['stderr'] or result['stdout']).strip()[-400:]}")
-        return {"engine": "postgresql", "level": level, "applied": paths,
+        return {"db_type": "postgresql", "level": level, "applied": paths,
                 "data_dir": data_dir, "action": action}
 
     # --- container: combine while it runs, swap while it is down, then bring it back ---------
@@ -273,7 +273,7 @@ def apply(level: str, request: dict[str, Any], paths: list[str]) -> dict[str, An
         "start": f"{'sudo ' if host.sudo else ''}docker start {shlex.quote(host.container)}",
     }
     if dry_run:
-        return {"engine": "postgresql", "level": level, "plan": plan,
+        return {"db_type": "postgresql", "level": level, "plan": plan,
                 "action": action, "dry_run": True}
 
     mounts = _container_mounts(on_host, host.container, sudo=host.sudo)
@@ -312,7 +312,7 @@ def apply(level: str, request: dict[str, Any], paths: list[str]) -> dict[str, An
         # incident on top of the first, and the caller can see what happened from the error.
         run(on_host, plan["start"], timeout=300)
 
-    return {"engine": "postgresql", "level": level, "applied": paths,
+    return {"db_type": "postgresql", "level": level, "applied": paths,
             "data_dir": data_dir, "action": action, "container": host.container,
             "staged_into_container": staged,
             "note": "combined while up, swapped while down, container restarted"}

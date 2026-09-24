@@ -110,7 +110,7 @@
           "key_fields": [
             "sql_id"
           ],
-          "label_field": "sql_name"
+          "label_field": "display_name"
         }
       ]
     },

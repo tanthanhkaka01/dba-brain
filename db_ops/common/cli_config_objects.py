@@ -31,15 +31,20 @@ import sys
 from datetime import datetime, timezone
 from typing import Any
 
+from db_ops.common import config_upgrade, field_migration
 from db_ops.lib import config_references, response, shared_objects
 from db_ops.lib.time_window import explain_due, parse_time_window_config, run_anchor
 
 DESCRIBE_USAGE = """\
 Usage: python -m db_ops.common.cli describe-object '<json>'|@file|-
 
-What a SHARED config object's fields mean - the blocks that appear inside many data/*.json records
-and are parsed once in db_ops/lib: time_window, notify, notify_rule, cmd_access, sql_access, and
-the shared field cleanup_retention.
+What a config object's fields mean. Two kinds are described:
+  - the SHARED blocks that appear inside many data/*.json records and are parsed once in
+    db_ops/lib - time_window, notify, cmd_access, sql_access, ... and the shared field
+    cleanup_retention;
+  - the RECORDS a person edits whole - app_command, backup_entry, sql_command, db_instance,
+    telegram_support_command, metric_definition, ...
+{} lists them all; the list is the reference file's, so it never needs repeating here.
 
   {}                                  // list every object, with its field count
   {"object": "time_window"}           // one object: every field, required or not, range, default
@@ -233,11 +238,21 @@ def _references(request: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     return message, result
 
 
+def _upgrade(request: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    return config_upgrade.upgrade(request)
+
+
+def _standardize(request: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    return field_migration.standardize(request)
+
+
 _COMMANDS = {
     "describe-object": (_describe, DESCRIBE_USAGE),
     "due-check": (_due, DUE_USAGE),
     "check-objects": (_check, CHECK_USAGE),
     "check-references": (_references, REFERENCES_USAGE),
+    "standardize-field-names": (_standardize, field_migration.USAGE),
+    "upgrade-config": (_upgrade, config_upgrade.USAGE),
 }
 
 
@@ -270,5 +285,8 @@ def run(operation: str, argv: list[str], *, read_request: Any) -> int:
     # A check that finds violations must not exit 0: this is run in a gate, and a green exit with a
     # populated `violations` list is exactly the shape nobody reads.
     if operation in {"check-objects", "check-references"} and not data.get("ok", True):
+        return 1
+    # A migration that left a file unwritten for a conflict has not done what it was asked.
+    if operation in {"standardize-field-names", "upgrade-config"} and data.get("conflicts"):
         return 1
     return code

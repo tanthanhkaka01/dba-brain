@@ -232,7 +232,7 @@ def test_run_sql_returns_first_result_set_and_rolls_back(monkeypatch):
     assert result["ok"] is True
     assert result["columns"] == ["Id", "Name"]
     assert result["row_count"] == 2
-    assert result["database"] == "SALESDB"
+    assert result["database_name"] == "SALESDB"
     assert result["committed"] is False
     assert conn.rolled_back is True and conn.committed is False and conn.closed is True
 

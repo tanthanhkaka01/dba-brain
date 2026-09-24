@@ -1,9 +1,9 @@
 """One registration turns on four mechanisms, and nothing asserted it.
 
-`instance-add` writes an inventory record with `enabled: true` and **no** `metrics` / `reports` /
+`instance-add` writes an inventory record with `active: true` and **no** `metrics` / `reports` /
 `alerts` block at all. Four things then read that record — server metrics, the inventory report,
 the index report and SLA — through a cascade where each flag defaults to the one before it:
-`enabled` → `metrics` → `reports` → `alerts`. So a plain registration is collected *and* reported,
+`active` → `metrics` → `reports` → `alerts`. So a plain registration is collected *and* reported,
 which is what makes "add an instance and it appears" true without asking the operator to learn a
 second switch.
 
@@ -25,14 +25,14 @@ from db_ops.lib.target_flags import is_alerts_enabled, is_metrics_enabled, is_re
 
 
 def test_a_registration_writes_one_flag_and_not_four(tmp_path):
-    """The record carries `enabled: true` and says nothing about metrics, reports or alerts. Four
+    """The record carries `active: true` and says nothing about metrics, reports or alerts. Four
     blocks written at registration time would be four places to keep in step, and the cascade
     exists so there is one."""
     instance_admin.add_instance({"server_id": "ACME-1", "db_type": "sqlserver", "ip": "192.0.2.10"},
                                 data_dir=tmp_path)
 
     record = _record(tmp_path)
-    assert record["enabled"] is True
+    assert record["active"] is True and "enabled" not in record
     assert "metrics" not in record and "reports" not in record and "alerts" not in record
 
 

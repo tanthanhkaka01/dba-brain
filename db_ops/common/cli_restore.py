@@ -37,8 +37,8 @@ the engine, both ends and the credentials, so it works against a machine nothing
               "data_dir": "/var/opt/mssql/data",
               "import_dir": "/opt/mssql2025/backup/SQLBK_IMPORT",
               "container": "mssql2025", // optional, for clearer logs only
-              "ssh_username": "tuser", "ssh_password": "..."},
-   "databases": ["APPDB"],               // optional; empty = every database in the backup set
+              "ssh_username": "labuser", "ssh_password": "..."},
+   "database_names": ["APPDB"],          // optional (was databases); empty = every database in the backup set
    "point_in_time": "2026-08-06 14:00:00 +07:00",  // optional; refused, never downgraded
    "dry_run": true}                     // optional; plan without touching anything
 

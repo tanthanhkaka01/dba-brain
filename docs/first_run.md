@@ -40,6 +40,22 @@ One of the nine is **`AGENTS.md`, written into the tool root rather than into an
 agent that has just run `init` is standing in that directory, and a guide in a repository it never
 cloned is a guide it will not read.
 
+**From 0.22.0 it is the whole operating guide for an AI agent** (Codex, Claude, ...), 300-400 lines:
+the rules, the key and the clock, adding a database through `instance-add`, the files and their
+registrars, `describe-object` / `check-objects` / `check-references`, schedules, the daemon, what to
+ask the tool, and which commands change a database or a host and need a person first. Its source is
+`db_ops/agents_guide.md` in the package, and every `db-ops <app> <command>` it names is checked
+against that app's `--help` by the suite.
+
+It is the one file `init` **always replaces**, so the guide in a root is the installed version's -
+0.22.0 and 0.23.0 renamed too much for an old one to be left in place. Its first line is a stamp with
+the build and a hash of the text; a guide somebody edited (or one from before the stamp) is copied to
+`runtime/agents_guide/AGENTS.<UTC stamp>.md` first, and `init` prints where. Keep your own notes in
+another file. Before a root exists, `dbabrain guide` prints it and
+`dbabrain guide --write` puts it in the current directory. The one limit is pip's: a wheel cannot
+write into the directory it was installed from, so the file appears on the first `init` or
+`guide --write`, never on `pip install` itself.
+
 <!-- TODO(rename): the distribution is `db_ops` until the rename lands. The `db-ops` command
      below keeps its name; `python -m db_ops.<app>.cli` becomes `python -m dbabrain.<app>.cli`. -->
 
@@ -111,11 +127,11 @@ against a file nobody had been told to create.
 {
   "db_instances": [
     {
-      "ord": 1,
+      "sort_order": 1,
       "db_instance_name": "prod_sqlserver",
       "server_id": "ACME-192-0-2-115-MSSQL-1433",
       "site": "HQ",
-      "env": "prod",
+      "environment": "prod",
       "ip": "192.0.2.115",
       "port": 1433,
       "db_type": "sqlserver",
@@ -124,7 +140,7 @@ against a file nobody had been told to create.
       "service_name": "SALESDB-PROD",
       "database_names": ["master", "msdb", "SALESDB"],
       "default_credential_name": "sqlserver_prod_monitor",
-      "enabled": true,
+      "active": true,
       "metrics": { "enabled": true, "disabled_collector_types": ["cmd", "docker"], "metric_overrides": {} },
       "reports": { "enabled": true },
       "alerts": { "enabled": false }
@@ -140,7 +156,7 @@ Four fields are easy to get wrong, and each fails in a way that does not name it
 - **`service_name` is a label, not a database.** On SQL Server the collector always connects to
   `master` and the metric SQL issues its own `USE`. Passing the label as the connection database
   fails *every* SQL Server target at once with `Cannot open database`.
-- **`env` changes severity.** A metric can be graded differently in `prod` and `lab`; a lab machine
+- **`environment` changes severity.** A metric can be graded differently in `prod` and `lab`; a lab machine
   labelled `prod` pages somebody.
 - **`disabled_collector_types`** switches off whole families. `cmd` and `docker` need a shell on
   the machine (`cmd_access`, below); a target without one **skips** those metrics with a line

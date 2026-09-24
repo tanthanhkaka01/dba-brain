@@ -38,6 +38,7 @@ the same JSON gets the same instructions.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -64,7 +65,7 @@ SQLITE_STORE = {
     "postgresql": {
         "host": "",
         "port": 5432,
-        "database": "dbabrain",
+        "database_name": "dbabrain",
         "schema": "dbabrain",
         "username": "",
         "password_ref": "",
@@ -340,195 +341,80 @@ SECRET_TEXT = {
     ],
 }
 
-#: Written into the tool root, beside the JSON it describes.
+#: Written into the tool root as ``AGENTS.md``, beside the JSON it describes.
 #:
-#: Not repository documentation — generated output, and that placement is the point. An agent that
+#: Not repository documentation - generated output, and that placement is the point. An agent that
 #: has just run `init` is standing in this directory; a guide in a repository it never cloned is a
 #: guide it will not read. The same file serves a person, because the instructions are the same
 #: instructions and the only difference is who is typing.
-AGENTS_GUIDE = """# Running this toolkit for the first time
+#:
+#: The text lives in ``db_ops/agents_guide.md`` (package data) rather than in this module since
+#: 0.22.0, when it grew from a first-run note into the whole operating guide for an AI agent. It is
+#: deliberately NOT named ``AGENTS.md`` inside the package: an agent working on this source tree
+#: reads any ``AGENTS.md`` as instructions for the code beside it.
+GUIDE_SOURCE = Path(__file__).with_name("agents_guide.md")
+AGENTS_GUIDE = GUIDE_SOURCE.read_text(encoding="utf-8")
 
-This directory is a **tool root**: configuration plus the results of monitoring. `db-ops` reads it
-because you are standing in it, so run every command below from here.
+#: The first line of every generated AGENTS.md. It records which build wrote the file and a hash of
+#: the text below it, which is how `init` tells an untouched guide from one a person has annotated -
+#: the second is saved before it is replaced (see write_guide).
+_STAMP_PREFIX = "<!-- written by dbabrain init"
 
-There are two ways to configure it. Both end at the same JSON.
+#: Where an edited AGENTS.md is saved before `init` replaces it, relative to the tool root.
+GUIDE_BACKUP_DIR = Path("runtime") / "agents_guide"
 
-| | |
-| --- | --- |
-| **A person** | a web console, adding a database the way a database client does - host, port, user, password. **Not in this release.** |
-| **An AI agent, or a person editing files** | write the JSON described below. This is the supported path today. |
 
-## What you must supply
+def rendered_guide() -> str:
+    """AGENTS.md exactly as `init` writes it: a stamp line, then the guide."""
+    from db_ops.lib.distribution import PUBLIC_VERSION
 
-Exactly two things: **one database to monitor**, and **its password**.
+    digest = hashlib.sha256(AGENTS_GUIDE.encode("utf-8")).hexdigest()[:16]
+    return (f"{_STAMP_PREFIX} {PUBLIC_VERSION}; sha256 {digest} - every init replaces it with the "
+            f"installed version's guide, saving an edited copy in runtime/agents_guide/ first -->\n"
+            + AGENTS_GUIDE)
 
-### 1. The database - `data/db_instances.json`
 
-Add one object to `db_instances`:
+def guide_is_untouched(text: str) -> bool:
+    """True when ``text`` is a guide some `init` wrote and nobody has edited since.
 
-```json
-{
-  "server_id": "MYLAB-SQL01",
-  "ip": "192.0.2.50",
-  "port": 1433,
-  "db_type": "sqlserver",
-  "major_version": 16,
-  "service_name": "MYLAB",
-  "default_credential_name": "MSSQL_MYLAB_MONITOR",
-  "enabled": true,
-  "env": "lab"
-}
-```
+    A file without the stamp predates it (0.21.0 and earlier) or was written by hand; either way it
+    is treated as edited, and saved before it is replaced.
+    """
+    first, _, body = text.partition("\n")
+    if not first.startswith(_STAMP_PREFIX) or " sha256 " not in first:
+        return False
+    recorded = first.split(" sha256 ", 1)[1].split(" ", 1)[0]
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()[:16] == recorded
 
-Three fields are easy to get wrong, and each fails in a way that does not name itself:
 
-- **`service_name` is a label, not a database.** Collection always connects to `master`, and the
-  metric SQL issues its own `USE`. Putting a database name here fails every SQL Server target at
-  once with `Cannot open database "..." (4060)`.
-- **`major_version` selects the query**, not just documentation: 13=2016, 14=2017, 15=2019,
-  16=2022. An older engine gets a variant it can parse instead of failing every cycle.
-- **`default_credential_name` is a reference**, not a password. It names an entry in the secret
-  store; the next step is what puts a value behind it.
+def write_guide(root: Path, *, force: bool = False) -> tuple[str, Path | None]:
+    """Write ``root/AGENTS.md`` as this build's guide: ``(outcome, saved_copy)``.
 
-### 2. The password - `secrets/secret_text.json`, then encrypt
+    ``outcome`` is ``written``, ``unchanged`` or ``replaced``. **The guide always matches the
+    installed version** (the operator, 2026-09-24: 0.22.0 and 0.23.0 changed too much for an old one
+    to be left in place). Until then an edited guide was kept, so the root an agent opened after an
+    upgrade told it the previous version's field names. Nothing a person wrote is lost for it: an
+    edited file - or one from before the stamp - is copied to ``runtime/agents_guide/`` first, and
+    that copy is ``saved_copy``. ``force`` is accepted for the callers that pass it and changes
+    nothing any more.
+    """
+    del force
+    root = Path(root)
+    path = root / "AGENTS.md"
+    text = rendered_guide()
+    saved: Path | None = None
+    if path.exists():
+        current = path.read_text(encoding="utf-8")
+        if current == text:
+            return "unchanged", None
+        if not guide_is_untouched(current):
+            from db_ops.lib.timezone import utc_file_stamp
 
-```json
-{ "MSSQL_MYLAB_MONITOR": "the-password" }
-```
-
-Then:
-
-```bash
-db-ops encrypt-secret --key-base64 <passphrase in base64>
-```
-
-That writes `data/encrypted_secret_text.json`, and **that** is the file the toolkit reads.
-`secrets/secret_text.json` is never read at run time and must never be committed.
-
-Keep the passphrase. Nothing else can decrypt the store, and there is no recovery.
-
-## Then run it
-
-```bash
-db-ops metrics collect --dry-run                              # resolves targets, connects to nothing
-db-ops metrics --key-base64 <passphrase in base64> collect    # collects
-db-ops metrics summary-latest                                 # reads the result back
-```
-
-`--dry-run` is the check worth making first: it proves the instance resolved and the metric
-queries were found, without needing the database to be reachable or the password to be right.
-
-## The least privilege that works
-
-The starter metrics need very little. On SQL Server:
-
-```sql
-CREATE LOGIN monitor_user WITH PASSWORD = '...';
-GRANT VIEW SERVER STATE TO monitor_user;
-GRANT VIEW ANY DEFINITION TO monitor_user;
-USE msdb; CREATE USER monitor_user FOR LOGIN monitor_user;
-ALTER ROLE db_datareader ADD MEMBER monitor_user;   -- BACKUP_AGE reads backupset
-```
-
-No server role, and no access to your data.
-
-## Alerts to Telegram
-
-Optional. Nothing is sent or answered until a token exists.
-
-1. Create a bot with `@BotFather`, copy the token.
-2. Store it encrypted, never in clear — the request goes on stdin, not the command line:
-   `{"ref": "TELEGRAM_BOT_TOKEN", "value": "<token>"}` piped into
-   `python -m db_ops.common.cli secret-set -`.
-   From then on the bot **answers commands** — the running daemon picks the token up.
-3. Send the bot one message from yourself and one in each group, so they are discovered, then
-   say what each is for: `db-ops telegram user-level --user @you --level 100` and
-   `db-ops telegram group-level --group "<title>" --level warning`.
-
-That is all: **alerts are on by default** (`enabled: true` in `data/telegram_config.json`) and
-start as soon as a group has a level. Set `enabled` to `false` to mute alerts; commands are
-answered either way.
-
-Do not run `encrypt-secret` after step 2 unless `secrets/secret_text.json` holds the token too: it
-replaces the store with that file, and the file `init` wrote holds no secrets.
-
-## Where the results go
-
-**SQLite, in `runtime/`.** Nothing to install: a first run has no PostgreSQL, and needing one to
-hold the results of monitoring is a poor first request.
-
-Move later by filling in the `postgresql` block in `data/store_config.json` and then switching
-with `db-ops db use-store postgresql`, which checks the block before it points anything at it and
-keeps the section you left, so coming back is not a retyping exercise. The block is already there with every field, which is why the file looks larger
-than a first run needs.
-
-## Set the clock before anything is scheduled
-
-`config.json` carries a **`timezone`** field, and it decides two things: what every displayed time
-says, and what an hour in a schedule means.
-
-```json
-"timezone": "Asia/Ho_Chi_Minh"
-```
-
-An IANA name (follows daylight saving) or a fixed offset (`+07:00`, `UTC`). `init` writes `UTC`,
-because it runs wherever you happen to be standing and the scheduler runs wherever it is deployed.
-
-**Change it before the first scheduled run, not after.** A window written as `from_hour: 1` means
-01:00 in this zone; changing the zone later moves every schedule that names an hour. Stored
-timestamps are UTC either way and are not affected.
-
-```bash
-db-ops common timezone '{"format":"txt"}'      # what this node resolved
-```
-
-## Running it on a schedule
-
-Everything above is one collection, by hand. The daemon is what makes it an estate: it reads
-`data/app_commands.json` and runs each app on its own interval and window.
-
-```bash
-db-ops daemon --config config.json --once      # one pass of every due command, then exit
-db-ops daemon --config config.json             # stay up and keep running them
-```
-
-**`DB_OPS_NODE_ROLE=worker` is not optional and is the easiest thing to miss.** Every entry in
-`app_commands.json` is `node_role: worker`; a daemon left in the default `master` role schedules
-**nothing** and looks like a healthy idle process.
-
-```bash
-export DB_OPS_NODE_ROLE=worker
-export DB_OPS_SECRET_KEY=<passphrase>
-```
-
-Ask it what happened, rather than reading logs:
-
-```bash
-db-ops db --config config.json check --counts    # tables and row counts
-db-ops db --config config.json ops-status '{}'   # each app's last run, and what is overdue
-```
-
-**Only one scheduler may run an estate at a time.** Two double every collection, every report and
-every alert, and the second is invisible in the first one's store.
-
-## What this release does
-
-Metrics, alerting, scheduled SQL, backup and restore validation, SLA/SLO reporting, report
-generation and a web console for reading them - across SQL Server, Oracle, PostgreSQL and MySQL.
-`db-ops --help` lists every app; each app's own `--help` lists its commands.
-
-The web console **reads** reports and edits configuration. Adding a database through it - host,
-port, user, password - is the one thing not in this release, which is why the JSON above is the
-supported path.
-
-## Where the full documentation is
-
-This file is the shortest path to a first collection. The reference is not in the package:
-
-<https://github.com/tanthanhkaka01/dba-brain> - `docs/first_run.md` for both paths step by step,
-`docs/configuration.md` for every file and field, `docs/architecture.md` for how the parts fit,
-and one `docs/NN_*.md` per component.
-"""
+            saved = root / GUIDE_BACKUP_DIR / f"AGENTS.{utc_file_stamp()}.md"
+            saved.parent.mkdir(parents=True, exist_ok=True)
+            saved.write_text(current, encoding="utf-8")
+    path.write_text(text, encoding="utf-8")
+    return ("replaced" if saved else "written"), saved
 
 
 def _config(app_name: str) -> dict:
@@ -726,6 +612,8 @@ class InitResult:
     root: Path
     written: list[str]
     skipped: list[str]
+    #: An edited AGENTS.md, saved before this version's guide replaced it.
+    guide_saved_copy: Path | None = None
 
 
 def initialise(root: Path, *, app_name: str = "dbabrain", force: bool = False) -> InitResult:
@@ -751,16 +639,13 @@ def initialise(root: Path, *, app_name: str = "dbabrain", force: bool = False) -
         path.write_text(json.dumps(content, indent=2) + "\n", encoding="utf-8")
         written.append(relative)
 
-    # The guide goes in last and by the same rule: never overwritten, because somebody may have
-    # annotated it, and the notes a reader adds to a first-run guide are the ones worth keeping.
-    guide = root / "AGENTS.md"
-    if guide.exists() and not force:
-        skipped.append("AGENTS.md")
-    else:
-        guide.write_text(AGENTS_GUIDE, encoding="utf-8")
-        written.append("AGENTS.md")
+    # The guide goes in last, and it is the one file `init` always refreshes: after `pip install -U`
+    # the guide an agent reads must describe the build it is driving. An edited one is saved to
+    # runtime/agents_guide/ first - the stamp on its first line is how the two are told apart.
+    outcome, saved = write_guide(root)
+    (skipped if outcome == "unchanged" else written).append("AGENTS.md")
 
-    return InitResult(root=root, written=written, skipped=skipped)
+    return InitResult(root=root, written=written, skipped=skipped, guide_saved_copy=saved)
 
 
 def next_steps(root: Path) -> str:

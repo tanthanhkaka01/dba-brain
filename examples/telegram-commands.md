@@ -223,7 +223,8 @@ It can also be sent as one line, which is what a repeat from `/spbot_list_my_com
 > console. Answered at a **prompt** instead, the same two fields are declared `secret` and are stored
 > **masked**. Better still, do not type a secret at all:
 >
-> - `password_env` — the database password comes from an environment variable on the host;
+> - `password_ref` — the database password comes from a ref already in the encrypted store (or
+>   an environment variable of the same name on the host);
 > - `remote_password_ref` — the host login comes from a ref already in the encrypted store
 >   (`db-ops common secret-set -`), or use `remote_key_name` for key authentication.
 >

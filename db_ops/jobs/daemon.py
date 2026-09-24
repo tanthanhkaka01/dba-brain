@@ -33,6 +33,7 @@ from db_ops import __version__ as db_ops_version
 from db_ops.db import DbOpsStore
 from db_ops.db.store import RunAlreadyClaimed
 from db_ops.lib import daemon_state, process_liveness, run_claim, store_outage
+from db_ops.lib import node_role as node_role_rule
 from db_ops.lib import run_mode as run_mode_lib
 from db_ops.db.store import utc_now_text
 from db_ops.jobs.models import JobRun
@@ -390,8 +391,7 @@ def _command_runs_on_node(command: AppCommand, node_role: str) -> bool:
     legacy aliases ``both``/``any``/empty) runs everywhere; otherwise the command's
     node_role must equal the node role (``master`` runs master+all, ``worker`` runs
     worker+all)."""
-    role = (command.node_role or "all").strip().lower()
-    return role in ("all", "both", "any", "") or role == (node_role or "master").strip().lower()
+    return node_role_rule.runs_on(command.node_role, node_role, default="all")
 
 
 def run_scheduler_scan(

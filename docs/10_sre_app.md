@@ -1469,8 +1469,8 @@ python -m db_ops.sre.cli ssh 198.51.100.11 -- systemctl status mysql
 
    **What you need for a one-command remote install** — nothing pre-seeded:
    - `--remote-host <ip> --remote-user <user>` and SSH auth, in one of three forms: **`--remote-key <path>`** (an SSH private key file — how key-auth VMs such as Oracle Cloud connect; no password), **`--remote-password '<pass>'`** (inline value), or **`--remote-password-ref <REF>`** (a ref in the encrypted secret store). A key-auth VM with passwordless sudo needs no password at all.
-   - the DB password with `--password-text '<db-pass>'` (stored under `<NAME>_PASSWORD` in the master secret store, which needs `--key-base64 "<KEY>"`); or set an env var and pass `--password-env`.
-   - on the VM: **docker + the compose plugin installed**, and the containers dir writable by the SSH user (one-time: `sudo mkdir -p /opt/db_ops/containers && sudo chown <user>: /opt/db_ops/containers`) — **or pass `--install-docker`** to have the CLI do all of that over SSH for a bare Ubuntu VM (installs docker via `get.docker.com`, falls back to distro packages, adds the SSH user to the docker group, creates the dir; needs the SSH user to have sudo). `--install-docker` is idempotent: a host that already has Docker is left as-is.
+   - the DB password with `--password-text '<db-pass>'` (stored under `<NAME>_PASSWORD` in the master secret store, which needs `--key-base64 "<KEY>"`); or set an env var and pass `--password-ref`.
+   - on the VM: **docker + the compose plugin installed**, and **both folders a lab writes** owned by the SSH user - the containers dir and the backup bind mount (one-time: `sudo mkdir -p /opt/db_ops/containers /opt/db_ops/backup && sudo chown <user>: /opt/db_ops/containers /opt/db_ops/backup`) — **or pass `--install-docker`** (`install_docker = yes` in `/spbot_create_db_docker`) to have the CLI do all of that over SSH for a bare Ubuntu VM (installs docker via `get.docker.com`, falls back to distro packages, adds the SSH user to the docker group, creates **both** folders and hands them to the SSH user; needs the SSH user to have sudo). `--install-docker` is idempotent: a host that already has Docker gets only the group and the folders. Until 2026-09-24 it prepared only the containers dir, and the backup mount - created later over SFTP, without sudo - failed with *Permission denied* for a user with full sudo rights; a failed preparation now says so instead of surfacing as that SFTP error.
 
    Long post-start steps (the Oracle Data Guard RMAN duplicate, ~3–4 min) run **detached on the remote host and are polled**, so a blip in the control SSH connection does not interrupt them — the one command runs to completion on its own.
 
@@ -1559,14 +1559,14 @@ python -m db_ops.sre.cli ssh 198.51.100.11 -- systemctl status mysql
 # PostgreSQL single instance
 python -m db_ops.sre.cli create-db-docker `
     --name pg_lab_01 --engine postgres --version 16 --mode single `
-    --host-port 5433 --password-env POSTGRES_PASSWORD
+    --host-port 5433 --password-ref POSTGRES_PASSWORD
 
 # MySQL single instance
 python -m db_ops.sre.cli create-db-docker `
     --name mysql_lab_01 --engine mysql --version 8.4 --mode single `
-    --host-port 3307 --password-env MYSQL_ROOT_PASSWORD
+    --host-port 3307 --password-ref MYSQL_ROOT_PASSWORD
 
-# SQL Server single instance. --host-port and --password-env may be omitted: the port defaults
+# SQL Server single instance. --host-port and --password-ref may be omitted: the port defaults
 # to the engine's own (1433) and the secret ref to <NAME>_PASSWORD.
 python -m db_ops.sre.cli create-db-docker `
     --name mssql_lab_01 --engine mssql --version 2022-latest --mode single
@@ -1575,7 +1575,7 @@ python -m db_ops.sre.cli create-db-docker `
 # (official postgres image; standbys seeded with pg_basebackup); each node on its own port
 python -m db_ops.sre.cli create-db-docker `
     --name pg_ha_lab_01 --engine postgres --version 18 --mode ha-lab `
-    --replicas 2 --host-port 5433 --password-env POSTGRES_PASSWORD
+    --replicas 2 --host-port 5433 --password-ref POSTGRES_PASSWORD
 
 # SQL Server Always On lab: 3 nodes, AG with CLUSTER_TYPE = NONE (see the note below).
 # Also stores the password in the encrypted secret store under MSSQL_AG_LAB_PASSWORD.
@@ -1620,12 +1620,12 @@ python -m db_ops.sre.cli create-db-docker `
 
 # Preview everything (compose, .env, connection entry, commands) — changes nothing
 python -m db_ops.sre.cli create-db-docker --name pg_lab_01 --engine postgres `
-    --version 16 --mode single --host-port 5433 --password-env POSTGRES_PASSWORD --dry-run
+    --version 16 --mode single --host-port 5433 --password-ref POSTGRES_PASSWORD --dry-run
 
 # Register a connection only (no container created)
 python -m db_ops.sre.cli register-db-connection `
     --name pg_lab_01 --engine postgres --host 198.51.100.129 --port 5433 `
-    --database postgres --username postgres --password-env POSTGRES_PASSWORD
+    --database postgres --username postgres --password-ref POSTGRES_PASSWORD
 ```
 
 Options for `create-db-docker`:
@@ -1634,12 +1634,12 @@ Options for `create-db-docker`:
 |---|---|
 | `--name` | Instance name — letters, numbers, `_`, `-` only. |
 | `--engine` | `postgres` \| `mysql` \| `mssql` \| `oracle`. |
-| `--version` | Image tag, checked against the registry **before** anything is created. postgres: `18`/`17`/`16`. mysql: `8.4`/`8.0`. mssql: `2022-latest`, `2025-latest`, or a full tag such as `2025-CU6-ubuntu-24.04` — **there is no bare-year tag: `2025` does not exist** ([tag list](https://mcr.microsoft.com/v2/mssql/server/tags/list)). oracle: `26`/`26-slim` (26ai), `23`/`23-slim` (23ai) — gvenzl/oracle-free tags, **no `ai` suffix**. |
+| `--version` | Image tag, checked against the registry **before** anything is created. postgres: `18`/`17`/`16`. mysql: `8.4`/`8.0`. mssql: `2022-latest`, `2025-latest`, or a full tag such as `2025-CU6-ubuntu-24.04` — **there is no bare-year tag: `2025` does not exist** ([tag list](https://mcr.microsoft.com/v2/mssql/server/tags/list)). oracle: `23.26.3` (the newest 26ai, 2026-09) or `latest` - **Oracle AI Database 26ai kept the 23.26.x version numbers: there is no `26` / `26-slim` tag** (Docker Hub answers 404) - or `23`/`23-slim` (23ai); gvenzl/oracle-free tags, **no `ai` suffix**. The check says *Image not found* only when the registry says the tag is not there; a registry that does not answer (rate limit, timeout, DNS) is reported as that, with docker's own message - not as a wrong `--version`. |
 | `--mode` | `single` \| `ha-lab`. **`ha-lab` is each engine's own replication, not one product** — see below. `oracle` ha-lab is Data Guard, fixed at 1 primary + 1 standby. |
 | `--replicas` | Standby count for `ha-lab` (default 2); rejected with `--mode single`. |
 | `--host-port` | Host port for the (primary) instance; HA standbys take the next ports. Default: the engine's own port (postgres 5432, mysql 3306, mssql 1433). |
-| `--password-env` | Env var / secret ref holding the password. **Never hardcoded**; it lands only in the instance `.env`. Default: `<NAME>_PASSWORD`, so each instance has its own ref. |
-| `--password-text` | The password value. Stored under `--password-env` in the encrypted secret store, then used to provision. Visible in the process list while it runs. |
+| `--password-ref` | The secret ref holding the password (`--password-env` is the old spelling, still taken); an environment variable of the same name wins when set. **Never hardcoded**; it lands only in the instance `.env`. Default: `<NAME>_PASSWORD`, so each instance has its own ref. |
+| `--password-text` | The password value. Stored under `--password-ref` in the encrypted secret store, then used to provision. Visible in the process list while it runs. |
 | `--password-text-env` | Name of an env var holding the password instead — how the Telegram command passes it, so nothing sensitive reaches argv. |
 | `--worker-host` | DB host/IP recorded in the connection entry and connection hint. |
 | `--containers-dir` | Base dir for instance folders (default `/opt/db_ops/containers`). **A backup bind mount must not live under this default** — it is inside the `control deploy` tree; see [Backups and the container must be kept separate](#backups-and-the-container-must-be-kept-separate). |
@@ -1650,7 +1650,7 @@ Options for `create-db-docker`:
 | `--remote-host` / `--remote-user` / `--remote-port` | Provision on that Ubuntu host over SSH instead of locally (CLI on the master, docker on the remote machine). |
 | `--remote-password-ref` / `--remote-password` | SSH password: a secret-store ref decrypted with `--key`/`--key-base64` (preferred), or the literal value. |
 
-The password is resolved from the `--password-env` environment variable first, then the encrypted secret store (ref == the env-var name) if a key is available. `--password-text` / `--password-text-env` write it into that store first, so the ref exists on the next run too. Validation rules: safe `--name`; `--engine`/`--mode` whitelists; `--replicas` only with `ha-lab`; host port(s) must be free; the instance folder must not exist unless `--force`.
+The password is resolved from an environment variable named like the `--password-ref` first, then the encrypted secret store (ref == the env-var name) if a key is available. `--password-text` / `--password-text-env` write it into that store first, so the ref exists on the next run too. Validation rules: safe `--name`; `--engine`/`--mode` whitelists; `--replicas` only with `ha-lab`; host port(s) must be free; the instance folder must not exist unless `--force`.
 
 **What `ha-lab` actually builds** — it is *not* one HA product, it is each engine's own replication:
 
@@ -1659,7 +1659,7 @@ The password is resolved from the `--password-env` environment variable first, t
 | `postgres` | Physical **streaming replication**: 1 primary + N standbys, seeded with `pg_basebackup`, replication role provisioned by an initdb hook. | Manual (promote a standby). |
 | `mysql` | **Asynchronous** primary/replica (bitnami image, `MYSQL_REPLICATION_MODE`). | Manual. |
 | `mssql` | An **Always On availability group** with `CLUSTER_TYPE = NONE`: `MSSQL_ENABLE_HADR=1` on each node, one shared certificate, mirroring endpoints on 5022, `SEEDING_MODE = AUTOMATIC`, and a database (`<name>_db`) added to the group. Built by `setup/setup_ag.sh`, which the provisioner runs once the nodes are healthy — compose cannot express it and the image has no init hook. | **Manual, and there is no listener.** A container lab has no WSFC or Pacemaker, so this is a read-scale AG: `ALTER AVAILABILITY GROUP [ag_<name>] FAILOVER` on the target replica while the primary is alive, `FORCE_FAILOVER_ALLOW_DATA_LOSS` once it is gone. Clients connect to a replica by port. Enough to exercise replication, seeding, AG DMVs and monitoring — **not** automatic HA. |
-| `oracle` | **Data Guard, exactly 1 primary + 1 physical standby** (`--replicas` fixed at 1). Both nodes first start as normal databases; `setup/setup_dataguard.sh` (run by the provisioner once both are healthy) enables ARCHIVELOG/FORCE LOGGING + standby redo logs on the primary, copies the SYS password file, rebuilds the standby as a physical standby via `RMAN DUPLICATE ... FOR STANDBY FROM ACTIVE DATABASE` (aux pfile generated from the standby's own spfile — a minimal pfile dies with ORA-00443; aux reached via a static listener SID entry + `DGSB_AUX` alias present on **both** nodes) and starts managed recovery (MRP). **Redo transport: Oracle Free blocks every live mode with ORA-00439 (ASYNC, SYNC and FAL gap fetch — verified on 23.26.2), so redo moves Standard-Edition style**: the `<name>-shipper` sidecar (docker:cli + socket) forces a log switch and copies+registers each new archived log every 2 minutes; MRP applies them. RPO ≈ that interval. The standby stays **MOUNTED** — its container healthcheck reports *unhealthy* from then on, which is expected. After a standby restart, re-start managed recovery by hand (the setup output prints the command). | **Failover only** (no live transport → no clean switchover): on the standby `RECOVER MANAGED STANDBY DATABASE CANCEL;` then `ALTER DATABASE ACTIVATE STANDBY DATABASE;` — data current to the last shipped log. |
+| `oracle` | **Data Guard, exactly 1 primary + 1 physical standby** (`--replicas` fixed at 1). Both nodes first start as normal databases; `setup/setup_dataguard.sh` (run by the provisioner once both are healthy) enables ARCHIVELOG/FORCE LOGGING + standby redo logs on the primary, copies the SYS password file, rebuilds the standby as a physical standby via `RMAN DUPLICATE ... FOR STANDBY FROM ACTIVE DATABASE` (aux pfile generated from the standby's own spfile — a minimal pfile dies with ORA-00443; aux reached via a static listener SID entry + `DGSB_AUX` alias present on **both** nodes) and starts managed recovery (MRP). **Redo transport: Oracle Free blocks every live mode with ORA-00439 (ASYNC, SYNC and FAL gap fetch — verified on 23.26.2), so redo moves Standard-Edition style**: the `<name>-shipper` sidecar (docker:cli + socket) forces a log switch and copies+registers each new archived log every 2 minutes; MRP applies them. RPO ≈ that interval. The standby stays **MOUNTED**. Once converted it starts through its own `dg/standby_entrypoint.sh` - listener up, `STARTUP MOUNT`, never opened, `SHUTDOWN IMMEDIATE` on stop - so a container restart or a host reboot brings it back a mounted standby the shipper keeps applying to; `dg/standby_healthcheck.sh` reports a mounted physical standby as *healthy*. Until 2026-09-24 it ran under the image's own start, which opens every database as a primary: after one host reboot the standby crash-looped (*DATABASE STARTUP FAILED!*, `restart: unless-stopped`) and the shipper refused every cycle (ORA-01034); its healthcheck also read *unhealthy* for as long as the lab lived. The shipper reads the standby's `resetlogs_id` and `log_archive_format` at the start of **every** cycle: until 2026-09-24 it read them once, when the sidecar started - before the setup had converted the standby - and skipped every cycle after (*no valid RLID/FMT*); only the setup's own one-off cycle had ever shipped a log. | **Failover only** (no live transport → no clean switchover): on the standby `RECOVER MANAGED STANDBY DATABASE CANCEL;` then `ALTER DATABASE ACTIVATE STANDBY DATABASE;` — data current to the last shipped log. |
 
 SQL Server needs ~2 GB of RAM per node: a 3-node AG wants ~6 GB free on the worker before it will start.
 
@@ -1684,13 +1684,13 @@ host produces an **empty database with the same name**.
 # What would move, without touching anything
 python -m db_ops.sre.cli move-db-docker --name ora11g_lab `
     --from-target ACME-192-0-2-249-HOST `
-    --to-target   ACME-192-0-2-11-MSSQL25-1433 `
+    --to-target   ACME-192-0-2-11-LABSQL-1433 `
     --dry-run --key-base64 "<KEY>"
 
 # The move itself: container filesystem included, source stopped once the destination is healthy
 python -m db_ops.sre.cli move-db-docker --name ora11g_lab `
     --from-target ACME-192-0-2-249-HOST `
-    --to-target   ACME-192-0-2-11-MSSQL25-1433 `
+    --to-target   ACME-192-0-2-11-LABSQL-1433 `
     --commit-container --stop-source --key-base64 "<KEY>"
 ```
 

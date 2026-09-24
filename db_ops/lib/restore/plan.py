@@ -54,6 +54,6 @@ def plan_restore(spec: RestoreSpec) -> dict[str, Any]:
         "target": f"{spec.target.host}:{spec.target.port}"
                   + (f" ({spec.target.container})" if spec.target.container else ""),
         "source": f"{spec.source.access}:{spec.source.path}",
-        "databases": list(spec.databases) or "all found in the backup set",
+        "database_names": list(spec.databases) or "all found in the backup set",
         "spec": redacted(spec),
     }

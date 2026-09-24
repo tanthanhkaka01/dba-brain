@@ -169,7 +169,7 @@ def apply(level: str, request: dict[str, Any], paths: list[str]) -> dict[str, An
     steps = build_steps(level, request, paths)
     mode = str(request.get("mode") or DUPLICATE).strip().lower()
     if request.get("dry_run"):
-        return {"engine": "oracle", "level": level, "mode": mode, "dry_run": True,
+        return {"db_type": "oracle", "level": level, "mode": mode, "dry_run": True,
                 "steps": [s["name"] for s in steps],
                 "scripts": {s["name"]: s["command"] for s in steps}}
 
@@ -184,7 +184,7 @@ def apply(level: str, request: dict[str, Any], paths: list[str]) -> dict[str, An
         if _failed(step["name"], output, result["exit_code"]):
             raise RestoreStepError(f"oracle {step['name']} failed: {output.strip()[-800:]}")
 
-    return {"engine": "oracle", "level": level, "mode": mode, "steps": ran,
+    return {"db_type": "oracle", "level": level, "mode": mode, "steps": ran,
             "cataloged": paths if mode == RESTORE else [],
             "backup_location": str(request.get("backup_location") or "") or None,
             "stopat": str(request.get("stopat") or "") or None,

@@ -54,7 +54,7 @@
       },
       {
         "server_id": "ACME-192-0-2-10",
-        "database": "APPDB_STG",
+        "database_name": "APPDB_STG",
         "note": "A staging copy, refreshed from production on demand and deliberately not backed up. Stating that here is the difference between a decision and an oversight.",
         "types": {
           "FULL": {"required": false, "warn_hours": 0, "critical_hours": 0},

@@ -170,6 +170,29 @@ def _summarize_runs(conn: Any, since: str) -> dict[str, dict[str, Any]]:
     return out
 
 
+def latest_runs(store: Any, codes: list[str], *, since: str) -> dict[str, dict[str, Any]]:
+    """The newest run of each job code since ``since``: ``{code: {"status", "started_at"}}``.
+
+    One query for every code, not one per code: ``self-status`` answers over Telegram, and nine
+    round trips to a store on another host is the difference between a reply and a timeout. A code
+    with no run in the window is simply absent - the caller decides what "absent" means.
+    """
+    wanted = [str(code) for code in codes if str(code or "").strip()]
+    if not wanted:
+        return {}
+    marks = ", ".join("?" for _ in wanted)
+    with store.connect() as conn:
+        rows = conn.execute(
+            "SELECT j.job_code, j.status, j.started_at FROM job_runs j JOIN ("
+            "  SELECT job_code, MAX(started_at) AS newest FROM job_runs"
+            f"  WHERE started_at >= ? AND job_code IN ({marks}) GROUP BY job_code"
+            ") n ON j.job_code = n.job_code AND j.started_at = n.newest",
+            [since, *wanted],
+        ).fetchall()
+    return {str(row["job_code"]): {"status": row["status"], "started_at": row["started_at"]}
+            for row in rows}
+
+
 def _latest_run(conn: Any, code: str, since: str, *, failed_only: bool = False) -> dict[str, Any]:
     """The newest run of one app — optionally the newest *failed* one.
 

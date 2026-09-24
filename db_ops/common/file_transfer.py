@@ -118,8 +118,8 @@ def _result(*, target, status, local_path: Path, remote_path: str, size: int, st
         "host": target.host,
         "remote_path": str(remote_path),
         "local_path": str(local_path),
-        "bytes": int(size),
-        "elapsed_seconds": round(time.monotonic() - started, 3),
+        "size_bytes": int(size),
+        "duration_ms": int((time.monotonic() - started) * 1000),
     }
 
 
@@ -429,7 +429,7 @@ def _pack_remote(request, *, archive_path, fmt, files, folder, include, overwrit
                     session, _SHA256_COMMAND[shell].format(path=shlex.quote(path)),
                     what=f"hashing {path}", target=target,
                 )
-                members.append({"path": path, "bytes": _remote_size(session, path),
+                members.append({"path": path, "size_bytes": _remote_size(session, path),
                                 "sha256": line.split()[0]})
 
         return {
@@ -438,11 +438,11 @@ def _pack_remote(request, *, archive_path, fmt, files, folder, include, overwrit
             "server_id": target.server_id,
             "archive_path": archive_path,
             "format": fmt,
-            "bytes": int(size),
+            "size_bytes": int(size),
             "sha256": sha,
             "file_count": len(files) or None,
             "files": members or None,
-            "elapsed_seconds": round(time.monotonic() - started, 3),
+            "duration_ms": int((time.monotonic() - started) * 1000),
         }
     except RemoteExecError as exc:
         raise FileTransferError(f"{target.describe()}: {exc}") from exc
@@ -495,13 +495,13 @@ def _pack_local(*, archive_path, fmt, files, folder, include, overwrite, checksu
         "server_id": "",
         "archive_path": str(destination),
         "format": fmt,
-        "bytes": destination.stat().st_size,
+        "size_bytes": destination.stat().st_size,
         "sha256": _local_sha256(destination),
         "file_count": len(members),
-        "files": ([{"path": str(path), "bytes": path.stat().st_size,
+        "files": ([{"path": str(path), "size_bytes": path.stat().st_size,
                     "sha256": _local_sha256(path)} for path in members]
                   if checksum_files else None),
-        "elapsed_seconds": round(time.monotonic() - started, 3),
+        "duration_ms": int((time.monotonic() - started) * 1000),
     }
 
 
@@ -563,7 +563,7 @@ def relay_file(request: dict[str, Any], *, data_dir=None, secrets=None) -> dict[
     Request::
 
         {"source":      {"target": "ACME-192-0-2-249-HOST", "path": "/tmp/bundle.tar.gz"},
-         "destination": {"target": "ACME-192-0-2-11-MSSQL25-1433", "path": "/tmp/b.tar.gz"},
+         "destination": {"target": "ACME-192-0-2-11-LABSQL-1433", "path": "/tmp/b.tar.gz"},
          "overwrite": false, "make_dirs": true}
 
     Each side is resolved exactly like ``fetch-file``/``send-file`` resolve theirs — a
@@ -671,10 +671,10 @@ def relay_file(request: dict[str, Any], *, data_dir=None, secrets=None) -> dict[
                        "path": source_path},
             "destination": {"server_id": dst_target.server_id, "host": dst_target.host,
                             "path": dest_path},
-            "bytes": int(moved),
+            "size_bytes": int(moved),
             "sha256": source_sha,
             "verified": True,
-            "elapsed_seconds": round(time.monotonic() - started, 3),
+            "duration_ms": int((time.monotonic() - started) * 1000),
         }
     finally:
         for session in (src_session, dst_session):

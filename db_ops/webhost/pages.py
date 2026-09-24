@@ -21,6 +21,8 @@ import html
 import json
 from typing import Any
 
+from db_ops.lib import field_names
+
 
 def escape(value: Any) -> str:
     """HTML-escape anything on its way into a page — including into an attribute.
@@ -366,7 +368,7 @@ def nav_items(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
         commands = [item for item in block.get("commands") or [] if not item.get("missing")]
         rows.append({
             "app_code": block["app_code"],
-            "ord": block.get("ord") or 0,
+            "ord": field_names.read(block, "webhost_app", "sort_order", 0) or 0,
             "display_name": block.get("display_name") or block["app_code"],
             "commands": len(commands),
             "dot": _worst_dot(commands),
