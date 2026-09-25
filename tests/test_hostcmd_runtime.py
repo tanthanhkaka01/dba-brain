@@ -40,8 +40,30 @@ def test_docker_uses_a_login_shell():
 def test_sudo_is_stated_not_guessed():
     plain = wrap(parse_host({"runtime": DOCKER, "container": "c"}), "x")
     elevated = wrap(parse_host({"runtime": DOCKER, "container": "c", "sudo": True}), "x")
-    assert not plain.startswith("sudo ")
-    assert elevated.startswith("sudo docker exec")
+    assert plain.startswith("docker exec") and "sudo" not in plain
+    # Asked-for sudo is a fallback decided on the host, not a prefix: `sudo docker` with a sudo
+    # that wants a password fails outright, while the SSH user is usually in the docker group.
+    assert elevated.startswith('$(docker info >/dev/null 2>&1 && echo docker || echo "sudo docker") exec')
+
+
+def test_the_sudo_fallback_runs_as_a_real_shell_would_read_it():
+    """The expression is typed into the remote shell; checked here in one, where one exists."""
+    import shutil
+    import subprocess
+
+    import pytest
+
+    sh = shutil.which("sh")
+    if not sh:
+        pytest.skip("no POSIX shell here")
+    from db_ops.lib.shell import docker_cli
+
+    out = subprocess.run([sh, "-c", f"docker() {{ return 0; }}; echo {docker_cli(True)}"],
+                         capture_output=True, text=True).stdout.strip()
+    assert out == "docker"
+    out = subprocess.run([sh, "-c", f"docker() {{ return 1; }}; echo {docker_cli(True)}"],
+                         capture_output=True, text=True).stdout.strip()
+    assert out == "sudo docker"
 
 
 def test_k8s_names_its_namespace_and_pod():

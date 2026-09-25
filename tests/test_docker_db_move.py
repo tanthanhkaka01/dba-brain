@@ -30,7 +30,8 @@ import subprocess
 
 import pytest
 
-from db_ops.sre.docker_db import mover, register_config
+from db_ops.common.docker_db import mover
+from db_ops.sre.docker_db import register_config, resolve
 
 
 class FakeHost:
@@ -398,12 +399,57 @@ def test_the_engine_comes_from_the_registry_so_it_need_not_be_retyped(tmp_path):
          "docker": {"compose_path": "/old/path/docker-compose.yml"}},
     ]})
 
-    assert mover.resolve_engine(_spec(engine=""), data_dir=tmp_path) == "oracle-xe"
+    # Read by sre, which passes it to `common.cli move-db-docker` - the mover reads nothing.
+    assert resolve.registered_engine("ora11g_lab", data_dir=tmp_path) == "oracle-xe"
 
 
 def test_an_unregistered_instance_asks_for_the_engine_rather_than_guessing(tmp_path):
+    assert resolve.registered_engine("ora11g_lab", data_dir=tmp_path) == ""
     with pytest.raises(mover.MoveError, match="--engine"):
-        mover.resolve_engine(_spec(engine=""), data_dir=tmp_path)
+        mover.resolve_engine(_spec(engine=""))
+
+
+# --------------------------------------------------------------------------- #
+# 1.37 - the move reads nothing and launches nothing
+# --------------------------------------------------------------------------- #
+def test_the_bundle_travels_host_to_host_through_the_sessions_the_move_holds(monkeypatch):
+    """It used to launch `common.cli relay-file` with two targets for a subprocess to resolve out
+    of db_instances.json - a CLI launched from `common`, reading config, for something the two
+    open sessions already do."""
+    calls = []
+
+    def fake_relay(source, destination, source_path, dest_path, **kwargs):
+        calls.append((source, destination, source_path, dest_path))
+        return {"size_bytes": 7, "sha256": "x", "verified": True}
+
+    monkeypatch.setattr(mover.ssh_relay, "relay", fake_relay)
+    source = type("H", (), {"session": "SRC-SESSION", "host": "192.0.2.249", "user": "u"})()
+    destination = type("H", (), {"session": "DST-SESSION", "host": "192.0.2.11"})()
+    manifest = {"images_archive": mover.IMAGES_ARCHIVE, "instance_archive": mover.INSTANCE_ARCHIVE,
+                "volumes": [{"volume": "v", "archive": "volume_v.tar.gz"}]}
+
+    results = mover.transfer_bundle(source, destination, _spec(), manifest, log=lambda *_: None)
+
+    assert [(c[0], c[1]) for c in calls] == [("SRC-SESSION", "DST-SESSION")] * 4
+    assert [c[2].rsplit("/", 1)[1] for c in calls] == [
+        mover.IMAGES_ARCHIVE, mover.INSTANCE_ARCHIVE, "volume_v.tar.gz", mover.MANIFEST]
+    assert sum(r["size_bytes"] for r in results) == 28
+
+
+def test_a_move_reports_the_bytes_it_actually_transferred(monkeypatch):
+    """The summary read `bytes`, which the relay never answered - every move reported 0."""
+    source, destination = _source(), _destination()
+    monkeypatch.setattr(mover, "transfer_bundle",
+                        lambda *a, **k: [{"path": "/s/a", "size_bytes": 900},
+                                         {"path": "/s/b", "size_bytes": 40}])
+    monkeypatch.setattr(mover.healthcheck, "wait_healthy",
+                        lambda services, engine, **kwargs: {svc: "healthy" for svc in services})
+
+    result = mover.move(_spec(), source=source, destination=destination, log=lambda *_: None)
+
+    assert result["bytes_transferred"] == 940
+    assert result["compose_path"].endswith("/ora11g_lab/docker-compose.yml")
+    assert "registered" not in result, "the registry is sre's to write"
 
 
 def test_relocating_a_connection_changes_where_it_is_and_nothing_else(tmp_path):
@@ -534,3 +580,17 @@ def test_force_frees_the_ports_before_they_are_checked(monkeypatch):
     _move(_spec(force=True), source, destination, monkeypatch)
 
     assert destination.index_of("compose down -v") < destination.index_of("docker ps --format")
+
+
+def test_an_instance_named_in_capitals_is_found_by_its_compose_project():
+    """Compose lower-cases the directory name into the project name. Asking Docker for the name
+    as typed found no containers for any lab named in capitals - this estate's own convention -
+    and refused the move as "no containers" (found moving a lab between the .249/.250 hosts)."""
+    source = FakeHost("192.0.2.250", answers={
+        "label=com.docker.compose.project=lab137_pg_5440": "LAB137_PG_5440"})
+
+    facts = mover.inspect_instance(source, "LAB137_PG_5440", "/opt/db_ops/containers")
+
+    assert facts.containers == ["LAB137_PG_5440"]
+    assert facts.instance_dir == "/opt/db_ops/containers/LAB137_PG_5440", "the folder keeps its case"
+    assert not [c for c in source.commands if "compose.project=LAB137" in c]

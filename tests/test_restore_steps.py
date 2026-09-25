@@ -258,31 +258,40 @@ def test_postgresql_full_copies_a_base_backup_directory_into_place():
 
 
 def test_a_container_restore_plans_the_whole_lifecycle_itself():
-    """Nothing is left for the caller to type. The chain is put where the container can read it,
-    then the combine runs while the server is up because it is the long part; only the swap needs
-    it down, so the database is out for seconds rather than for the minutes pg_combinebackup
-    takes."""
+    """Nothing is left for the caller to type, and nothing needs the target running: it is stopped
+    first and everything else runs in a throwaway container sharing its volumes. The combine used
+    to run inside the live target, so a target a failed drill had left crash-looping refused every
+    later restore with "Container ... is restarting" (2026-09-24)."""
     plan = _pg("diff", backup_paths=["/b/base/a_FULL", "/b/base/b_INCR"])["plan"]
 
-    assert list(plan) == ["stage", "combine", "stop", "swap", "start"]
-    assert "docker exec -u postgres" in plan["combine"]
-    assert "docker stop" in plan["stop"] and "docker start" in plan["start"]
+    assert list(plan) == ["stop", "combine", "swap", "start"]
+    assert "docker stop c" in plan["stop"] and "docker start c" in plan["start"]
+    assert "run --rm -u postgres --volumes-from c" in plan["combine"]
+    assert not [step for step in plan.values() if " exec " in step], "never into the target"
 
 
-def test_the_chain_is_staged_into_the_container_before_it_is_combined():
-    """The chain is listed on the host and combined inside the container. When no volume serves
+def test_the_chain_is_mounted_into_the_helper_that_combines_it():
+    """The chain is listed on the host and combined in the container's image. When no volume serves
     that path the container cannot open it, and the combine died on whichever piece was newest
-    while happily reading a previous run's leftovers for the rest."""
+    while happily reading a previous run's leftovers for the rest. Mounted read-only at the same
+    path, there is no copy to go stale and nothing that can write to the backups."""
     plan = _pg("diff", backup_paths=["/b/base/a_FULL", "/b/base/b_INCR"])["plan"]
 
-    assert [p for p in plan["stage"] if "a_FULL" in p] and [p for p in plan["stage"] if "b_INCR" in p]
-    assert all("docker cp" in step for step in plan["stage"])
+    assert "-v /b/base/a_FULL:/b/base/a_FULL:ro" in plan["combine"]
+    assert "-v /b/base/b_INCR:/b/base/b_INCR:ro" in plan["combine"]
+    assert not [step for step in plan.values() if "docker cp" in step]
 
 
 def test_staging_replaces_a_previous_copy_rather_than_copying_into_it():
     """``docker cp`` into an existing directory nests the copy, and keeping the old one pins the
-    restore to whatever was staged first - pieces deleted at the source get read hours later."""
-    stage = _pg("diff", backup_paths=["/b/base/a_FULL", "/b/base/b_INCR"])["plan"]["stage"][0]
+    restore to whatever was staged first - pieces deleted at the source get read hours later.
+    (Still how a WAL directory reaches a RUNNING container for a separate log step, and how an
+    Oracle duplicate reaches its backup location.)"""
+    from db_ops.common.hostcmd import parse_host
+    from db_ops.common.restorestep.postgresql import _stage_command
+
+    stage = _stage_command(parse_host({"runtime": "docker", "host": "h", "container": "c"}),
+                           "/b/base/a_FULL")
 
     assert "rm -rf /b/base/a_FULL" in stage
     assert stage.index("rm -rf") < stage.index("docker cp")
@@ -296,7 +305,7 @@ def test_the_data_directory_contents_are_replaced_not_the_directory():
     directory - but it owns what is inside. `rm -rf $PGDATA` simply fails."""
     plan = _pg("diff", backup_paths=["/b/base/a_FULL", "/b/base/b_INCR"])["plan"]
 
-    assert "/var/lib/postgresql/data/*" in plan["swap"]
+    assert "find /var/lib/postgresql/data -mindepth 1 -maxdepth 1 -exec rm -rf" in plan["swap"]
     assert "rm -rf /var/lib/postgresql/data " not in plan["swap"]
 
 
@@ -306,7 +315,16 @@ def test_nothing_is_written_as_root():
     plan = _pg("diff", backup_paths=["/b/base/a_FULL", "/b/base/b_INCR"])["plan"]
 
     assert "-u postgres" in plan["combine"] and "-u postgres" in plan["swap"]
+    assert "-u 0" not in plan["combine"] and "-u 0" not in plan["swap"]
     assert "chown" not in plan["combine"] and "chown" not in plan["swap"]
+
+
+def test_a_dry_run_does_not_connect():
+    """A plan is something to read before anything happens, including before an SSH login: the
+    image is read at run time, and the plan names it by its container."""
+    plan = _pg("diff", backup_paths=["/b/base/a_FULL", "/b/base/b_INCR"])["plan"]
+
+    assert "'<image of c>'" in plan["combine"]
 
 
 def test_a_path_a_volume_already_serves_is_never_copied_or_deleted():

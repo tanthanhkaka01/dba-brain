@@ -61,7 +61,6 @@ def plan_backup(spec: BackupSpec) -> dict[str, Any]:
         "container": spec.host.container,
         "env_names": sorted(spec.env),
         "timeout": spec.timeout,
-        "server_metadata": dict(spec.server_metadata) or None,
     }
 
 
@@ -95,34 +94,7 @@ def run_backup(spec: BackupSpec) -> dict[str, Any]:
 
     result = {**planned, "status": status, "exit_code": exit_code, "duration_ms": _ms(started),
               "stdout": out, "stderr": err, "error": error, "receipt": receipt}
-    if spec.server_metadata:
-        result["server_metadata_result"] = _export_server_metadata(spec, backup_ok=status == "done")
     return result
-
-
-def _export_server_metadata(spec: BackupSpec, *, backup_ok: bool) -> dict[str, Any]:
-    """Export the instance's server-level metadata beside the backup. Read-only, and never fatal.
-
-    **A failure here does not fail the backup.** The data is the thing that must not be lost, and
-    losing it to a metadata step that could not read ``sys.credentials`` would be absurd — the
-    result is reported alongside so the gap is visible without being destructive.
-
-    Skipped when the backup itself failed: a bundle describing an instance whose backup did not
-    complete is a set of files that look like a matched pair and are not.
-    """
-    if not backup_ok:
-        return {"ok": False, "skipped": True,
-                "error": "backup did not complete; no metadata exported"}
-    from db_ops.common import sqlserver_instance
-
-    request = {"target": spec.server_metadata["target"],
-               "output_dir": spec.server_metadata["output_dir"]}
-    if spec.server_metadata.get("include"):
-        request["include"] = spec.server_metadata["include"]
-    try:
-        return sqlserver_instance.export_instance(request)
-    except Exception as exc:  # noqa: BLE001 - reported next to the backup, never fatal to it.
-        return {"ok": False, "error": str(exc), "operation": "sqlserver-export-instance"}
 
 
 def _ms(started: float) -> int:

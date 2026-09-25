@@ -91,7 +91,7 @@ USAGE_COMMAND = """usage: python -m db_ops.common.cli sql-command-add <json>|@<f
 Registers WHAT a SQL task runs, in data/sql_commands.json. Where it runs is sql-target-add.
 
   {"display_name": "Drain the working-hour queue", // required (sql_name is still read)
-   "db_type": "sqlserver",                          // required: sqlserver|oracle (what a task can run on)
+   "db_type": "sqlserver",                          // required: sqlserver|oracle|postgresql
    "script_type": "single",                         // single (default) | array | folder
    "script_path": "assets/tasks/sqlserver/030_x.sql",   // single/folder: a file that EXISTS
    "sql_text": "SELECT 1;",                         // ...or the SQL itself, and db_ops writes
@@ -301,6 +301,13 @@ def add_sql_command(request: dict[str, Any], *, data_dir: str | Path | None = No
             f"db_type {db_type!r} is a valid engine for this estate, but a scheduled SQL task can "
             f"only be run on {SQL_TASK_DB_TYPES}. The task would register and then fail at its "
             f"first run with 'Unsupported db_type: {db_type}'.")
+    if db_type == "postgresql" and request.get("parameters"):
+        # A task's parameters are T-SQL `DECLARE @name` lines put in front of the script, which
+        # PostgreSQL cannot read. Refused here, by name, rather than at the task's first run.
+        raise SqlTaskAdminError(
+            "a postgresql task takes no parameters yet: they are declared as T-SQL `DECLARE @name` "
+            "lines, which PostgreSQL cannot read. Write the values into the script, or run it on "
+            "sqlserver.")
     sql_name = str(request.get("display_name") or "").strip()
     if not sql_name:
         raise SqlTaskAdminError("display_name is required - the sentence a person reads for this "

@@ -2,7 +2,7 @@
 already configured with.
 
 This is the manual-operations primitive. Every db_ops app that moves files does it as part of a
-larger job — ``backup_restore.transfer`` syncs a whole backup directory between two remote hosts,
+larger job — ``common.backup_copy`` syncs a whole backup directory between two remote hosts,
 ``backup_restore.copy_backup`` pulls a window of backups off an SMB share — and neither can answer
 "put *this* file *there*". So that ended up being typed by hand as ``ssh``/``scp``/``docker cp``,
 which is exactly the shape the repo has been burned by before: a throwaway command answers once
@@ -10,7 +10,7 @@ and takes its target resolution and its edge cases with it.
 
 **Not a replacement for the backup transfers.** Per-file SFTP across two internet hops measured
 10 KB/s here — about eight hours for the ~3900-file PostgreSQL backup set, which is why
-:mod:`db_ops.backup_restore.transfer` streams a whole directory as a single ``tar`` instead.
+:mod:`db_ops.common.backup_copy` streams a whole directory as a single ``tar`` instead.
 Routing bulk staging through this module would reintroduce that, and would also stage the bytes
 on the intermediate host's disk rather than passing them through in 256 KB chunks. Use it for a
 handful of files you can name: a backup piece to inspect, a script to place, a log to collect.
@@ -54,12 +54,12 @@ from typing import Any
 
 from db_ops.common import host_ops
 from db_ops.common.remote_exec import RemoteExecError
+from db_ops.common.ssh_relay import PARTIAL_SUFFIX, RelayError, relay
+from db_ops.common.ssh_relay import atomic_replace as _atomic_replace
+from db_ops.common.ssh_relay import remote_size as _remote_size
 from db_ops.lib.paths import TOOL_ROOT  # noqa: F401 - one definition, see that module
 from db_ops.lib.paths import resolve_tool_path
 
-
-#: Written beside the destination while the bytes are in flight, then renamed onto it.
-PARTIAL_SUFFIX = ".dbops_partial"
 
 STATUS_COPIED = "COPIED"
 STATUS_REPLACED = "REPLACED"
@@ -97,15 +97,6 @@ def _require(request: dict[str, Any], field: str) -> str:
 def _open(request: dict[str, Any], *, data_dir, secrets):
     target = host_ops.resolve_host(request, data_dir=data_dir)
     return target, host_ops.open_host_session(target, data_dir=data_dir, secrets=secrets)
-
-
-def _remote_size(session, path: str) -> int | None:
-    try:
-        return int(session.sftp().stat(str(PurePosixPath(path))).st_size)
-    except FileNotFoundError:
-        return None
-    except OSError:
-        return None
 
 
 def _result(*, target, status, local_path: Path, remote_path: str, size: int, started: float,
@@ -239,26 +230,6 @@ def send_file(request: dict[str, Any], *, data_dir=None, secrets=None) -> dict[s
         raise FileTransferError(f"{target.describe()}: {exc}") from exc
     finally:
         session.close()
-
-
-def _atomic_replace(session, staged: str, destination: str) -> None:
-    """Move ``staged`` onto ``destination`` in one step where the server supports it.
-
-    Same rule and same fallback as ``backup_restore.transfer``: prefer the OpenSSH
-    ``posix-rename`` extension, which overwrites in a single syscall, and only fall back to
-    remove-then-rename when the server lacks it.
-    """
-    sftp = session.sftp()
-    try:
-        sftp.posix_rename(staged, destination)
-        return
-    except (IOError, OSError, AttributeError):
-        pass
-    try:
-        sftp.remove(destination)
-    except (IOError, OSError):
-        pass
-    sftp.rename(staged, destination)
 
 
 # --------------------------------------------------------------------------- #
@@ -521,41 +492,8 @@ def _pack_local(*, archive_path, fmt, files, folder, include, overwrite, checksu
 # done: the two hosts are not assumed to reach each other, and an SSH trust created between two
 # database hosts to serve one file move is a permanent widening of access for a temporary need.
 # The orchestrator already holds both credentials, so it is the one place that can bridge them
-# without creating anything. Same reasoning as ``backup_restore.transfer``, which is where the
+# without creating anything. Same reasoning as ``common.backup_copy``, which is where the
 # streaming shape below comes from.
-
-_RELAY_CHUNK = 1 << 18
-
-
-class _Drained:
-    """Read a channel's stderr on its own thread for the whole transfer.
-
-    Nothing reads these streams until after ``recv_exit_status()``, which cannot be reached
-    while the copy is still running — so a command that complains on every chunk fills its
-    stderr window, blocks on the write, stops reading stdin, and the pipeline seizes with no
-    error anywhere. ``backup_restore.transfer`` learned that by sitting at RUNNING for two
-    hours; the lesson applies to one file exactly as it did to four thousand.
-    """
-
-    def __init__(self, handle) -> None:
-        import threading
-
-        self._chunks: list[str] = []
-        self._thread = threading.Thread(target=self._pump, args=(handle,), daemon=True)
-        self._thread.start()
-
-    def _pump(self, handle) -> None:
-        try:
-            for line in handle:
-                self._chunks.append(
-                    line if isinstance(line, str) else line.decode("utf-8", "replace"))
-        except Exception:  # noqa: BLE001 - diagnostics must never raise over the real error
-            pass
-
-    def text(self) -> str:
-        self._thread.join(timeout=5)
-        return "".join(self._chunks)
-
 
 def relay_file(request: dict[str, Any], *, data_dir=None, secrets=None) -> dict[str, Any]:
     """Copy one file from one host to another, streaming through here without staging.
@@ -596,72 +534,13 @@ def relay_file(request: dict[str, Any], *, data_dir=None, secrets=None) -> dict[
                     "supported. Use fetch-file then send-file for that hop."
                 )
 
-        size = _remote_size(src_session, source_path)
-        if size is None:
-            raise FileTransferError(
-                f"{src_target.describe()}: {source_path} does not exist or is not readable as "
-                f"{src_target.access.get('username') or 'the configured user'}."
-            )
-        if not overwrite and _remote_size(dst_session, dest_path) is not None:
-            raise FileTransferError(
-                f"{dst_target.describe()}: {dest_path} already exists; pass "
-                '"overwrite": true to replace it.'
-            )
-
-        # Hash the source BEFORE the stream, not after: a file still being written by whatever
-        # produced it would otherwise hash one set of bytes and send another, and the mismatch
-        # would be blamed on the network.
-        source_sha = _run_checked(
-            src_session, f"sha256sum {shlex.quote(source_path)}",
-            what="sha256sum", target=src_target).split()[0]
-
-        staged = f"{dest_path}{PARTIAL_SUFFIX}"
-        directory = str(PurePosixPath(dest_path).parent)
-        prefix = f"mkdir -p {shlex.quote(directory)} && " if make_dirs else ""
-
-        src_in, src_out, src_err = src_session.client.exec_command(
-            f"cat {shlex.quote(source_path)}", timeout=None)
-        dst_in, dst_out, dst_err = dst_session.client.exec_command(
-            f"{prefix}cat > {shlex.quote(staged)}", timeout=None)
-        src_errors, dst_errors = _Drained(src_err), _Drained(dst_err)
-        moved = 0
         try:
-            src_in.close()
-            while True:
-                chunk = src_out.read(_RELAY_CHUNK)
-                if not chunk:
-                    break
-                dst_in.write(chunk)
-                moved += len(chunk)
-            dst_in.flush()
-            dst_in.channel.shutdown_write()
-            src_rc = src_out.channel.recv_exit_status()
-            dst_rc = dst_out.channel.recv_exit_status()
-        finally:
-            for handle in (src_in, dst_in):
-                try:
-                    handle.close()
-                except Exception:  # noqa: BLE001
-                    pass
-        if src_rc != 0 or dst_rc != 0:
-            detail = (src_errors.text() + dst_errors.text()).strip()
-            raise FileTransferError(
-                f"relay {source_path} -> {dest_path} failed (source exit {src_rc}, destination "
-                f"exit {dst_rc}): {detail[:400]}"
-            )
-
-        dest_sha = _run_checked(
-            dst_session, f"sha256sum {shlex.quote(staged)}",
-            what="sha256sum", target=dst_target).split()[0]
-        if dest_sha != source_sha:
-            # Leave nothing behind under either name: a corrupt .partial that a later run
-            # mistakes for a resumable transfer is the failure this check exists to prevent.
-            dst_session.run(f"rm -f {shlex.quote(staged)}")
-            raise FileTransferError(
-                f"relay {source_path} -> {dest_path}: sha256 mismatch (source {source_sha}, "
-                f"destination {dest_sha}); the copy was discarded."
-            )
-        _atomic_replace(dst_session, staged, dest_path)
+            streamed = relay(src_session, dst_session, source_path, dest_path,
+                             overwrite=overwrite, make_dirs=make_dirs,
+                             source_name=src_target.describe(), dest_name=dst_target.describe(),
+                             source_user=str(src_target.access.get("username") or ""))
+        except RelayError as exc:
+            raise FileTransferError(str(exc)) from exc
 
         return {
             "ok": True,
@@ -671,9 +550,9 @@ def relay_file(request: dict[str, Any], *, data_dir=None, secrets=None) -> dict[
                        "path": source_path},
             "destination": {"server_id": dst_target.server_id, "host": dst_target.host,
                             "path": dest_path},
-            "size_bytes": int(moved),
-            "sha256": source_sha,
-            "verified": True,
+            "size_bytes": streamed["size_bytes"],
+            "sha256": streamed["sha256"],
+            "verified": streamed["verified"],
             "duration_ms": int((time.monotonic() - started) * 1000),
         }
     finally:

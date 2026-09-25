@@ -17,9 +17,9 @@ import types
 
 import pytest
 
-from db_ops.sre.docker_db import provisioner
-from db_ops.sre.docker_db.models import DockerDbSpec
-from db_ops.sre.docker_db.provisioner import ProvisionError
+from db_ops.common.docker_db import provisioner
+from db_ops.lib.docker_db_spec import DockerDbSpec
+from db_ops.common.docker_db.provisioner import ProvisionError
 
 SPEC = DockerDbSpec(name="pg_lab", engine="postgres", version="18", host_port=5432, password_env="X")
 

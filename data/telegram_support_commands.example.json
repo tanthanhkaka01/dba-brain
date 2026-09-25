@@ -1129,6 +1129,15 @@
                         "argv": [
                             "--install-docker"
                         ]
+                    },
+                    {
+                        "parameter": "backup_ready",
+                        "equals": "yes",
+                        "argv": [
+                            "--backup-mount",
+                            "/opt/db_ops/backup"
+                        ],
+                        "_note": "Without it a lab created from the bot could be backed up only after a DBA had prepared it by hand, and an HA lab never (2026-09-24). The mount is the tool's default path; --backup-mount with any other path is the CLI's."
                     }
                 ],
                 "env_from_parameters": {
@@ -1161,9 +1170,9 @@
                         "position": 2,
                         "required": true,
                         "validator": "regex",
-                        "pattern": "postgres|mysql|mssql|oracle",
-                        "validation_error": "engine must be one of: postgres, mysql, mssql, oracle",
-                        "prompt_text": "Engine? postgres / mysql / mssql / oracle",
+                        "pattern": "postgres|mysql|mssql|oracle|oracle-xe",
+                        "validation_error": "engine must be one of: postgres, mysql, mssql, oracle, oracle-xe",
+                        "prompt_text": "Engine? postgres / mysql / mssql / oracle / oracle-xe (Oracle XE 11g R2)",
                         "input_type": "choice",
                         "allow_text_input": false,
                         "options": [
@@ -1182,6 +1191,10 @@
                             {
                                 "label": "oracle",
                                 "value": "oracle"
+                            },
+                            {
+                                "label": "oracle-xe",
+                                "value": "oracle-xe"
                             }
                         ]
                     },
@@ -1193,7 +1206,7 @@
                         "validator": "regex",
                         "pattern": "[A-Za-z0-9][A-Za-z0-9._-]{0,31}",
                         "validation_error": "version must be a Docker image tag, e.g. 18 / 8.4 / 2025-latest / 23.26.2",
-                        "prompt_text": "Version (Docker image tag)? postgres: 18 · mysql: 8.4 · mssql: 2022-latest or 2025-latest · oracle: 23.26.2 or latest (= 26ai; Oracle kept 23.26.x version numbers — there is NO '26'/'26ai' tag; gvenzl/oracle-free).\nNOTE for mssql: there is no bare-year tag — '2025' does not exist. Use 2025-latest, or a full tag like 2025-CU6-ubuntu-24.04."
+                        "prompt_text": "Version (Docker image tag)? postgres: 18 · mysql: 8.4 · mssql: 2022-latest or 2025-latest · oracle: 23.26.2 or latest (= 26ai; Oracle kept 23.26.x version numbers — there is NO '26'/'26ai' tag; gvenzl/oracle-free) · oracle-xe: 11 (11g R2, x86-64 only).\nNOTE for mssql: there is no bare-year tag — '2025' does not exist. Use 2025-latest, or a full tag like 2025-CU6-ubuntu-24.04."
                     },
                     {
                         "name": "mode",
@@ -1408,6 +1421,29 @@
                             "parameter": "deploy_target",
                             "not_equals": "worker"
                         }
+                    },
+                    {
+                        "name": "backup_ready",
+                        "source": "arg",
+                        "position": 16,
+                        "required": false,
+                        "validator": "regex",
+                        "pattern": "yes|no|-",
+                        "validation_error": "answer yes or no",
+                        "prompt_text": "Make the lab backup-ready? yes / no\nyes = mount /opt/db_ops/backup at the same path and prepare the database for backups (PostgreSQL archives WAL, Oracle runs ARCHIVELOG; HA labs mount it on the primary). Its backups then go under /opt/db_ops/backup/<name> - the backup entry's backup_dir. SQL Server mounts it either way. Skip = no.",
+                        "input_type": "choice",
+                        "allow_text_input": false,
+                        "allow_skip": true,
+                        "options": [
+                            {
+                                "label": "No",
+                                "value": "no"
+                            },
+                            {
+                                "label": "Yes - backup-ready",
+                                "value": "yes"
+                            }
+                        ]
                     }
                 ]
             }

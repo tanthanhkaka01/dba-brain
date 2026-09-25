@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from db_ops.common.restorestep import DIFF, FULL, LOG, RestoreStepError
+from db_ops.common.restorestep import DIFF, FULL, LOG, RestoreStepError, moment_in_server_clock
 
 
 def _quote_name(name: str) -> str:
@@ -39,6 +39,11 @@ def build_statements(level: str, request: dict[str, Any], paths: list[str]) -> l
             f"stopat applies to a log restore only; SQL Server accepts it on a {level} and "
             "silently ignores it, which reads as a point-in-time restore that never happened."
         )
+    if stopat:
+        # In the server's clock, and without the offset: STOPAT refuses one outright - `Invalid
+        # value specified for STOPAT parameter` (Msg 3217) for every point-in-time restore from the
+        # bot, whose moments carry `+HH:MM` (the point-in-time drill, 2026-09-25).
+        stopat = moment_in_server_clock(stopat)
 
     move = request.get("move") or {}
     if move and level != FULL:

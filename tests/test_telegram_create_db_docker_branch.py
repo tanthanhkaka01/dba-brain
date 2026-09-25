@@ -64,10 +64,11 @@ def argv_for(command, args: list[str]) -> list[str]:
 # --------------------------------------------------------------------------- #
 def test_a_worker_deploy_is_never_asked_about_ssh(command) -> None:
     asked = questions_asked(command, ["lab01", "mssql", "2025-latest", "single",
-                                      "-", "-", "-", "worker", "no"])
+                                      "-", "-", "-", "worker", "no", "no"])
 
+    # backup_ready is asked for every target (1.31): a lab on the worker is backed up the same way.
     assert asked == ["name", "engine", "version", "mode", "host_port", "password_ref",
-                     "password_text", "deploy_target", "recreate"]
+                     "password_text", "deploy_target", "recreate", "backup_ready"]
     assert not [name for name in asked if name.startswith("remote_")]
     assert "install_docker" not in asked, "there is no remote VM to install docker on"
 

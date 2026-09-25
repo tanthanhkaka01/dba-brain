@@ -881,13 +881,15 @@ def _the_operator_s_passphrase_is_not_in_scope(monkeypatch):
     Found by an operator running the suite in the shell they had just used to start the daemon:
     `test_daemon_sets_secret_key_env_for_spawned_restore_command` failed with
 
-        assert 'Hdhsu#4s#834^sujdfh$%sgdf' == 'secret-phrase'
+        assert '<the estate's passphrase, in clear>' == 'secret-phrase'
 
     Two things were wrong and only one of them was the test. The daemon was preferring an
     inherited key over the `--key-base64` it had been given (fixed in `db_ops.jobs.daemon`), and
     the suite was reading the ambient environment at all — so a run's outcome depended on the
     shell, and a failure **printed the estate's passphrase into the test report**. A CI log is a
-    place that keeps things.
+    place that keeps things - and so is a docstring: this one quoted that failure verbatim, and the
+    passphrase shipped in every public tree and sdist from v0.4.3 (2026-08-27) until the 0.23.0
+    release run found it (2026-09-25). `check-secret-literals` now searches for the passphrase too.
 
     Cleared for every test rather than for the ones known to look: a test that starts reading it
     tomorrow gets the isolation without anybody remembering to ask for it.

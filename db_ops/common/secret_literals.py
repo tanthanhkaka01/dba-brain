@@ -23,6 +23,7 @@ the value it found has moved the leak into the log.
 
 from __future__ import annotations
 
+import base64
 import os
 from pathlib import Path
 from typing import Any, Iterable
@@ -33,6 +34,9 @@ from db_ops.lib.paths import TOOL_ROOT
 #: Below this, a "secret" is too short to be found reliably and too common to be meaningful — a
 #: four-character value collides with ordinary words and would report every file in the tree.
 MIN_SECRET_LENGTH = 8
+
+#: How a finding of the passphrase itself is named. Never the value: see `format_report`.
+PASSPHRASE_REF = "(the store passphrase)"
 
 #: Values that are real entries in the store and still not worth searching for, because they are
 #: what somebody types when a field is required and unused. Finding these proves nothing.
@@ -85,6 +89,14 @@ def _searchable(secrets: dict[str, str]) -> dict[str, str]:
     return out
 
 
+def passphrase_spellings(passphrase: str) -> list[str]:
+    """The passphrase as typed and as the base64 the CLIs take (`--key-base64`)."""
+    text = str(passphrase or "")
+    if len(text) < MIN_SECRET_LENGTH:
+        return []
+    return [text, base64.b64encode(text.encode("utf-8")).decode("ascii")]
+
+
 def scan(request: dict[str, Any] | None = None, *, data_dir: str | Path | None = None,
          key: str | None = None) -> dict[str, Any]:
     """Report every shipped file holding a value the secret store contains.
@@ -124,6 +136,11 @@ def scan(request: dict[str, Any] | None = None, *, data_dir: str | Path | None =
             f"{store} decrypted to no entries at all, so there is nothing to look for."
         )
     searchable = _searchable(secrets)
+    # The passphrase is the one secret the store cannot hold, so a search of the store's values
+    # never looked for it - and it shipped: a docstring in tests/conftest.py quoted a failure that
+    # printed it, public from v0.4.3 (2026-08-27) until the 0.23.0 release run (2026-09-25).
+    for spelling in passphrase_spellings(resolved_key):
+        searchable.setdefault(spelling, PASSPHRASE_REF)
 
     findings: list[dict[str, Any]] = []
     scanned = 0

@@ -400,6 +400,17 @@ import each other. `/spbot_list_sql_runs` is the same command from Telegram.
 The output is lines rather than JSON because its first reader is a person who has just been paged.
 A failed run carries the first line of its reason, so the answer does not require opening the store.
 
+### A task another scan finished is not run again
+
+`APP-SQL_TASKS` is `async`: while one scan is held by a slow task, the next scan takes the tasks
+behind it. `ux_sql_runs_claim` stops the two from running one task at the same time. It did not
+stop the first scan from running a task again once the second scan had finished it, because the
+claim holds only while a row is `running`. Each scan therefore records when it read its due list,
+and skips a task whose `run_key` has a run started since (`store.sql_run_started_since`, one
+indexed probe per task). The skip is logged as `sql_tasks.runner.task.taken_by_another_scan` and
+counted as skipped, like a refused claim. The backup/restore schedule test found the gap there
+on 2026-09-25 ([03](03_app_command_daemon.md), *A claim covers the work in flight*).
+
 ### Stale running rows
 
 Every scan begins with `mark_stale_running_sql_runs`. A run row still `running` past its target's
@@ -805,15 +816,66 @@ read-write `assets/` mount; sync it back to the master with `control worker-pull
 
 ## Which engines a task can run on
 
-`sqlserver` and `oracle`, named once in `db_ops/lib/sql_access.py` as `SQL_TASK_DB_TYPES` and read
-by both the runner's dispatch and the two registration commands.
+`sqlserver`, `oracle` and `postgresql`, named once in `db_ops/lib/sql_access.py` as
+`SQL_TASK_DB_TYPES` and read by both the runner's dispatch and the two registration commands.
 
 It is deliberately narrower than `KNOWN_DB_TYPES`, which is the config vocabulary for the whole
-estate: a PostgreSQL instance is perfectly legitimate there — metrics collect from it, and
-`backup_restore` backs it up. What no layer supports is *executing a task script* on one.
+estate: a MySQL instance is legitimate there, and metrics collect from it, but no task runs on one.
 
-The two were related only by a literal until 0.21.0, and the gap had a cost. On 2026-09-21 three
-probe tasks were registered with `db_type: "postgresql"`; `sql-command-add` accepted them,
-`check-references` passed them, and nothing said a word until the first came due nine hours later
-and errored `Unsupported db_type: postgresql` — on a soak node, where a wasted run costs clock.
-`sql-command-add` and `add-sql` now both refuse at registration, and widening the set is one edit.
+The set and the runner were related only by a literal until 0.21.0, and the gap had a cost. On
+2026-09-21 three probe tasks were registered with `db_type: "postgresql"`; `sql-command-add`
+accepted them, `check-references` passed them, and nothing said a word until the first came due
+nine hours later and errored `Unsupported db_type: postgresql` — on a soak node, where a wasted run
+costs clock. `sql-command-add` and `add-sql` now both refuse an engine outside the set at
+registration, and widening it is one edit.
+
+### PostgreSQL tasks (0.23.0)
+
+PostgreSQL joined on 2026-09-25, when the operator asked for tasks on all three engines. The task
+itself runs through `run-sql`, which already reached PostgreSQL. What did not work was a
+**script**:
+
+- **A script runs a statement at a time.** pg8000 runs a whole script in one execute and returns
+  one result set per execute. A task of `SELECT pg_sleep(1); INSERT ...; SELECT count(*) ...` came
+  back as one set holding both SELECTs' rows under the last one's column name, with
+  `affected_rows` 0 for the INSERT. `run-sql` now splits a PostgreSQL script on `;`
+  (`lib.sql_text.split_postgresql_statements`). A `;` inside a string, a quoted name, a comment or a
+  `$$` / `$tag$` body (a function, a `DO` block) is not a split. On the lab the same script came
+  back as two sets and `affected_rows 1`. Each set is stored the way a SQL Server task's are.
+- **A PostgreSQL task takes no parameters yet.** Parameters become T-SQL `DECLARE @name` lines in
+  front of the script, which PostgreSQL cannot read, so `sql-command-add` refuses one by name.
+  Write the values into the script.
+- **The whole task is one transaction**, as on the other engines: committed at the end, or run with
+  `autocommit: true` for a task that manages its own (`VACUUM`, `CREATE INDEX CONCURRENTLY`).
+- **`timeout` is the server's `statement_timeout`**, set per session by `db_connect`, so a
+  `pg_sleep(600)` task needs a `timeout` above 600. The client socket waits that long plus a
+  minute. Before 0.23.0 it waited only the connect timeout (30 s), so every PostgreSQL task
+  longer than that failed with *could not reach* ([13](13_common.md), `run-sql`).
+
+### Oracle task scripts
+
+An Oracle batch is **one** statement or one PL/SQL block. Separate them with `GO` lines:
+
+```sql
+BEGIN DBMS_SESSION.SLEEP(60); END;
+GO
+INSERT INTO sqltask_drill(task) VALUES ('ORA_1M');
+GO
+SELECT COUNT(*) AS n FROM sqltask_drill;
+```
+
+A statement's trailing `;` is dropped before it is sent (Oracle refuses it). A block keeps the one
+after its `END` (PL/SQL requires it). Until 0.23.0 every batch lost it, so a task with a block failed
+with PLS-00103 on every run ([13](13_common.md), `run-sql`). A task that sleeps or calls a
+procedure needs a block, so this was every such task.
+
+## The credential a target runs as (0.23.0)
+
+`credential_name` is looked up in `users.json` by `server_id` and `db_type`, then by `instance_name`
+(SID on Oracle). **On SQL Server `service_name` does not narrow the lookup** - it is a label there,
+the same rule the target's own lookup follows. It used to: three targets saying `SALES-PROD` against the
+server's `SALES-DEV` group failed *Credential not found* with the credential in the file. On Oracle,
+which connects by service, it still narrows. When the named credential exists in a group the target
+did not match, the failure says which group and why (*It is configured on <server>, in the group for
+service_name 'X', the target says 'Y'*), and the SQL task reports that reason, not only the name.
+

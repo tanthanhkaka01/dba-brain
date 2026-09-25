@@ -15,7 +15,7 @@ import subprocess
 
 import pytest
 
-from db_ops.backup_restore import transfer
+from db_ops.common import backup_copy as transfer
 
 
 class _Chan:
@@ -242,7 +242,7 @@ def test_prune_never_deletes_a_directory_that_is_empty_by_design():
     nobody had deleted at the source. A directory may only go when its whole subtree holds no
     file at all.
     """
-    from db_ops.backup_restore.transfer import prune_target_dir
+    from db_ops.common.backup_copy import prune_target_dir
 
     client = _CapturingClient()
     prune_target_dir(client, "/opt/db_ops/pg_restore_stage", 8 * 86400)
@@ -255,7 +255,7 @@ def test_prune_never_deletes_a_directory_that_is_empty_by_design():
 
 
 def test_prune_still_deletes_files_older_than_the_retention():
-    from db_ops.backup_restore.transfer import prune_target_dir
+    from db_ops.common.backup_copy import prune_target_dir
 
     client = _CapturingClient(stdout="7\n")
     result = prune_target_dir(client, "/stage", 2 * 86400)
@@ -265,7 +265,7 @@ def test_prune_still_deletes_files_older_than_the_retention():
 
 
 def test_prune_is_skipped_when_retention_is_disabled():
-    from db_ops.backup_restore.transfer import prune_target_dir
+    from db_ops.common.backup_copy import prune_target_dir
 
     client = _CapturingClient()
     result = prune_target_dir(client, "/stage", 0)
@@ -281,7 +281,7 @@ def test_the_prune_shell_command_really_keeps_the_piece_and_drops_the_husk(tmp_p
 
     Skipped on Windows: the command runs on the Linux restore target, and a Git-Bash harness
     resolves /tmp per invocation, so a green run here would prove nothing anyway."""
-    from db_ops.backup_restore.transfer import prune_target_dir
+    from db_ops.common.backup_copy import prune_target_dir
 
     root = "/tmp/dbops_prune_test"
     layout = (
@@ -314,3 +314,43 @@ def test_the_prune_shell_command_really_keeps_the_piece_and_drops_the_husk(tmp_p
     assert "/base/husk" not in rel                  # no file anywhere beneath it
     assert "/empty_top" not in rel
     assert "/wal/old.wal" not in rel                # older than the retention
+
+
+class _RemovingSftp(_Sftp):
+    def __init__(self, tree):
+        super().__init__(tree)
+        self.removed = []
+    def remove(self, path):
+        if not path.endswith(".db_ops_write_probe"):      # the writability probe
+            self.removed.append(path)
+
+
+def test_the_staging_copy_mirrors_the_source_and_drops_what_it_no_longer_has(monkeypatch):
+    """A source rebuilt under the same name left its previous life's pieces staged beside the new
+    ones; a gvenzl Oracle lab has the same DBID in every life, so RMAN mixed the two and a
+    point-in-time duplicate died on the old life's logs (RMAN-06054, 2026-09-25)."""
+    tree_src = {"/src": [("new_life.bkp", 100, False)]}
+    tree_dst = {"/dst": [("new_life.bkp", 100, False), ("old_life.bkp", 100, False)]}
+    target_sftp = _RemovingSftp(tree_dst)
+    monkeypatch.setattr(transfer, "_stream_files", lambda **kw: True)
+
+    result = transfer.sync_backup_dir(source_client=_Client(sftp=_Sftp(tree_src)), source_dir="/src",
+                                      target_client=_Client(sftp=target_sftp), target_dir="/dst")
+
+    assert target_sftp.removed == ["/dst/old_life.bkp"]
+    assert result.as_dict()["removed_absent_at_source"] == 1
+
+
+def test_a_file_the_source_still_has_stays_even_when_this_run_does_not_copy_it(monkeypatch):
+    """`include` narrows what one run COPIES, not what the staging folder may hold - an older point
+    in time needs pieces a newest-chain copy skipped."""
+    tree_src = {"/src": [("full_old.bak", 100, False), ("full_new.bak", 100, False)]}
+    tree_dst = {"/dst": [("full_old.bak", 100, False)]}
+    target_sftp = _RemovingSftp(tree_dst)
+    monkeypatch.setattr(transfer, "_stream_files", lambda **kw: True)
+
+    transfer.sync_backup_dir(source_client=_Client(sftp=_Sftp(tree_src)), source_dir="/src",
+                             target_client=_Client(sftp=target_sftp), target_dir="/dst",
+                             include=("full_new",))
+
+    assert target_sftp.removed == []

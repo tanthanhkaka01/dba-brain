@@ -24,7 +24,20 @@ The directory listing is the real one from the lab on 2026-08-04.
 
 from __future__ import annotations
 
-from db_ops.backup_restore import restore_script
+from db_ops.common import backup_copy
+
+
+# The chain moved into common with the copy (0.23.0); the job objects below are what the app
+# holds, and these two lines are how it hands their values over.
+def _transfer_include(job, client, source=None, point_in_time=""):
+    return backup_copy.chain_include(job.db_type, client, source_dir=job.source_backup_host_dir,
+                                     backup_dir=getattr(job, "backup_dir", ""),
+                                     container=source.container_name if source else "",
+                                     point_in_time=point_in_time)
+
+
+def _postgresql_chain_include(job, client):
+    return backup_copy.postgresql_chain_include(client, source_dir=job.source_backup_host_dir)
 
 
 LAB_LISTING = """\
@@ -75,7 +88,7 @@ class _Job:
 
 
 def test_only_the_newest_full_and_the_incrementals_after_it_are_copied():
-    include = restore_script._postgresql_chain_include(_Job("postgresql"), _FakeClient(LAB_LISTING))
+    include = _postgresql_chain_include(_Job("postgresql"), _FakeClient(LAB_LISTING))
     assert include == (
         "base/20260802T225227Z_FULL",
         "base/20260803T185512Z_INCR",
@@ -87,7 +100,7 @@ def test_only_the_newest_full_and_the_incrementals_after_it_are_copied():
 def test_the_older_chains_the_restore_will_never_read_are_left_behind():
     """14 of the lab's 17 backup directories belong to superseded chains. Those are the files
     that were being copied and pruned on every run."""
-    include = restore_script._postgresql_chain_include(_Job("postgresql"), _FakeClient(LAB_LISTING))
+    include = _postgresql_chain_include(_Job("postgresql"), _FakeClient(LAB_LISTING))
     copied = [prefix for prefix in include if prefix.startswith("base/")]
     assert len(copied) == 3
     assert "base/20260802T185220Z_FULL" not in include  # the previous full, same day
@@ -97,7 +110,7 @@ def test_the_older_chains_the_restore_will_never_read_are_left_behind():
 def test_the_wal_directory_always_travels_whole():
     """Which segments recovery needs is decided by PostgreSQL at replay time, not here — so the
     narrowing must never reach into wal/."""
-    include = restore_script._postgresql_chain_include(_Job("postgresql"), _FakeClient(LAB_LISTING))
+    include = _postgresql_chain_include(_Job("postgresql"), _FakeClient(LAB_LISTING))
     assert "wal/" in include
 
 
@@ -105,13 +118,13 @@ def test_a_source_with_no_full_backup_copies_everything_rather_than_guessing():
     """A narrowed copy that guessed wrong fails the restore; an un-narrowed one only costs
     bandwidth. When the listing cannot be trusted, spend the bandwidth."""
     only_incrementals = "/b/base/20260803T185512Z_INCR\n"
-    assert restore_script._postgresql_chain_include(
+    assert _postgresql_chain_include(
         _Job("postgresql"), _FakeClient(only_incrementals)) == ()
-    assert restore_script._postgresql_chain_include(_Job("postgresql"), _FakeClient("")) == ()
+    assert _postgresql_chain_include(_Job("postgresql"), _FakeClient("")) == ()
 
 
 def test_sqlserver_still_copies_the_whole_directory():
-    assert restore_script._transfer_include(_Job("sqlserver"), _FakeClient(LAB_LISTING)) == ()
+    assert _transfer_include(_Job("sqlserver"), _FakeClient(LAB_LISTING)) == ()
 
 
 # --------------------------------------------------------------------------- #
@@ -164,7 +177,7 @@ class _OracleJob:
 
 
 def test_oracle_copies_only_the_pieces_the_catalog_names():
-    include = restore_script._transfer_include(
+    include = _transfer_include(
         _OracleJob(), _OracleClient(), source=_OracleSource())
 
     assert include == (
@@ -178,7 +191,7 @@ def test_oracle_copies_only_the_pieces_the_catalog_names():
 
 def test_a_piece_outside_the_transferred_directory_is_not_included():
     """The catalog knows handles anywhere on the source - an FRA copy has no counterpart here."""
-    include = restore_script._transfer_include(
+    include = _transfer_include(
         _OracleJob(), _OracleClient(), source=_OracleSource())
 
     assert not any(name.endswith("-1d") for name in include)
@@ -187,7 +200,7 @@ def test_a_piece_outside_the_transferred_directory_is_not_included():
 def test_oracle_asks_rman_and_never_reads_the_file_names():
     """The guard on the whole design: the chain must come from RMAN, not from a directory listing."""
     client = _OracleClient()
-    restore_script._transfer_include(_OracleJob(), client, source=_OracleSource())
+    _transfer_include(_OracleJob(), client, source=_OracleSource())
 
     assert any("rman target" in c for c in client.commands)
     assert any("v$backup_piece" in c for c in client.commands)
@@ -196,23 +209,23 @@ def test_oracle_asks_rman_and_never_reads_the_file_names():
 
 def test_a_preview_that_names_no_pieces_copies_everything():
     """Spend the bandwidth rather than restore to an older point than the operator believes."""
-    assert restore_script._transfer_include(
+    assert _transfer_include(
         _OracleJob(), _OracleClient(preview="RMAN-06026: some targets not found\n"),
         source=_OracleSource()) == ()
 
 
 def test_a_catalog_answer_with_nothing_under_the_backup_dir_copies_everything():
-    assert restore_script._transfer_include(
+    assert _transfer_include(
         _OracleJob(), _OracleClient(handles="/somewhere/else/piece.bkp\n"),
         source=_OracleSource()) == ()
 
 
 def test_oracle_copies_everything_when_the_source_container_is_unknown():
     """Without a container there is nothing to ask, and guessing is what this must never do."""
-    assert restore_script._transfer_include(_OracleJob(), _OracleClient()) == ()
+    assert _transfer_include(_OracleJob(), _OracleClient()) == ()
 
 
 def test_postgresql_is_selected_by_db_type_whichever_spelling_config_uses():
     for spelling in ("postgresql", "postgres", "PostgreSQL"):
-        include = restore_script._transfer_include(_Job(spelling), _FakeClient(LAB_LISTING))
+        include = _transfer_include(_Job(spelling), _FakeClient(LAB_LISTING))
         assert include and include[-1] == "wal/"

@@ -217,9 +217,60 @@ def test_a_vendor_default_is_not_treated_as_an_estate_name() -> None:
     Scrubbing it would break the code that depends on the vendor's spelling, which is why the
     exclusion carries its reason rather than sitting in an unexplained set.
     """
-    for term in ("mssqlserver", "freepdb1", "free_sb"):
+    for term in ("mssqlserver", "freepdb1", "free_sb", "free"):
         assert term in identifier_scan.GENERIC_TERMS
         assert identifier_scan.GENERIC_TERMS[term], f"{term} is excluded without a stated reason"
+
+
+def test_an_oracle_free_labs_sid_is_not_searched_for(tmp_path) -> None:
+    """An Oracle Free lab's record says `"sid": "FREE"`. Harvested as a term, it matched every
+    `FREE_SPACE` and "free memory" in the tree and refused the 0.23.0 export (2026-09-25)."""
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "db_instances.json").write_text(json.dumps({"db_instances": [
+        {"server_id": "LAB-192-0-2-49-ORA-1521", "db_type": "oracle", "ip": "192.0.2.49",
+         "sid": "FREE", "instance_name": "FREE", "service_name": "FREEPDB1"}]}), encoding="utf-8")
+
+    terms = identifier_scan.collect_identifiers(data)
+
+    assert "LAB-192-0-2-49-ORA-1521" in terms
+    assert "FREE" not in terms and "FREEPDB1" not in terms
+
+
+def test_a_telegram_id_and_username_are_searched_for(tmp_path) -> None:
+    """The loaders take a file path first; passing the folder there made every Telegram read fail
+    in silence, and a person's id shipped in a test (found 2026-09-25)."""
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "db_instances.json").write_text(json.dumps({"db_instances": [
+        {"server_id": "ACME-192-0-2-77", "db_type": "sqlserver", "ip": "192.0.2.77"}]}),
+        encoding="utf-8")
+    (data / "telegram_users.json").write_text(json.dumps({"telegram_users": [
+        {"user_id": "700000123", "username": "someone_real_42", "user_type": 0}]}), encoding="utf-8")
+    (data / "telegram_groups.json").write_text(json.dumps({"telegram_groups": [
+        {"group_id": "-100700000456", "group_name": "x"}]}), encoding="utf-8")
+
+    terms = identifier_scan.collect_identifiers(data)
+
+    assert terms.get("700000123") == "person" and terms.get("someone_real_42") == "person"
+    assert terms.get("-100700000456") == "chat"
+
+
+def test_a_persons_id_in_a_shipped_file_is_a_hit_not_a_review(tmp_path) -> None:
+    """Digits with no separator read as an ordinary number by shape; a person's id is not one."""
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "db_instances.json").write_text(json.dumps({"db_instances": [
+        {"server_id": "ACME-192-0-2-77", "db_type": "sqlserver", "ip": "192.0.2.77"}]}),
+        encoding="utf-8")
+    (data / "telegram_users.json").write_text(json.dumps({"telegram_users": [
+        {"user_id": "700000123", "username": "someonereal", "user_type": 0}]}), encoding="utf-8")
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "test_x.py").write_text('USER = {"user_id": "700000123"}\n', encoding="utf-8")
+
+    outcome = identifier_scan.scan({"root": str(tmp_path), "paths": ["pkg"]}, data_dir=data)
+
+    assert outcome["hits"] == 1
 
 
 def test_every_exclusion_states_why() -> None:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from db_ops.sre.docker_db.models import (
+from db_ops.lib.docker_db_spec import (
     ENGINE_META,
     HA_SUPPORTED_ENGINES,
     VALID_ENGINES,

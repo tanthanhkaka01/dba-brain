@@ -16,7 +16,7 @@ from db_ops.common.data_sources import REGISTRY_FILENAME  # noqa: F401 - one def
 import json
 from pathlib import Path
 
-from db_ops.sre.docker_db.models import DockerDbSpec
+from db_ops.lib.docker_db_spec import DockerDbSpec
 
 REGISTRY_ROOT_KEY = "docker_db_connections"
 CREATED_BY = "db_ops.sre.create-db-docker"

@@ -88,6 +88,17 @@ ALL_COMMANDS = [
 #: and has checks of its own (below), and the drift guard counts these too.
 STDIN_ONLY_COMMANDS = [
     "secret-set",       # 2026-09-11: one secret into the encrypted store, never in clear
+    # 0.23.0, moved from the sre app: a database password and one or two SSH passwords, resolved
+    # by the caller, travel in the request.
+    "create-db-docker",
+    "move-db-docker",
+    # 0.23.0 (1.38): the SMB restore's sqlcmd batches - a SQL password and a host password.
+    "run-sqlcmd",
+    # 0.23.0 (1.48): a restore's copy and staging cleanup, split out of the app - SSH passwords
+    # for one or both hosts.
+    "backup-chain",
+    "copy-backup-dir",
+    "prune-staged-backups",
 ]
 
 

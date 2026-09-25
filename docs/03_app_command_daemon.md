@@ -156,8 +156,36 @@ or `sync` app command). The second process is told the work is taken and moves t
 duplicate production SQL runs and the 2026-09-14 second restore, both of which were guarded only by
 a SELECT taken before the decision.
 
+**A claim covers the work in flight, not the work done.** The unique index holds only while a
+row is `running`. A run lists what is due, then works through the list; an overlapping run 30 s
+later takes what the first has not reached yet. Once the second has **finished** such a job, the
+first used to run it again when it got there: the claim had nothing left to refuse. Driving the
+real `run_backup` showed it, `['LONG_A', 'SHORT_B (by the other run)', 'SHORT_B']` (2026-09-25),
+and the SQL task scan had the same gap - on a production target, the same SQL twice.
+
+Since then a scheduled run asks again just before each claim, with one indexed probe per key,
+whether another run has started this job since the list was read:
+`store.job_run_started_since` for backups and restores (`backup_restore.schedule.taken_since`),
+`store.sql_run_started_since` for SQL tasks. It skips the job if so. An explicit `--force` still
+runs what it was asked to.
+
 **`max_parallel` is a brake, not a tuning knob.** `APP-SQL_TASKS` is due every second; uncapped,
 `async` would start a process per second for as long as the first one runs.
+
+It is still the number of tasks that can run at once, because each run works through its list one
+task at a time. Measured on 2026-09-25 with nine SQL tasks of 10, 5 and 1 minutes, all due again
+10 s after they start:
+
+| `max_parallel` | At once | A 1-minute task waited between runs | Longest single run of the app |
+| --- | --- | --- | --- |
+| 4 (shipped) | 4 | up to 848 s | 966 s: it chained a 10- and a 5-minute task |
+| 10 | 9, one per task | 0-5 s | one task |
+
+Raise it to the number of long tasks that must not wait behind each other, and no higher: each run
+is a process with a database session. Keep the app's `timeout` above the longest chain a run can
+take, because the daemon's kill at the timeout leaves the statement running on the server
+([05](05_sql_task_runner.md), *Stale running rows*). `app-command-set` changes it on a running node;
+the daemon reads it at its next pass.
 
 A `sync` command still claims its own id, so a second daemon on the host — or a child that outlived
 its daemon — cannot start a duplicate either. An `async` command claims nothing, because being

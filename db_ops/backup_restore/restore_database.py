@@ -459,6 +459,12 @@ def build_checkdb_sql(candidate: RestoreCandidate) -> str:
 
 
 def build_sqlcmd_query_command(*, sql: str, config: BackupRestoreConfig) -> list[str]:
+    command = _SqlcmdCommand(_sqlcmd_argv(sql=sql, config=config))
+    command.sql = sql
+    return command
+
+
+def _sqlcmd_argv(*, sql: str, config: BackupRestoreConfig) -> list[str]:
     sql_auth_args = _build_sqlcmd_auth_args(config)
     timeout_args = [
         "-l",
@@ -1512,57 +1518,101 @@ def ensure_vm_share_credential(config: BackupRestoreConfig) -> None:
         subprocess.run(cmd, check=True, text=True)
 
 
-def _run_sqlcmd_via_ssh(cmd: list[str], config: BackupRestoreConfig) -> subprocess.CompletedProcess[str]:
-    """Execute sqlcmd on a Linux target via SSH (paramiko). cmd is the sentinel list from build_sqlcmd_query_command."""
-    _assert_sql_command_target(cmd, config)
-    sql = cmd[3]
-    sql_auth_args = _build_sqlcmd_auth_args(config)
-    auth_str = " ".join(shlex.quote(a) for a in sql_auth_args)
-    remote_cmd = (
-        "export PATH=$PATH:/opt/mssql-tools/bin:/opt/mssql-tools18/bin; "
-        f"{shlex.quote(config.sqlcmd_path)} "
-        f"-S {shlex.quote(config.restore_sql_instance_on_vm)} "
-        f"-C {auth_str} "
-        f"-l {config.sql_login_timeout_seconds} "
-        f"-t {config.sql_query_timeout_seconds} -b "
-        f"-Q {shlex.quote(sql)}"
-    )
-    with open_ssh_connection(config) as ssh:
-        chan = ssh.get_transport().open_session(
-            timeout=config.remote_command_timeout_seconds or None
+def _sql_of(cmd: list[str]) -> str:
+    """The batch inside a command :func:`build_sqlcmd_query_command` made, in any of its shapes."""
+    if cmd and cmd[0] == "__ssh_sqlcmd__":
+        return str(cmd[3])
+    if "-Q" in cmd:
+        return str(cmd[cmd.index("-Q") + 1])
+    # The Invoke-Command argv carries the batch inside its script; build_sqlcmd_query_command
+    # records it on the list it returns.
+    sql = getattr(cmd, "sql", None)
+    if sql is None:
+        raise RuntimeError("no SQL batch found in the sqlcmd command.")
+    return str(sql)
+
+
+class _SqlcmdCommand(list):
+    """The argv :func:`build_sqlcmd_query_command` returns, which also remembers its batch.
+
+    A list, so everything that compared or asserted its shape still does; the batch rides along
+    because the PowerShell shape buries it inside a script, and ``common.cli run-sqlcmd`` is handed
+    the batch and its context as values, not a command line to reverse-engineer."""
+
+    sql: str = ""
+
+
+def _sqlcmd_request(cmd: list[str], config: BackupRestoreConfig, *, via: str) -> dict[str, object]:
+    """The ``run-sqlcmd`` request for one batch, every value resolved here - ``common`` reads none."""
+    auth = _build_sqlcmd_auth_args(config)
+    username, password = (auth[1], auth[3]) if auth[:1] == ["-U"] else ("", "")
+    request: dict[str, object] = {
+        "sql": _sql_of(cmd),
+        "instance": config.restore_sql_instance_on_vm,
+        "sqlcmd_path": config.sqlcmd_path,
+        "username": username,
+        "password": password,
+        "login_timeout_seconds": config.sql_login_timeout_seconds,
+        "query_timeout_seconds": config.sql_query_timeout_seconds,
+        "timeout_seconds": config.restore_command_timeout_seconds,
+        "via": via,
+    }
+    if via != "local":
+        host_password = ""
+        if config.vm_password_env and (via == "ssh" or config.vm_username):
+            host_password = resolve_password_ref(config.vm_password_env)
+            if not host_password:
+                raise RuntimeError(
+                    f"Password ref not found in environment or secret_text.json: {config.vm_password_env}")
+        request["host"] = {
+            "host": config.vm_credential_target,
+            "username": config.vm_username,
+            "password": host_password,
+            "open_timeout_seconds": config.remote_command_timeout_seconds,
+        }
+    return request
+
+
+def _local_request_from_argv(cmd: list[str], *, timeout_seconds: int) -> dict[str, object]:
+    """A local ``sqlcmd`` argv, read back into a request - for a caller with no restore config."""
+    def after(flag: str, default: str = "") -> str:
+        return str(cmd[cmd.index(flag) + 1]) if flag in cmd else default
+
+    return {"sql": _sql_of(cmd), "instance": after("-S"), "sqlcmd_path": str(cmd[0]),
+            "username": after("-U"), "password": after("-P"),
+            "login_timeout_seconds": int(after("-l", "30")), "query_timeout_seconds": int(after("-t", "0")),
+            "timeout_seconds": timeout_seconds, "via": "local"}
+
+
+def _sqlcmd_in_common(request: dict[str, object], *, cmd: list[str]) -> subprocess.CompletedProcess[str]:
+    """Run one batch through ``common.cli run-sqlcmd`` (1.38) and hand it back as the process it was.
+
+    The restore's statements used to run here - an SSH channel of the app's own, a local
+    PowerShell, a local ``sqlcmd``. They run in ``common`` now, which reads no configuration: this
+    app resolved every value above. What an answer MEANS - a failure hidden in exit code 0, a
+    connection lost mid-RESTORE LOG - is still decided by the caller of this function, unchanged.
+    stderr streams: ``sqlcmd``'s *percent processed* reaches this process's log as it happens.
+    """
+    from db_ops.lib import common_cli
+
+    ok, data, error = common_cli.run_allowing_failure("run-sqlcmd", request, stream_stderr=True)
+    if not ok:
+        raise RuntimeError(f"sqlcmd could not be run ({request.get('via')}): {error}")
+    if data.get("timed_out"):
+        raise RestoreCommandTimeoutError(
+            f"Restore command timed out after {request.get('timeout_seconds')} seconds.",
+            command_started=True,
         )
-        chan.exec_command(remote_cmd)
-        deadline = (
-            time.monotonic() + config.restore_command_timeout_seconds
-            if config.restore_command_timeout_seconds > 0
-            else None
-        )
-        stdout_data = b""
-        stderr_data = b""
-        while not chan.exit_status_ready():
-            if chan.recv_ready():
-                stdout_data += chan.recv(4096)
-            if chan.recv_stderr_ready():
-                stderr_data += chan.recv_stderr(4096)
-            if deadline is not None and time.monotonic() >= deadline:
-                chan.close()
-                raise RestoreCommandTimeoutError(
-                    f"Restore command timed out after {config.restore_command_timeout_seconds} seconds.",
-                    command_started=True,
-                )
-            time.sleep(0.05)
-        # drain remaining
-        while chan.recv_ready():
-            stdout_data += chan.recv(4096)
-        while chan.recv_stderr_ready():
-            stderr_data += chan.recv_stderr(4096)
-        returncode = chan.recv_exit_status()
+    exit_code = data.get("exit_code")
     return subprocess.CompletedProcess(
-        args=cmd,
-        returncode=returncode,
-        stdout=stdout_data.decode("utf-8", errors="replace"),
-        stderr=stderr_data.decode("utf-8", errors="replace"),
-    )
+        cmd, 1 if exit_code is None else int(exit_code),
+        str(data.get("stdout") or ""), str(data.get("stderr") or ""))
+
+
+def _run_sqlcmd_via_ssh(cmd: list[str], config: BackupRestoreConfig) -> subprocess.CompletedProcess[str]:
+    """``sqlcmd`` on a Linux target over SSH. ``cmd`` is the sentinel list from build_sqlcmd_query_command."""
+    _assert_sql_command_target(cmd, config)
+    return _sqlcmd_in_common(_sqlcmd_request(cmd, config, via="ssh"), cmd=cmd)
 
 
 def run_sqlcmd_query_command(
@@ -1657,72 +1707,61 @@ def _execute_sqlcmd_once(
     if cmd and cmd[0] == "__ssh_sqlcmd__":
         if config is None:
             raise RuntimeError("config is required for SSH sqlcmd execution.")
-        return _run_sqlcmd_via_ssh(cmd, config)
-    if logger and progress_step:
-        return _run_sqlcmd_query_command_streaming(
-            cmd,
-            logger=logger,
-            progress_step=progress_step,
-            progress_database=progress_database or "unknown",
-            restore_id=restore_id,
-            timeout_seconds=timeout_seconds,
-        )
-    try:
-        return subprocess.run(
-            cmd,
-            capture_output=True,
-            check=False,
-            text=True,
-            timeout=timeout_seconds or None,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise RestoreCommandTimeoutError(
-            f"Restore command timed out after {timeout_seconds} seconds.",
-            command_started=True,
-        ) from exc
+        result = _run_sqlcmd_via_ssh(cmd, config)
+        # The Linux path logged no progress at all until 0.23.0; it has the same answer to read.
+        _log_restore_progress(result, logger=logger, progress_step=progress_step or "sql",
+                              progress_database=progress_database or "unknown", restore_id=restore_id)
+        return result
+    return _run_sqlcmd_query_command_streaming(
+        cmd,
+        logger=logger,
+        progress_step=progress_step or "sql",
+        progress_database=progress_database or "unknown",
+        restore_id=restore_id,
+        timeout_seconds=timeout_seconds,
+        config=config,
+    )
 
 
 def _run_sqlcmd_query_command_streaming(
     cmd: list[str],
     *,
-    logger: object,
+    logger: object | None,
     progress_step: str,
     progress_database: str,
     restore_id: str = "",
     timeout_seconds: int = 0,
+    config: BackupRestoreConfig | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    process = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
-    stdout_lines: list[str] = []
-    assert process.stdout is not None
-    def read_stdout() -> None:
-        for line in process.stdout:
-            stdout_lines.append(line)
-            progress = _parse_restore_progress_percent(line)
-            if progress is not None:
-                _emit_restore_log(
-                    logger,
-                    f"restore-db {progress_step} progress "
-                    + _format_metadata(restore_id=restore_id or None, database=progress_database, percent=progress),
-                )
+    """A Windows target through ``Invoke-Command``, or a local ``sqlcmd`` - through ``common.cli``.
 
-    reader = threading.Thread(target=read_stdout, daemon=True)
-    reader.start()
-    try:
-        returncode = process.wait(timeout=timeout_seconds) if timeout_seconds > 0 else process.wait()
-    except subprocess.TimeoutExpired as exc:
-        process.kill()
-        reader.join(timeout=5)
-        raise RestoreCommandTimeoutError(
-            f"Restore command timed out after {timeout_seconds} seconds.",
-            command_started=True,
-        ) from exc
-    reader.join()
-    return subprocess.CompletedProcess(cmd, returncode, "".join(stdout_lines), "")
+    The progress events are read off the answer; the live *percent processed* lines reach this
+    process's stderr while the restore runs (see :func:`_sqlcmd_in_common`).
+    """
+    if config is not None:
+        via = "winrm" if config.vm_credential_target and not config.is_linux else "local"
+        request = _sqlcmd_request(cmd, config, via=via)
+    else:
+        request = _local_request_from_argv(cmd, timeout_seconds=timeout_seconds)
+    result = _sqlcmd_in_common(request, cmd=cmd)
+    _log_restore_progress(result, logger=logger, progress_step=progress_step,
+                          progress_database=progress_database, restore_id=restore_id)
+    return result
+
+
+def _log_restore_progress(result: subprocess.CompletedProcess[str], *, logger: object | None,
+                          progress_step: str, progress_database: str, restore_id: str = "") -> None:
+    """One ``progress`` event per *NN percent processed* line sqlcmd printed."""
+    if not logger:
+        return
+    for line in (result.stdout or "").splitlines():
+        progress = _parse_restore_progress_percent(line)
+        if progress is not None:
+            _emit_restore_log(
+                logger,
+                f"restore-db {progress_step} progress "
+                + _format_metadata(restore_id=restore_id or None, database=progress_database, percent=progress),
+            )
 
 
 def _is_transient_sql_connection_failure(text: str) -> bool:

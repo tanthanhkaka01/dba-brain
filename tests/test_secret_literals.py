@@ -63,6 +63,33 @@ def test_the_report_names_the_ref_and_never_the_value(tmp_path):
     assert secret not in json.dumps(outcome)
 
 
+def test_the_passphrase_itself_is_searched_for_and_never_printed(tmp_path):
+    """The store cannot hold its own passphrase, so a search of its values never looked for it -
+    and the real one shipped in a test docstring from v0.4.3 to 0.23.0's release run."""
+    import base64
+
+    store = _store(tmp_path, {"MSSQL_LAB_SA": "Jf-not-real-37d#42"})
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "conftest.py").write_text(f"# failed: assert '{KEY}' == 'x'\n", encoding="utf-8")
+    encoded = base64.b64encode(KEY.encode()).decode()
+    (tmp_path / "pkg" / "deploy.md").write_text(f"--key-base64 {encoded}\n", encoding="utf-8")
+
+    outcome = secret_literals.scan(
+        {"root": str(tmp_path), "paths": ["pkg"], "store": str(store)}, key=KEY)
+
+    assert sorted(f["file"] for f in outcome["findings"]) == ["pkg/conftest.py", "pkg/deploy.md"]
+    assert {f["secret_ref"] for f in outcome["findings"]} == {secret_literals.PASSPHRASE_REF}
+    assert KEY not in json.dumps(outcome) and encoded not in json.dumps(outcome)
+    assert KEY not in secret_literals.format_report(outcome)
+
+
+def test_the_tests_ship_so_they_are_searched_by_default():
+    """The public repository and every sdist carry `tests/`, and the default surface did not."""
+    from db_ops.common.identifier_scan import DEFAULT_PATHS
+
+    assert "tests" in DEFAULT_PATHS
+
+
 def test_a_clean_tree_reports_nothing(tmp_path):
     store = _store(tmp_path, {"MSSQL_LAB_SA": "Jf-not-real-37d#42"})
     (tmp_path / "pkg").mkdir()

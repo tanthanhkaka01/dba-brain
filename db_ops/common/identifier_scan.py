@@ -48,6 +48,12 @@ DEFAULT_PATHS: tuple[str, ...] = (
     "db_ops",
     "docs",
     "examples",
+    # `tests/` ships: in the public repository and in every sdist. It was missing here until
+    # 2026-09-25, so neither check ever read it by default - and the store passphrase sat in
+    # `tests/conftest.py` from v0.4.3 on. The export's own scan always read it; these defaults did not.
+    "tests",
+    "CHANGELOG.md",
+    ".github",
     "docker-compose.yml",
     "docker-compose.runtime.yml",
     "Dockerfile",
@@ -107,6 +113,10 @@ GENERIC_TERMS: dict[str, str] = {
     "mssqlserver": "how Windows registers a *default* SQL Server instance - a vendor constant",
     "sqlexpress": "the default instance name of SQL Server Express - a vendor constant",
     "freepdb1": "Oracle Free's default PDB name - a vendor constant",
+    # Oracle Free's SID and instance name. An Oracle Free lab's record carries it as `sid` and
+    # `instance_name`, and the 0.23.0 export was refused over it: 855 hits in 192 files, every one
+    # an ordinary word (`TABLESPACE_FREE_SPACE`, "free space") and not one an estate name.
+    "free": "Oracle Free's default SID and instance name - a vendor constant",
     "free_sb": "the standby db_unique_name a shipped Data Guard template creates, not a host",
     # Lab container names. These *are* in the inventory, and they are still not estate data: the
     # shipped templates create them, so every operator who runs a lab gets the same names. The
@@ -281,8 +291,12 @@ def collect_identifiers(data_dir: str | Path | None = None) -> dict[str, str]:
     # Two of them were hardcoded in 22 places and were found by accident rather than by the scrub.
     for loader, kind in ((data_sources.load_telegram_groups, "chat"),
                          (data_sources.load_telegram_users, "person")):
+        # `data_dir=` by name: the loaders' first parameter is a file *path*. Passed positionally,
+        # the folder was opened as a file, the error was swallowed below as "optional file", and
+        # no Telegram id or username was searched for from 2026-08-17 (when the loaders took a
+        # path first) until the 0.23.0 release run found a person's id in a shipped test.
         try:
-            records = loader(data_dir)
+            records = loader(data_dir=data_dir)
         except Exception:  # noqa: BLE001 - these files are optional; the inventory is not.
             continue
         for record in records or []:
@@ -387,6 +401,12 @@ def _search_terms(terms: dict[str, str]) -> dict[str, tuple[str, str, str]]:
     expanded: dict[str, tuple[str, str, str]] = {}
     for term, kind in terms.items():
         level = confidence(term)
+        # A person's or a chat's id is never an ordinary word, whatever its shape. By shape alone a
+        # Telegram user id is digits with no separator and a username often plain lowercase, so
+        # both fell to `review` - reported, never counted - and an id that shipped in a test passed
+        # the export (found 2026-09-25, once the Telegram files were read at all).
+        if kind in ("person", "chat") and level == REVIEW:
+            level = LIKELY
         for spelling in _spellings(term):
             key = spelling.lower() if level == CERTAIN else spelling
             expanded.setdefault(key, (term, kind, level))

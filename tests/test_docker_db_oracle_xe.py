@@ -16,8 +16,8 @@ from __future__ import annotations
 import pytest
 
 from db_ops.common import db_connect
-from db_ops.sre.docker_db import healthcheck, templates
-from db_ops.sre.docker_db.models import ENGINE_META, HA_SUPPORTED_ENGINES, DockerDbSpec
+from db_ops.common.docker_db import healthcheck, templates
+from db_ops.lib.docker_db_spec import ENGINE_META, HA_SUPPORTED_ENGINES, DockerDbSpec
 from db_ops.sre.docker_db.register_config import build_connection_entry
 
 
@@ -98,7 +98,7 @@ def test_the_compose_template_renders_for_a_single_instance():
 def test_the_first_start_budget_fits_inside_the_callers():
     """`create-db-docker` is reachable from Telegram, whose poller SIGKILLs the process at its own
     timeout. A budget that does not fit turns a provisioning failure into a blunt "timed out"."""
-    from db_ops.sre.docker_db.models import CALLER_BUDGET_SECONDS, PULL_AND_STARTUP_ALLOWANCE
+    from db_ops.lib.docker_db_spec import CALLER_BUDGET_SECONDS, PULL_AND_STARTUP_ALLOWANCE
 
     meta = ENGINE_META["oracle-xe"]
 

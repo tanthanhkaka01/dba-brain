@@ -341,8 +341,7 @@ def test_the_once_a_day_report_guard_uses_the_operators_midnight(tmp_path):
     assert exists("2026-09-07", UTC) and not exists("2026-09-08", UTC)
 
 
-@pytest.mark.parametrize("zone,expected_archive", [(PLUS7, "app_20260907.log"),
-                                                  (UTC, "app_20260906.log")])
+@pytest.mark.parametrize("zone,expected_archive", [(PLUS7, "app_20260907.log"), (UTC, None)])
 def test_the_log_rotation_boundary_follows_the_configured_zone(zone, expected_archive, tmp_path):
     """A log file named `_20260907` has to hold the day its lines claim to be from — the line
     prefix and the rotation boundary read the same clock, or the archive is off by one.
@@ -353,12 +352,19 @@ def test_the_log_rotation_boundary_follows_the_configured_zone(zone, expected_ar
     """
     from db_ops.logging_ops.handlers import archive_yesterday_if_missing
 
+    import os
+
     log = tmp_path / "app.log"
     log.write_text("a line", encoding="utf-8")
+    # Last written an hour before ACROSS_MIDNIGHT: already the 7th's last hour at +07, while at
+    # +00 it is the same day as "now" - so +07 rotates it and +00 keeps it live. One instant, two
+    # clocks, two answers; the name comes from the day the file was written (1.32).
+    written = (ACROSS_MIDNIGHT - dt.timedelta(hours=1)).timestamp()
+    os.utime(log, (written, written))
     with at(zone, ACROSS_MIDNIGHT):
         archived = archive_yesterday_if_missing(log)
 
-    assert archived is not None and archived.name == expected_archive
+    assert (archived.name if archived else None) == expected_archive
 
 
 @pytest.mark.parametrize("zone,expected", [(PLUS7, "2026-09-07T16:59:59Z"),
@@ -459,6 +465,9 @@ def test_no_producer_renders_a_bare_wall_clock():
         "db_ops/reports/metrics_reports.py",
         # A comparison key compared against server-local file mtimes as text, not a rendered time.
         "db_ops/lib/backupfiles_retention.py",
+        # A moment in the database SERVER's clock for STOPAT / TO_DATE and the listings' window -
+        # an engine reads it, not a person; an offset is exactly what STOPAT refuses (Msg 3217).
+        "db_ops/lib/restore/moment.py",
     }
     pattern = re.compile(r'strftime\("%Y-%m-%d %H:%M')
     offenders = []

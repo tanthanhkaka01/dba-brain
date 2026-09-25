@@ -452,7 +452,7 @@ def test_the_transfer_recreates_empty_directories(monkeypatch):
     """A PostgreSQL backup needs its empty dirs (pg_tblspc, pg_replslot). Copying only files
     yields a directory that looks complete and that pg_combinebackup refuses."""
     import stat as stat_mod
-    from db_ops.backup_restore import transfer
+    from db_ops.common import backup_copy as transfer
 
     class _Attr:
         def __init__(self, name, is_dir, size=0):

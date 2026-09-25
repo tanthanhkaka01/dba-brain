@@ -35,6 +35,17 @@ class RestoreStepError(ValueError):
     """The step cannot be run as asked."""
 
 
+def moment_in_server_clock(text: str) -> str:
+    """A point in time as ``YYYY-MM-DD HH:MM:SS`` in the target's clock - UTC, which is what every
+    container target here runs on. Refused by name when it cannot be read."""
+    from db_ops.lib.restore.moment import MomentError, server_clock_text
+
+    try:
+        return server_clock_text(text)
+    except MomentError as exc:
+        raise RestoreStepError(str(exc)) from exc
+
+
 def restore_step(level: str, request: dict[str, Any]) -> dict[str, Any]:
     """Apply one backup at ``level``. Dispatches on ``db_type``."""
     if level not in LEVELS:

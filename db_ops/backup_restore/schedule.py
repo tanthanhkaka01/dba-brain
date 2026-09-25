@@ -70,6 +70,20 @@ def is_due(
     ).due
 
 
+def taken_since(store: DbOpsStore, job_code: str, since: str) -> bool:
+    """Whether another run started this unit of work at or after ``since``.
+
+    ``since`` is when this run read its due list. APP-BACKUP-RESTORE is ``async`` (``max_parallel``
+    4, due every 30 s), so a second run starts while the first is still working through its list,
+    and takes whatever is due and not running - the jobs the first has not reached yet. The RUNNING
+    claim stops the two from overlapping. It does not stop the first from running the same job
+    again once the second has finished it. Driving the real ``run_backup`` showed exactly that:
+    ``['LONG_A', 'SHORT_B (by the other run)', 'SHORT_B']`` (the schedule test, 2026-09-25). So a
+    scheduled run asks again, just before it claims each job, whether someone already has.
+    """
+    return store.job_run_started_since(job_code, since)
+
+
 def is_running(job_code: str, latest_runs: dict[str, Any]) -> bool:
     """Whether this unit of work has a run still open.
 

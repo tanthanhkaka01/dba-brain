@@ -13,7 +13,7 @@
     {
       "cidr": "172.30.0.0/16",
       "owner": "networks db_ops pins by name",
-      "note": "Where db_ops puts everything it names itself: docker0 (via the 'bip' setting in docker-daemon.json), its own runtime compose network, and the lab subnets derived per lab name by db_ops.sre.docker_db.models.lab_network_subnet. That derivation is what keeps a provisioned lab safe even on a host where docker-daemon.json was never applied."
+      "note": "Where db_ops puts everything it names itself: docker0 (via the 'bip' setting in docker-daemon.json), its own runtime compose network, and the lab subnets derived per lab name by db_ops.lib.docker_db_spec.lab_network_subnet. That derivation is what keeps a provisioned lab safe even on a host where docker-daemon.json was never applied."
     },
     {
       "cidr": "172.31.0.0/16",

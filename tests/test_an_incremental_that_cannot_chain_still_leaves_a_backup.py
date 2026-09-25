@@ -66,12 +66,16 @@ def test_the_first_ever_run_still_takes_a_baseline(code: str):
 def test_the_script_never_creates_the_backup_directory_itself(code: str):
     """The one thing that must not happen. `pg_basebackup` creates its target and removes it when
     the server refuses; a directory the script made to fill the gap would be a backup that does not
-    restore, which is worse than an error. Only `base/` — the parent — is ever created here."""
+    restore, which is worse than an error. Only parents are ever created here: `base/`, and since
+    2026-09-24 the backup folder itself when another user made it and it has to be taken over (as
+    root, then handed to the engine). This asserted exactly one `mkdir` until that change added two,
+    and the count, not the rule, is what went stale."""
     made = [line for line in code.splitlines() if "mkdir" in line]
 
-    assert len(made) == 1, made
-    assert "${base_dir}" in made[0]
-    assert "$target" not in made[0]
+    assert made, "the script must create base/ itself"
+    for line in made:
+        assert "${base_dir}" in line or "${backup_dir}" in line, line
+        assert "$target" not in line and "${target}" not in line, line
 
 
 def test_the_failed_target_is_removed_on_every_path_that_fails(code: str):

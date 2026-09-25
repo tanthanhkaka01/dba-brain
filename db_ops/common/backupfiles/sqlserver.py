@@ -12,12 +12,20 @@ all, and listing locally would work on the one topology where the two coincide.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from db_ops.common.backupfiles import DIFF, FULL, LOG, BackupListError, row
 
 #: RESTORE HEADERONLY's BackupType codes, and the letters some tools report instead.
 _KIND = {"1": FULL, "5": DIFF, "2": LOG, "D": FULL, "I": DIFF, "L": LOG}
+
+#: SQL Server's own numbers for "this file is not a backup": the media family is incorrectly formed
+#: (3241), or not Microsoft Tape Format (3242, 3243). Measured on a certificate file, 2026-09-24.
+_NOT_A_BACKUP = frozenset({"3241", "3242", "3243"})
+_NUMBERED = re.compile(r"\((\d{3,5})\)")
+#: What this tool's SQL Server jobs name their pieces; anything else in the folder is not ours.
+_BACKUP_SUFFIXES = (".bak", ".trn")
 
 _LIST = ("SELECT full_filesystem_path AS path, size_in_bytes AS size "
          "FROM sys.dm_os_enumerate_filesystem(N'{directory}', N'*') "
@@ -29,7 +37,7 @@ def _rows(cursor) -> list[dict[str, Any]]:
     return [dict(zip(columns, r)) for r in cursor.fetchall()]
 
 
-def list_files(request: dict[str, Any]) -> list[dict[str, Any]]:
+def list_files(request: dict[str, Any], skipped: list[str] | None = None) -> list[dict[str, Any]]:
     target = request.get("target") or {}
     directory = str(request.get("path") or "").strip()
     if not directory:
@@ -61,8 +69,20 @@ def list_files(request: dict[str, Any]) -> list[dict[str, Any]]:
             try:
                 cursor.execute(f"RESTORE HEADERONLY FROM DISK = N'{escaped}'")
                 heads = _rows(cursor)
-            except Exception:  # noqa: BLE001 - a stray file in a shared directory is not an error.
-                continue
+            except Exception as exc:  # noqa: BLE001 - sorted below: stray file, or a real failure.
+                # A file that is not a backup (the exported certificate beside the backups, a
+                # README) is skipped: SQL Server says so with 3241-3243. Anything else is a backup
+                # that could not be read, and skipping it too is how "Access is denied" (3201) and
+                # a missing certificate (33111) both came out as "no databases found" on
+                # 2026-09-24 - or, worse, how a restore quietly stops at an older piece.
+                if _NOT_A_BACKUP.intersection(_NUMBERED.findall(str(exc))):
+                    # Named like a backup and still not one: a truncated or damaged piece. Passed
+                    # over - the chain is built from what can be read - but reported, because the
+                    # newest piece silently missing is how a restore quietly goes back in time.
+                    if skipped is not None and path.lower().endswith(_BACKUP_SUFFIXES):
+                        skipped.append(path)
+                    continue
+                raise BackupListError(f"cannot read {path}: {exc}") from exc
             for head in heads:
                 kind = _KIND.get(str(head.get("BackupType") or "").strip().upper())
                 if not kind:

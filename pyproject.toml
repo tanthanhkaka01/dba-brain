@@ -168,6 +168,8 @@ namespaces = false
 "db_ops.sla" = ["catalogue/*.json"]
 "db_ops.common" = ["backup_scripts/**/*.sh", "backup_scripts/**/*.ps1",
                    "restore_scripts/**/*.sh", "restore_scripts/**/*.ps1",
+                   # The lab compose templates moved here from `sre` with create-db-docker (0.23.0).
+                   "docker_db/templates/**/*",
                    "catalogue/*.json"]
 # Back with the packages in `v0.2.0`. The removal note is worth keeping as the reason this list is
 # checked rather than trusted: **package-data for a package that is not in `packages.find` is
@@ -180,7 +182,7 @@ namespaces = false
 # a blank page, and `webhost` serves one.
 "db_ops.sre" = ["host_config/**/*", "automation/**/*.j2", "automation/**/*.yml",
                 "automation/**/*.ps1", "automation/**/*.sh", "automation/**/*.cfg",
-                "docker_db/templates/**/*", "inventory/**/*.sql", "inventory/**/*.md",
+                "inventory/**/*.sql", "inventory/**/*.md",
                 # Added 2026-09-16, with the seeds for the last two catalogued config files. The
                 # exact omission this list's own note describes, made again: `sre_config.json` and
                 # `docker_db_connections.json` were added to PACKAGED_DEFAULTS and not here, so

@@ -93,6 +93,60 @@ def test_postgres_gets_its_statement_timeout_set_inside_the_server(monkeypatch):
     assert not any("%s" in str(entry) for entry in log if isinstance(entry, str))
 
 
+class _Socket:
+    def __init__(self, timeout):
+        self.timeout = timeout
+
+    def settimeout(self, value):
+        self.timeout = value
+
+
+def _pg8000_whose_socket_keeps_the_connect_timeout(monkeypatch, conn):
+    """pg8000's own behaviour: `timeout` goes onto the socket and stays there."""
+    def connect(**kw):
+        conn._usock = _Socket(kw["timeout"])
+        return conn
+    package = types.ModuleType("pg8000")
+    package.dbapi = types.SimpleNamespace(connect=connect)
+    monkeypatch.setitem(sys.modules, "pg8000", package)
+
+
+def test_a_long_postgresql_statement_is_not_cut_at_the_connect_timeout(monkeypatch):
+    """A 5-minute task failed after 30 s with `timed out`, on a reachable server: pg8000 kept the
+    connect's deadline on the socket for every read after it (the lab drill, 2026-09-25)."""
+    conn = _Conn([])
+    _pg8000_whose_socket_keeps_the_connect_timeout(monkeypatch, conn)
+
+    db_connect.connect_engine(db_type="postgresql", host="h", username="u", password="p",
+                              connect_timeout_seconds=30, statement_timeout_seconds=900)
+
+    assert conn._usock.timeout == 900 + db_connect.PG_SOCKET_GRACE_SECONDS
+
+
+def test_with_no_statement_timeout_a_postgresql_read_waits_for_the_statement(monkeypatch):
+    conn = _Conn([])
+    _pg8000_whose_socket_keeps_the_connect_timeout(monkeypatch, conn)
+
+    db_connect.connect_engine(db_type="postgresql", host="h", username="u", password="p",
+                              connect_timeout_seconds=30, statement_timeout_seconds=None)
+
+    assert conn._usock.timeout is None
+
+
+def test_the_connect_itself_keeps_its_short_deadline(monkeypatch):
+    """A down host must still be found out in the connect's time, not the statement's."""
+    seen = {}
+    conn = _Conn([])
+    package = types.ModuleType("pg8000")
+    package.dbapi = types.SimpleNamespace(connect=lambda **kw: seen.update(kw) or conn)
+    monkeypatch.setitem(sys.modules, "pg8000", package)
+
+    db_connect.connect_engine(db_type="postgresql", host="h", username="u", password="p",
+                              connect_timeout_seconds=30, statement_timeout_seconds=900)
+
+    assert seen["timeout"] == 30
+
+
 def test_oracle_builds_a_dsn_from_the_service_and_sets_call_timeout(monkeypatch):
     captured = {}
 
@@ -182,7 +236,10 @@ def test_oracle_loses_the_trailing_semicolon_every_other_engine_tolerates():
     """`SELECT 1;` raises ORA-00911 on Oracle and is fine everywhere else. Stripping it for all
     engines would break a MySQL/PostgreSQL batch of several semicolon-separated statements."""
     assert sql_run.split_batches_for("SELECT 1 FROM dual;", "oracle") == ["SELECT 1 FROM dual"]
-    assert sql_run.split_batches_for("SELECT 1;", "postgresql") == ["SELECT 1;"]
+    assert sql_run.split_batches_for("SELECT 1;", "mysql") == ["SELECT 1;"]
+    # PostgreSQL runs one statement per execute since 2026-09-25 (its driver returns one result set
+    # per execute); the terminating semicolon goes with the split, and PostgreSQL needs none.
+    assert sql_run.split_batches_for("SELECT 1;", "postgresql") == ["SELECT 1"]
     assert sql_run.split_batches_for("SELECT 1;", "sqlserver") == ["SELECT 1;"]
 
 

@@ -53,12 +53,13 @@ from db_ops.backup_restore.server_metadata import (
     parse_server_metadata,
     replay_phase,
 )
-from db_ops.backup_restore.transfer import prune_target_dir, sync_backup_dir
 from db_ops.backup_restore.config import (
     DEFAULT_CLEANUP_RETENTION,
     parse_cleanup_retention,
 )
+from db_ops.lib import common_cli
 from db_ops.lib import instance_bundle
+from db_ops.lib.shell import docker_cli
 from db_ops.lib.notify import NotifyConfig
 from db_ops.lib.time_window import TimeWindow, parse_time_window_config
 
@@ -270,173 +271,23 @@ def _script_env(job: ScriptRestore, source: BackupTarget,
     return env
 
 
-def _open_client(target: BackupTarget, *, data_dir, key, key_base64):
-    from db_ops.common.data_sources import resolve_ssh_key, resolve_ssh_password
-    from db_ops.common.ssh import open_ssh_client
+def _ssh_login(target: BackupTarget, *, data_dir, key, key_base64) -> dict[str, Any]:
+    """The login a ``common.cli`` copy command opens its session with: resolved here, handed there.
 
+    ``common`` reads no configuration, so the secret ref and the key name stop at this line.
+    """
+    from db_ops.common.data_sources import resolve_ssh_key, resolve_ssh_password
+
+    login: dict[str, Any] = {"host": target.host, "port": target.port, "username": target.username}
     key_filename = resolve_ssh_key(target.key_file, data_dir) if target.key_file else None
-    password = None
-    if not key_filename:
-        password = resolve_ssh_password(
+    if key_filename:
+        login["key_file"] = str(key_filename)
+    else:
+        login["password"] = resolve_ssh_password(
             password=None, password_ref=target.password_ref,
             key=key, key_base64=key_base64, data_dir=data_dir,
         )
-    return open_ssh_client(
-        target.host, target.username, port=target.port,
-        password=password, key_filename=key_filename,
-    )
-
-
-def _transfer_include(job: ScriptRestore, source_client, *, source=None, log=None) -> tuple[str, ...]:
-    """Which parts of the source backup directory this restore needs, as path prefixes.
-
-    An empty tuple means "everything", which is what SQL Server gets and what every engine falls
-    back to when the chain cannot be established.
-
-    PostgreSQL's directory layout states the chain, so it is read from the names (see
-    :func:`_postgresql_chain_include`). An RMAN directory does not — level 0, level 1, archivelogs,
-    controlfile autobackups and spfiles all sit side by side under generated names — so Oracle is
-    narrowed by *asking RMAN*, never by parsing those names (:func:`_oracle_chain_include`).
-    """
-    engine = str(job.db_type or "").strip().lower()
-    if engine in {"postgresql", "postgres"}:
-        return _postgresql_chain_include(job, source_client, log=log)
-    if engine == "oracle" and source is not None:
-        return _oracle_chain_include(job, source_client, source=source, log=log)
-    return ()
-
-
-# The restore needs every piece from the newest usable level 0 onward: that level 0, the level 1s
-# chained to it, the archived-log backups that roll it forward, and the controlfile/spfile
-# autobackups DUPLICATE starts from. The cutoff is not guessed - RESTORE ... PREVIEW is RMAN
-# stating which datafile pieces it would use, and the cutoff is when the oldest of those sets
-# completed. Everything the catalog recorded at or after that moment travels.
-_ORACLE_PREVIEW = "RESTORE DATABASE PREVIEW;\nEXIT;\n"
-
-_ORACLE_CHAIN_SQL = """set pagesize 0 feedback off heading off linesize 32767 trimspool on
-SELECT p.handle
-FROM v$backup_piece p
-JOIN v$backup_set s ON s.set_stamp = p.set_stamp AND s.set_count = p.set_count
-WHERE p.status = 'A' AND p.handle IS NOT NULL
-  AND s.completion_time >= (
-      SELECT MIN(s2.completion_time)
-      FROM v$backup_set s2
-      JOIN v$backup_piece p2 ON p2.set_stamp = s2.set_stamp AND p2.set_count = s2.set_count
-      WHERE p2.handle IN ({handles})
-  );
-EXIT;
-"""
-
-
-def _oracle_chain_include(job: ScriptRestore, source_client, *, source, log=None) -> tuple[str, ...]:
-    """The basenames of every backup piece from the newest level 0 onward.
-
-    An RMAN directory is flat, so a basename *is* the relative path and the prefix filter in
-    :func:`transfer.sync_backup_dir` matches it exactly.
-
-    Why this exists: the CLOUD lab's backup directory reached 90 GB, of which the pieces a restore
-    actually needs were ~5 GB — the rest was seven days of controlfile autobackups, one every 15
-    minutes at ~45 MB each, for a database whose data is 3.5 GB. The whole directory crossed the
-    link on every drill and was then copied a second time *into* the target container by the restore
-    script, so the drill needed roughly twice the backup directory in free space and eventually
-    stopped fitting on a 193 GB disk at all.
-
-    Why it asks RMAN rather than reading the names: which pieces form the chain is RMAN's decision,
-    recorded in its catalog. Inferring it from ``FREE_L0_<date>_...`` would be a second, weaker copy
-    of that logic, and being wrong here does not fail loudly - DUPLICATE restores to whatever point
-    the pieces present allow, so a chain missing its incrementals still "succeeds", just at an older
-    point than the operator believes.
-
-    Falls back to "everything" whenever the answer is unusable: an un-narrowed copy only costs
-    bandwidth, while a narrowed one that guessed wrong costs the restore.
-    """
-    backup_dir = job.backup_dir.rstrip("/")
-    handles = _oracle_preview_handles(source_client, source, log=log)
-    if not handles:
-        if log:
-            log("RMAN preview named no backup pieces; copying the whole backup directory")
-        return ()
-
-    quoted = ", ".join("'" + h.replace("'", "''") + "'" for h in handles)
-    rows = _oracle_sql(source_client, source, _ORACLE_CHAIN_SQL.format(handles=quoted))
-    names: list[str] = []
-    for line in rows:
-        line = line.strip()
-        # Only pieces inside the directory being transferred; a handle elsewhere on the source
-        # (an FRA copy, say) has no counterpart to include here.
-        if line.startswith(backup_dir + "/"):
-            names.append(line.rsplit("/", 1)[-1])
-    if not names:
-        if log:
-            log("no catalog pieces resolved under the backup dir; copying the whole directory")
-        return ()
-    if log:
-        log(f"transfer narrowed to the RMAN chain: {len(names)} piece(s) from the newest level 0")
-    return tuple(sorted(set(names)))
-
-
-def _oracle_preview_handles(source_client, source, *, log=None) -> list[str]:
-    """The datafile piece handles from ``RESTORE DATABASE PREVIEW`` - RMAN's own answer."""
-    out = _run_in_source_container(
-        source_client, source,
-        f"printf {shlex.quote(_ORACLE_PREVIEW)} | rman target / log /dev/stdout 2>&1",
-    )
-    handles = []
-    for line in out.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("Piece Name:"):
-            handles.append(stripped.split(":", 1)[1].strip())
-    if log and not handles:
-        log("RESTORE DATABASE PREVIEW returned no piece names")
-    return handles
-
-
-def _oracle_sql(source_client, source, script: str) -> list[str]:
-    out = _run_in_source_container(
-        source_client, source,
-        f"printf {shlex.quote(script)} | sqlplus -s -L / as sysdba 2>&1",
-    )
-    return [line for line in out.splitlines() if line.strip()]
-
-
-def _run_in_source_container(source_client, source, command: str) -> str:
-    """Run a read-only query inside the source database container over the host's SSH access."""
-    inner = f"docker exec -i {shlex.quote(source.container_name)} bash -lc {shlex.quote(command)}"
-    _stdin, stdout, _stderr = source_client.exec_command(f"sudo {inner}")
-    return stdout.read().decode("utf-8", "replace")
-
-
-def _postgresql_chain_include(job: ScriptRestore, source_client, *, log=None) -> tuple[str, ...]:
-    """``("base/<newest _FULL>", "base/<each _INCR after it>", "wal/")``.
-
-    The restore combines exactly this set (``pg_combinebackup`` over the newest ``_FULL`` plus
-    every ``_INCR`` whose stamp sorts after it), so anything else in ``base/`` is a chain the
-    drill will not touch. Deciding it here, on the source, is what keeps those older chains from
-    being copied and then pruned on every run.
-
-    Falls back to "everything" whenever the listing is unusable: a narrowed copy that guessed
-    wrong would fail the restore, while an un-narrowed one only costs bandwidth.
-    """
-    base = f"{job.source_backup_host_dir.rstrip('/')}/base"
-    command = f"ls -1d {shlex.quote(base)}/*_FULL {shlex.quote(base)}/*_INCR 2>/dev/null | sort"
-    _stdin, stdout, _stderr = source_client.exec_command(command)
-    names = [line.strip().rsplit("/", 1)[-1]
-             for line in stdout.read().decode("utf-8", "replace").splitlines() if line.strip()]
-    fulls = [name for name in names if name.endswith("_FULL")]
-    if not fulls:
-        if log:
-            log("no _FULL backup found on the source; copying the whole backup directory")
-        return ()
-    newest_full = fulls[-1]
-    chain = [newest_full] + [name for name in names
-                             if name.endswith("_INCR") and name > newest_full]
-    # wal/ always travels whole: recovery replays forward from the base backup, and which
-    # segments it needs is decided by PostgreSQL at replay time, not by us here.
-    include = tuple([f"base/{name}" for name in chain] + ["wal/"])
-    if log:
-        log(f"transfer narrowed to the restore chain: {len(chain)} backup(s) + wal/ "
-            f"(source holds {len(names)} backup directories)")
-    return include
+    return login
 
 
 def transfer_backup_to_target(
@@ -448,6 +299,8 @@ def transfer_backup_to_target(
     key=None,
     key_base64=None,
     log=None,
+    prune: bool = True,
+    point_in_time: str = "",
 ) -> dict[str, Any]:
     """Copy the backup from the source host to the target host before the restore runs.
 
@@ -456,49 +309,60 @@ def transfer_backup_to_target(
     the pieces genuinely have to travel, which is the whole difference between a drill and a
     recovery onto new hardware.
 
-    For PostgreSQL the copy is narrowed to the chain the restore will actually combine (see
-    :func:`_postgresql_chain_include`). Without that the transfer sends the whole backup
-    directory and ``prune_target_dir`` then deletes whatever is past the target's retention —
-    so the same ~1089 files, ~310 MB, crossed the link and were deleted again on every single
-    run: measured as ``copied=1090 skipped=14495 pruned=1089`` three runs in a row. The comment
-    on the prune call says "whatever is old here is old at the source too", which only holds
-    when the two retentions match; the source keeps 14 days and the target 8.
+    Two ``common.cli`` commands since 0.23.0, each a step of its own: ``backup-chain`` says which
+    parts of the source directory the restore needs (PostgreSQL's newest chain, RMAN's own answer
+    for Oracle, everything for SQL Server and for a point in time), ``copy-backup-dir`` moves them
+    as one tar stream and mirrors the source. The app resolves the two logins; ``common`` opens the
+    sessions. Their progress streams on stderr as it happens (``log`` is kept for callers and no
+    longer used).
+
+    ``prune=False`` leaves the retention cleanup to the caller: ``restore_by_id`` runs it after the
+    restored databases are verified (its DELETE step), as the engine path does.
     """
-    source_client = _open_client(source, data_dir=data_dir, key=key, key_base64=key_base64)
-    try:
-        # Make the pieces readable immediately before walking them. The backup jobs relax
-        # permissions after each run, but a transfer of a large backup takes minutes and the
-        # archivelog job writes new 0640 pieces every 15 minutes - so a set that was fully
-        # readable when the transfer started can grow an unreadable file while it is running.
-        # Fixing it here, at the moment of reading, removes the race instead of narrowing it.
-        _stdin, _out, _err = source_client.exec_command(
-            f"sudo chmod -R a+rX {shlex.quote(job.source_backup_host_dir)} 2>/dev/null || true"
-        )
-        _out.channel.recv_exit_status()
-
-        include = _transfer_include(job, source_client, source=source, log=log)
-
-        target_client = _open_client(target, data_dir=data_dir, key=key, key_base64=key_base64)
-        try:
-            result = sync_backup_dir(
-                source_client=source_client, source_dir=job.source_backup_host_dir,
-                target_client=target_client, target_dir=job.target_backup_dir,
-                include=include, log=log,
-            )
-            # Prune AFTER the copy, never before: pruning first would delete files this run is
-            # about to need and the copy would fetch them again over the same slow link. After
-            # the copy, whatever is old here is old at the source too.
-            pruned = prune_target_dir(
-                target_client, job.target_backup_dir, job.cleanup_retention, log=log,
-            )
-        finally:
-            target_client.close()
-    finally:
-        source_client.close()
-    out = result.as_dict()
+    del log
+    source_login = _ssh_login(source, data_dir=data_dir, key=key, key_base64=key_base64)
+    target_login = _ssh_login(target, data_dir=data_dir, key=key, key_base64=key_base64)
+    chain = common_cli.run("backup-chain", {
+        "db_type": job.db_type, "source": source_login,
+        "source_dir": job.source_backup_host_dir, "backup_dir": job.backup_dir,
+        "container": source.container_name, "point_in_time": point_in_time,
+    }, stream_stderr=True)
+    out = dict(common_cli.run("copy-backup-dir", {
+        "source": source_login, "source_dir": job.source_backup_host_dir,
+        "target": target_login, "target_dir": job.target_backup_dir,
+        "include": chain.get("include") or [], "make_readable": True, "open_for_engine": True,
+    }, stream_stderr=True))
+    out["include"] = list(chain.get("include") or [])
+    pruned = (prune_staged_backups(job, target=target, data_dir=data_dir, key=key,
+                                   key_base64=key_base64)
+              if prune else {"pruned": 0, "retention_seconds": int(job.cleanup_retention or 0),
+                             "skipped": "left to the caller"})
     out["pruned"] = pruned.get("pruned", 0)
     out["retention_seconds"] = pruned.get("retention_seconds", 0)
     return out
+
+
+def prune_staged_backups(
+    job: ScriptRestore,
+    *,
+    target: BackupTarget,
+    data_dir=None,
+    key=None,
+    key_base64=None,
+    log=None,
+) -> dict[str, Any]:
+    """The DELETE step of a remote restore: ``common.cli prune-staged-backups`` on its staging.
+
+    After the verify, not inside the copy: a drill that failed keeps what it staged for the next
+    attempt - the rule the engine path has followed since 2026-09-11 ("the retention cleanup must
+    not prune the backups when the drill that proves them restorable has just failed").
+    """
+    del log
+    return common_cli.run("prune-staged-backups", {
+        "target": _ssh_login(target, data_dir=data_dir, key=key, key_base64=key_base64),
+        "target_dir": job.target_backup_dir,
+        "cleanup_retention": int(job.cleanup_retention or 0),
+    }, stream_stderr=True)
 
 
 # `_announce` is `db_ops.backup_restore.events.announce` since 2026-08-16 — it was four

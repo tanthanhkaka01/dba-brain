@@ -19,6 +19,11 @@ Three details are decisions, not defaults:
   hours. The app command that schedules the work carries the window and the daemon kills the
   parent — one deadline, at the level that knows the number. ``timeout_seconds`` exists for the
   caller that genuinely knows its own: the instance-metadata replay caps itself at 30 minutes.
+* **stderr is captured unless the caller streams it.** Most commands answer in seconds and their
+  stderr belongs in an error message. Building a lab database takes minutes - an Oracle first
+  start creates the database - and a person watching ``sre.cli create-db-docker`` (or the Telegram
+  chat relaying it) saw nothing until the end when that work moved into ``common`` (0.23.0).
+  ``stream_stderr=True`` passes the child's progress straight through; stdout is still the answer.
 * **Two shapes, because callers genuinely differ.** :func:`run` raises when the command reports
   failure; :func:`run_allowing_failure` hands the failure back as data. Which one is right is a
   property of the work, not a preference — see :func:`run_allowing_failure`.
@@ -41,7 +46,7 @@ class CommonCliError(RuntimeError):
 
 
 def run(command: str, request: dict[str, Any], *,
-        timeout_seconds: int | None = None) -> dict[str, Any]:
+        timeout_seconds: int | None = None, stream_stderr: bool = False) -> dict[str, Any]:
     """Run ``db_ops.common.cli <command>`` with ``request`` and return the response's ``data``.
 
     The unwrapping is what keeps callers unchanged: the CLI wraps the very dict the in-process
@@ -51,14 +56,16 @@ def run(command: str, request: dict[str, Any], *,
     doing — a restore step, a table load nobody can use half of — because letting it flow back as
     data would make it indistinguishable from a command that ran and found nothing to do.
     """
-    success, data, error = _call(command, request, timeout_seconds=timeout_seconds)
+    success, data, error = _call(command, request, timeout_seconds=timeout_seconds,
+                                 stream_stderr=stream_stderr)
     if not success:
         raise CommonCliError(f"{command} failed: {error or 'no reason given'}")
     return data
 
 
 def run_allowing_failure(command: str, request: dict[str, Any], *,
-                         timeout_seconds: int | None = None) -> tuple[bool, dict[str, Any], str]:
+                         timeout_seconds: int | None = None,
+                         stream_stderr: bool = False) -> tuple[bool, dict[str, Any], str]:
     """Like :func:`run`, but a failed command comes back as data instead of an exception.
 
     A **backup** that fails is a recorded outcome, not a stop: the app writes a ``job_runs`` row
@@ -69,7 +76,7 @@ def run_allowing_failure(command: str, request: dict[str, Any], *,
     Returns ``(success, data, error)``. A command that could not run **at all** still raises: that
     is not a failed backup, it is no backup, and the two must not be recorded as the same thing.
     """
-    return _call(command, request, timeout_seconds=timeout_seconds)
+    return _call(command, request, timeout_seconds=timeout_seconds, stream_stderr=stream_stderr)
 
 
 #: The dispatcher a command belongs to. ``db_ops.db.cli`` owns the three that open the runtime
@@ -81,7 +88,7 @@ DEFAULT_MODULE = "db_ops.common.cli"
 
 
 def spawn(command: str, request: dict[str, Any], *, module: str = DEFAULT_MODULE,
-          timeout_seconds: int | None = None):
+          timeout_seconds: int | None = None, stream_stderr: bool = False):
     """Run the command with the request on stdin. Returns ``(completed, error_text)``.
 
     Public because ``db/queue_message.py`` needs the spawn without the reading: it falls back to
@@ -92,7 +99,9 @@ def spawn(command: str, request: dict[str, Any], *, module: str = DEFAULT_MODULE
     try:
         completed = subprocess.run(
             [sys.executable, "-m", module, command, "-"],
-            input=payload.encode("utf-8"), capture_output=True, timeout=timeout_seconds,
+            input=payload.encode("utf-8"), stdout=subprocess.PIPE,
+            # None = inherited: the child's progress reaches this process's stderr as it is written.
+            stderr=None if stream_stderr else subprocess.PIPE, timeout=timeout_seconds,
             # **Bytes, and pinned to UTF-8 below.** `text=True` encodes through
             # `locale.getpreferredencoding()`, which on Windows is the machine's ANSI code page.
             # One program talking to itself over a pipe then depends on the console it happened to
@@ -125,9 +134,10 @@ def spawn(command: str, request: dict[str, Any], *, module: str = DEFAULT_MODULE
 
 
 
-def _call(command: str, request: dict[str, Any], *,
-          timeout_seconds: int | None = None) -> tuple[bool, dict[str, Any], str]:
-    completed, error = spawn(command, request, timeout_seconds=timeout_seconds)
+def _call(command: str, request: dict[str, Any], *, timeout_seconds: int | None = None,
+          stream_stderr: bool = False) -> tuple[bool, dict[str, Any], str]:
+    completed, error = spawn(command, request, timeout_seconds=timeout_seconds,
+                             stream_stderr=stream_stderr)
     if completed is None:
         raise CommonCliError(error)
 

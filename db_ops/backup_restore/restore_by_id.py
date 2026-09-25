@@ -26,7 +26,9 @@ that looks symmetrical:
 
 from __future__ import annotations
 
+import posixpath
 import sys
+import time
 
 import subprocess
 
@@ -36,6 +38,7 @@ from typing import Any
 
 from db_ops.backup_restore.events import announce
 from db_ops.lib import common_cli
+from db_ops.lib import instance_bundle
 from db_ops.lib import response
 
 
@@ -55,11 +58,16 @@ def _secret(ref: str, secrets: dict[str, str], *, where: str) -> str:
     return str(value)
 
 
-def _host_block(job: Any, *, data_dir: Any) -> dict[str, Any]:
+def _host_block(job: Any, *, data_dir: Any, load_secrets: Any = None) -> dict[str, Any]:
     """Where the target database runs, in the shape :mod:`db_ops.common.hostcmd` expects.
 
     Derived from the entry rather than restated: ``target_server_id`` names the host and
     ``target_container`` the container on it, which is the same chain ``server_metadata`` follows.
+
+    A target that logs in with a password gets it here - ``load_secrets()`` is called only then.
+    The block used to carry a key file or nothing, so every PostgreSQL and Oracle restore onto a
+    password-login machine failed at planning, "open_ssh_client needs either a password or a
+    key_filename" (the lab drill, 2026-09-24); the key-login cloud hosts never showed it.
     """
     from db_ops.backup_restore.backup import resolve_ssh_target
 
@@ -84,6 +92,10 @@ def _host_block(job: Any, *, data_dir: Any) -> dict[str, Any]:
         from db_ops.common.data_sources import resolve_ssh_key
 
         block["key_file"] = str(resolve_ssh_key(target.key_file, data_dir))
+    elif target.password_ref and load_secrets is not None:
+        from db_ops.backup_restore.spec_builder import _ssh_password
+
+        block["password"] = _ssh_password(target, load_secrets())
     if job.target_container:
         block["container"] = job.target_container
     return block
@@ -140,6 +152,10 @@ def _visible_dir(job: Any) -> str:
 # --------------------------------------------------------------------------- #
 
 
+#: Pieces the listings of the current plan could not read as backups (1.23). Cleared per restore.
+_UNREADABLE: set[str] = set()
+
+
 def _list_backup_files(request: dict[str, Any]) -> dict[str, Any]:
     """What is on the share, asked through the `common` CLI.
 
@@ -149,16 +165,71 @@ def _list_backup_files(request: dict[str, Any]) -> dict[str, Any]:
     list — "no backups found" and "the listing command did not run" lead to opposite actions.
     """
     try:
-        return common_cli.run("list-backup-files", request)
+        found = common_cli.run("list-backup-files", request)
     except common_cli.CommonCliError as exc:
         raise RestoreByIdError(str(exc)) from exc
+    _UNREADABLE.update(found.get("unreadable") or [])
+    return found
+
+
+def _sqlserver_port(job: Any, *, data_dir: Any) -> int:
+    """The SQL port of the instance the restore goes INTO.
+
+    It was 1433 whatever the target was, so on a host running two SQL Server labs (1433 and 11433)
+    a restore meant for one planned - and would have restored - against the other. The target's
+    own inventory record says which port it listens on; ``env.MSSQL_PORT`` overrides it for a
+    target named by a host record, which carries no port.
+    """
+    from db_ops.common import data_sources
+
+    override = str((job.env or {}).get("MSSQL_PORT") or "").strip()
+    if override:
+        return int(override)
+    wanted =str(getattr(job, "target_server_id", "") or job.server_id or "").strip()
+    for record in data_sources.load_db_instances(data_dir):
+        if str(record.get("server_id") or "").strip() != wanted:
+            continue
+        if str(record.get("db_type") or "").strip().lower() in ("sqlserver", "mssql") and record.get("port"):
+            return int(record["port"])
+        break
+    return 1433
+
+
+def _logs_through(files: list[dict[str, Any]], moment: str) -> list[dict[str, Any]]:
+    """The log backups a restore to ``moment`` needs: every one finished by then, AND the first one
+    finished after it - that is the one holding the moment, and STOPAT stops inside it.
+
+    The chain used to be "finished at or before the moment", which leaves out exactly that log: the
+    restore stopped at the end of the previous one, as early as fifteen minutes before what was
+    asked, and reported success (the point-in-time drill, 2026-09-25). Compared in the server's
+    clock, as the listing's own window is.
+    """
+    from db_ops.lib.restore.moment import MomentError, server_clock_text
+
+    def clock(text: str) -> str:
+        head, dot, rest = str(text or "").strip().partition(".")
+        text = head + rest.lstrip("0123456789") if dot and len(head) >= 19 else str(text or "").strip()
+        try:
+            return server_clock_text(text[:-1] + "+00:00" if text.endswith("Z") else text)
+        except MomentError:
+            return text.replace("T", " ")[:19]
+
+    bound = clock(moment)
+    kept: list[dict[str, Any]] = []
+    for item in files:  # oldest first, as the listing returns them
+        kept.append(item)
+        if item.get("finished_at") and clock(item["finished_at"]) > bound:
+            break
+    return kept
 
 
 def _plan_sqlserver(job: Any, secrets: dict[str, str], *, point_in_time: str,
-                    host: dict[str, Any], data_dir: Any) -> list[dict[str, Any]]:
+                    host: dict[str, Any], data_dir: Any, dry_run: bool = False) -> list[dict[str, Any]]:
+    _UNREADABLE.clear()  # this plan's listings only - never a previous restore's
     directory = _visible_dir(job)
     target = {
-        "host": host["host"], "port": 1433, "username": job.env.get("MSSQL_USER", "sa"),
+        "host": host["host"], "port": _sqlserver_port(job, data_dir=data_dir),
+        "username": job.env.get("MSSQL_USER", "sa"),
         "password": _secret(job.env_secrets.get("MSSQL_PASSWORD", ""), secrets,
                             where=f"{job.restore_id}.env_secrets.MSSQL_PASSWORD"),
     }
@@ -169,11 +240,20 @@ def _plan_sqlserver(job: Any, secrets: dict[str, str], *, point_in_time: str,
         if job.env_secrets.get("BACKUP_ENCRYPTION_PASSWORD") else ""
     if cert_password:
         name = job.env.get("BACKUP_CERT_NAME", "db_ops_backup_cert")
-        steps.append({"op": "restore-key", "request": {
+        key_step = {"op": "restore-key", "request": {
             "certificate_name": name,
             "cer_path": f"{directory.rstrip('/')}/_cert/{name}.cer",
             "pvk_path": f"{directory.rstrip('/')}/_cert/{name}.pvk",
-            "password": cert_password, "target": target}})
+            "password": cert_password, "target": target}}
+        # Imported NOW, before the listing below: RESTORE HEADERONLY cannot read an encrypted
+        # backup on an instance without its certificate (Msg 33111), so a key step queued behind
+        # the listing never ran on a fresh target - the listing failed first. The import drops
+        # and recreates the certificate, so doing it on every run is safe. A dry run changes
+        # nothing, so there it stays a planned step - and its listing may fail for this reason.
+        if not dry_run:
+            _execute("restore-key", key_step["request"])
+            key_step["done"] = True
+        steps.append(key_step)
 
     base = {"db_type": "sqlserver", "path": directory, "target": target}
     databases = [d for d in (job.env.get("MSSQL_DATABASES", "") or "").split(",") if d.strip()]
@@ -193,8 +273,9 @@ def _plan_sqlserver(job: Any, secrets: dict[str, str], *, point_in_time: str,
         diff = _list_backup_files({**scoped, "kinds": ["diff"], "latest": True, "after": anchor,
                                   **({"before": point_in_time} if point_in_time else {})})
         anchor = diff["newest_finished_at"] or anchor
-        logs = _list_backup_files({**scoped, "kinds": ["log"], "after": anchor,
-                                  **({"before": point_in_time} if point_in_time else {})})
+        logs = _list_backup_files({**scoped, "kinds": ["log"], "after": anchor})
+        if point_in_time:
+            logs = {**logs, "files": _logs_through(logs["files"], point_in_time)}
 
         # NORECOVERY on everything but the last step: a database recovered early cannot take the
         # rest of its chain, and the only fix is to start the whole restore again.
@@ -214,11 +295,16 @@ def _plan_sqlserver(job: Any, secrets: dict[str, str], *, point_in_time: str,
 
     steps.append({"op": "verify-restore", "request": {
         "db_type": "sqlserver", "database_names": databases, "target": target}})
+    if _UNREADABLE:
+        steps.append({"op": "warning", "warning": (
+            f"{len(_UNREADABLE)} file(s) named like backups could not be read as backups and were "
+            f"passed over - the restore used the newest chain it could read: "
+            f"{', '.join(sorted(_UNREADABLE)[:5])}")})
     return steps
 
 
 def _plan_oracle(job: Any, secrets: dict[str, str], *, point_in_time: str,
-                 host: dict[str, Any], data_dir: Any) -> list[dict[str, Any]]:
+                 host: dict[str, Any], data_dir: Any, dry_run: bool = False) -> list[dict[str, Any]]:
     directory = _visible_dir(job)
     request: dict[str, Any] = {
         "db_type": "oracle", "mode": "duplicate", "host": host,
@@ -243,7 +329,7 @@ def _plan_oracle(job: Any, secrets: dict[str, str], *, point_in_time: str,
 
 
 def _plan_postgresql(job: Any, secrets: dict[str, str], *, point_in_time: str,
-                     host: dict[str, Any], data_dir: Any) -> list[dict[str, Any]]:
+                     host: dict[str, Any], data_dir: Any, dry_run: bool = False) -> list[dict[str, Any]]:
     directory = _visible_dir(job)
     # Listed on the HOST: the layout is read from directory names, and the host is where the
     # staging lives. The combine itself runs inside the container.
@@ -255,9 +341,17 @@ def _plan_postgresql(job: Any, secrets: dict[str, str], *, point_in_time: str,
                               **({"before": point_in_time} if point_in_time else {})})
     if not full["files"]:
         raise RestoreByIdError(f"{job.restore_id}: no base backup found under {directory}.")
-    incr = _list_backup_files({**base, "kinds": ["diff"], "after": full["newest_finished_at"],
+    # The incrementals by NAME, as pg_combinebackup's chain and `backup-chain` read it: every
+    # `_INCR` whose stamp sorts after the full's. By finish time ("after" the full) they tied when
+    # a full and its incremental were staged in the same second, and the chain lost the
+    # incremental (2026-09-25).
+    incr = _list_backup_files({**base, "kinds": ["diff"],
                               **({"before": point_in_time} if point_in_time else {})})
-    chain = [full["files"][0]["path"]] + [f["path"] for f in incr["files"]]
+    full_name = posixpath.basename(full["files"][0]["path"].rstrip("/"))
+    chain = [full["files"][0]["path"]] + sorted(
+        (f["path"] for f in incr["files"]
+         if posixpath.basename(f["path"].rstrip("/")) > full_name),
+        key=lambda p: posixpath.basename(p.rstrip("/")))
 
     data_directory = job.env.get("PGDATA", "/var/lib/postgresql/18/docker")
     staging = job.env.get("PG_STAGING", "/var/lib/postgresql/dbops_staging")
@@ -267,11 +361,19 @@ def _plan_postgresql(job: Any, secrets: dict[str, str], *, point_in_time: str,
     # missing its middle produces a data directory that starts and is incomplete.
     step = ({"op": "restore-diff", "request": {**common, "backup_paths": chain}} if len(chain) > 1
             else {"op": "restore-full", "request": {**common, "backup_path": chain[0]}})
+    recovery = {"wal_dir": f"{directory.rstrip('/')}/wal",
+                **({"stopat": point_in_time} if point_in_time else {})}
+    if host.get("runtime") == "docker":
+        # Into a container the recovery configuration travels WITH the combine, written before the
+        # first start. As a separate step after it, it reached a server that had already started
+        # and replayed no WAL at all (the lab drill, 2026-09-24).
+        step["request"].update(recovery)
+        replay: list[dict[str, Any]] = []
+    else:
+        replay = [{"op": "restore-log", "request": {**common, **recovery}}]
     return [
         step,
-        {"op": "restore-log", "request": {
-            **common, "wal_dir": f"{directory.rstrip('/')}/wal",
-            **({"stopat": point_in_time} if point_in_time else {})}},
+        *replay,
         # PGPORT when the job states one: psql with no -p takes the default cluster, which is right
         # inside a container and wrong on a host running two.
         {"op": "verify-restore", "request": {
@@ -306,6 +408,66 @@ def _execute(op: str, request: dict[str, Any]) -> dict[str, Any]:
         raise RestoreByIdError(str(exc)) from exc
 
 
+def _metadata_phase(job: Any, phase: str, *, data_dir: Any, on_phase: Any) -> None:
+    """One instance-metadata phase around the restore, announced either way.
+
+    An entry without ``server_metadata`` is told so once, on the first phase - its stdout gains
+    nothing (an entry that never asked must not), but a Telegram reader following the steps
+    otherwise cannot tell "not configured" from "forgotten".
+    """
+    from db_ops.backup_restore.restore_script import replay_metadata_phase
+
+    plan = getattr(job, "server_metadata", None)
+    if plan is None or not getattr(plan, "enabled", False):
+        if phase == instance_bundle.PRE_DATABASE:
+            engine = str(getattr(job, "db_type", "") or "").lower()
+            reason = ("not needed - logins, roles and grants are inside the physical backup"
+                      if engine in ("oracle", "postgresql")
+                      else "not replayed - server_metadata is off for this entry")
+            announce(on_phase, "METADATA_SKIP",
+                     f"Restore {job.restore_id}: instance metadata {reason}.")
+        return
+    replay_metadata_phase(job, phase=phase, data_dir=data_dir, on_phase=on_phase)
+
+
+def _plan_summary(steps: list[dict[str, Any]]) -> str:
+    """What a plan restores, in the words a Telegram reader needs: which backups, how many.
+
+    Read off the plan itself rather than written per engine, so it cannot describe work the plan
+    does not do.
+    """
+    parts: list[str] = []
+    by_database: dict[str, list[str]] = {}
+    for step in steps:
+        op, req = step.get("op"), step.get("request") or {}
+        paths = [str(p) for p in (req.get("backup_paths") or
+                                  ([req["backup_path"]] if req.get("backup_path") else []))]
+        names = [posixpath.basename(p.rstrip("/")) or p for p in paths]
+        if op == "restore-key":
+            parts.append("the backup certificate")
+        elif op == "restore-full" and req.get("mode") == "duplicate":
+            parts.append(f"RMAN DUPLICATE of {req.get('oracle_sid') or 'the instance'} from "
+                         f"{req.get('backup_location') or (paths[0] if paths else '?')} (level 0, "
+                         "incrementals and archived logs as RMAN picks them)")
+        elif req.get("database_name"):
+            # SQL Server: one chain per database.
+            words = {"restore-full": f"full {names[0] if names else ''}".strip(),
+                     "restore-diff": f"diff {names[0] if names else ''}".strip(),
+                     "restore-log": f"{len(paths)} log(s)"}
+            if op in words:
+                by_database.setdefault(str(req["database_name"]), []).append(words[op])
+        elif op in ("restore-full", "restore-diff"):
+            # A summary that raised would fail the restore it describes; a step without a named
+            # path is described, not indexed.
+            chain = ("the planned backup" if not names else f"base backup {names[0]}"
+                     + (f" + {len(names) - 1} incremental(s)" if len(names) > 1 else ""))
+            parts.append(chain + (", then WAL replay" if req.get("wal_dir") else ""))
+        elif op == "restore-log":
+            parts.append("WAL replay")
+    parts.extend(f"{database}: {' + '.join(words)}" for database, words in by_database.items())
+    return "; ".join(parts)
+
+
 # `_announce` is `db_ops.backup_restore.events.announce` since 2026-08-16 — it was four
 # near-copies in this app, one of which had already drifted its parameter names.
 
@@ -315,9 +477,10 @@ def restore_by_id(request: dict[str, Any], *, data_dir: Any = None,
                   on_phase: Any = None) -> dict[str, Any]:
     """Restore one configured entry through the common primitives.
 
-    ``on_phase(phase, message, extra)`` is called at the copy boundaries so a caller can announce
-    the long half of a remote drill. It is optional: this function decides *what happened*, the
-    caller decides *who hears about it*.
+    ``on_phase(phase, message, extra)`` is called at the copy boundaries (COPY_START/COPY_DONE),
+    around the restore (RESTORE_START/RESTORE_DONE) and around the check (VERIFY_START/VERIFY_DONE),
+    so a caller can announce every long stretch of a drill. It is optional: this function decides
+    *what happened*, the caller decides *who hears about it*.
     """
     from db_ops.backup_restore.backup import _load_secrets
     from db_ops.backup_restore.restore_script import load_script_restores
@@ -344,12 +507,14 @@ def restore_by_id(request: dict[str, Any], *, data_dir: Any = None,
 
     secrets = _load_secrets(data_dir=data_dir, key=key, key_base64=key_base64) \
         if job.env_secrets else {}
-    host = _host_block(job, data_dir=data_dir)
+    host = _host_block(job, data_dir=data_dir, load_secrets=lambda: secrets or _load_secrets(
+        data_dir=data_dir, key=key, key_base64=key_base64))
 
     # Staging stays with the machinery that has been doing it nightly for months. Re-deriving it
     # here would repeat the mistake this module was written after: a primitive that turned out to
     # know less than the script it was meant to generalise.
     transferred = None
+    target_host = None
     if getattr(job, "is_remote", False) and not bool(request.get("skip_transfer")) and not dry_run:
         from db_ops.backup_restore.backup import resolve_ssh_target
         from db_ops.backup_restore.restore_script import transfer_backup_to_target
@@ -366,30 +531,103 @@ def restore_by_id(request: dict[str, Any], *, data_dir: Any = None,
                   f"Restore {restore_id}: copy started {job.server_id} -> {job.target_server_id}.")
         transferred = transfer_backup_to_target(
             job, source=source, target=target_host,
-            data_dir=data_dir, key=key, key_base64=key_base64,
+            data_dir=data_dir, key=key, key_base64=key_base64, prune=False,
+            point_in_time=point_in_time,
         )
         announce(on_phase, "COPY_DONE",
                   f"Restore {restore_id}: copy finished - {transferred['copied']} piece(s), "
-                  f"{transferred['bytes_copied']} bytes, {transferred['skipped']} already present.",
+                  f"{transferred['bytes_copied']} bytes, {transferred['skipped']} already present"
+                  + (f", {transferred['removed_absent_at_source']} removed (gone at the source)"
+                     if transferred.get("removed_absent_at_source") else "")
+                  + ("" if transferred.get("include") else " (the whole directory)") + ".",
                   {"copied": transferred["copied"], "skipped": transferred["skipped"],
                    "bytes_copied": transferred["bytes_copied"],
-                   "pruned": transferred.get("pruned", 0)})
+                   "removed_absent_at_source": transferred.get("removed_absent_at_source", 0)})
 
-    steps = planner(job, secrets, point_in_time=point_in_time, host=host, data_dir=data_dir)
+    steps = planner(job, secrets, point_in_time=point_in_time, host=host, data_dir=data_dir,
+                    dry_run=dry_run)
 
     if dry_run:
         return {"restore_id": restore_id, "db_type": engine, "dry_run": True,
                 "steps": [s["op"] for s in steps]}
 
+    # The restore and its check are announced as well as the copy. After COPY_DONE a drill said
+    # nothing until END - an Oracle DUPLICATE is minutes, a large one hours - and END said only
+    # `status=done`: not which backups went in, not whether the databases then opened. The
+    # SQL Server engine path has said VERIFY_START / VERIFY_DONE since 2026-09-15; this path, which
+    # runs PostgreSQL, Oracle and container SQL Server, never did (asked on 2026-09-25, reading a
+    # PostgreSQL drill in Telegram: "only copy start/done - where is the restore, the verify?").
+    # Instance metadata (logins, roles, Agent jobs) before the databases and after them - the
+    # order the engine path and the old script runner keep. When the move onto this function
+    # (2.69.52) took the copy but left its events behind, it left this behind too: a container
+    # SQL Server entry with `server_metadata` on restored its databases and never its logins.
+    _metadata_phase(job, instance_bundle.PRE_DATABASE, data_dir=data_dir, on_phase=on_phase)
+
+    plan = _plan_summary(steps)
+    moment = f"to {point_in_time}" if point_in_time else "to the newest backup"
+    restoring = [s for s in steps
+                 if s.get("request") and s["op"] != "verify-restore" and not s.get("done")]
+    if restoring:
+        announce(on_phase, "RESTORE_START", f"Restore {restore_id}: restoring {plan}, {moment}.",
+                 {"plan": plan})
+    restore_started = time.monotonic()
+    restore_done_said = not restoring
+
+    def _restore_done() -> None:
+        nonlocal restore_done_said
+        if not restore_done_said:
+            restore_done_said = True
+            seconds = int(time.monotonic() - restore_started)
+            announce(on_phase, "RESTORE_DONE",
+                     f"Restore {restore_id}: {len(restoring)} restore step(s) finished in {seconds} s.",
+                     {"steps": len(restoring), "restore_seconds": seconds})
+
     results: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    verify: dict[str, Any] | None = None
     for step in steps:
+        if step.get("warning"):
+            warnings.append(step["warning"])
+            continue
+        if step.get("done"):
+            # Run while planning (the certificate, which the listing needed); recorded, not repeated.
+            results.append({"step": step["op"], "ok": True})
+            continue
+        if step["op"] == "verify-restore":
+            _restore_done()
+            announce(on_phase, "VERIFY_START",
+                     f"Restore {restore_id}: checking the restored database(s) can be opened.")
         outcome = _execute(step["op"], step["request"])
         results.append({"step": step["op"], "ok": bool(outcome.get("ok", True))})
-        if step["op"] == "verify-restore" and not outcome.get("ok"):
-            # A restore that finished and left a database nobody can query is the failure the
-            # whole verify step exists to catch; it must not be reported as success.
-            raise RestoreByIdError(
-                f"{restore_id}: restored, but verification failed - "
-                f"{outcome.get('failed')} of {outcome.get('checked')} database(s) unusable.")
+        if step["op"] == "verify-restore":
+            verify = {"checked": outcome.get("checked"), "failed": outcome.get("failed")}
+            announce(on_phase, "VERIFY_DONE",
+                     f"Restore {restore_id}: {outcome.get('checked')} database(s) checked, "
+                     f"{outcome.get('failed')} unusable.", verify)
+            if not outcome.get("ok"):
+                # A restore that finished and left a database nobody can query is the failure the
+                # whole verify step exists to catch; it must not be reported as success.
+                raise RestoreByIdError(
+                    f"{restore_id}: restored, but verification failed - "
+                    f"{outcome.get('failed')} of {outcome.get('checked')} database(s) unusable.")
+    _restore_done()
+    # Only after a restore that worked: Agent job steps name databases that have to exist.
+    _metadata_phase(job, instance_bundle.POST_DATABASE, data_dir=data_dir, on_phase=on_phase)
+
+    pruned = None
+    if transferred is not None and target_host is not None:
+        from db_ops.backup_restore.restore_script import prune_staged_backups
+
+        announce(on_phase, "DELETE_START",
+                 f"Restore {restore_id}: removing staged backups older than the entry's "
+                 f"retention ({int(job.cleanup_retention or 0)} s) from {job.target_backup_dir}.")
+        pruned = prune_staged_backups(job, target=target_host, data_dir=data_dir,
+                                      key=key, key_base64=key_base64)
+        announce(on_phase, "DELETE_DONE",
+                 f"Restore {restore_id}: {pruned.get('pruned', 0)} staged file(s) removed"
+                 + (f" ({pruned['skipped']})" if pruned.get("skipped") else "") + ".",
+                 {"pruned": pruned.get("pruned", 0),
+                  "retention_seconds": pruned.get("retention_seconds", 0)})
     return {"restore_id": restore_id, "db_type": engine, "steps": results,
-            "transferred": transferred, "point_in_time": point_in_time or None}
+            "transferred": transferred, "point_in_time": point_in_time or None,
+            "warnings": warnings, "plan": plan, "verify": verify, "pruned": pruned}

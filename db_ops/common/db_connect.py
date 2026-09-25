@@ -38,6 +38,11 @@ from db_ops.lib.target_profile import (
 
 DEFAULT_STATEMENT_TIMEOUT_SECONDS = 300
 
+#: How much longer than the server's own statement timeout the client waits on a PostgreSQL
+#: socket before calling the peer dead. The server cancels a statement at ``statement_timeout``
+#: and says so; the socket's deadline is only for a server that can no longer say anything.
+PG_SOCKET_GRACE_SECONDS = 60
+
 # Engine -> (default port, default database when the caller names none).
 _ENGINE_DEFAULTS = {
     "sqlserver": (1433, "master"),
@@ -203,6 +208,14 @@ def _connect_postgresql(*, host, port, database, username, password, connect_tim
         host=host, port=port, database=database or "postgres",
         user=username, password=password, timeout=connect_timeout,
     )
+    _widen_pg8000_socket(conn, statement_timeout)
+    # Before the first statement, not after it. pg8000 opens a transaction for any statement run
+    # without autocommit - including the set_config below - and switching autocommit on later does
+    # not close it, so an "autocommit" connection ran everything inside one transaction:
+    # CREATE DATABASE, ALTER SYSTEM and VACUUM refused, and one failing metric query poisoned the
+    # rest of the batch (2026-09-24).
+    if autocommit:
+        conn.autocommit = True
     if statement_timeout:
         cursor = conn.cursor()
         try:
@@ -216,9 +229,27 @@ def _connect_postgresql(*, host, port, database, username, password, connect_tim
             )
         finally:
             cursor.close()
-    if autocommit:
-        conn.autocommit = True
     return conn
+
+
+def _widen_pg8000_socket(conn: Any, statement_timeout: int | None) -> None:
+    """Give a pg8000 connection's socket the statement's deadline, not the connect's.
+
+    pg8000's ``timeout`` is not a connect timeout: ``socket.create_connection`` leaves it on the
+    socket for the connection's whole life, so every read waits at most that long. Any statement
+    that ran longer than the connect deadline died with ``timed out`` - reported as *could not
+    reach* the instance - and a PostgreSQL SQL task of ``SELECT pg_sleep(300)`` failed after 30 s
+    on a reachable server (the lab drill, 2026-09-25). The connect keeps its short deadline, so a
+    down host is still found out quickly; after it, the server's ``statement_timeout`` is the
+    bound and the socket waits a grace past it. With no statement timeout, reads wait as long as
+    the statement runs.
+
+    ``_usock`` is pg8000's raw socket (1.31); a connection without one is left as it is.
+    """
+    sock = getattr(conn, "_usock", None)
+    if sock is None or not hasattr(sock, "settimeout"):
+        return
+    sock.settimeout(int(statement_timeout) + PG_SOCKET_GRACE_SECONDS if statement_timeout else None)
 
 
 def _connect_mysql(*, host, port, database, username, password, connect_timeout,

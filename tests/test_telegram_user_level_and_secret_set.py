@@ -33,7 +33,7 @@ from db_ops.telegram.updates import set_user_level
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 KEY = "user-level-and-secret-set-passphrase"
-TOKEN = "8629909482:AAH-not-a-real-token-but-shaped-like-one-000"
+TOKEN = "7000000002:AAH-not-a-real-token-but-shaped-like-one-000"
 
 
 def _users(tmp_path, *records):
@@ -42,7 +42,7 @@ def _users(tmp_path, *records):
     return path
 
 
-OPERATOR = {"user_id": "851670612", "username": "operator_one", "user_type": 0, "status": "active"}
+OPERATOR = {"user_id": "700000005", "username": "operator_one", "user_type": 0, "status": "active"}
 OTHER = {"user_id": "700000001", "username": "operator_two", "user_type": 0, "status": "active"}
 
 
@@ -53,10 +53,10 @@ def test_a_user_is_cleared_by_id_and_the_permission_check_reads_it(tmp_path):
 
     path = _users(tmp_path, dict(OPERATOR), dict(OTHER))
 
-    result = set_user_level(user="851670612", level=100, users_path=path)
+    result = set_user_level(user="700000005", level=100, users_path=path)
 
     assert result["before"] == {"user_type": 0} and result["after"] == {"user_type": 100}
-    assert telegram_user_type(path, user_id="851670612") == 100
+    assert telegram_user_type(path, user_id="700000005") == 100
     assert telegram_user_type(path, user_id="700000001") == 0, "nobody else was touched"
 
 
@@ -81,7 +81,7 @@ def test_a_negative_level_is_refused_rather_than_read_as_disable(tmp_path):
     path = _users(tmp_path, dict(OPERATOR))
 
     with pytest.raises(RuntimeError, match="0 or more"):
-        set_user_level(user="851670612", level=-1, users_path=path)
+        set_user_level(user="700000005", level=-1, users_path=path)
 
 
 def test_a_node_nobody_has_messaged_says_how_users_get_there(tmp_path):
@@ -223,12 +223,12 @@ def test_the_pending_level_is_adopted_the_moment_they_first_speak(tmp_path):
     set_user_level(user="@newcomer", level=100, users_path=path, pending=True)
     pending = json.loads(path.read_text(encoding="utf-8"))["telegram_users"]
 
-    arriving = build_user_record({"id": 851670612, "username": "newcomer", "first_name": "New"})
+    arriving = build_user_record({"id": 700000005, "username": "newcomer", "first_name": "New"})
     assert arriving["user_type"] == 0, "intake always records a newcomer at 0"
 
     adopted = adopt_pending_user(pending, arriving)
 
-    assert adopted["user_id"] == "851670612"
+    assert adopted["user_id"] == "700000005"
     assert adopted["user_type"] == 100, "the level the operator set survives first contact"
     assert pending == [], "the pending record is consumed, never left to shadow the real one"
 

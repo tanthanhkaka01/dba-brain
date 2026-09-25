@@ -215,7 +215,14 @@ def test_every_docker_exec_in_the_oracle_scripts_goes_through_the_same_user(rman
     execs = [line for line in code.splitlines() if "$DOCKER exec" in line]
 
     assert execs, code
-    assert all("${exec_user}" in line for line in execs), execs
+    # One exception, by name: `run_root`, which only makes the backup folder and hands it to the
+    # engine's user when that user cannot (a lab's bind mount belongs to the SSH user). It writes
+    # no backup, so it cannot take one as another user.
+    as_root = [line for line in execs if line.lstrip().startswith("run_root()")]
+    assert len(as_root) == 1, as_root
+    assert all("${exec_user}" in line for line in execs if line not in as_root), execs
+    calls = [line for line in code.splitlines() if "run_root " in line and "run_root()" not in line]
+    assert calls and all("chown -R ${engine_uid}:${engine_gid}" in line for line in calls), calls
 
 
 @pytest.mark.parametrize("script", [ORACLE_DB, ORACLE_ARCH])

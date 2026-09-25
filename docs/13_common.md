@@ -185,6 +185,26 @@ fall back to `data_sources` when the caller passes nothing. Pass everything and 
 function; pass nothing and it silently reads *this repo's* `data/`. Same code, and only one of the
 two survives being packaged elsewhere. So keep passing the fact even when the default would work.
 
+### The rule for `common.cli`, and how far it is held (0.23.0)
+
+The operator, 2026-09-24: *`common.cli` imports nothing but `lib`, runs no other CLI, calls no
+app, reads no config JSON - input in, work, JSON out.* Measured that day, it was the rule for part
+of the layer and a description of the rest, so it is enforced as far as it is true and as a
+baseline where it is not:
+
+| Half of the rule | Held by | Exceptions |
+| --- | --- | --- |
+| imports no app | `test_a_shared_layer_never_imports_an_app` | none |
+| imports only `lib` (and `common`) | `test_common_imports_only_common_and_lib` | `cli.py`: `db_ops.config` and the root package's `__version__` - `COMMON_OUTSIDE_IMPORTS`, which may only shrink |
+| launches no CLI | `test_common_never_launches_a_db_ops_cli` (a literal `db_ops.x.cli`) and `test_common_launches_no_python_module_by_any_spelling` (`sys.executable`, a bare `-m`, `-m db_ops.…` in a string, a module name built into an f-string, `lib.common_cli`, `runpy`) | usage text naming a command for a reader |
+| reads no config | **by name, without exception**, for every module behind backup, restore and `create-db-docker`/`move-db-docker` (`CONFIG_FREE_BY_NAME`): no config, store or data-folder read, no import of the resolver tier, and a transport handed values - never `data_dir`/`secrets`/`credential`, and `open_session` with `resolve_key=False` | the 18 resolver-tier modules, frozen as `RESOLVER_TIER_AT_0_23_0` - it may only shrink; they move out in 0.24 |
+
+All of them live in `tests/test_import_boundaries.py` and `tests/test_common_layers.py`, and each
+was checked against a module written to break it. The named guard found one read on its first run:
+`backup-database`'s `server_metadata` resolved its instance out of the inventory. It is refused
+now (below), and the app exports the metadata the way it always had, through
+`sqlserver-export-instance`.
+
 ### The rules
 
 1. **A library-tier module reads nothing.** Not `data/*.json`, not `config.json`, not the secret
@@ -213,7 +233,7 @@ two survives being packaged elsewhere. So keep passing the fact even when the de
 | `plan.py` | What a spec would do, decided without touching anything. |
 | `sqlserver/chain.py` | Which backups to restore and in what order — from LSNs, not file names. |
 | `sqlserver/sql.py` | The RESTORE statements, with `STOPAT` on the one log that carries it. |
-| `sqlserver/timeparse.py` | Reading the moment; `STOPAT` is in the server's clock. |
+| `lib/restore/moment.py` | Reading the moment; `STOPAT` is in the server's clock (moved to `lib` in 0.23.0: every engine's restore step and the listing window use it). |
 | `sqlserver/runner.py` | The I/O: connect, ask the instance what is on disk, run the statements. |
 
 It reads no file at all, pinned by `tests/test_common_restore_is_pure.py` — which walks the
@@ -249,7 +269,7 @@ talking to. Each answers the question the only way it can be answered correctly 
 
 | Engine | Asked | Why not the file names |
 | --- | --- | --- |
-| SQL Server | the instance, `RESTORE HEADERONLY` | a `.bak` keeps its name when copied from another database |
+| SQL Server | the instance, `RESTORE HEADERONLY` - a file it calls not a backup (Msg 3241-3243) is skipped; any other error fails the listing with the file's path | a `.bak` keeps its name when copied from another database |
 | Oracle | RMAN, `LIST BACKUP` | an RMAN directory is flat; the level lives in the catalogue |
 | PostgreSQL | the directory layout | `base/<stamp>_FULL` / `_INCR` is what the backup job wrote **on purpose** |
 
@@ -333,16 +353,13 @@ writes an unencrypted set nobody notices until a restore needs it.
 The plan (and the dry run) names `env_names` and never env values: it exists to be shown to
 somebody, and half of them are passphrases.
 
-**`server_metadata`** (SQL Server only) exports the instance's logins, server roles, permissions,
-credentials, linked servers, endpoints, `sp_configure`, Database Mail and Agent jobs beside the
-backup. A SQL Server backup covers user databases only — the scripts select `database_id > 4` — so
-after a restore the database is back and none of the machinery around it is. Refused for Oracle and
-PostgreSQL, whose physical backups carry that state inside the data; refusing beats ignoring,
-because a caller that set it believes it is getting something.
-
-A metadata failure **never** fails the backup — the data is the thing that must not be lost — and it
-is skipped entirely when the backup failed, since a bundle beside a backup that did not complete is
-a pair of files that look matched and are not.
+**`server_metadata` is refused since 0.23.0.** A SQL Server backup covers user databases only —
+the scripts select `database_id > 4` — so the logins, roles, Agent jobs and the rest are exported
+separately, by `sqlserver-export-instance` after a backup that completed; the backup_restore app
+does that for an entry with a `server_metadata` block ("Where the scheduled run calls it", below).
+`backup-database` used to take the block too, and resolved its instance out of the inventory to do
+it - the one read of configuration behind this command. Refused rather than ignored, because a
+caller that set it believes it is getting the export.
 
 #### Windows SQL Server
 
@@ -519,7 +536,9 @@ operator to work out which of the two copies is the bad one.
 written would otherwise hash one set of bytes and send another, and the network would get the
 blame), pipes `cat` into `cat >` in 256 KB chunks, hashes the destination, and only then renames
 the `.dbops_partial` onto the real name. A mismatch discards the copy — it does not retry, for
-the same reason `pack-backup` does not.
+the same reason `pack-backup` does not. The stream itself is `ssh_relay.py`, which takes two open
+sessions and nothing else, so `move-db-docker` streams through the same code with the sessions it
+already holds instead of launching this command.
 
 ```json
 {"source":      {"target": "ACME-192-0-2-249-HOST", "path": "/tmp/bundle.tar.gz"},
@@ -537,7 +556,7 @@ an inline `access` block — so no password appears in the request.
 **Both stderr streams are drained on their own threads for the whole transfer.** Nothing reads
 them until `recv_exit_status()`, which cannot be reached while the copy is running — so a command
 that complains on every chunk fills its stderr window, blocks on the write, stops reading stdin,
-and the pipeline seizes with no error anywhere. `backup_restore.transfer` learned that by sitting
+and the pipeline seizes with no error anywhere. `backup_copy` (then `backup_restore.transfer`) learned that by sitting
 at RUNNING for two hours.
 
 **The target does not pull from the source directly**, though it would be faster: the two hosts
@@ -547,6 +566,74 @@ holds both credentials.
 
 First caller: `sre.move-db-docker`, which relays a docker image archive and each volume archive
 between two lab hosts.
+
+### `create-db-docker` / `move-db-docker` — a lab database built or moved, from a request
+
+Moved here from the `sre` app in 0.23.0 (`docker_db/`, with `cli_docker_db.py` in front), so the
+bot's `/spbot_create_db_docker` and the lab drills run the same `common.cli` path as everything
+else. In `sre` the provisioner decrypted its own password and wrote
+`data/docker_db_connections.json`, and the mover resolved both hosts out of `db_instances.json` and
+launched `relay-file` as a subprocess. Here none of that happens: the request carries the resolved
+password and resolved SSH logins, and the answer carries what the caller needs to register. `sre`
+is that caller - it stores and resolves, calls, and writes the record (`docs/10_sre_app.md`).
+
+**stdin only**, like `secret-set`: a database password and one or two SSH passwords travel in the
+request, and inline they would be on the command line, in a file plaintext on disk. **Progress on
+stderr** - and for the length of the work file descriptor 1 *is* stderr, because a local
+`docker compose up` writes to fd 1 directly and a Python `redirect_stdout` does not reach it.
+`lib.common_cli.run(..., stream_stderr=True)` lets the caller show that progress as it happens.
+Every command's answer leaves as **UTF-8 when stdout is a pipe** (set once, in `cli.py`'s entry
+point): its one client decodes UTF-8, and a Windows pipe defaults to the ANSI code page - every
+non-ASCII character in an answer arrived as U+FFFD until the labs showed it (0.23.0).
+
+```json
+{"name": "lab01", "engine": "postgres", "version": "18", "mode": "single",
+ "password_ref": "LAB01_PASSWORD", "password": "<resolved>",
+ "backup_mount": "/opt/db_ops/backup",
+ "remote": {"host": "192.0.2.249", "port": 22, "username": "labuser", "password": "<resolved>"},
+ "install_docker": false, "force": false, "dry_run": false}
+```
+
+An `ssh_login` (`remote`, and `source`/`destination` for a move) is `host`, `port`, `username` and
+a resolved `password` or an absolute `key_file` - never a ref. A **dry run connects to nothing**
+for `create-db-docker` and never installs Docker; `move-db-docker`'s reads the source to say what it
+would move. The fields are in the reference (`input_create_db_docker`, `output_create_db_docker`,
+`input_move_db_docker`, `output_move_db_docker`).
+
+### `run-sqlcmd` — one `sqlcmd` batch, run where the SQL Server is
+
+The SMB SQL Server restore's statements (1.38, 0.23.0). The `backup_restore` app decides what to
+run and what the answer means; this runs it - `via` `local`, `ssh` (a Linux host) or `winrm` (a
+Windows host, through a local `Invoke-Command` built by `lib.powershell`) - with every value in the
+request, on **stdin only** because it carries a SQL password and a host password. Each is the app's
+own command moved, not rewritten: the nightly restore of a production estate depends on them.
+Every stdout line is echoed to stderr as it arrives, including the ones a quick batch leaves for
+the final drain; a run past `timeout_seconds` comes back `timed_out: true` with what was read,
+because a RESTORE LOG cut off mid-way must be inspected rather than retried. The fields are
+`input_run_sqlcmd` / `output_run_sqlcmd`.
+
+### `backup-chain`, `copy-backup-dir`, `prune-staged-backups` — a restore's copy, step by step
+
+A cross-machine restore stages its backups on the target, and those two steps are commands of
+their own since 0.23.0 (1.48). They used to run inside the `backup_restore` app, over SSH sessions
+the app opened itself. That made the restore one long call with two steps nobody could run, test or
+watch alone. (The operator, 2026-09-25: "not one long command - common cli copy, common cli verify,
+common cli metadata ...".) The app now resolves the two logins and calls, in order:
+
+| Step | Command |
+| --- | --- |
+| which files | `backup-chain` - PostgreSQL's newest chain from the directory names, RMAN's own answer for Oracle (`RESTORE DATABASE PREVIEW` plus the catalog), everything for SQL Server. **A point in time copies everything**: both narrowings take the NEWEST chain, and a moment before the newest full needs an older one |
+| the copy | `copy-backup-dir` - one `tar` stream through the orchestrator. It skips a file the target already has at the same size and no older, and removes a staged file the source no longer has |
+| the listing | `list-backup-files` (unchanged) |
+| instance metadata | `sqlserver-replay-instance` (unchanged), before the databases and after them |
+| the restore | `restore-full` / `restore-diff` / `restore-log` (unchanged) |
+| the check | `verify-restore` (unchanged) |
+| the cleanup | `prune-staged-backups` - the staging folder past the entry's retention, **after** the verify |
+
+All three new ones are **stdin only**: their requests carry SSH passwords. A login is `host`, `port`,
+`username` and a resolved `password` or an absolute `key_file` - never a ref. The work is
+`db_ops/common/backup_copy.py`, which was `backup_restore/transfer.py` until 0.23.0. The fields are
+`input_`/`output_backup_chain`, `_copy_backup_dir` and `_prune_staged_backups`.
 
 ### Where the layer does not meet this yet
 
@@ -631,7 +718,8 @@ with an import in it.
 | `schema_copy.py` | **Single source of truth** for *reproducing one SQL Server schema on another instance*. `table_load.py` covers a file into one table; this covers "make schema `X` on instance B look like schema `X` on instance A". Nine phases in dependency order — partition function/scheme, change tracking on the database, tables, change tracking per table, indexes, checks, data, modules, foreign keys — with **FKs after data**, so load order cannot violate them. Every phase is **idempotent** (`IF OBJECT_ID(...) IS NULL`, `IF NOT EXISTS`, `CREATE OR ALTER`), because a run that dies in phase 4 has to resume by being run again rather than by being repaired. `plan` prints counts and statements and writes nothing; `apply` takes an `sp_getapplock` around the whole operation, because the "already has rows" guard is read-then-write and two appliers really did run against one target. Data moves **through the client** in batched `executemany` with `IDENTITY_INSERT` per table — `INSERT ... SELECT FROM [OtherDb]...` only works when both databases share an instance. **Input is a JSON object**, like `run-sql` and `rotate-password`. See [the section below](#copying-a-schema-between-instances-schema_copy). | `copy_schema`, `build_plan`, `apply_plan`, `plan_steps`, `verify_copy`, `copy_table_data`, `select_tables`, `select_modules`, `assert_destination`, `application_lock`, `format_plan`; `SchemaCopyError`; `SchemaCopyRequest`, `Endpoint`, `Step`; `PHASES`, `DEFAULT_BATCH_SIZE = 2000`, `DEFAULT_TIMEOUT_SECONDS = 900`, `DEFAULT_LOCK_TIMEOUT_SECONDS = 300`, `DEFAULT_MODULE_PASSES = 4` |
 | `schema_catalog.py` | **Single source of truth** for *what SQL Server's catalogue views say a schema contains* — the read half of `schema_copy`, kept apart because reading a catalogue and writing DDL fail differently and are worth testing separately. Also owns the answer to the question the feature request called worth as much as the copying: **`unsupported_features` lists what a copy will silently drop**. Scripting from `sys.tables` alone loses partitioning (a UAT hop shipped 0 of 32 partitioned indexes), change tracking (a `CREATE PROCEDURE` failed with Msg 22105 mid-deploy), filegroups, compression, temporal tables, extended properties and permissions. Reporting them is not the same as carrying them, and saying which is which is the point. | `unsupported_features`, and the per-object readers `schema_copy` plans from |
 | `result_format.py` | **Single source of truth** for *how a result set is rendered*: `json` (default, the only one a program should parse), `txt` (aligned table for a terminal), `csv` (RFC 4180 via the stdlib writer, header row included), `xml` (structure without a JSON parser), `xlsx` (writes a workbook, via `xlsx_export`), `raw` (values only, tab-separated, no header — so `\| cut -f2` works). Chosen inside the JSON request as `"format"`, never a flag, so a config file can carry it. `xlsx` was already here but reachable only from `sql_tasks` config; the rest existed nowhere and were being improvised by piping JSON into whatever the operator remembered. **A SQL NULL stays distinguishable from an empty string in every text format** — rendering both as nothing silently answers a question nobody asked. `csv` does it PostgreSQL's way (`COPY ... WITH CSV`): an empty *unquoted* field is NULL, `""` is the empty string; numbers stay unquoted so a spreadsheet reads them as numbers. Column names become XML *attributes*, not tags: SQL returns columns called `1` or `count(*)` and neither is a legal element name. `write_result` is the single entry point for "put this result set in a file", whatever the format — callers get one call and no branch, which is what `sql_tasks` now uses for all of `xlsx`/`csv`/`txt`/`xml`. | `render_result`, `write_result`, `normalize_format`; `ResultFormatError`; `RESULT_FORMATS`, `NULL_TEXT` |
-| `file_transfer.py` | **Single source of truth** for *moving one named file* between this host and a remote one, and for *packing a set into one archive* so it can be moved as one. The apps that move files do it inside a larger job — `backup_restore.transfer` syncs a whole backup directory between two remote hosts, `backup_restore.copy_backup` pulls a window of backups off an SMB share — and neither answers "put **this** file **there**", so that kept being typed by hand as `ssh`/`scp`/`docker cp`. Every transfer is size-verified and a short copy deletes what it wrote; overwriting must be asked for and lands atomically; a same-size destination is skipped; mtime is preserved (the restore log-chain filter reads it). `pack_files` builds the archive **on the host that already holds the files** and returns its `sha256` — size catches a truncated copy, not a corrupted one. **Not** for staging a backup set: per-file SFTP across two internet hops measured 10 KB/s, which is why `backup_restore.transfer` streams a directory as one `tar`. **Input is a JSON object.** | `fetch_file`, `send_file`, `pack_files`; `FileTransferError`; `STATUS_COPIED` / `STATUS_REPLACED` / `STATUS_SKIPPED_EXISTS`, `PARTIAL_SUFFIX` |
+| `backup_copy.py` | A restore's **staging copy** between two hosts (0.23.0, from `backup_restore.transfer`): which parts of a backup directory the restore needs (`chain_include` - PostgreSQL by name, Oracle by asking RMAN, everything for SQL Server and for a point in time), the copy as one `tar` stream that skips what is there and removes what the source dropped (`sync_backup_dir`), the engine's read access (`open_for_the_engine`), and the staging cleanup past retention (`prune_target_dir`). SSH clients arrive open, from values the caller resolved; the CLI face is `cli_backup_copy` (`backup-chain`, `copy-backup-dir`, `prune-staged-backups`). | `chain_include`, `sync_backup_dir`, `open_for_the_engine`, `prune_target_dir`; `TransferResult` |
+| `file_transfer.py` | **Single source of truth** for *moving one named file* between this host and a remote one, and for *packing a set into one archive* so it can be moved as one. The apps that move files do it inside a larger job — `backup_copy` (`copy-backup-dir`) syncs a whole backup directory between two remote hosts, `backup_restore.copy_backup` pulls a window of backups off an SMB share — and neither answers "put **this** file **there**", so that kept being typed by hand as `ssh`/`scp`/`docker cp`. Every transfer is size-verified and a short copy deletes what it wrote; overwriting must be asked for and lands atomically; a same-size destination is skipped; mtime is preserved (the restore log-chain filter reads it). `pack_files` builds the archive **on the host that already holds the files** and returns its `sha256` — size catches a truncated copy, not a corrupted one. **Not** for staging a backup set: per-file SFTP across two internet hops measured 10 KB/s, which is why `backup_copy` streams a directory as one `tar`. **Input is a JSON object.** | `fetch_file`, `send_file`, `pack_files`; `FileTransferError`; `STATUS_COPIED` / `STATUS_REPLACED` / `STATUS_SKIPPED_EXISTS`, `PARTIAL_SUFFIX` |
 | `sqlserver_patch.py` | The SQL-Server-specific half of a cumulative update: the "is this instance safe to patch" gate set, the unattended `setup.exe /Action=Patch` contract with its exit-code rules (**3010 = applied, restart required — never re-run**), and the build verification that reads `SERVERPROPERTY` first and registry **`PatchLevel`** (not `Version`) as corroboration. Everything platform-generic underneath is `host_ops`. See [the section below](#patching-a-sql-server-instance-sqlserver_patch). | `precheck`, `apply_cu`, `verify_build` (the JSON entry points); `patch_arguments`, `patch_exit_verdict`, `sqlserver_service_names`, `sqlserver_registry_key`, `setup_log_root`, `version_tuple`; `SqlServerPatchError`; `EXIT_SUCCESS_RESTART_REQUIRED = 3010` |
 | `ops_status.py` | **Is db_ops itself running** — the one question no other app here asks. Everything in db_ops watches databases; nothing watched db_ops, and on 2026-08-12 a NameError in the SQL task scanner made every scheduled scan exit 1 once a minute for a day while the daemon stayed up, the container stayed up and the metric reports kept arriving. Not one scheduled SQL task ran, and a person found it by noticing an absence. Reads `job_runs` and `app_commands.json` and answers two things the estate's own monitoring cannot: **overdue** (an app that stopped being *scheduled* writes no failure row at all, so "no errors" is not health) and **failed since the last alert went out** (the alert's own queue row is the watermark, so an app broken since Tuesday does not message the group every minute for three days — the standing failures ride the periodic summary instead, the same split `sla_policies.json` makes with `reminder_after_seconds`). That question is asked **over an interval, never sampled at an instant**: the first version compared the two newest `job_runs` rows at the moment it happened to run and in seven weeks never sent one alert, because APP-CONTROL runs once a minute while APP-TELEGRAM runs every four seconds — a failure that came and went between two checks was invisible (2026-08-14). Both ends of a **restart** are excused, the daemon's shutdown rows and the stale-`running` rows it closes on startup, or every deploy would raise an incident. The summary's working-hours window is **local** and constrains only the summary; the failure alert ignores the clock, because an app that breaks at 03:00 is news at 03:00. Its state is the queue row it already writes (`source_type=ops_status`), so there is no state table to drift. CLI face: `common.cli ops-status`, scheduled as `APP-CONTROL`. | `build_ops_status`, `format_summary`, `format_failure_alert`, `summary_is_due`, `last_summary_sent_at`, `last_failure_alert_at`, `load_app_commands`; `FAILED_STATUSES`, `NON_FAULT_MARKERS`, `SOURCE_TYPE`, `SUMMARY_NOTE`, `FAILURE_NOTE` |
 | `oracle_bridge.py` | **Single source of truth** for *reaching a legacy Oracle (8i / 8.1.7)*, which no driver db_ops can install speaks to — `oracledb` thin needs 12.1+, an 11.2 client refuses 8.1.7. The one combination that works (Oracle Client 10.2 + `cx_Oracle` 5.1.2 + Python 2.7 32-bit) lives apart as a self-contained tool — installed beside the project rather than shipped inside the package — that takes one JSON request on stdin; this module is everything that decides *what the tool is asked to do*. Two transports, per target via `sql_access.method`: **`subprocess`** runs the tool here (nothing to keep running, request never leaves the host — the request goes on **stdin**, never in argv, because an argument is readable in the process table) and **`api`** POSTs to the HTTP bridge that runs it on another host, sending `connect + mode + minute + nonce` as a short-lived (~90s) HMAC-signed token instead of the password. **The connect string is assembled per run** from the target's `users.json` credential + the encrypted store — never stored (`connect_ref` still overrides; the two that existed were deleted for duplicating a password). `schema_prelude` issues `ALTER SESSION SET CURRENT_SCHEMA` so an application's unqualified script runs under a DBA login instead of ORA-00942. | `run_query`, `run_bridge_query`, `normalize_sql_access`, `is_legacy`, `build_connect_string`, `resolve_connect`, `resolve_secret`, `connect_mode`, `schema_prelude`, `prepare_sql`, `subprocess_argv`, `encrypt_token`; `LegacyOracleError`; `SUPPORTED_SQL_ACCESS_METHODS`, `DEFAULT_TTL_SECONDS = 90`, `DEFAULT_TOOL_DIR` |
@@ -721,7 +809,7 @@ Rules worth knowing:
 | Caller | Face used |
 | --- | --- |
 | `metrics.collector` (`execute_ssh` / `execute_winrm`) | `run_script` — the metric contract (JSON stdout → rows) stays in the collector |
-| `sre.remote.RemoteUbuntuHost` | `SshSession` for run + SFTP; the class adds the `CompletedProcess` shape the provisioner expects |
+| `common.docker_db.remote_host.RemoteUbuntuHost` | `SshSession` for run + SFTP, opened from a resolved login with `resolve_key=False`; the class adds the `CompletedProcess` shape the provisioner expects |
 | `backup_restore.copy_backup.open_ssh_connection` | `open_session(...).client` — a raw paramiko client, because the restore paths use SFTP and incremental channel reads directly |
 | `backup_restore.preflight` (remote SMB share) | `run_script` over WinRM |
 | `backup_restore.restore_database` / `certificate` | `build_invoke_command_argv` — they compose the remote script and run it through their own runner (retry, progress logging, target-context guards) |
@@ -1011,6 +1099,24 @@ Rules worth knowing:
 - **Only the first result set is returned**; later sets are drained, and the rowcount of any
   batch that returned no result set is summed into `affected_rows` (reported, not rejected).
 - **`GO` splits batches** (`split_sql_batches`), so a script pasted out of SSMS runs as-is.
+- **A PostgreSQL script runs one statement at a time** (0.23.0), split on `;` outside strings,
+  quoted names, comments and `$$` bodies by `lib.sql_text.split_postgresql_statements`. pg8000
+  returns one result set per execute, so a whole script merged every SELECT's rows into one set
+  and lost the row counts. With `params` the script is not split: the values are numbered for the
+  whole script, not for each statement.
+- **A PostgreSQL statement may run past the connect timeout** (0.23.0). pg8000's `timeout` is
+  the socket's for the connection's whole life, not a connect timeout, so every statement longer
+  than the connect deadline died with `timed out`, reported as *could not reach*. A 5-minute
+  task failed at 30 s on a reachable server. `db_connect` keeps the short deadline for the
+  connect, then gives the socket the statement timeout plus `PG_SOCKET_GRACE_SECONDS` (60): the
+  server cancels a statement at its `statement_timeout` and says so, and the socket's deadline
+  is only for a server that can no longer answer.
+- **An Oracle batch loses its trailing `;`, unless it is PL/SQL** (`lib.sql_text.oracle_statement`).
+  The SQL parser refuses the `;` (ORA-00911); the PL/SQL parser requires the one after `END`
+  (PLS-00103). A block is a `BEGIN` / `DECLARE`, or the `CREATE` of a procedure, function, package,
+  trigger, type or library, after any leading comments. A SQL*Plus `/` line after a block is not
+  sent. Until 0.23.0 every batch lost its `;`, so no block could run. Separate Oracle statements
+  with `GO`: an Oracle batch is one statement.
 - **`rows` holds native driver values** (`datetime`, `Decimal`); `json_safe_result()` returns
   a serializable copy.
 - **`database_name` beats `USE <db>;`** — pin the database in the request instead of opening the
@@ -1617,6 +1723,12 @@ credential you run, plus the Telegram files, which name the people. Two conseque
 the reason it is built this way:
 
 - **A hit cannot be a false positive by construction.** Every term is a value this operator uses.
+  Except a vendor's constant a lab record repeats - `FREEPDB1`, and since 0.23.0 `FREE`, Oracle
+  Free's SID, which matched every `FREE_SPACE` in the tree - and those sit in `GENERIC_TERMS` with
+  their reason.
+- **The Telegram files are read by name** (`data_dir=`). Passed positionally, the folder went where
+  the loaders take a file path, the read failed, and the failure was skipped as "an optional file":
+  no Telegram id or username was searched for from 2026-08-17 until 0.23.0.
 - **The answer improves on its own.** A machine added to the inventory is searched for from that
   moment. A hand-maintained map is a second copy of the estate, and the two disagree the first time
   somebody adds a server without updating the map — which is precisely how the 2026-08-21 scrub was
@@ -1651,6 +1763,27 @@ the tiers and word boundaries are applied.
 
 `review` is reported in `data.review` and deliberately kept out of the number a gate acts on.
 Rewriting those mechanically is how a scrub renames a Python function called `export`.
+
+**A person or a chat is never `review`**, whatever its shape. A Telegram user id is digits with no
+separator and a username is often plain lowercase, so by shape both read as ordinary words - and a
+person's id sat in a shipped test, reported and never counted. From 0.23.0 a term from the Telegram
+files is at least `likely`.
+
+**The default surface includes `tests/`**, `CHANGELOG.md` and `.github/`: all three ship, in the
+public repository and (the tests) in every sdist. Until 0.23.0 the default read `db_ops`, `docs`,
+`examples` and the root files only, and the export's own scan was the one place tests were read.
+
+### Its sibling: `check-secret-literals`
+
+`check-identifiers` finds names; a password is not a name. `check-secret-literals` decrypts the
+store and searches the same surface for every stored **value**, reporting the ref and the line and
+never the value. From 0.23.0 it also searches for **the passphrase itself**, as typed and as the
+base64 `--key-base64` takes: the store cannot hold its own key, so a search of its values never
+looked for it, and a test docstring quoting a failure message had carried it.
+
+```bash
+python -m db_ops.common.cli check-secret-literals '{}'      # needs the key; 0 hit(s) is the pass
+```
 
 ### What is never reported, and why each one is there
 
@@ -2268,6 +2401,12 @@ python -m db_ops.common.cli fetch-file '<json>'     # file_transfer: copy one fi
 python -m db_ops.common.cli send-file '<json>'      # file_transfer: copy one file from here to a host
 python -m db_ops.common.cli pack-files '<json>'     # file_transfer: pack files into one archive + sha256
 python -m db_ops.common.cli relay-file '<json>'     # file_transfer: copy one file host->host, hash-verified
+<request> | python -m db_ops.common.cli create-db-docker -  # docker_db: build a lab database instance
+<request> | python -m db_ops.common.cli move-db-docker -    # docker_db: move one, data included
+<request> | python -m db_ops.common.cli run-sqlcmd -        # sqlcmd_run: one batch, local / ssh / winrm
+<request> | python -m db_ops.common.cli backup-chain -      # backup_copy: which files a restore needs
+<request> | python -m db_ops.common.cli copy-backup-dir -   # backup_copy: host to host, one tar stream, mirrored
+<request> | python -m db_ops.common.cli prune-staged-backups -  # backup_copy: a restore's staging past retention
 python -m db_ops.common.cli rotate-password '<json>'  # password_rotation: change a login's password
 python -m db_ops.common.cli check-secret '<json>'     # secret_check: prove each secret still logs in
 <request> | python -m db_ops.common.cli secret-set -  # lib.secret_text: one secret into the encrypted store

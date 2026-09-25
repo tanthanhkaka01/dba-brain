@@ -23,7 +23,8 @@ import json
 
 import pytest
 
-from db_ops.sre.cli import SKIP_SENTINEL, ProvisionError, _supplied_password_text
+from db_ops.sre.cli import SKIP_SENTINEL, _supplied_password_text
+from db_ops.sre.docker_db.resolve import DockerDbRequestError
 from db_ops.telegram.command_processor import DEFAULT_COMMANDS_PATH, build_cli_argv
 
 
@@ -102,7 +103,7 @@ def test_a_named_but_genuinely_empty_variable_is_still_an_error(monkeypatch):
     that to "reuse whatever is stored" would provision a database with a password nobody chose."""
     monkeypatch.delenv("DB_OPS_NEW_DB_PASSWORD", raising=False)
 
-    with pytest.raises(ProvisionError, match="empty"):
+    with pytest.raises(DockerDbRequestError, match="empty"):
         _supplied_password_text(_args(password_text_env="DB_OPS_NEW_DB_PASSWORD"))
 
 

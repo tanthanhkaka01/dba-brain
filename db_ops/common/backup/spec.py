@@ -40,9 +40,6 @@ from db_ops.lib.backup_level import (  # noqa: F401 - re-exported for compatibil
 from db_ops.lib.paths import resolve_tool_path
 
 
-
-
-
 #: The env var a script reads its level from, when one is forced.
 LEVEL_ENV = "BACKUP_LEVEL"
 
@@ -53,8 +50,6 @@ LEVEL_ENV = "BACKUP_LEVEL"
 #: and "silently reported success" is the worst failure a backup can have. So success is a positive
 #: statement by the script, not the absence of an error from the shell.
 RECEIPT = "RESULT=ok"
-
-
 
 
 @dataclass(frozen=True)
@@ -71,9 +66,6 @@ class BackupSpec:
     dry_run: bool = False
     #: Where the script came from, for the answer. Not used to run anything.
     script_source: str = ""
-    #: SQL Server only: also export the instance's server-level metadata next to the backup.
-    #: ``{"target": ..., "output_dir": ..., "include": [...]}`` — see :func:`_server_metadata`.
-    server_metadata: dict[str, Any] = field(default_factory=dict)
 
 
 def parse_backup_spec(request: dict[str, Any]) -> BackupSpec:
@@ -86,6 +78,12 @@ def parse_backup_spec(request: dict[str, Any]) -> BackupSpec:
         raise BackupSpecError(
             f"db_type must be one of {', '.join(sorted(BACKUP_LEVEL_BY_ENGINE))}; got {db_type!r}."
         )
+
+    if request.get("server_metadata") not in (None, {}, False):
+        # Refused, not ignored: a caller that set it believes it is getting the export. It was a
+        # branch that looked its target up in db_instances.json - the one read of configuration
+        # behind this command, found by the guard that holds backup to reading none (1.37).
+        raise BackupSpecError("server_metadata is not part of backup-database since 0.23.0: exporting an instance's logins, roles and Agent jobs resolves that instance out of the inventory, and this command reads no configuration. Run sqlserver-export-instance after the backup - the backup_restore app does exactly that for an entry with a server_metadata block.")
 
     script, source = _script(request)
     env = _env(request.get("env"))
@@ -114,49 +112,7 @@ def parse_backup_spec(request: dict[str, Any]) -> BackupSpec:
         env=env,
         timeout=timeout_seconds,
         dry_run=bool(request.get("dry_run")),
-        server_metadata=_server_metadata(request.get("server_metadata"), db_type=db_type),
     )
-
-
-def _server_metadata(raw: Any, *, db_type: str) -> dict[str, Any]:
-    """The opt-in that carries an instance's logins, roles, Agent jobs and linked servers.
-
-    A SQL Server backup covers user databases only — the script selects ``database_id > 4``, so
-    ``master``/``msdb``/``model`` are excluded and every login, server role, permission, credential,
-    linked server, Agent job and ``sp_configure`` value is absent after a restore. The database
-    comes back and none of the machinery around it does.
-
-    Oracle and PostgreSQL need no equivalent: RMAN ``DUPLICATE`` and ``pg_basebackup`` are physical
-    and whole-instance, so that state is inside the data. Asking for it there is refused rather
-    than quietly ignored — a caller that set it believes it is getting something.
-    """
-    if raw in (None, {}, False):
-        return {}
-    if not isinstance(raw, dict):
-        raise BackupSpecError("server_metadata must be an object.")
-    if not bool(raw.get("enabled", True)):
-        return {}
-    if db_type != "sqlserver":
-        raise BackupSpecError(
-            f"server_metadata is SQL Server only; {db_type} backups are physical and carry "
-            "instance state inside the data already."
-        )
-    target = str(raw.get("target") or "").strip()
-    if not target:
-        raise BackupSpecError("server_metadata.target is required: the instance to read.")
-    output_dir = str(raw.get("output_dir") or "").strip()
-    if not output_dir:
-        raise BackupSpecError(
-            "server_metadata.output_dir is required. The bundle belongs beside the backup it "
-            "describes; a default here would put it somewhere the restore does not look."
-        )
-    metadata: dict[str, Any] = {"target": target, "output_dir": output_dir}
-    include = raw.get("include")
-    if include:
-        if isinstance(include, str):
-            raise BackupSpecError('server_metadata.include must be an array, e.g. ["logins"].')
-        metadata["include"] = [str(item).strip() for item in include if str(item).strip()]
-    return metadata
 
 
 def _script(request: dict[str, Any]) -> tuple[str, str]:

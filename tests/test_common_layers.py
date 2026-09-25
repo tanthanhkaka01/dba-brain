@@ -190,3 +190,151 @@ def test_the_library_tier_is_still_the_large_majority() -> None:
         "being the exception — either the facts belong in the callers, or common has become two "
         "packages that should be named as such."
     )
+
+
+# --------------------------------------------------------------------------- #
+# The operator's rule for common.cli, held BY NAME where it is already true (0.23.0)
+# --------------------------------------------------------------------------- #
+# "common.cli imports nothing but lib, runs no other CLI, calls no app, reads no config JSON -
+# input in, work, JSON out" (the operator, 2026-09-24). Measured that day, it held for backup,
+# restore and the lab-docker commands once create-db-docker moved in - and did not hold for the
+# 18 resolver-tier modules above, which are the next version's work (0.24). So it is enforced two
+# ways: without exception for the modules below, which are named so none of them can quietly
+# become a resolver; and as a baseline for the rest, which may only shrink.
+
+#: Every module behind backup-database, list/prune-backup-files, restore-full/diff/log/key/
+#: metadata, verify-restore, restore-database, run-sqlcmd (the SMB restore's statements),
+#: pack-backup/pull-file/push-file, create/move-db-docker and a restore's copy (backup-chain,
+#: copy-backup-dir, prune-staged-backups). A trailing slash names a package.
+CONFIG_FREE_BY_NAME: tuple[str, ...] = (
+    "cli_backup.py", "backup/",
+    "cli_backup_files.py", "backupfiles/", "deletefiles.py",
+    "cli_restorestep.py", "restorestep/", "restorekey.py", "restoremetadata.py", "verifyrestore.py",
+    "cli_restore.py", "restore/",
+    "cli_filetransfer.py", "filetransfer.py",
+    "cli_docker_db.py", "docker_db/",
+    "cli_sqlcmd.py", "sqlcmd_run.py",
+    # 0.23.0 (1.48): a restore's copy and staging cleanup, moved out of the app.
+    "cli_backup_copy.py", "backup_copy.py",
+    "hostcmd.py", "ssh_relay.py", "db_connect.py",
+)
+
+#: The two transports a library module may reach a host through - with the credentials it was
+#: handed. Both *can* resolve (a `password_ref`, a bare key name under data/ssh_keys/), which is
+#: why they are resolver tier; what makes a call site library tier is that it never asks them to.
+TRANSPORTS = {"ssh", "remote_exec"}
+#: Handing a transport any of these asks it to look something up.
+_RESOLVING_KEYWORDS = {"data_dir", "secrets", "credential"}
+
+
+def _config_free_files() -> list[Path]:
+    files = []
+    for name in CONFIG_FREE_BY_NAME:
+        if name.endswith("/"):
+            files += sorted(p for p in (COMMON_ROOT / name).rglob("*.py") if "__pycache__" not in p.parts)
+        else:
+            files.append(COMMON_ROOT / name)
+    return files
+
+
+def _resolver_modules() -> set[str]:
+    """`db_ops.common.x` names of the resolver tier, packages included."""
+    names = set()
+    for relative in READS_LOCAL_CONFIG:
+        dotted = relative[:-3].replace("/", ".")
+        names.add(dotted[: -len(".__init__")] if dotted.endswith(".__init__") else dotted)
+    return names
+
+
+def test_every_named_module_exists() -> None:
+    missing = [name for name in CONFIG_FREE_BY_NAME if not (COMMON_ROOT / name.rstrip("/")).exists()]
+    assert not missing, f"CONFIG_FREE_BY_NAME names what is not there: {missing}"
+
+
+@pytest.mark.parametrize("path", _config_free_files(), ids=_relative)
+def test_a_backup_restore_or_docker_module_reads_no_config_at_all(path: Path) -> None:
+    relative = _relative(path)
+    assert relative not in READS_LOCAL_CONFIG, (
+        f"common/{relative} is named as config-free, and cannot be moved to the resolver tier: "
+        "backup, restore and create-db-docker take every fact in the request (the operator's rule).")
+    assert not _reads_local_state(path), f"common/{relative}: {_reads_local_state(path)}"
+
+
+@pytest.mark.parametrize("path", _config_free_files(), ids=_relative)
+def test_a_backup_restore_or_docker_module_reaches_no_resolver(path: Path) -> None:
+    """Not even one hop away. A library module importing `host_ops` or `sql_run` reads config the
+    moment it calls them, and the per-module scan above would not see it."""
+    resolvers = _resolver_modules() - TRANSPORTS
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    reached = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            parts = node.module.split(".")
+            if parts[:2] == ["db_ops", "common"]:
+                inner = ".".join(parts[2:])
+                reached |= {inner} if inner else {alias.name for alias in node.names}
+                reached |= {f"{inner}.{alias.name}" for alias in node.names} if inner else set()
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.startswith("db_ops.common."):
+                    reached.add(alias.name[len("db_ops.common."):])
+    offenders = sorted(name for name in reached if name in resolvers
+                       or any(name.startswith(r + ".") for r in resolvers))
+    assert not offenders, f"common/{_relative(path)} imports the resolver tier: {offenders}"
+
+
+@pytest.mark.parametrize("path", _config_free_files(), ids=_relative)
+def test_a_transport_is_handed_values_never_asked_to_look_them_up(path: Path) -> None:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    offenders = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        # A transport's own function - imported by name, or `remote_exec.x` / `ssh.x`. Not any
+        # method that happens to share a name: paramiko's `transport.open_session()` opens a
+        # channel on a connection already made, and asks nothing of anyone.
+        func = node.func
+        if isinstance(func, ast.Name):
+            name = func.id
+        elif (isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name)
+              and func.value.id in TRANSPORTS):
+            name = func.attr
+        else:
+            continue
+        if name not in {"open_session", "run_command", "run_script", "open_ssh_client"}:
+            continue
+        keywords = {kw.arg: kw.value for kw in node.keywords}
+        asked = sorted(set(keywords) & _RESOLVING_KEYWORDS)
+        if asked:
+            offenders.append(f"line {node.lineno}: {name}(... {', '.join(asked)} ...)")
+        # A key NAME resolves under data/ssh_keys/ unless the caller says it already did.
+        if name == "open_session" and not (
+                isinstance(keywords.get("resolve_key"), ast.Constant)
+                and keywords["resolve_key"].value is False):
+            offenders.append(f"line {node.lineno}: open_session without resolve_key=False")
+    assert not offenders, f"common/{_relative(path)}: {offenders}"
+
+
+#: READS_LOCAL_CONFIG as it stood at 0.23.0 - 18 modules. It may only shrink: moving one of them
+#: to the library tier means deleting it here AND above, in the same commit. Adding one - or
+#: swapping one for another, which a count alone would not catch - fails.
+RESOLVER_TIER_AT_0_23_0 = frozenset({
+    "cli.py", "remote_credential_admin.py", "config_admin.py", "app_command_admin.py",
+    "sql_task_admin.py", "data_sources/__init__.py", "data_sources/metric_targets.py",
+    "data_sources/ssh_auth.py", "data_sources/target_resolve.py", "host_ops.py",
+    "instance_admin.py", "identifier_scan.py", "password_rotation.py", "remote_exec.py",
+    "secret_check.py", "sql_run.py", "sqlserver_instance.py", "ssh.py",
+})
+
+
+def test_the_resolver_tier_only_shrinks() -> None:
+    grown = sorted(set(READS_LOCAL_CONFIG) - RESOLVER_TIER_AT_0_23_0)
+    assert not grown, (
+        f"READS_LOCAL_CONFIG gained {grown}. The resolver tier is a baseline since 0.23.0: a new "
+        "module takes its facts as parameters and the app looks them up.")
+
+
+def test_the_baseline_names_nothing_that_has_left_the_tier() -> None:
+    stale = sorted(RESOLVER_TIER_AT_0_23_0 - set(READS_LOCAL_CONFIG))
+    assert not stale, f"These left the resolver tier - delete them from the baseline too: {stale}"
+

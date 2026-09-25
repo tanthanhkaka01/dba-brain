@@ -12,8 +12,8 @@ That is how MSSQL25 on 192.0.2.11 was created on 2026-08-10: a named volume for
 template so the next lab instance does not need the same hour.
 """
 
-from db_ops.sre.docker_db import templates as t
-from db_ops.sre.docker_db.models import DEFAULT_BACKUP_MOUNT, ENGINE_META, DockerDbSpec
+from db_ops.common.docker_db import templates as t
+from db_ops.lib.docker_db_spec import DEFAULT_BACKUP_MOUNT, ENGINE_META, DockerDbSpec
 
 
 def _spec(engine="mssql", **overrides):

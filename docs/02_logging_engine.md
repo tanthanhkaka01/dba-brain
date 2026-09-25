@@ -85,3 +85,10 @@ LIMIT 50;
 - Runtime output is missing: confirm the entrypoint calls `patch_stdout(...)` or is launched by the daemon.
 - Old logs are growing: daily archive exists, but retention cleanup is not implemented in the logging engine.
 
+## Which day an archived log is named after (0.23.0)
+
+A live log is archived as `<name>_<YYYYMMDD>.log` under the day it was **last written**, on the
+display clock - not under "yesterday". A file last written today is today's log and is left alone.
+Named after yesterday whatever it held, the first process of a new root filed that root's first
+lines under the wrong date, and a node back from three days down filed its last day as yesterday.
+

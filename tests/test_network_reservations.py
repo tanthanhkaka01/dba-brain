@@ -25,7 +25,7 @@ from db_ops.control import worker_status
 from db_ops.lib import network_policy
 from db_ops.lib.network_policy import HIJACK, OVERLAP, UNCONFINED
 from db_ops.lib.paths import DEFAULT_DATA_DIR
-from db_ops.sre.docker_db.models import LAB_NETWORK_PREFIX, lab_network_subnet
+from db_ops.lib.docker_db_spec import LAB_NETWORK_PREFIX, lab_network_subnet
 
 
 #: The estate's own declaration. ``data/*.json`` is private and does **not** ship, so in the public

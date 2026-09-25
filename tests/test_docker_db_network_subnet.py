@@ -18,8 +18,8 @@ from __future__ import annotations
 import pytest
 import yaml
 
-from db_ops.sre.docker_db import templates
-from db_ops.sre.docker_db.models import (
+from db_ops.common.docker_db import templates
+from db_ops.lib.docker_db_spec import (
     LAB_NETWORK_FIRST_OCTET,
     LAB_NETWORK_LAST_OCTET,
     LAB_NETWORK_PREFIX,

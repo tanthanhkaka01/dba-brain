@@ -313,6 +313,9 @@ required and each has cost somebody a real incident:
 
 **Proves:** `list-backups` and `list-restores` show the entry with the window it will actually use.
 
+For a worked build -> backup -> restore -> point in time on each engine, against throwaway Docker
+labs, see [`lab-create-backup-restore.md`](./lab-create-backup-restore.md).
+
 **A restore's verdict is computed, not asserted.** The workflow ends with a `verify` phase that
 queries every database it touched; one that will not answer fails the run, whatever the steps before
 it reported. A drill that used to read `done` may therefore now read `failed` — what fell is the

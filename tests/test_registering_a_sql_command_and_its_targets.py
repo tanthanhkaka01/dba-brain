@@ -184,7 +184,7 @@ def test_a_target_writes_the_notify_object_in_its_canonical_nested_form(estate):
 # --------------------------------------------------------------------------- #
 # The engine: a valid engine for the estate is not automatically a runnable one
 # --------------------------------------------------------------------------- #
-@pytest.mark.parametrize("db_type", ["postgresql", "mysql"])
+@pytest.mark.parametrize("db_type", ["mysql"])
 def test_an_engine_no_task_can_run_on_is_refused_at_registration(estate, db_type):
     """What this cost, on the node where it costs most.
 
@@ -193,6 +193,7 @@ def test_an_engine_no_task_can_run_on_is_refused_at_registration(estate, db_type
     the first one came due nine hours later and errored ``Unsupported db_type: postgresql``. The
     engine is a perfectly valid one for this estate — metrics collect from it and backup_restore
     backs it up — so the wide vocabulary was right and the narrow question was simply never asked.
+    PostgreSQL itself became runnable on 2026-09-25; MySQL is the engine this still guards.
     """
     with pytest.raises(sql_task_admin.SqlTaskAdminError) as raised:
         add_command(estate, db_type=db_type)
@@ -208,11 +209,11 @@ def test_an_engine_no_task_can_run_on_is_refused_at_registration(estate, db_type
 def test_the_refusal_writes_nothing(estate):
     """A registration that half-applied would leave a script file with no command pointing at it."""
     with pytest.raises(sql_task_admin.SqlTaskAdminError):
-        add_command(estate, db_type="postgresql")
+        add_command(estate, db_type="mysql")
 
     commands = json.loads((estate / "data" / "sql_commands.json").read_text(encoding="utf-8"))
     assert commands["sql_commands"] == []
-    assert not (estate / "assets" / "tasks" / "postgresql").exists()
+    assert not (estate / "assets" / "tasks" / "mysql").exists()
 
 
 def test_the_registrar_and_the_runner_read_the_same_tuple():
@@ -224,7 +225,7 @@ def test_the_registrar_and_the_runner_read_the_same_tuple():
     from db_ops.lib.sql_access import SQL_TASK_DB_TYPES
     from db_ops.sql_tasks import runner
 
-    assert SQL_TASK_DB_TYPES == ("sqlserver", "oracle")
+    assert SQL_TASK_DB_TYPES == ("sqlserver", "oracle", "postgresql")
     source = inspect.getsource(runner)
     assert "sql_access.SQL_TASK_DB_TYPES" in source
     assert '{"sqlserver", "oracle"}' not in source

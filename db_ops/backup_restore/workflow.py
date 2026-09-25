@@ -56,6 +56,26 @@ def select_due_restores(
     ]
 
 
+def restore_mode_metadata(point_in_time: str) -> dict[str, Any]:
+    """``restore_mode`` and the moment, carried on every message of a script-driven run.
+
+    The engine path has always set them. This one did not, and the formatter's default filled in
+    ``LATEST``: every message of a point-in-time drill read ``restore_mode=LATEST``, and only the
+    RESTORE_START text named the moment (the .251 -> .252 drill, 2026-09-25). The UTC form is the
+    moment as the restore reads it - UTC unless the text states another offset.
+    """
+    if not str(point_in_time or "").strip():
+        return {"restore_mode": "LATEST"}
+    from db_ops.lib.restore.moment import MomentError, parse_moment
+
+    meta: dict[str, Any] = {"restore_mode": "POINT_IN_TIME", "point_in_time_original": point_in_time}
+    try:
+        meta["point_in_time_utc"] = parse_moment(point_in_time).isoformat() + "+00:00"
+    except MomentError:
+        pass
+    return meta
+
+
 def script_restore_metadata(job: Any) -> dict[str, Any]:
     """Event metadata for a script-driven restore, in the keys the shared formatter reads.
 
@@ -117,8 +137,15 @@ def run_scheduled_restores(
     force: bool = False,
     key: str | None = None,
     key_base64: str | None = None,
+    on_demand: bool = False,
+    point_in_time: str = "",
 ) -> dict[str, Any]:
-    """Run every restore entry that is due, recording each under its own restore_id."""
+    """Run every restore entry that is due, recording each under its own restore_id.
+
+    ``on_demand`` is an operator naming one entry (``restore-workflow --restore-id``, which is
+    what ``/spbot_restore`` runs): it runs whether or not the entry is active, as the SQL Server
+    path always has. ``point_in_time`` reaches a script-driven restore's plan.
+    """
     # Imported here: run_restore_workflow lives in the CLI module, which imports this one.
     from db_ops.backup_restore.cli import run_restore_workflow
 
@@ -150,6 +177,7 @@ def run_scheduled_restores(
             **{job.job_code: job.notify for job in script_jobs},
         },
     )
+    listed_at = utc_now_text()
     latest_runs = store.fetch_latest_job_runs_by_job_code()
     # --force skips the schedule, never a restore already in flight - two restores into one
     # database is exactly what the RUNNING row is there to stop.
@@ -174,6 +202,11 @@ def run_scheduled_restores(
             summary["restores"].append({"restore_id": config.restore_id, "status": "dry-run"})
             continue
         job_code = schedule.restore_job_code(config.restore_id)
+        # Taken and done by an overlapping async run since this one listed it (schedule.taken_since).
+        if not force and schedule.taken_since(store, job_code, listed_at):
+            summary["skipped"] += 1
+            summary["restores"].append({"restore_id": config.restore_id, "status": "taken-by-another-run"})
+            continue
         metadata = {"restore_id": config.restore_id, "source_id": config.source_id, "target_id": config.target_id}
         try:
             log_id, _started_at = schedule.start_run(
@@ -300,7 +333,7 @@ def run_scheduled_restores(
     # the execution differs, so they are appended to the same summary.
     summary["configured"] += len(script_jobs)
     script_due = ([j for j in script_jobs
-                   if j.active and not schedule.is_running(j.job_code, latest_runs)]
+                   if (j.active or on_demand) and not schedule.is_running(j.job_code, latest_runs)]
                   if force else select_due_script_restores(jobs=script_jobs, latest_runs=latest_runs))
     summary["due"] += len(script_due)
     summary["skipped"] += len(script_jobs) - len(script_due)
@@ -309,7 +342,12 @@ def run_scheduled_restores(
         if dry_run:
             summary["restores"].append({"restore_id": job.restore_id, "db_type": job.db_type, "status": "dry-run"})
             continue
-        metadata = script_restore_metadata(job)
+        if not force and schedule.taken_since(store, job.job_code, listed_at):
+            summary["skipped"] += 1
+            summary["restores"].append({"restore_id": job.restore_id, "db_type": job.db_type,
+                                        "status": "taken-by-another-run"})
+            continue
+        metadata = {**script_restore_metadata(job), **restore_mode_metadata(point_in_time)}
         try:
             log_id, _started = schedule.start_run(
                 store=store, job_code=job.job_code,
@@ -351,7 +389,8 @@ def run_scheduled_restores(
             from db_ops.backup_restore.restore_by_id import restore_by_id
 
             outcome = restore_by_id(
-                {"restore_id": job.restore_id},
+                {"restore_id": job.restore_id,
+                 **({"point_in_time": point_in_time} if point_in_time else {})},
                 key=key, key_base64=key_base64,
                 # The copy boundaries, so the long silence in the middle of a remote drill is
                 # bounded by two events instead of looking like a hang.
@@ -361,14 +400,26 @@ def run_scheduled_restores(
             out = json.dumps(outcome, default=str)
             err = ""
             error_text = None
+            warnings = [str(w) for w in (outcome.get("warnings") or [])]
+            restored = {"restored": outcome.get("plan") or ""}
+            if outcome.get("verify"):
+                restored["verified"] = (f"{outcome['verify'].get('checked')} database(s) checked, "
+                                        f"{outcome['verify'].get('failed')} unusable")
         except Exception as exc:  # noqa: BLE001 - one restore must not stop the others.
             status, exit_code, out, err = "error", None, "", str(exc)
             error_text = str(exc)[-2000:]
+            warnings = []
+            restored = {}
         duration_ms = int((time.monotonic() - started) * 1000)
         end_metadata = {**metadata, "exit_code": exit_code, "duration_ms": duration_ms,
-                        "status": status,
+                        "status": status, **restored,
                         "stdout_tail": stdout_excerpt(out)}
         end_message = f"Restore {job.label} finished: {status}."
+        if warnings:
+            # Done, and something the operator must hear about - a piece passed over (1.23). Said
+            # in the message and raised to `warning`, so the alert is not a quiet success.
+            end_message = f"Restore {job.label} finished: done with a warning - {'; '.join(warnings)}"
+            end_metadata["warnings"] = warnings
         schedule.finish_run(
             store=store, log_id=log_id, status=status,
             message=end_message,
@@ -378,7 +429,7 @@ def run_scheduled_restores(
         emit_backup_restore_event(
             app_config=app_config, command="restore-workflow",
             phase="END" if status == "done" else "ERROR",
-            level="logging" if status == "done" else "error",
+            level=("warning" if warnings else "logging") if status == "done" else "error",
             message=end_message, logger=logger, started_at=started_at,
             finished_at=utc_now_text(), duration_ms=duration_ms, error_text=error_text,
             metadata=end_metadata, notify=job.notify,

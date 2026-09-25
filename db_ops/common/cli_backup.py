@@ -38,22 +38,15 @@ the values.
                                       // SQL Server here is reached by winrm.
             "host": "203.0.113.188", "port": 22,
             "username": "ubuntu", "key_file": "/keys/oracle-cloud.key"},
-   "server_metadata": {               // optional, SQL Server only
-       "target": "ACME-192-0-2-115",     // instance to read
-       "output_dir": "/backup/_instance",  // beside the backup it describes
-       "include": ["logins", "agent_jobs"]},   // default: every artifact the policy declares
    "timeout": 7200,                   // seconds; default 3600
    "dry_run": true}                   // optional; report the plan, ship nothing
 
 A SQL Server backup covers user databases only (`database_id > 4`), so master/msdb/model are
 excluded and every login, server role, permission, credential, linked server, Agent job and
-sp_configure value is absent after a restore - the database comes back and none of the machinery
-around it does. `server_metadata` exports that beside the backup. It is refused for oracle and
-postgresql, whose physical backups carry the state inside the data already.
-
-A metadata failure NEVER fails the backup: the data is the thing that must not be lost. It is
-skipped entirely when the backup itself failed, because a bundle beside a backup that did not
-complete is a pair of files that look matched and are not.
+sp_configure value is absent after a restore. Exporting those is `sqlserver-export-instance`, run
+after a backup that completed - the backup_restore app does it for an entry with a
+`server_metadata` block. It was a `server_metadata` field here until 0.23.0 and is refused now:
+it resolved its instance out of the inventory, and this command reads no configuration.
 
 The script runs ON the host, not inside the container: these scripts `docker exec` themselves,
 because they need to be on the host for the directory the backup is written to. Such a `docker

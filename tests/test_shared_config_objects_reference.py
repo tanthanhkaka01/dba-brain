@@ -401,7 +401,7 @@ def test_a_bridge_url_is_required_only_when_the_method_asks_for_one():
 
 
 def test_a_docker_connection_is_described_with_the_provisioners_own_engines(reference):
-    from db_ops.sre.docker_db.models import VALID_ENGINES
+    from db_ops.lib.docker_db_spec import VALID_ENGINES
 
     entry = next(item for item in reference if item["object"] == "docker_db_connection")
     field = next(f for f in entry["fields"] if f["field"] == "db_type")

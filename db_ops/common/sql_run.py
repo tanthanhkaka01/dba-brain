@@ -142,6 +142,7 @@ from db_ops.lib.target_profile import SOURCE_CONFIG, SOURCE_REQUEST, TargetProfi
 from db_ops.lib.sql_text import (  # noqa: F401 - re-exported for compatibility
     DEFAULT_MAX_ROWS, DEFAULT_TIMEOUT_SECONDS, SqlRunError, check_sqlplus_define_value,
     expand_sqlplus_defines)
+from db_ops.lib.sql_text import oracle_statement, split_postgresql_statements
 
 
 
@@ -775,18 +776,26 @@ def connect_target(target: dict[str, Any], *, timeout_seconds: int = DEFAULT_TIM
         raise SqlRunError(f"connect failed: {exc}") from exc
 
 
-def split_batches_for(sql_text: str, db_type: str = "sqlserver") -> list[str]:
+def split_batches_for(sql_text: str, db_type: str = "sqlserver", *,
+                      statements: bool = True) -> list[str]:
     """The statements to run, in order, for this engine.
 
     ``GO`` is a SQL Server *client* batch separator, not SQL; the shared splitter honours it.
     Oracle is the one engine that also rejects the thing every other engine tolerates — a
-    trailing semicolon (``SELECT 1;`` raises ORA-00911) — so it is stripped there. Doing that
+    trailing semicolon (``SELECT 1;`` raises ORA-00911) — so it is stripped there, except after a
+    PL/SQL block's ``END``, which requires it (``lib.sql_text.oracle_statement``). Doing that
     unconditionally would break MySQL/PostgreSQL scripts that legitimately send several
     semicolon-separated statements in one batch.
     """
     batches = sql_execution.split_sql_batches(sql_text)
-    if db_connect.normalize_db_type(db_type) == "oracle":
-        return [batch.rstrip().rstrip(";").rstrip() for batch in batches]
+    engine = db_connect.normalize_db_type(db_type)
+    if engine == "oracle":
+        return [oracle_statement(batch) for batch in batches]
+    if engine == "postgresql" and statements:
+        # One statement per execute: pg8000 returns one result set per execute, so a whole script
+        # merged every SELECT's rows into one set (lib.sql_text.split_postgresql_statements). Not
+        # when values are bound - they are numbered for the whole script, not for each statement.
+        return [stmt for batch in batches for stmt in split_postgresql_statements(batch)]
     return batches
 
 
@@ -848,7 +857,7 @@ def execute_capture(
             del rows[max_rows:]
         return {"columns": columns, "rows": rows, "row_count": len(rows), "truncated": truncated}
 
-    for batch in split_batches_for(sql_text, db_type):
+    for batch in split_batches_for(sql_text, db_type, statements=not bound):
         if not batch.strip():
             continue
         statement = prelude + batch if prelude else batch

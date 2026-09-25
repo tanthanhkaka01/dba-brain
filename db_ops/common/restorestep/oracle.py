@@ -39,8 +39,8 @@ import base64
 import shlex
 from typing import Any
 
-from db_ops.common.hostcmd import parse_host, run
-from db_ops.common.restorestep import DIFF, FULL, LOG, RestoreStepError
+from db_ops.common.hostcmd import DOCKER, parse_host, run
+from db_ops.common.restorestep import DIFF, FULL, LOG, RestoreStepError, moment_in_server_clock
 
 DUPLICATE = "duplicate"
 RESTORE = "restore"
@@ -92,6 +92,10 @@ def build_steps(level: str, request: dict[str, Any], paths: list[str]) -> list[d
     if mode not in MODES:
         raise RestoreStepError(f"mode must be one of {', '.join(MODES)}; got {mode!r}.")
     until = str(request.get("stopat") or "").strip()
+    if until:
+        # TO_DATE(..., 'YYYY-MM-DD HH24:MI:SS') refuses an offset (ORA-01830), and the moment is read
+        # in the database's clock - so it is converted, not passed through as typed.
+        until = moment_in_server_clock(until)
     if until and level == FULL and mode == RESTORE:
         raise RestoreStepError(
             "stopat belongs to recovery, not to the restore of the datafiles; ask for it on the "
@@ -117,15 +121,35 @@ def build_steps(level: str, request: dict[str, Any], paths: list[str]) -> list[d
             raise RestoreStepError("oracle_sid is required: DUPLICATE DATABASE TO <sid>.")
 
         # ABORT, not IMMEDIATE - see the module docstring. The instance is about to be rebuilt.
+        # The archived logs an earlier duplicate restored into $ORACLE_HOME/dbs go with it: media
+        # recovery applies a log found there under the expected name, and every gvenzl lab shares
+        # the image's DBID and incarnation - so after the Data Guard lab was restored onto this
+        # target, ITS arch1_<seq>_<resetlogs>.dbf files would stand in for this source's.
         steps.append({"name": "nomount", "command": _sqlplus(
-            "WHENEVER SQLERROR CONTINUE\nSHUTDOWN ABORT;\nSTARTUP NOMOUNT;\nEXIT;\n")})
-        until_line = (f"SET UNTIL TIME \"TO_DATE('{until}', 'YYYY-MM-DD HH24:MI:SS')\";\n"
-                      if until else "")
-        # SET DECRYPTION outside any RUN block: inside one RMAN answers RMAN-03032.
-        script = (f"{_decryption(request)}\n{until_line}"
-                  f"DUPLICATE DATABASE TO {sid}\n"
-                  f"  BACKUP LOCATION '{backup_location}'\n"
-                  f"  NOFILENAMECHECK;\nEXIT;\n")
+            "WHENEVER SQLERROR CONTINUE\nSHUTDOWN ABORT;\nHOST rm -f $ORACLE_HOME/dbs/arch*.dbf\n"
+            "STARTUP NOMOUNT;\nEXIT;\n")})
+        # BACKUP LOCATION with a trailing slash: without one RMAN reads it as a PREFIX, and
+        # `/opt/db_ops/backup/ora_restore_from_249` also matched `.../ora_restore_from_249ha` - the
+        # Data Guard lab's staging, whose pieces have the same DBID (every gvenzl lab carries the
+        # image's). A newest-point duplicate survived that by luck; a point-in-time one recovered
+        # through the other database's logs and asked for a sequence its own never reached
+        # (RMAN-06054, the point-in-time drill, 2026-09-25).
+        #
+        # NORESUME: never resume onto datafiles a failed earlier duplicate left - RMAN reuses any
+        # with the right DBID ("Using previous duplicated file ... checkpoint SCN 2383489", from
+        # the failed attempt that had read the wrong folder). A drill builds from its own backups.
+        duplicate = (f"DUPLICATE DATABASE TO {sid}\n"
+                     f"  BACKUP LOCATION '{backup_location.rstrip('/')}/'\n"
+                     f"  NOFILENAMECHECK\n"
+                     f"  NORESUME;\n")
+        # SET DECRYPTION outside any RUN block: inside one RMAN answers RMAN-03032. SET UNTIL TIME
+        # the other way round - outside one it is RMAN-03031, which is how every point-in-time
+        # duplicate failed until 0.23.0 (the point-in-time drill, 2026-09-25): the plain duplicate
+        # never needed a RUN block, so the pair was never in one.
+        if until:
+            duplicate = (f"RUN {{\n  SET UNTIL TIME \"TO_DATE('{until}', 'YYYY-MM-DD HH24:MI:SS')\";\n"
+                         + "".join(f"  {line}\n" for line in duplicate.splitlines()) + "}\n")
+        script = f"{_decryption(request)}\n{duplicate}EXIT;\n"
         steps.append({"name": "duplicate", "command": _rman(script, auxiliary=True)})
         return steps
 
@@ -175,6 +199,21 @@ def apply(level: str, request: dict[str, Any], paths: list[str]) -> dict[str, An
 
     host = parse_host(request.get("host"))
     timeout = int(request.get("timeout_seconds") or 7200)
+    # RMAN reads the backup location INSIDE the container. A path copied to the host and served by
+    # no volume there is not visible to it: "RMAN-05579: CONTROLFILE backup not found" for a folder
+    # sitting on the host in plain sight (the lab drill, 2026-09-24). The old shell script staged it
+    # (stage_into_target); these primitives did not - PostgreSQL learnt the same lesson first, and
+    # its staging is the one rule both engines now follow: served by a mount -> nothing to do;
+    # otherwise copied in, replacing a previous copy rather than reusing it.
+    staged: list[str] = []
+    backup_location = str(request.get("backup_location") or "").strip()
+    if host.runtime == DOCKER and mode == DUPLICATE and backup_location:
+        from db_ops.common.restorestep.postgresql import (
+            _container_mounts, _host_of, _stage_into_container)
+
+        on_host = _host_of(host)
+        staged = _stage_into_container(on_host, host, [backup_location],
+                                       _container_mounts(on_host, host.container, sudo=host.sudo))
     ran: list[dict[str, Any]] = []
     for step in steps:
         result = run(host, step["command"], timeout=timeout)
@@ -187,6 +226,7 @@ def apply(level: str, request: dict[str, Any], paths: list[str]) -> dict[str, An
     return {"db_type": "oracle", "level": level, "mode": mode, "steps": ran,
             "cataloged": paths if mode == RESTORE else [],
             "backup_location": str(request.get("backup_location") or "") or None,
+            "staged_into_container": staged,
             "stopat": str(request.get("stopat") or "") or None,
             "note": ("RMAN chose which pieces to read from the backup location"
                      if mode == DUPLICATE else "pieces were cataloged; RMAN selected what to read")}

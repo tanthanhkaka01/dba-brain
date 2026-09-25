@@ -23,11 +23,15 @@ cut of this module left three things to the caller and each of them bit on the f
   delete nor recreate the directory. Its **contents** are replaced instead.
 
 * **A path the caller listed on the host is not a path the container can open.** The chain is
-  found by listing directories on the host; the combine runs inside the container. When no volume
-  serves that path the files must be copied in first (``stage_into_target`` in the script). Missing
-  this was the fourth one: the combine kept reading a previous run's leftover copy and failed on
+  found by listing directories on the host; the combine runs in the container's image. Missing this
+  was the fourth one: the combine kept reading a previous run's leftover copy and failed on
   whichever piece was newest, reporting `could not open file ".../PG_VERSION"` for a directory that
-  was sitting on the host in plain sight.
+  was sitting on the host in plain sight. The chain is now mounted read-only into the helper that
+  combines it, at the same path.
+* **The target need not be running.** Into a container, every step runs in a throwaway container
+  from the target's image that shares its volumes, while the target is stopped. A drill that failed
+  once used to leave its target crash-looping, and every later restore then died on
+  "Container ... is restarting" before touching anything (2026-09-24).
 
 None of that is new knowledge - ``assets/restore/postgresql/pg_restore_basebackup.sh`` has done it
 correctly for months, and this module was worse than the script it was meant to generalise. These
@@ -41,25 +45,18 @@ from pathlib import PurePosixPath
 from typing import Any
 
 from db_ops.common.hostcmd import DOCKER, Host, parse_host, run
+from db_ops.lib.shell import docker_cli
 from db_ops.common.restorestep import DIFF, FULL, LOG, RestoreStepError
 
 #: Written as this OS user so nothing in the data directory ends up owned by root.
 DEFAULT_RUN_AS = "postgres"
 
 
-def _in_container(host: Host, command: str, *, run_as: str) -> str:
-    """``docker exec -u <user>`` — the ``-u`` is the whole point, see the module docstring."""
-    inner = (f"docker exec -u {shlex.quote(run_as)} -i {shlex.quote(host.container)} "
-             f"sh -lc {shlex.quote(command)}")
-    return f"sudo {inner}" if host.sudo else inner
-
-
 def _container_mounts(on_host: Host, container: str, *, sudo: bool) -> list[dict[str, Any]]:
     """``docker inspect``'s ``Mounts``, read once. Both directions of the translation need them."""
     import json as _json
 
-    prefix = "sudo " if sudo else ""
-    result = run(on_host, f"{prefix}docker inspect {shlex.quote(container)}", timeout=120)
+    result = run(on_host, f"{docker_cli(sudo)} inspect {shlex.quote(container)}", timeout=120)
     if result["exit_code"] != 0:
         raise RestoreStepError(f"could not inspect {container}: {result['stderr'][-200:]}")
     try:
@@ -120,18 +117,18 @@ def _stage_command(host: Host, path: str) -> str:
     pieces deleted at the source stay here and get read hours later.
     """
     clean = path.rstrip("/")
-    prefix = "sudo " if host.sudo else ""
+    docker = docker_cli(host.sudo)
     quoted = shlex.quote(clean)
     parent = shlex.quote(str(PurePosixPath(clean).parent))
     # -u 0: the database user owns its own directories but not /, and the staging path sits
     # outside them. The tree is handed back with a+rX because the database user has to read it.
-    exec_as_root = f"{prefix}docker exec -u 0 -i {shlex.quote(host.container)} sh -lc "
+    exec_as_root = f"{docker} exec -u 0 -i {shlex.quote(host.container)} sh -lc "
     return (
         f'[ -d {quoted} ] || {{ echo "{clean} is not served by a mount inside '
         f'{host.container} and does not exist on this host either - nothing to stage." >&2; '
         f"exit 3; }}; "
         + exec_as_root + shlex.quote(f"rm -rf {quoted} && mkdir -p {parent}") + " && "
-        + f"{prefix}docker cp {quoted} {shlex.quote(host.container + ':' + clean)} && "
+        + f"{docker} cp {quoted} {shlex.quote(host.container + ':' + clean)} && "
         + exec_as_root + shlex.quote(f"chmod -R a+rX {quoted}")
     )
 
@@ -164,6 +161,73 @@ def _host_of(host: Host) -> Host:
     return replace(host, runtime="linux", container="")
 
 
+def _recovery_config(directory: str, wal_dir: str, target_time: str = "") -> str:
+    """Shell that makes ``directory`` start in archive recovery from ``wal_dir``.
+
+    ``printf '%s\\n'`` with the format QUOTED: unquoted, the shell ate the backslash and every
+    configuration ended in a literal ``n`` - ``recovery_target_timeline = 'latest'n``.
+    """
+    lines = [f"restore_command = 'cp {wal_dir.rstrip('/')}/%f %p'",
+             "recovery_target_timeline = 'latest'"]
+    if target_time:
+        lines.append(f"recovery_target_time = '{target_time}'")
+        # Promote, not the default `pause`: paused at the target the server stays in recovery,
+        # read-only, waiting for a pg_wal_replay_resume() nobody sends - the restore then waited
+        # its full thirty minutes for recovery to end and reported failure, for data that was
+        # right (the point-in-time drill, 2026-09-25).
+        lines.append("recovery_target_action = 'promote'")
+    conf = f"{directory.rstrip('/')}/postgresql.auto.conf"
+    return (f"printf '%s\\n' {' '.join(shlex.quote(line) for line in lines)} > {shlex.quote(conf)} && "
+            f"touch {shlex.quote(directory.rstrip('/') + '/recovery.signal')}")
+
+
+def _wait_for_recovery(on_host: Host, host: Host, *, run_as: str, timeout: int) -> str:
+    """Until the restored cluster has replayed what it was given and left recovery.
+
+    A server in archive recovery accepts connections, so a check run straight after the start
+    would query a cluster still replaying - or one that stopped early - and call it restored.
+    """
+    import time
+
+    probe = (f"{docker_cli(host.sudo)} exec -u {shlex.quote(run_as)} {shlex.quote(host.container)} "
+             "psql -tAc 'select pg_is_in_recovery()'")
+    state = (f"{docker_cli(host.sudo)} inspect -f '{{{{.State.Status}}}} {{{{.RestartCount}}}}' "
+             f"{shlex.quote(host.container)}")
+    deadline = time.monotonic() + timeout
+    answer = ""
+    first_restarts = None
+    while time.monotonic() < deadline:
+        # A cluster that cannot recover exits, and `restart: unless-stopped` brings it back to
+        # fail again - which looked like a long recovery for 30 minutes on 2026-09-24. A restart
+        # or a stopped container ends the wait, with the server's own last words.
+        status, _, restarts = (run(on_host, state, timeout=60)["stdout"] or "").strip().partition(" ")
+        if first_restarts is None:
+            first_restarts = restarts
+        if status in {"restarting", "exited", "dead"} or restarts != first_restarts:
+            tail = run(on_host, f"{docker_cli(host.sudo)} logs --tail 8 {shlex.quote(host.container)} 2>&1",
+                       timeout=60)["stdout"].strip()
+            raise RestoreStepError(
+                f"{host.container} stopped while recovering ({status or 'unknown'}); its log ends: {tail[-700:]}")
+        result = run(on_host, probe, timeout=60)
+        answer = (result["stdout"] or "").strip()
+        if result["exit_code"] == 0 and answer == "f":
+            return "recovered"
+        if result["exit_code"] == 0 and answer == "t":
+            # Paused at a recovery target is not "still recovering": nothing will move it on, and
+            # the wait used to run its full thirty minutes. Said at once, with what to do.
+            paused = run(on_host, probe.replace("pg_is_in_recovery()", "pg_is_wal_replay_paused()"),
+                         timeout=60)
+            if paused["exit_code"] == 0 and (paused["stdout"] or "").strip() == "t":
+                raise RestoreStepError(
+                    f"{host.container} reached its recovery target and PAUSED there, read-only "
+                    "(recovery_target_action = 'pause'). The data is at the target; promote it with "
+                    "SELECT pg_promote() if it is the one wanted.")
+        time.sleep(3)
+    raise RestoreStepError(
+        f"{host.container} did not finish recovery within {timeout} s (pg_is_in_recovery: "
+        f"{answer or 'no answer'}); read its log: docker logs {host.container}")
+
+
 def _combine_command(paths: list[str], staging: str, bin_dir: str) -> str:
     binary = (f"{bin_dir.rstrip('/')}/pg_combinebackup" if bin_dir else
               "$(command -v pg_combinebackup "
@@ -181,7 +245,6 @@ def apply(level: str, request: dict[str, Any], paths: list[str]) -> dict[str, An
     run_as = str(request.get("run_as") or DEFAULT_RUN_AS).strip()
     bin_dir = str(request.get("bin_dir") or "").strip()
     dry_run = bool(request.get("dry_run"))
-    steps: list[str] = []
 
     if level == LOG:
         if not data_dir:
@@ -189,16 +252,11 @@ def apply(level: str, request: dict[str, Any], paths: list[str]) -> dict[str, An
         wal_dir = str(request.get("wal_dir") or (paths[0] if paths else "")).strip()
         target_time = str(request.get("stopat") or "").strip()
         conf = f"{data_dir.rstrip('/')}/postgresql.auto.conf"
-        lines = [f"restore_command = 'cp {wal_dir.rstrip('/')}/%f %p'",
-                 "recovery_target_timeline = 'latest'"]
-        if target_time:
-            lines.append(f"recovery_target_time = '{target_time}'")
-        body = "\n".join(lines)
         # Written where the files are: inside the container when it is up, on the host when the
-        # caller is mid-swap and it is down. `run` on the parsed host does the right one.
-        steps = [f"printf %s\\n {shlex.quote(body)} > {shlex.quote(conf)}",
-                 f"touch {shlex.quote(data_dir.rstrip('/') + '/recovery.signal')}"]
-        command = " && ".join(steps)
+        # caller is mid-swap and it is down. `run` on the parsed host does the right one. A planned
+        # restore into a container does not come here any more: its configuration is written
+        # before the first start (see _recovery_config).
+        command = _recovery_config(data_dir, wal_dir, target_time)
         if dry_run:
             return {"db_type": "postgresql", "level": level, "command": command, "dry_run": True}
         # The WAL directory is read by the *server*, inside the container, through the
@@ -239,6 +297,14 @@ def apply(level: str, request: dict[str, Any], paths: list[str]) -> dict[str, An
                  f"cp -a {shlex.quote(paths[0].rstrip('/'))}/. {shlex.quote(staging)}/")
     else:
         build = _combine_command(paths, staging, bin_dir)
+    # The recovery configuration goes into the combined directory BEFORE the first start. Written
+    # by a later step, it reached a server that had already started on the combined data, ended
+    # recovery at the backup and taken writes: no WAL was ever replayed - every PostgreSQL drill
+    # stopped at its last base or incremental backup and reported verified - and the
+    # recovery.signal left behind would replay the source's WAL onto that diverged cluster at its
+    # next restart (the lab drill, 2026-09-24).
+    wal_dir = str(request.get("wal_dir") or "").strip()
+    target_time = str(request.get("stopat") or "").strip()
 
     # PGDATA's CONTENTS are replaced, never PGDATA itself: its parent is root-owned, so the
     # database user can neither delete nor recreate the directory - but it owns what is inside.
@@ -259,60 +325,89 @@ def apply(level: str, request: dict[str, Any], paths: list[str]) -> dict[str, An
         return {"db_type": "postgresql", "level": level, "applied": paths,
                 "data_dir": data_dir, "action": action}
 
-    # --- container: combine while it runs, swap while it is down, then bring it back ---------
+    # --- container: stop it, rebuild it from a helper, start it, wait for recovery ------------
     #
-    # The combine is the long part (minutes) and needs the binaries inside the image; the swap
-    # needs the server stopped. Doing them in this order keeps the database down for seconds
-    # rather than for the whole combine.
+    # Everything runs in throwaway containers from the target's own image, sharing its volumes,
+    # as the database user - never `docker exec` into the target. The target used to have to be
+    # RUNNING for the combine and the staging, so a drill that failed once and left it
+    # crash-looping (a bad data directory restarting under `restart: unless-stopped`) made every
+    # later drill fail too - "Container ... is restarting" - until someone repaired it by hand
+    # (2026-09-24). A drill target's downtime is not worth that; it is down for the whole restore.
     on_host = _host_of(host)
+    docker = docker_cli(host.sudo)
+    container_q = shlex.quote(host.container)
+    # The WAL is copied INTO the data volume, next to the staging directory: restore_command is run
+    # by the server after the start, and a copy there needs no exec, no `docker cp`, no mount.
+    wal_copy = f"{PurePosixPath(staging.rstrip('/')).parent}/dbops_wal"
+    if dry_run:
+        # A dry run does not connect. The image and the mounts are read at run time, so the plan
+        # names the image by its container and mounts every path as if no volume served it.
+        image_name, mounts = f"<image of {host.container}>", []
+    else:
+        image = run(on_host, f"{docker} inspect -f '{{{{.Config.Image}}}}' {container_q}", timeout=120)
+        if image["exit_code"] != 0 or not image["stdout"].strip():
+            raise RestoreStepError(
+                f"could not read the image of {host.container}: {image['stderr'][-200:]}")
+        image_name = image["stdout"].strip()
+        mounts = _container_mounts(on_host, host.container, sudo=host.sudo)
+        # All three must sit on a volume, or they are lost when the container is recreated - and
+        # the helper that writes them sees only the target's volumes.
+        for inside in (data_dir, staging, wal_copy):
+            _to_host_path(mounts, host.container, inside.rstrip("/"))
+    image_q = shlex.quote(image_name)
+    # The chain and the WAL, where the helper can read them: a path a volume of the target serves
+    # comes through --volumes-from; any other is a host path, mounted read-only at the same place.
+    readable = sorted({p.rstrip("/") for p in paths + ([wal_dir] if wal_dir else [])
+                       if not _served_by_a_mount(mounts, p)})
+    helper = " ".join([f"{docker} run --rm -u {shlex.quote(run_as)} --volumes-from {container_q}",
+                       *(f"-v {shlex.quote(p)}:{shlex.quote(p)}:ro" for p in readable),
+                       f"--entrypoint sh {image_q} -c "])
+    wal_q = shlex.quote(wal_copy)
+    rebuild = build
+    if wal_dir:
+        rebuild += (f" && rm -rf {wal_q} && mkdir -p {wal_q} && cp -a {shlex.quote(wal_dir.rstrip('/'))}/. {wal_q}/"
+                    f" && {_recovery_config(staging, wal_copy, target_time)}")
+    data_q, staging_q = shlex.quote(data_dir.rstrip("/")), shlex.quote(staging.rstrip("/"))
+    # `find -exec`, not a glob: the helper's shell is sh, which has no dotglob. The database user
+    # owns the data directory and everything in it, so the swap needs no root either.
+    swap_in_helper = (f"find {data_q} -mindepth 1 -maxdepth 1 -exec rm -rf {{}} + && "
+                      f"find {staging_q} -mindepth 1 -maxdepth 1 -exec mv -t {data_q} {{}} + && "
+                      f"rmdir {staging_q} && chmod 700 {data_q}")
     plan = {
-        "stage": [_stage_command(host, p) for p in paths],
-        "combine": _in_container(host, build, run_as=run_as),
-        "stop": f"{'sudo ' if host.sudo else ''}docker stop {shlex.quote(host.container)}",
-        "swap": _in_container(host, swap, run_as=run_as),
-        "start": f"{'sudo ' if host.sudo else ''}docker start {shlex.quote(host.container)}",
+        "stop": f"{docker} stop {container_q}",
+        "combine": helper + shlex.quote(rebuild),
+        "swap": helper + shlex.quote(swap_in_helper),
+        "start": f"{docker} start {container_q}",
     }
     if dry_run:
         return {"db_type": "postgresql", "level": level, "plan": plan,
                 "action": action, "dry_run": True}
 
-    mounts = _container_mounts(on_host, host.container, sudo=host.sudo)
-    # Before the combine, not during it: the combine runs in the container's namespace and reads
-    # every path in the chain, so a path no volume serves has to be put there first.
-    staged = _stage_into_container(on_host, host, paths, mounts)
-
-    # Resolved BEFORE the container is stopped: `docker inspect` still answers afterwards, but
-    # failing here costs nothing while failing there leaves the database down.
-    host_data_dir = _to_host_path(mounts, host.container, data_dir.rstrip("/"))
-    host_staging = _to_host_path(mounts, host.container, staging.rstrip("/"))
-    host_swap = (f"shopt -s dotglob nullglob 2>/dev/null; rm -rf {shlex.quote(host_data_dir)}/* && "
-                 f"mv {shlex.quote(host_staging)}/* {shlex.quote(host_data_dir)}/ && "
-                 f"rmdir {shlex.quote(host_staging)} && chmod 700 {shlex.quote(host_data_dir)}")
-    plan["swap"] = f"{'sudo ' if host.sudo else ''}sh -lc {shlex.quote(host_swap)}"
-
-    combined = run(on_host, plan["combine"], timeout=int(request.get("timeout_seconds") or 7200))
-    if combined["exit_code"] != 0:
-        raise RestoreStepError(
-            f"{action} failed (exit {combined['exit_code']}): "
-            f"{(combined['stderr'] or combined['stdout']).strip()[-400:]}")
-
     stopped = run(on_host, plan["stop"], timeout=300)
     if stopped["exit_code"] != 0:
         raise RestoreStepError(f"could not stop {host.container}: {stopped['stderr'][-200:]}")
     try:
-        # The container is down, so the swap runs on the host against the same paths - the volume
-        # is mounted there. `docker cp`-free, and a rename rather than a copy.
+        combined = run(on_host, plan["combine"], timeout=int(request.get("timeout_seconds") or 7200))
+        if combined["exit_code"] != 0:
+            raise RestoreStepError(
+                f"{action} failed (exit {combined['exit_code']}): "
+                f"{(combined['stderr'] or combined['stdout']).strip()[-400:]}")
         swapped = run(on_host, plan["swap"], timeout=1800)
         if swapped["exit_code"] != 0:
             raise RestoreStepError(
                 f"could not move the combined cluster into place: "
                 f"{(swapped['stderr'] or swapped['stdout']).strip()[-300:]}")
     finally:
-        # Always brought back, even when the swap failed: leaving a lab node down is a second
+        # Always brought back, even when a step failed: leaving a lab node down is a second
         # incident on top of the first, and the caller can see what happened from the error.
         run(on_host, plan["start"], timeout=300)
+    recovery = (_wait_for_recovery(on_host, host, run_as=run_as,
+                                   timeout=int(request.get("recovery_timeout_seconds") or 1800))
+                if wal_dir else "no WAL given - started at the end of the backup")
 
     return {"db_type": "postgresql", "level": level, "applied": paths,
             "data_dir": data_dir, "action": action, "container": host.container,
-            "staged_into_container": staged,
-            "note": "combined while up, swapped while down, container restarted"}
+            "read_from_host": readable, "wal_copy": wal_copy if wal_dir else None,
+            "recovery": recovery, "recovery_target_time": target_time or None,
+            "note": "rebuilt in a helper container while the target was stopped, recovery "
+                    "configured before the first start, waited for until recovery ended"}

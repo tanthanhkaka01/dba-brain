@@ -64,7 +64,10 @@ def list_backup_files(request: dict[str, Any]) -> dict[str, Any]:
             f"db_type must be sqlserver, oracle or postgresql; got {db_type!r}."
         )
 
-    files = [row for row in engine.list_files(request) if row["kind"] in kinds]
+    unreadable: list[str] = []
+    listed = (engine.list_files(request, skipped=unreadable) if db_type == "sqlserver"
+              else engine.list_files(request))
+    files = [row for row in listed if row["kind"] in kinds]
     # One SQL Server directory holds every database on the instance, so walking a chain there
     # without naming one mixes them: the "diff after the full" would be some other database's.
     # Oracle and PostgreSQL report no database, so asking for one there finds nothing - which is
@@ -84,6 +87,8 @@ def list_backup_files(request: dict[str, Any]) -> dict[str, Any]:
         # to be dug out of the last row, because that is the whole point of the three-step walk:
         # newest full -> diffs after it -> logs after those.
         "newest_finished_at": files[-1].get("finished_at") if files else None,
+        # Files named like backups that the engine could not read as one (SQL Server only).
+        "unreadable": unreadable,
     }
 
 
@@ -110,7 +115,9 @@ def _in_window(files: list[dict[str, Any]], *, after: Any, before: Any) -> list[
             continue
         if after_text and not _later(stamp, after_text):
             continue
-        if before_text and _later(stamp, before_text):
+        # `before` is a point in time, converted to UTC; a row that knows its UTC finish is judged
+        # by it (PostgreSQL, whose `stat` times are the host's clock).
+        if before_text and _later(str(row_.get("finished_at_utc") or stamp), before_text):
             continue
         kept.append(row_)
     return kept
@@ -119,15 +126,31 @@ def _in_window(files: list[dict[str, Any]], *, after: Any, before: Any) -> list[
 def _later(stamp: str, reference: str) -> bool:
     """Is ``stamp`` after ``reference``?
 
-    Compared as text after normalising the ``T`` separator, which works because every engine here
-    reports ``YYYY-MM-DD HH:MM:SS`` — sortable as a string by construction. Parsing to datetimes
-    would add a timezone question none of these strings answer.
+    Compared as ``YYYY-MM-DD HH:MM:SS`` text in the server's clock, which sorts as a string by
+    construction. The engines report their finish times that way; what a caller passes as a bound
+    may carry an offset - the bot's point in time does, `2026-09-25 07:13:40 +08:00` - and that
+    offset used to be cut off with the rest of the string, so the window was eight hours off with
+    no error anywhere (the point-in-time drill, 2026-09-25). It is converted instead.
     """
     return _normalise(stamp) > _normalise(reference)
 
 
 def _normalise(stamp: str) -> str:
-    return str(stamp).strip().replace("T", " ")[:19]
+    from db_ops.lib.restore.moment import MomentError, server_clock_text
+
+    text = str(stamp).strip()
+    # Fractional seconds are dropped: a listing compares to the second, and the moment parser
+    # reads none.
+    head, dot, rest = text.partition(".")
+    if dot and len(head) >= 19:
+        text = head + rest.lstrip("0123456789")
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        return server_clock_text(text)
+    except MomentError:
+        # Not a moment the parser reads: the old text rule, on the text as it came.
+        return str(stamp).strip().replace("T", " ")[:19]
 
 
 def _latest_only(files: list[dict[str, Any]]) -> list[dict[str, Any]]:

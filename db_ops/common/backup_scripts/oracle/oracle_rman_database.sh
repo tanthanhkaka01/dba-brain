@@ -96,6 +96,11 @@ if [ -n "$container" ]; then
     $DOCKER info >/dev/null 2>&1 || DOCKER="sudo docker"
     $DOCKER inspect "$container" >/dev/null 2>&1 \
         || die "container '${container}' not found or docker unavailable on host."
+    # Present is not running. A stopped container used to fail further on, as whatever the first
+    # exec could not do - "no sqlcmd found (container X); install mssql-tools" on 2026-09-24 -
+    # which sends the reader to install tools that are there.
+    [ "$($DOCKER inspect -f '{{.State.Running}}' "$container" 2>/dev/null)" = "true" ] \
+        || die "container '${container}' is not running - start it (docker start ${container}) and run the backup again."
     run_db()   { $DOCKER exec ${exec_user} "$container" bash -lc "$1" </dev/null; }
     run_rman() { $DOCKER exec -i ${exec_user} "$container" bash -lc "$1"; }
     where="container ${container}"
@@ -126,6 +131,25 @@ printf 'reaching the database: %s\n' "$where"
 # without its own input would read the *rest of this file* as the container's stdin and the
 # shell would silently run out of script (exit 0, no output, nothing backed up). The RMAN call
 # below may use -i because its stdin is the pipe from printf, not the script.
+# Root where the database runs, for the one thing its own user cannot do: take over a backup
+# folder someone else made (see "writable by the database user" below). On a host it never
+# prompts - a sudo that wants a password fails, and the folder is named.
+if [ -n "$container" ]; then
+    run_root() { $DOCKER exec -u 0 "$container" bash -lc "$1" </dev/null; }
+else
+    run_root() { sudo -n bash -lc "$1" </dev/null; }
+fi
+
+# Writable by the database user, not only by whoever made the folder above it. A lab's bind mount
+# belongs to the SSH user, and on 2026-09-24 every backup into it failed "mkdir: Permission
+# denied" until the folder was handed over by hand. Made as root where the database runs and
+# given to the user it runs as (numeric ids: the su path cannot carry quotes) - the whole folder,
+# because what is checked is the folder this job writes, which may sit one level below it.
+if ! run_db "mkdir -p '${backup_dir}' && test -w '${backup_dir}'" 2>/dev/null; then
+    engine_uid="$(run_db 'id -u' 2>/dev/null)"; engine_gid="$(run_db 'id -g' 2>/dev/null)"
+    [ -n "$engine_uid" ] && run_root "mkdir -p '${backup_dir}' && chown -R ${engine_uid}:${engine_gid} '${backup_dir}'" >/dev/null 2>&1
+fi
+
 run_db "mkdir -p '${backup_dir}'" </dev/null \
     || die "could not create BACKUP_DIR '${backup_dir}' (${where})."
 

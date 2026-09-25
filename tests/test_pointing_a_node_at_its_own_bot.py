@@ -30,7 +30,7 @@ from db_ops.telegram import use_bot as use_bot_module
 from db_ops.telegram.use_bot import UseBotError, use_bot
 
 REF = "TOKEN_TELEGRAM_TEST_BOT"
-IDENTITY = {"ok": True, "telegram_bot_id": "8629909482", "telegram_bot_username": "a_test_bot",
+IDENTITY = {"ok": True, "telegram_bot_id": "7000000002", "telegram_bot_username": "a_test_bot",
             "privacy_mode": "off", "note": "Privacy mode is OFF."}
 
 
@@ -53,7 +53,7 @@ def test_the_identity_is_read_back_from_telegram_never_typed(node):
 
     assert written(node) == {
         "telegram_bot_token_ref": REF,
-        "telegram_bot_id": "8629909482",
+        "telegram_bot_id": "7000000002",
         "telegram_bot_username": "a_test_bot",
     }
     assert result["now"] == "a_test_bot"

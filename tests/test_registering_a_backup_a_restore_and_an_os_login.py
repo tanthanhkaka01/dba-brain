@@ -747,6 +747,9 @@ def _script_restore(**over):
     request = {
         "restore_id": "ACME_PG_RESTORE_DRILL",
         "db_type": "postgresql",
+        # The script runner refuses an entry without these, so registration does too.
+        "server_id": "ACME-192-0-2-10",
+        "target_container": "PG_DRILL",
         "script": "assets/restore/pg_drill.sh",
         "backup_dir": "/backup/pg",
         "cleanup_retention": 86400,
@@ -800,3 +803,30 @@ def test_an_engine_restore_is_still_refused_without_source_and_target(tmp_path):
     message = str(excinfo.value)
     assert "needs a source object" in message
     assert "backup_dir" in message
+
+
+def test_a_script_driven_restore_is_checked_by_the_loader_that_runs_it(tmp_path):
+    """The SQL Server loader steps over a script-driven entry, and it was the only check: a
+    PostgreSQL restore routed to a notify level no group defines was written, and from then on
+    `list-restores` and every `restore-workflow` failed on it - for every entry on the node
+    (found writing the lab walkthrough, 2026-09-25)."""
+    registration.add_restore(_script_restore(), data_dir=tmp_path, key=KEY)
+    before = (tmp_path / "restore_config.json").read_text(encoding="utf-8")
+    unknown = {"enabled": True, "telegram_chat": "no_such_chat"}
+
+    with pytest.raises(registration.RegistrationError, match="no_such_chat"):
+        registration.add_restore(
+            _script_restore(restore_id="ACME_PG_BROKEN",
+                            notify={"logging_on_run": unknown, "alert_on_error": unknown}),
+            data_dir=tmp_path, key=KEY)
+
+    assert (tmp_path / "restore_config.json").read_text(encoding="utf-8") == before
+
+
+def test_a_script_driven_restore_the_runner_accepts_is_written(tmp_path):
+    from db_ops.backup_restore.restore_script import load_script_restores
+
+    registration.add_restore(_script_restore(), data_dir=tmp_path, key=KEY)
+
+    assert [job.restore_id for job in load_script_restores(tmp_path / "restore_config.json")] == [
+        "ACME_PG_RESTORE_DRILL"]

@@ -132,7 +132,7 @@ def _point_in_time(spec) -> datetime | None:
     """
     if not spec.point_in_time:
         return None
-    from db_ops.common.restore.sqlserver.timeparse import parse_moment
+    from db_ops.lib.restore.moment import parse_moment
 
     return parse_moment(spec.point_in_time)
 

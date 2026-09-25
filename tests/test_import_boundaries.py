@@ -196,6 +196,98 @@ def test_common_never_launches_a_db_ops_cli():
 
 
 
+
+# --------------------------------------------------------------------------- #
+# The operator's rule for common.cli, 2026-09-24: "imports nothing but lib, runs no other CLI,
+# calls no app, reads no config JSON". The app half is test_a_shared_layer_never_imports_an_app
+# above; these are the other two halves, and the config half is tests/test_common_layers.py.
+# --------------------------------------------------------------------------- #
+#: `common` imports `common` and `lib`, and nothing else in db_ops - except here, and this may only
+#: shrink. `cli.py` is the layer's composition root: eight commands load `db_ops.config` to find
+#: this node's data folder and store (the resolver tier, moved out in 0.24), and two read the root
+#: package's `__version__`.
+COMMON_OUTSIDE_IMPORTS: dict[str, frozenset[str]] = {
+    "common/cli.py": frozenset({"db_ops.config", "db_ops"}),
+}
+
+
+def _db_ops_imports_of(path: Path) -> set[str]:
+    """Top-level db_ops modules a file imports - `db_ops.lib.x` is `db_ops.lib`, `import db_ops` is `db_ops`."""
+    found: set[str] = set()
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path))):
+        names = []
+        if isinstance(node, ast.Import):
+            names = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            names = [node.module]
+        for name in names:
+            parts = name.split(".")
+            if parts[0] == "db_ops":
+                found.add(".".join(parts[:2]))
+    return found
+
+
+@pytest.mark.parametrize("path", _files_under(frozenset({"common"})), ids=_relative)
+def test_common_imports_only_common_and_lib(path: Path) -> None:
+    allowed = {"db_ops.common", "db_ops.lib"} | COMMON_OUTSIDE_IMPORTS.get(_relative(path), frozenset())
+    outside = sorted(_db_ops_imports_of(path) - allowed)
+    assert not outside, (
+        f"{_relative(path)} imports {outside}. common imports nothing but lib (and itself): a fact "
+        "it needs comes in the request, and the caller looks it up.")
+
+
+def test_the_outside_imports_only_shrink() -> None:
+    stale = {name: sorted(allowed - _db_ops_imports_of(DB_OPS_ROOT / name))
+             for name, allowed in COMMON_OUTSIDE_IMPORTS.items()}
+    stale = {name: gone for name, gone in stale.items() if gone}
+    assert not stale, f"no longer imported - delete from COMMON_OUTSIDE_IMPORTS: {stale}"
+
+
+def test_common_launches_no_python_module_by_any_spelling() -> None:
+    """The literal check above sees `"db_ops.x.cli"` and nothing else. A module name built at run
+    time - `f"{python} -m {module}"`, `[sys.executable, "-m", name]` - or the one client that exists
+    to launch a CLI, `lib.common_cli`, passes it untouched; the rule is about the launch, not the
+    spelling. Text for a person is not a launch either, as with `prog=`: a usage text naming
+    `common.cli` itself, or telling the reader which other command to run."""
+    offenders = []
+    for path in sorted((DB_OPS_ROOT / "common").rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        where = _relative(path)
+        # Strings assigned to a *USAGE name are printed for a reader, never run.
+        for_a_reader = {
+            id(inner) for node in ast.walk(tree)
+            if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id.endswith("USAGE") for target in node.targets)
+            for inner in ast.walk(node.value)
+        }
+        for node in ast.walk(tree):
+            if id(node) in for_a_reader:
+                continue
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                module = getattr(node, "module", "") or ""
+                names = {alias.name for alias in node.names}
+                if "common_cli" in module or "common_cli" in names or "runpy" in names | {module}:
+                    offenders.append(f"{where}:{node.lineno} imports a launcher ({module or names})")
+            elif (isinstance(node, ast.Attribute) and node.attr == "executable"
+                  and getattr(node.value, "id", "") == "sys"):
+                offenders.append(f"{where}:{node.lineno} sys.executable")
+            elif isinstance(node, ast.Constant) and node.value == "-m":
+                offenders.append(f"{where}:{node.lineno} a '-m' argument")
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                for chunk in node.value.split("-m db_ops.")[1:]:
+                    if not chunk.startswith("common.cli"):
+                        offenders.append(f"{where}:{node.lineno} -m db_ops.{chunk.split()[0][:40]}")
+            elif isinstance(node, ast.JoinedStr):
+                values = node.values
+                for piece, following in zip(values, values[1:]):
+                    if (isinstance(piece, ast.Constant) and isinstance(piece.value, str)
+                            and piece.value.rstrip().endswith("-m")
+                            and isinstance(following, ast.FormattedValue)):
+                        offenders.append(f"{where}:{node.lineno} -m followed by a value built at run time")
+    assert offenders == [], "common must not launch a Python module: " + "; ".join(offenders)
+
 #: Direction inside the shared tier. `common` is the bottom: it answers from what it is given, so
 #: it may not reach the store. `db` owns the runtime store and may use `common` as the library it
 #: is — secrets, the severity vocabulary, the shared JSON-request parser.

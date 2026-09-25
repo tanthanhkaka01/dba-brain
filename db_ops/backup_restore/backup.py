@@ -544,6 +544,7 @@ def run_backup(
         timeouts={item.job_code: item.time_window.timeout for item in jobs},
         notify={item.job_code: item.notify for item in jobs},
     )
+    listed_at = utc_now_text()
     latest_runs = store.fetch_latest_job_runs_by_job_code()
     # --force runs every selected job regardless of schedule; the due check is the normal path.
     # --force skips the schedule, never a run that is still in flight: two backups of the
@@ -566,6 +567,13 @@ def run_backup(
     for item in due:
         if dry_run:
             summary["jobs"].append({"job": item.label, "status": "dry-run"})
+            continue
+        # Due when this run listed it is not the same as still due: an overlapping async run may have
+        # taken it since, and finished it (schedule.taken_since). An explicit --force still runs.
+        if not force and schedule.taken_since(store, item.job_code, listed_at):
+            summary["skipped"] += 1
+            summary.setdefault("taken_by_another_run", []).append(
+                {"backup_id": item.backup_id, "job": item.job})
             continue
         started_at = utc_now_text()
         try:

@@ -4,8 +4,9 @@ import json
 
 import pytest
 
-from db_ops.sre.docker_db import provisioner, register_config
-from db_ops.sre.docker_db.models import DockerDbSpec
+from db_ops.common.docker_db import provisioner
+from db_ops.sre.docker_db import register_config, resolve
+from db_ops.lib.docker_db_spec import DockerDbSpec
 
 
 def _spec(**over):
@@ -79,7 +80,7 @@ def test_load_registry_rejects_bad_shape(tmp_path):
 # --------------------------------------------------------------------------- #
 def test_resolve_password_from_env(monkeypatch):
     monkeypatch.setenv("MY_PW", "hunter2")
-    value, source = provisioner.resolve_password_value("MY_PW")
+    value, source = resolve.resolve_password_value("MY_PW")
     assert value == "hunter2"
     assert source == "env:MY_PW"
 
@@ -87,15 +88,15 @@ def test_resolve_password_from_env(monkeypatch):
 def test_resolve_password_missing_allow(monkeypatch):
     monkeypatch.delenv("MY_PW", raising=False)
     monkeypatch.delenv("DB_OPS_SECRET_KEY", raising=False)
-    value, _ = provisioner.resolve_password_value("MY_PW", allow_missing=True)
+    value, _ = resolve.resolve_password_value("MY_PW", allow_missing=True)
     assert value is None
 
 
 def test_resolve_password_missing_raises(monkeypatch):
     monkeypatch.delenv("MY_PW", raising=False)
     monkeypatch.delenv("DB_OPS_SECRET_KEY", raising=False)
-    with pytest.raises(provisioner.ProvisionError, match="Password not found"):
-        provisioner.resolve_password_value("MY_PW", allow_missing=False)
+    with pytest.raises(resolve.DockerDbRequestError, match="Password not found"):
+        resolve.resolve_password_value("MY_PW", allow_missing=False)
 
 
 def test_check_ports_free_detects_clash():

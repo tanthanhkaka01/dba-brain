@@ -132,6 +132,7 @@ differently in two places.
 | `task_input.py` | the reserved `{target_*}` placeholders a task's `input.args` may use without declaring them — the runner fills them from the `sql_targets` entry it is running for. Here because both sides need it and neither may import the other: `common.sql_task_admin` validates the args at registration, `sql_tasks.python_source` substitutes them at run time. It was spelled out in both until `test_no_duplicate_definitions.py` found the two copies |
 | `instance_bundle.py` | what a SQL Server instance-metadata bundle is — layout, two phases, order |
 | `ssh_errors.py` | what can go wrong reaching a host over SSH, as four names |
+| `docker_db_spec.py` | what a lab database Docker instance **is** - `DockerDbSpec` and its validation, `ENGINE_META` (image, port, login, health ceiling per engine), the lab subnet rule, and the default folders. Here since 0.23.0 because both sides of the `common.cli` boundary need it: `sre` for its argparse choices and the connection record, `common.docker_db` to build the instance |
 | `target_flags.py` | per-target on/off flags, and `is_record_active` - one rule for a Telegram chat or person switched on by `active` or the older `status: "active"`, absent meaning on |
 | `webhost_endpoints.py` | where this node's own pages are — parses `--port`/`--mount` out of the webhost serve `command_text`, builds the console and reports base URLs, and names the pages that exist under stable names. A per-server page stays a `{server_id}` template: a real server id in shipped code is what `check-identifiers` refuses |
 | `report_links.py` | `page_relative` / `href_for_page` — turning an absolute report URL into a relative href when it is one of our own pages. The report text stays absolute for Telegram; the rendered page gets the relative form, which resolves against whatever host served it rather than the one that rendered it |
@@ -210,7 +211,7 @@ reachable from everywhere else. Every symptom is an ordinary connect timeout.
 
 It has cost three outages on the same SQL Server — 2026-08-05, 2026-08-14, 2026-08-26 — and each
 was diagnosed by hand. The answer to the first two was *pinning*, in three places that all still
-matter: `db_ops.sre.docker_db.models.lab_network_subnet` (every generated lab compose file),
+matter: `db_ops.lib.docker_db_spec.lab_network_subnet` (every generated lab compose file),
 `docker-compose.runtime.yml` (db_ops's own network), and `db_ops/sre/host_config/docker-daemon.json`
 (the host's own allocation). Pinning works — but only where somebody applied it, which is why the
 third happened on a worker VM built after the second.
@@ -630,10 +631,15 @@ Two details that look like bugs and are not:
 ## `common_cli.py` — two readers, and only two
 
 ```python
-common_cli.run(command, request, *, timeout_seconds=None)                 # raises on failure
-common_cli.run_allowing_failure(command, request, *, timeout_seconds=None) # -> (success, data, error)
-common_cli.spawn(command, request, *, module=DEFAULT_MODULE, timeout_seconds=None)
+common_cli.run(command, request, *, timeout_seconds=None, stream_stderr=False)                 # raises on failure
+common_cli.run_allowing_failure(command, request, *, timeout_seconds=None, stream_stderr=False) # -> (success, data, error)
+common_cli.spawn(command, request, *, module=DEFAULT_MODULE, timeout_seconds=None, stream_stderr=False)
 ```
+
+`stream_stderr=True` (0.23.0) lets the child's stderr through as it is written instead of capturing
+it: `create-db-docker` runs for minutes - an Oracle first start creates the database - and the
+person watching `sre.cli`, or the Telegram chat relaying it, saw nothing until the end once that
+work moved into `common`. stdout is still the answer, and still captured.
 
 `spawn` carries a `module` parameter so `db/queue_message.py` can reach the `db` CLI through the
 same transport instead of keeping its own subprocess copy.

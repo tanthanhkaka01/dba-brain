@@ -144,7 +144,10 @@ def _dispatch(operation: str, request: dict) -> tuple[dict, str]:
         data = restore_step(level, request)
         applied = data.get("applied") or data.get("cataloged") or []
         what = "would apply" if data.get("dry_run") else "applied"
-        return data, f"{data['engine']}: {what} {len(applied) or 1} {level} backup(s)."
+        # `db_type`, the name every restorestep module answers with since 0.22.0. This line still
+        # read `engine` after the rename, so every restore step ran and then failed on its own
+        # summary - leaving the database it had just restored WITH NORECOVERY in RESTORING.
+        return data, f"{data['db_type']}: {what} {len(applied) or 1} {level} backup(s)."
 
     if operation == "restore-key":
         from db_ops.common.restorekey import import_key

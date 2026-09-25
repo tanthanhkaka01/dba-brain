@@ -160,6 +160,7 @@ def test_the_copy_boundaries_are_announced_by_whoever_does_the_copy(monkeypatch)
         restore_id="R1", db_type="oracle", label="R1 (oracle)", server_id="SRC",
         target_server_id="DST", target_container="", is_remote=True, env={}, env_secrets={},
         backup_dir="/b", target_backup_dir="/t", target_visible_dir="/t",
+        cleanup_retention=86400,
     )
     # Patched at the source module: restore_by_id imports it inside the function, so patching the
     # name on restore_by_id would bind nothing.
@@ -172,10 +173,15 @@ def test_the_copy_boundaries_are_announced_by_whoever_does_the_copy(monkeypatch)
                                                         container_name="", key_file=None))
     monkeypatch.setattr("db_ops.backup_restore.restore_script.transfer_backup_to_target",
                         lambda *a, **k: {"copied": 3, "skipped": 1, "bytes_copied": 99, "pruned": 0})
+    monkeypatch.setattr("db_ops.backup_restore.restore_script.prune_staged_backups",
+                        lambda *a, **k: {"pruned": 0, "retention_seconds": 86400})
 
     module.restore_by_id({"cleanup_retention": 691200, "restore_id": "R1"}, on_phase=lambda p, m, e=None: seen.append(p))
 
-    assert seen == ["COPY_START", "COPY_DONE"]
+    # An empty plan restores nothing, so no RESTORE_/VERIFY_ events; the metadata step still says
+    # why it did nothing, and the staging cleanup follows the (empty) restore - the whole order is
+    # in test_a_restore_reports_every_step_in_order.py.
+    assert seen == ["COPY_START", "COPY_DONE", "METADATA_SKIP", "DELETE_START", "DELETE_DONE"]
 
 
 def test_a_caller_that_wants_no_events_still_restores():
@@ -233,6 +239,7 @@ def test_script_restores_report_too(monkeypatch, harness):
     )
 
     assert harness.phases() == ["START", "END"]
+    assert all(e["metadata"]["restore_mode"] == "LATEST" for e in harness.events)
     assert harness.events[0]["metadata"]["restore_id"] == "CLOUD_ORA_TO_CLOUD2"
     # The two fields this branch used to omit, checked where they are actually produced.
     assert harness.events[0]["metadata"]["target_id"] == "DST"
@@ -283,7 +290,7 @@ def test_a_negative_or_unparsable_retention_is_refused():
 def test_pruning_is_skipped_when_retention_is_zero():
     """0 must not be read as "delete everything older than 0 seconds" - that would wipe the
     staging directory on the first run."""
-    from db_ops.backup_restore.transfer import prune_target_dir
+    from db_ops.common.backup_copy import prune_target_dir
 
     class _Client:
         def exec_command(self, *a, **k):
@@ -293,7 +300,7 @@ def test_pruning_is_skipped_when_retention_is_zero():
 
 
 def test_pruning_deletes_by_age_and_reports_the_count():
-    from db_ops.backup_restore.transfer import prune_target_dir
+    from db_ops.common.backup_copy import prune_target_dir
 
     sent = {}
 
@@ -359,3 +366,32 @@ def test_the_excerpt_never_silently_stitches_two_unrelated_halves():
 # Telegram routing is declared, not inherited silently.
 
 
+def test_a_point_in_time_script_restore_says_so_on_every_message(monkeypatch, harness):
+    """Every message of a point-in-time drill read `restore_mode=LATEST` - the formatter's default,
+    because this path never set the mode (the .251 -> .252 drill, 2026-09-25). The moment was
+    named only inside RESTORE_START's text."""
+    monkeypatch.setattr(workflow, "load_restore_configs", lambda _p: [])
+    job = SimpleNamespace(
+        restore_id="LAB_PG_A_TO_B", label="LAB_PG_A_TO_B (postgresql)", active=True,
+        db_type="postgresql", server_id="SRV", target_container="c", job_code="jc",
+        target_server_id="DST", notify={}, time_window=SimpleNamespace(timeout=7200),
+    )
+    monkeypatch.setattr(workflow, "load_script_restores", lambda _p: [job])
+    seen = {}
+
+    def fake_restore(request, **kwargs):
+        seen.update(request)
+        kwargs["on_phase"]("RESTORE_START", "restoring ...", {})
+        return {"restore_id": "LAB_PG_A_TO_B", "db_type": "postgresql", "steps": [], "plan": "p"}
+
+    monkeypatch.setattr("db_ops.backup_restore.restore_by_id.restore_by_id", fake_restore)
+
+    workflow.run_scheduled_restores(app_config=SimpleNamespace(sqlite_path=":memory:"), config_path="x.json",
+                                    force=True, point_in_time="2026-09-25 12:37:42 +08:00")
+
+    assert seen["point_in_time"] == "2026-09-25 12:37:42 +08:00"
+    assert harness.phases() == ["START", "RESTORE_START", "END"]
+    for event in harness.events:
+        assert event["metadata"]["restore_mode"] == "POINT_IN_TIME", event["phase"]
+        assert event["metadata"]["point_in_time_original"] == "2026-09-25 12:37:42 +08:00"
+        assert event["metadata"]["point_in_time_utc"] == "2026-09-25T04:37:42+00:00"

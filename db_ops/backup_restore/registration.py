@@ -190,6 +190,16 @@ def _validate(path: Path, document: dict[str, Any], loader) -> None:
         scratch.unlink(missing_ok=True)
 
 
+def _load_every_restore(path: Path) -> None:
+    """Load ``restores[]`` the way each consumer does: the SQL Server engine path, then the
+    script-driven one the scheduler and ``restore-workflow`` run."""
+    from db_ops.backup_restore.config import load_restore_configs
+    from db_ops.backup_restore.restore_script import load_script_restores
+
+    load_restore_configs(path)
+    load_script_restores(path)
+
+
 def _write_document(path: Path, document: dict[str, Any]) -> None:
     atomic_write_text(path, json.dumps(document, ensure_ascii=False, indent=2) + "\n")
 
@@ -496,7 +506,12 @@ def add_restore(request: dict[str, Any] | None = None, *,
                            if not (isinstance(item, dict)
                                    and str(item.get("restore_id")) == restore_id)]
     section["restores"].append(entry)
-    _validate(path, document, load_restore_configs)
+    # Both loaders, because each reads only its own shape: `load_restore_configs` steps over a
+    # script-driven entry, so an entry of that shape was checked by nothing. A PostgreSQL restore
+    # routed to a notify level no Telegram group defines was written, and from then on
+    # `list-restores` and every `restore-workflow` on the node failed on it - for every entry, not
+    # only that one (found writing the lab walkthrough, 2026-09-25).
+    _validate(path, document, _load_every_restore)
 
     written: list[str] = []
     for ref, value in stored:

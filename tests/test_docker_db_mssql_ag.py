@@ -16,10 +16,10 @@ import types
 import pytest
 import yaml
 
-from db_ops.sre.docker_db import compose as compose_mod
-from db_ops.sre.docker_db import provisioner, templates
-from db_ops.sre.docker_db.models import DockerDbSpec
-from db_ops.sre.docker_db.provisioner import ProvisionError
+from db_ops.common.docker_db import compose as compose_mod
+from db_ops.common.docker_db import provisioner, templates
+from db_ops.lib.docker_db_spec import DockerDbSpec
+from db_ops.common.docker_db.provisioner import ProvisionError
 
 
 def _spec(name="mssql_ag_lab", replicas=2, host_port=15433):
@@ -84,13 +84,11 @@ def test_the_provisioner_builds_the_group_after_the_nodes_are_healthy(monkeypatc
 
     monkeypatch.setattr(provisioner.healthcheck, "wait_healthy",
                         lambda services, engine, **kw: {svc: "healthy" for svc in services})
-    monkeypatch.setattr(provisioner, "resolve_password_value", lambda *a, **kw: ("pw", "env:test"))
-    monkeypatch.setattr(provisioner.register_config, "register_connection", lambda *a, **kw: "added")
 
-    rc = provisioner.provision(spec, containers_dir=str(tmp_path), data_dir=str(tmp_path),
-                               register=False, runner=fake_runner)
+    result = provisioner.provision(spec, password="pw", containers_dir=str(tmp_path),
+                                   runner=fake_runner)
 
-    assert rc == 0
+    assert result["healthy"] is True
     assert ["bash", "setup/setup_ag.sh"] in calls
     # ... and only after the stack is up: the group cannot be created against a dead node.
     up = next(index for index, call in enumerate(calls) if call[:2] == ["docker", "compose"] and "up" in call)
@@ -108,11 +106,10 @@ def test_an_unhealthy_stack_does_not_get_an_availability_group(monkeypatch, tmp_
 
     monkeypatch.setattr(provisioner.healthcheck, "wait_healthy",
                         lambda services, engine, **kw: {svc: "timeout" for svc in services})
-    monkeypatch.setattr(provisioner, "resolve_password_value", lambda *a, **kw: ("pw", "env:test"))
 
     with pytest.raises(ProvisionError, match="never became healthy"):
-        provisioner.provision(spec, containers_dir=str(tmp_path), data_dir=str(tmp_path),
-                              register=False, runner=fake_runner)
+        provisioner.provision(spec, password="pw", containers_dir=str(tmp_path),
+                              runner=fake_runner)
     assert ["bash", "setup/setup_ag.sh"] not in calls
 
 
@@ -138,11 +135,10 @@ def test_a_tag_that_does_not_exist_fails_before_anything_is_created(monkeypatch,
             return types.SimpleNamespace(returncode=1, stdout="", stderr="manifest unknown")
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(provisioner, "resolve_password_value", lambda *a, **kw: ("pw", "env:test"))
 
     with pytest.raises(ProvisionError) as exc:
-        provisioner.provision(spec, containers_dir=str(tmp_path), data_dir=str(tmp_path),
-                              register=False, runner=fake_runner)
+        provisioner.provision(spec, password="pw", containers_dir=str(tmp_path),
+                              runner=fake_runner)
 
     assert "Image not found: mcr.microsoft.com/mssql/server:2025" in str(exc.value)
     assert "2025-latest" in str(exc.value)                      # ... and what to use instead
@@ -160,11 +156,10 @@ def test_a_failed_start_removes_what_this_run_created(monkeypatch, tmp_path):
             return types.SimpleNamespace(returncode=1, stdout="", stderr="pull failed")
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(provisioner, "resolve_password_value", lambda *a, **kw: ("pw", "env:test"))
 
     with pytest.raises(ProvisionError, match="docker compose up"):
-        provisioner.provision(spec, containers_dir=str(tmp_path), data_dir=str(tmp_path),
-                              register=False, runner=fake_runner)
+        provisioner.provision(spec, password="pw", containers_dir=str(tmp_path),
+                              runner=fake_runner)
 
     assert not (tmp_path / "mssql_ag_lab").exists()
 
@@ -182,11 +177,10 @@ def test_an_instance_that_already_existed_is_never_removed_by_a_failure(monkeypa
             return types.SimpleNamespace(returncode=1, stdout="", stderr="boom")
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(provisioner, "resolve_password_value", lambda *a, **kw: ("pw", "env:test"))
 
     with pytest.raises(ProvisionError):
-        provisioner.provision(spec, containers_dir=str(tmp_path), data_dir=str(tmp_path),
-                              register=False, force=True, runner=fake_runner)
+        provisioner.provision(spec, password="pw", containers_dir=str(tmp_path),
+                              force=True, runner=fake_runner)
 
     assert existing.exists()
 

@@ -181,7 +181,7 @@ def test_the_history_command_leaves_itself_out():
 def test_only_the_person_who_asked_is_read():
     """The caller is the row's user_id, never an argument. A history that took the person as a
     parameter would let anyone read anyone's by typing a number."""
-    store = _Store([_row(), _row(user_id="7873858430", text="/spbot_backup")])
+    store = _Store([_row(), _row(user_id="7000000003", text="/spbot_backup")])
 
     result = history.collect(store, user_id="123456789")
 

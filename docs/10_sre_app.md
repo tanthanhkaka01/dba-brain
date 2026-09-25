@@ -1459,7 +1459,11 @@ python -m db_ops.sre.cli ssh 198.51.100.11 -- systemctl status mysql
 
 ### Lab Database Docker Instances
 
-`create-db-docker` provisions a single or HA-lab database **container** (distinct from the VMware cluster flows above), writes its compose + `.env` under `/opt/db_ops/containers/<name>/`, brings it up with `docker compose`, waits for health, and registers the connection in `data/docker_db_connections.json`. It can run three ways:
+`create-db-docker` provisions a single or HA-lab database **container** (distinct from the VMware cluster flows above), writes its compose + `.env` under `/opt/db_ops/containers/<name>/`, brings it up with `docker compose`, waits for health, and registers the connection in `data/docker_db_connections.json`.
+
+**Where the work runs (0.23.0).** `sre.cli create-db-docker` (and so `/spbot_create_db_docker`) no longer builds anything itself. It validates the spec, stores `--password-text` under its ref, resolves the database password and the SSH login (`--remote-password-ref`, `--remote-key`), and hands them to **`common.cli create-db-docker`** on stdin - which builds the instance and reads no configuration - then registers the record the answer describes. `move-db-docker` is split the same way: `sre` resolves both targets into logins and the engine from the registry, `common.cli move-db-docker` moves, `sre` repoints the entry. The work is `db_ops/common/docker_db/` (templates, compose, health, provisioner, mover, the SSH host); what an instance *is* - `DockerDbSpec`, `ENGINE_META` - is `db_ops/lib/docker_db_spec.py`, because both sides need it. The command line, the flags and the Telegram parameters did not change. Progress streams to stderr as it happens (an Oracle first start takes many minutes); stdout carries the summary. A dry run connects to nothing and never installs Docker - `--install-docker --dry-run` used to install it. Request and answer: `docs/13_common.md`.
+
+It can run three ways:
 
 1. **inside the worker container** from the master via the control app's `worker-run` — the original path, still fully supported and **unchanged**. Example:
    `python -m db_ops.control.cli worker-run --key-base64 "<KEY>" -- python -m db_ops.sre.cli create-db-docker --name ora_lab --engine oracle --version 23.26.2 --mode ha-lab`.
@@ -1469,8 +1473,16 @@ python -m db_ops.sre.cli ssh 198.51.100.11 -- systemctl status mysql
 
    **What you need for a one-command remote install** — nothing pre-seeded:
    - `--remote-host <ip> --remote-user <user>` and SSH auth, in one of three forms: **`--remote-key <path>`** (an SSH private key file — how key-auth VMs such as Oracle Cloud connect; no password), **`--remote-password '<pass>'`** (inline value), or **`--remote-password-ref <REF>`** (a ref in the encrypted secret store). A key-auth VM with passwordless sudo needs no password at all.
-   - the DB password with `--password-text '<db-pass>'` (stored under `<NAME>_PASSWORD` in the master secret store, which needs `--key-base64 "<KEY>"`); or set an env var and pass `--password-ref`.
-   - on the VM: **docker + the compose plugin installed**, and **both folders a lab writes** owned by the SSH user - the containers dir and the backup bind mount (one-time: `sudo mkdir -p /opt/db_ops/containers /opt/db_ops/backup && sudo chown <user>: /opt/db_ops/containers /opt/db_ops/backup`) — **or pass `--install-docker`** (`install_docker = yes` in `/spbot_create_db_docker`) to have the CLI do all of that over SSH for a bare Ubuntu VM (installs docker via `get.docker.com`, falls back to distro packages, adds the SSH user to the docker group, creates **both** folders and hands them to the SSH user; needs the SSH user to have sudo). `--install-docker` is idempotent: a host that already has Docker gets only the group and the folders. Until 2026-09-24 it prepared only the containers dir, and the backup mount - created later over SFTP, without sudo - failed with *Permission denied* for a user with full sudo rights; a failed preparation now says so instead of surfacing as that SFTP error.
+   - the DB password with `--password-text '<db-pass>'` (stored under `<NAME>_PASSWORD` in the master secret store, which needs `--key-base64 "<KEY>"`); or set an env var and pass `--password-ref`. The store is checked before the build, and the password is stored only **after** the build succeeds. Until 2026-09-25 it was stored first, so a failed build left the password of a lab that did not exist. A `{worker_host}` placeholder that nothing filled in is never recorded as the lab's host.
+   - on the VM: **docker + the compose plugin installed**, and **both folders a lab writes** owned by the SSH user - the containers dir and the backup bind mount (one-time: `sudo mkdir -p /opt/db_ops/containers /opt/db_ops/backup && sudo chown <user>: /opt/db_ops/containers /opt/db_ops/backup`) — **or pass `--install-docker`** (`install_docker = yes` in `/spbot_create_db_docker`) to have the CLI do all of that over SSH for a bare Ubuntu VM (installs docker via `get.docker.com`, falls back to distro packages, adds the SSH user to the docker group, creates **both** folders and hands them to the SSH user; needs the SSH user to have sudo). `--install-docker` is idempotent: a host that already has Docker gets only the group and the folders. Until 2026-09-24 it prepared only the containers dir, and the backup mount - created later over SFTP, without sudo - failed with *Permission denied* for a user with full sudo rights; a failed preparation now says so instead of surfacing as that SFTP error. **The backup mount is handed over at its top only, never recursively**: the engines write their backups beneath it as their own users (SQL Server as uid 10001), and a `chown -R` there - which the first version of this fix ran on every lab created on the host - took every existing backup folder away from its engine, whose next LOG and FULL backups then failed *Access is denied*. The SQL Server backup job takes its own folder over when it has to (`docs/08_backup_restore_app.md`).
+
+   **`--backup-mount`, and a lab that is backup-ready as built (0.23.0).** SQL Server mounts `/opt/db_ops/backup` by default; PostgreSQL, Oracle (Free and XE) and MySQL mount the folder only when it is passed. With a mount a lab's backups go under **`<mount>/<lab name>`** - `create-db-docker` prints it as *Backup folder*; it is the backup entry's `backup_dir` and a restore's `source_backup_host_dir` - and the lab is ready to be backed up with no work by hand:
+   - **PostgreSQL** (single, and the HA primary): the container makes that folder as root on start and hands it to postgres, and runs with `archive_mode=on`, `archive_command` into its `wal/` and `summarize_wal=on` (incrementals need WAL summaries).
+   - **Oracle Free single**: `initdb/10-archivelog.sql` runs once, after the image creates the database, and turns ARCHIVELOG on - the image has no switch for it (read from its entrypoint, 23.26.3). The Data Guard lab runs ARCHIVELOG already.
+   - **Oracle XE single**: the same first-start script, mounted into `/container-entrypoint-initdb.d`. XE 11 is a non-CDB, so the script has no pluggable step. Until 2026-09-25 the script was Oracle Free's only and XE's template mounted no script directory, so an XE lab came up NOARCHIVELOG, backup mount or not.
+   - **HA labs**: the Oracle and PostgreSQL primaries mount the folder, and every SQL Server replica does (a backup may run on any). An ha-lab used to refuse `--backup-mount`, since no HA template rendered one, so it could never be the source of a cross-machine restore.
+
+   A mount added to a lab that already exists changes only its compose file: PostgreSQL's settings and Oracle's ARCHIVELOG are made when the container (for Oracle, the database) is first created - rebuild with `--force` to have them.
 
    Long post-start steps (the Oracle Data Guard RMAN duplicate, ~3–4 min) run **detached on the remote host and are polled**, so a blip in the control SSH connection does not interrupt them — the one command runs to completion on its own.
 
@@ -1484,7 +1496,7 @@ python -m db_ops.sre.cli ssh 198.51.100.11 -- systemctl status mysql
            - subnet: 172.30.<n>.0/24
    ```
 
-   where `<n>` is derived from `--name` (`db_ops/sre/docker_db/models.py::lab_network_subnet`), or
+   where `<n>` is derived from `--name` (`db_ops/lib/docker_db_spec.py::lab_network_subnet`), or
    whatever `--network-subnet` says. It is never left to Docker, whose default pool spans
    `172.17.0.0/16`–`172.31.0.0/16` — private ranges that plenty of networks already route real
    databases on. An auto-allocated lab bridge has twice taken a production instance off the map:
@@ -1531,7 +1543,7 @@ python -m db_ops.sre.cli ssh 198.51.100.11 -- systemctl status mysql
    and before a container exists. Letters, digits and `_ - . # ! %` are safe.
 
    **How long the provisioner waits** — two separate budgets, both engine facts rather than
-   caller decisions (`ENGINE_META` in `sre/docker_db/models.py`):
+   caller decisions (`ENGINE_META` in `lib/docker_db_spec.py`):
 
    | | health (first start) | post-start step | + pull allowance | total |
    | --- | --- | --- | --- | --- |
@@ -1634,7 +1646,7 @@ Options for `create-db-docker`:
 |---|---|
 | `--name` | Instance name — letters, numbers, `_`, `-` only. |
 | `--engine` | `postgres` \| `mysql` \| `mssql` \| `oracle`. |
-| `--version` | Image tag, checked against the registry **before** anything is created. postgres: `18`/`17`/`16`. mysql: `8.4`/`8.0`. mssql: `2022-latest`, `2025-latest`, or a full tag such as `2025-CU6-ubuntu-24.04` — **there is no bare-year tag: `2025` does not exist** ([tag list](https://mcr.microsoft.com/v2/mssql/server/tags/list)). oracle: `23.26.3` (the newest 26ai, 2026-09) or `latest` - **Oracle AI Database 26ai kept the 23.26.x version numbers: there is no `26` / `26-slim` tag** (Docker Hub answers 404) - or `23`/`23-slim` (23ai); gvenzl/oracle-free tags, **no `ai` suffix**. The check says *Image not found* only when the registry says the tag is not there; a registry that does not answer (rate limit, timeout, DNS) is reported as that, with docker's own message - not as a wrong `--version`. |
+| `--version` | Image tag, checked against the registry **before** anything is created. postgres: `18`/`17`/`16`. mysql: `8.4`/`8.0`. mssql: `2022-latest`, `2025-latest`, or a full tag such as `2025-CU6-ubuntu-24.04` — **there is no bare-year tag: `2025` does not exist** ([tag list](https://mcr.microsoft.com/v2/mssql/server/tags/list)). oracle: `23.26.3` (the newest 26ai, 2026-09) or `latest` - **Oracle AI Database 26ai kept the 23.26.x version numbers: there is no `26` / `26-slim` tag** (Docker Hub answers 404) - or `23`/`23-slim` (23ai); gvenzl/oracle-free tags, **no `ai` suffix**. The check says *Image not found* only when the registry says the tag is not there; a registry that does not answer (rate limit, timeout, DNS) is reported as that, with docker's own message - not as a wrong `--version`. The check covers **every image the compose file pulls**, not only the engine's own. It used to ask only about the single-mode image, so a MySQL ha-lab passed the check and then failed on a `bitnami/mysql` that no longer exists. An image of the template's own that is gone is named as such. |
 | `--mode` | `single` \| `ha-lab`. **`ha-lab` is each engine's own replication, not one product** — see below. `oracle` ha-lab is Data Guard, fixed at 1 primary + 1 standby. |
 | `--replicas` | Standby count for `ha-lab` (default 2); rejected with `--mode single`. |
 | `--host-port` | Host port for the (primary) instance; HA standbys take the next ports. Default: the engine's own port (postgres 5432, mysql 3306, mssql 1433). |
@@ -1657,7 +1669,7 @@ The password is resolved from an environment variable named like the `--password
 | Engine | `ha-lab` = | Failover |
 |---|---|---|
 | `postgres` | Physical **streaming replication**: 1 primary + N standbys, seeded with `pg_basebackup`, replication role provisioned by an initdb hook. | Manual (promote a standby). |
-| `mysql` | **Asynchronous** primary/replica (bitnami image, `MYSQL_REPLICATION_MODE`). | Manual. |
+| `mysql` | **Asynchronous** primary/replica (`bitnamilegacy/mysql`, `MYSQL_REPLICATION_MODE`). `bitnami/mysql` has left Docker Hub; the single lab runs the official `mysql` image. | Manual. |
 | `mssql` | An **Always On availability group** with `CLUSTER_TYPE = NONE`: `MSSQL_ENABLE_HADR=1` on each node, one shared certificate, mirroring endpoints on 5022, `SEEDING_MODE = AUTOMATIC`, and a database (`<name>_db`) added to the group. Built by `setup/setup_ag.sh`, which the provisioner runs once the nodes are healthy — compose cannot express it and the image has no init hook. | **Manual, and there is no listener.** A container lab has no WSFC or Pacemaker, so this is a read-scale AG: `ALTER AVAILABILITY GROUP [ag_<name>] FAILOVER` on the target replica while the primary is alive, `FORCE_FAILOVER_ALLOW_DATA_LOSS` once it is gone. Clients connect to a replica by port. Enough to exercise replication, seeding, AG DMVs and monitoring — **not** automatic HA. |
 | `oracle` | **Data Guard, exactly 1 primary + 1 physical standby** (`--replicas` fixed at 1). Both nodes first start as normal databases; `setup/setup_dataguard.sh` (run by the provisioner once both are healthy) enables ARCHIVELOG/FORCE LOGGING + standby redo logs on the primary, copies the SYS password file, rebuilds the standby as a physical standby via `RMAN DUPLICATE ... FOR STANDBY FROM ACTIVE DATABASE` (aux pfile generated from the standby's own spfile — a minimal pfile dies with ORA-00443; aux reached via a static listener SID entry + `DGSB_AUX` alias present on **both** nodes) and starts managed recovery (MRP). **Redo transport: Oracle Free blocks every live mode with ORA-00439 (ASYNC, SYNC and FAL gap fetch — verified on 23.26.2), so redo moves Standard-Edition style**: the `<name>-shipper` sidecar (docker:cli + socket) forces a log switch and copies+registers each new archived log every 2 minutes; MRP applies them. RPO ≈ that interval. The standby stays **MOUNTED**. Once converted it starts through its own `dg/standby_entrypoint.sh` - listener up, `STARTUP MOUNT`, never opened, `SHUTDOWN IMMEDIATE` on stop - so a container restart or a host reboot brings it back a mounted standby the shipper keeps applying to; `dg/standby_healthcheck.sh` reports a mounted physical standby as *healthy*. Until 2026-09-24 it ran under the image's own start, which opens every database as a primary: after one host reboot the standby crash-looped (*DATABASE STARTUP FAILED!*, `restart: unless-stopped`) and the shipper refused every cycle (ORA-01034); its healthcheck also read *unhealthy* for as long as the lab lived. The shipper reads the standby's `resetlogs_id` and `log_archive_format` at the start of **every** cycle: until 2026-09-24 it read them once, when the sidecar started - before the setup had converted the standby - and skipped every cycle after (*no valid RLID/FMT*); only the setup's own one-off cycle had ever shipped a log. | **Failover only** (no live transport → no clean switchover): on the standby `RECOVER MANAGED STANDBY DATABASE CANCEL;` then `ALTER DATABASE ACTIVATE STANDBY DATABASE;` — data current to the last shipped log. |
 
@@ -1697,7 +1709,10 @@ python -m db_ops.sre.cli move-db-docker --name ora11g_lab `
 Both hosts are named as db_ops **targets** — a `server_id` or ip from `db_instances.json` — not
 as host/user/password: a machine that already runs db_ops containers is already in the inventory
 with a credential the secret store resolves, and retyping it is how two spellings of one host end
-up in two runbooks. Resolution is `common.host_ops.resolve_host`, the same one `run-cmd` uses.
+up in two runbooks. `sre` resolves each into an SSH login - the same three steps
+`common.host_ops.resolve_host` takes, out of the same files - and the engine from
+`data/docker_db_connections.json` (or `--engine`); `common.cli move-db-docker` is handed those
+values and reads nothing.
 
 ### A named volume is not proof of where the data is
 
@@ -1721,7 +1736,9 @@ the operator wrote, and `docker compose up` in that directory still does the rig
 ### What it does, in order
 
 1. **Reads the source from Docker, not from the compose file** — containers, images, volumes,
-   published ports, pinned subnet, compose service names, writable-layer size. The file describes
+   published ports, pinned subnet, compose service names, writable-layer size. Asked by compose
+   **project**, which is the directory name lower-cased: asking by the name as typed found nothing
+   for a lab named in capitals until 0.23.0. The file describes
    intent; the daemon describes what is running. Ports come from `HostConfig.PortBindings`, which
    survives the container being stopped (`NetworkSettings.Ports` does not, and the container is
    stopped when the answer is needed).
@@ -1734,15 +1751,19 @@ the operator wrote, and `docker compose up` in that directory still does the rig
    are stopped for that with `docker stop -t 180` — Docker's default of 10 s SIGKILLs Oracle
    mid-checkpoint, and a datafile copied in that state restores to a database that opens and is
    wrong — and started again immediately, even if the packing failed.
-4. **Relays each artifact host-to-host** with `common.cli relay-file`: streamed through the
-   master without touching its disk, one sha256 across the whole trip.
+4. **Relays each artifact host-to-host** through the two SSH sessions the move already holds
+   (`common/ssh_relay.py`, the stream `relay-file` uses too): through the master without touching
+   its disk, one sha256 across the whole trip. It used to launch `common.cli relay-file`, which
+   resolved both hosts again out of `db_instances.json` - a CLI launched from `common`, reading
+   config. `bytes_transferred` is real now; it read a key the relay never answered and was 0.
 5. **Imports on the destination**, in an order that matters: `docker load`, extract the instance
    dir, `docker compose create` — *this* is what creates the named volumes **with compose's own
    labels**; creating them with `docker volume create` leaves them unlabelled and compose then
    refuses the stack with "volume already exists but was not created by Docker Compose", after
    the data is already inside — restore the volumes, `docker compose up -d`, wait for health.
-6. **Only then** repoints `data/docker_db_connections.json` (host, worker_host, compose_path —
-   nothing else) and, with `--stop-source`, stops the source containers. Stopped, never removed:
+6. **Only then**, with `--stop-source`, stops the source containers; and `sre`, once the answer
+   is back, repoints `data/docker_db_connections.json` (host, worker_host, compose_path — nothing
+   else). Stopped, never removed:
    they and their volumes are the only other copy until a person has looked at the new host. The
    summary prints the `docker start` that undoes it.
 

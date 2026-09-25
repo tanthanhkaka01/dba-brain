@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -18,18 +19,17 @@ from db_ops.logging_ops import (
 from db_ops.logging_ops.runtime_stdout import patch_stdout
 from db_ops.sre.automation import list_known_workflows
 from db_ops.sre.config import SreOperationalConfig, load_sre_operational_config
-from db_ops.sre.docker_db import (
+from db_ops.lib.docker_db_spec import (
+    DEFAULT_BACKUP_MOUNT,
+    DEFAULT_CONTAINERS_DIR,
+    DEFAULT_STAGE_DIR,
     ENGINE_META,
     VALID_ENGINES,
     VALID_MODES,
     DockerDbSpec,
-    ProvisionError,
-    provision,
 )
 from db_ops.sre.docker_db import register_config as docker_register
-from db_ops.sre.docker_db.models import DEFAULT_BACKUP_MOUNT
-from db_ops.sre.docker_db.provisioner import DEFAULT_CONTAINERS_DIR
-from db_ops.sre.docker_db.mover import DEFAULT_STAGE_DIR
+from db_ops.sre.docker_db.resolve import DockerDbRequestError
 from db_ops.sre.inventory import list_inventory_assets
 from db_ops.sre.service import (
     check_mysql_cluster,
@@ -654,7 +654,42 @@ def _resolve_data_dir(config_path: str, override: str | None) -> str:
     return str(path.parent / "data")
 
 
+def _remote_login(args: argparse.Namespace, *, data_dir: str) -> dict:
+    """The ``ssh_login`` for ``--remote-host``, resolved here because ``common`` reads nothing.
+
+    A key-auth VM (e.g. Oracle Cloud) needs no SSH password; a password-auth host resolves it
+    from --remote-password / -ref / -env. Exactly one path is required.
+    """
+    from db_ops.common.data_sources import resolve_ssh_key
+    from db_ops.sre.remote import resolve_remote_ssh_password
+
+    if not args.remote_user:
+        raise DockerDbRequestError("--remote-host needs --remote-user.")
+    key_file = password = ""
+    if getattr(args, "remote_key", None):
+        key_file = str(resolve_ssh_key(args.remote_key, data_dir))  # bare name -> data/ssh_keys/
+    else:
+        password = resolve_remote_ssh_password(
+            password=args.remote_password, password_ref=args.remote_password_ref,
+            password_env=getattr(args, "remote_password_env", None),
+            key=args.key, key_base64=args.key_base64, data_dir=data_dir,
+        )
+    return {"host": args.remote_host, "port": int(args.remote_port or 22),
+            "username": args.remote_user, "password": password, "key_file": key_file}
+
+
 def _handle_create_db_docker(args: argparse.Namespace, logger, *, sre_config=None) -> int:
+    """Resolve, ask ``common.cli create-db-docker`` to build it, register what it built.
+
+    The building moved to ``common`` in 0.23.0 and reads nothing there; everything that is this
+    node's own data stays here: the password (stored, then resolved), the SSH login, and the
+    connection record in ``data/docker_db_connections.json``.
+    """
+    from db_ops.lib import common_cli
+    from db_ops.lib.ssh_errors import SshError
+    from db_ops.sre.docker_db.resolve import resolve_password_value
+    from db_ops.sre.remote import RemoteHostError
+
     log_function_call(logger, function_name="sre.create_db_docker")
     config_path = str(resolve_config_path("sre", args.config))
     data_dir = _resolve_data_dir(config_path, args.data_dir)
@@ -664,7 +699,6 @@ def _handle_create_db_docker(args: argparse.Namespace, logger, *, sre_config=Non
     meta = ENGINE_META.get(args.engine)
     host_port = args.host_port or (meta.container_port if meta else None)
     password_env = args.password_env or f"{str(args.name or '').upper()}_PASSWORD"
-    password_text = _supplied_password_text(args)
 
     replicas_explicit = args.replicas is not None
     # Oracle ha-lab is Data Guard 1/1, so its implicit default is one standby.
@@ -687,90 +721,82 @@ def _handle_create_db_docker(args: argparse.Namespace, logger, *, sre_config=Non
         network_subnet=("" if str(getattr(args, "network_subnet", "") or "").strip() == SKIP_SENTINEL
                         else str(getattr(args, "network_subnet", "") or "").strip()),
     )
-    remote_host_obj = None
     try:
+        # Validated here too, not only in `common`: a bad spec must fail before a password is
+        # written into the store under its ref.
         spec.validate(replicas_explicit=replicas_explicit)
+        password_text = _supplied_password_text(args)
         if password_text is not None:
-            _store_password(args, spec, password_text, data_dir=data_dir, logger=logger)
+            # Checked now, stored only once the lab exists: a build that failed - a wrong image
+            # tag - used to leave its password in the store under a ref no lab uses (the official
+            # test, 2026-09-24). The check stays up front so a conflicting ref still refuses before
+            # anything is built.
+            _assert_password_can_be_stored(args, spec, password_text, data_dir=data_dir)
+            password = password_text
         else:
             # No value supplied: the ref is expected to be in the store already. Say so, because
-            # the alternative failure - "ref not found" from deep inside the provisioner - reads
-            # like a store problem rather than a missing argument.
+            # the alternative failure - "ref not found" further on - reads like a store problem
+            # rather than a missing argument.
             print(f"Secret ref {password_env}: no password given, reusing the stored value.")
+            password, _source = resolve_password_value(
+                spec.password_env, key=args.key, key_base64=args.key_base64,
+                data_dir=data_dir, allow_missing=args.dry_run)
 
-        # --remote-host: run every docker/file operation on that Ubuntu machine over SSH.
-        # The CLI (and the connection registry write) stays on this node — typically the
-        # master — so no intermediate hop is involved.
-        runner_kwargs = {}
-        worker_host = args.worker_host
+        request = {
+            "name": spec.name, "engine": spec.engine, "version": spec.version, "mode": spec.mode,
+            "host_port": spec.host_port, "password_ref": spec.password_env,
+            "password": password or "", "network_subnet": spec.network_subnet,
+            "containers_dir": args.containers_dir, "worker_host": _worker_host(args.worker_host),
+            "health_timeout": int(args.health_timeout or 0),
+            "force": bool(args.force), "dry_run": bool(args.dry_run),
+        }
+        if replicas_explicit:
+            request["replicas"] = spec.replicas
+        if spec.backup_mount is not None:
+            request["backup_mount"] = spec.backup_mount
+        # --remote-host: every docker/file operation runs on that Ubuntu machine over SSH, from
+        # `common`. The CLI and the registry write stay on this node — typically the master — so
+        # no intermediate hop is involved.
         if getattr(args, "remote_host", ""):
-            from db_ops.lib.ssh_errors import SshError
-            from db_ops.sre.remote import RemoteHostError, RemoteUbuntuHost, resolve_remote_ssh_password
-            if not args.remote_user:
-                raise ProvisionError("--remote-host needs --remote-user.")
-            remote_key = getattr(args, "remote_key", None)
-            try:
-                # A key-auth VM (e.g. Oracle Cloud) needs no SSH password; a password-auth host
-                # resolves it from --remote-password / -ref / -env. Exactly one path is required.
-                if remote_key:
-                    from db_ops.common.data_sources import resolve_ssh_key
-                    remote_key = resolve_ssh_key(remote_key, data_dir)  # bare name -> data/ssh_keys/
-                ssh_password = None
-                if not remote_key:
-                    ssh_password = resolve_remote_ssh_password(
-                        password=args.remote_password, password_ref=args.remote_password_ref,
-                        password_env=getattr(args, "remote_password_env", None),
-                        key=args.key, key_base64=args.key_base64, data_dir=data_dir,
-                    )
-                remote_host_obj = RemoteUbuntuHost(
-                    args.remote_host, args.remote_user, ssh_password, port=args.remote_port,
-                    key_filename=remote_key,
-                )
-            except (RemoteHostError, SshError) as exc:
-                raise ProvisionError(str(exc)) from exc
-            runner_kwargs = {"runner": remote_host_obj.run, "fs": remote_host_obj}
-            # The connection entry must point at the machine the DB actually runs on: the
-            # remote host wins over any --worker-host default carried in the base command.
-            worker_host = args.remote_host or args.worker_host
-            # Optionally install docker + compose on the VM first, so a fresh Ubuntu host can be
-            # provisioned with one command. Reconnects internally so docker works as the user.
-            if getattr(args, "install_docker", False):
-                from db_ops.sre.remote import ensure_docker
-                # The backup mount too: the provisioner creates it later over SFTP, without sudo.
-                summary = ensure_docker(remote_host_obj, sudo_password=ssh_password,
-                                        containers_dir=args.containers_dir,
-                                        backup_mount=spec.resolved_backup_mount)
-                log_event(logger, level="logging",
-                          message=f"sre.create_db_docker.ensure_docker|host={summary['host']} "
-                                  f"already_present={summary['already_present']} installed={summary['installed']}")
-                print(f"Docker ready on {summary['host']} "
-                      f"({'already present' if summary['already_present'] else 'installed'}).", flush=True)
-
-        rc = provision(
-            spec,
-            containers_dir=args.containers_dir,
-            worker_host=worker_host,
-            data_dir=data_dir,
-            key=args.key,
-            key_base64=args.key_base64,
-            dry_run=args.dry_run,
-            force=args.force,
-            register=args.register,
-            registry_path=args.registry,
-            health_timeout=args.health_timeout,
-            **runner_kwargs,
-        )
-    except (ValueError, ProvisionError) as exc:
+            request["remote"] = _remote_login(args, data_dir=data_dir)
+            request["install_docker"] = bool(getattr(args, "install_docker", False))
+        # stderr streams: an Oracle first start takes many minutes, and the progress is what a
+        # person (or the Telegram chat relaying this command) watches.
+        result = common_cli.run("create-db-docker", request, stream_stderr=True)
+        if password_text is not None and not args.dry_run:
+            _store_password(args, spec, password_text, data_dir=data_dir, logger=logger)
+    except (ValueError, DockerDbRequestError, RemoteHostError, SshError,
+            common_cli.CommonCliError) as exc:
         log_function_error(logger, function_name="sre.create_db_docker", error_text=str(exc))
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
-    finally:
-        if remote_host_obj is not None:
-            remote_host_obj.close()
+
+    if result.get("docker"):
+        docker = result["docker"]
+        log_event(logger, level="logging",
+                  message=f"sre.create_db_docker.ensure_docker|host={docker.get('host')} "
+                          f"already_present={docker.get('already_present')} "
+                          f"installed={docker.get('installed')}")
+    # The connection must point at the machine the database runs on: `common` answers with the
+    # remote host when there was one, --worker-host otherwise.
+    worker_host = str(result.get("worker_host") or "")
+    entry = docker_register.build_connection_entry(
+        spec, host=worker_host or ("<worker-host-or-ip>" if args.dry_run else ""),
+        compose_path=str(result.get("compose_path") or ""), worker_host=worker_host)
+    if args.dry_run:
+        print(result.get("plan_text") or "")
+        print("\n# connection entry that would be registered "
+              f"({'skipped: --no-register' if not args.register else 'data/' + docker_register.REGISTRY_FILENAME}):")
+        print(json.dumps({docker_register.REGISTRY_ROOT_KEY: [entry]}, indent=2, ensure_ascii=False))
+    elif args.register:
+        registry = args.registry or str(docker_register.default_registry_path(data_dir))
+        action = docker_register.register_connection(registry, entry)
+        print(f"Connection {action} in {registry}.", flush=True)
+    print("\n" + str(result.get("summary") or ""))
     log_event(logger, level="logging",
               message=f"sre.create_db_docker|name={args.name} engine={args.engine} mode={args.mode} "
-                      f"dry_run={args.dry_run} rc={rc}")
-    return int(rc)
+                      f"dry_run={args.dry_run} status={result.get('status')}")
+    return 0
 
 
 def _handle_move_db_docker(args: argparse.Namespace, logger, *, sre_config=None) -> int:
@@ -778,57 +804,59 @@ def _handle_move_db_docker(args: argparse.Namespace, logger, *, sre_config=None)
 
     The two hosts are named as db_ops *targets*, not as host/user/password: both of them already
     run db_ops containers, so both are already in ``db_instances.json`` with a credential the
-    store resolves. Everything else is :mod:`db_ops.sre.docker_db.mover`.
+    store resolves. They are resolved HERE into SSH logins, the engine is read from the connection
+    registry, and ``common.cli move-db-docker`` does the move (:mod:`db_ops.common.docker_db.mover`)
+    reading nothing; the registry entry is repointed here afterwards.
     """
+    from db_ops.lib import common_cli
     from db_ops.lib.secret_text import set_key_env
-    from db_ops.sre.docker_db import mover
-    from db_ops.sre.remote import RemoteHostError, open_ubuntu_host
+    from db_ops.sre.docker_db.resolve import registered_engine
+    from db_ops.sre.remote import RemoteHostError, resolve_ubuntu_login
 
     log_function_call(logger, function_name="sre.move_db_docker")
     config_path = str(resolve_config_path("sre", args.config))
     data_dir = _resolve_data_dir(config_path, args.data_dir)
 
-    spec = mover.MoveSpec(
-        name=args.name,
-        source_target=args.from_target,
-        dest_target=args.to_target,
-        containers_dir=args.containers_dir,
-        dest_containers_dir=args.dest_containers_dir,
-        stage_dir=args.stage_dir,
-        include_volumes=args.include_volumes,
-        commit_container=args.commit_container,
-        stop_source=args.stop_source,
-        keep_stage=args.keep_stage,
-        force=args.force,
-        engine=args.engine,
-        health_timeout=args.health_timeout,
-        register=args.register,
-    )
-
-    source = destination = None
     try:
-        # Both hosts' OS credentials live encrypted in the store, and `relay_file` opens its own
-        # sessions from the same targets — so the key has to be in the environment, not only in
-        # this function's arguments.
+        # Both hosts' OS credentials live encrypted in the store: the key has to be where the
+        # resolver looks for it.
         set_key_env(args.key, args.key_base64)
-        source = open_ubuntu_host(spec.source_target, data_dir=data_dir)
-        destination = open_ubuntu_host(spec.dest_target, data_dir=data_dir)
-        result = mover.move(spec, source=source, destination=destination,
-                            data_dir=data_dir, dry_run=args.dry_run)
-    except (ValueError, RemoteHostError, mover.MoveError) as exc:
+        request = {
+            "name": args.name,
+            "engine": args.engine or registered_engine(args.name, data_dir=data_dir),
+            "source": {"label": args.from_target,
+                       **resolve_ubuntu_login(args.from_target, data_dir=data_dir)},
+            "destination": {"label": args.to_target,
+                            **resolve_ubuntu_login(args.to_target, data_dir=data_dir)},
+            "containers_dir": args.containers_dir,
+            "dest_containers_dir": args.dest_containers_dir,
+            "stage_dir": args.stage_dir,
+            "include_volumes": bool(args.include_volumes),
+            "commit_container": bool(args.commit_container),
+            "stop_source": bool(args.stop_source),
+            "keep_stage": bool(args.keep_stage),
+            "force": bool(args.force),
+            "health_timeout": int(args.health_timeout or 0),
+            "dry_run": bool(args.dry_run),
+        }
+        result = common_cli.run("move-db-docker", request, stream_stderr=True)
+    except (ValueError, RemoteHostError, common_cli.CommonCliError) as exc:
         log_function_error(logger, function_name="sre.move_db_docker", error_text=str(exc))
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
-    finally:
-        for host in (source, destination):
-            if host is not None:
-                try:
-                    host.close()
-                except Exception:  # noqa: BLE001 - the move already succeeded or already failed
-                    pass
 
-    if not args.dry_run:
-        print("\n" + mover.format_summary(result))
+    if args.dry_run:
+        print(result.get("plan_text") or "")
+    else:
+        print("\n" + str(result.get("summary") or ""))
+        if args.register:
+            entry_id = docker_register.connection_id(args.name)
+            registered = docker_register.relocate_connection(
+                docker_register.default_registry_path(data_dir), entry_id,
+                host=str(result.get("destination_host") or ""),
+                worker_host=str(result.get("destination_host") or ""),
+                compose_path=str(result.get("compose_path") or ""))
+            print(f"Registry:     {registered} ({entry_id})")
     log_event(logger, level="logging",
               message=f"sre.move_db_docker|name={args.name} from={args.from_target} "
                       f"to={args.to_target} volumes={args.include_volumes} "
@@ -872,11 +900,44 @@ def _supplied_password_text(args: argparse.Namespace) -> str | None:
     if value == SKIP_SENTINEL:
         return None
     if not value:
-        raise ProvisionError(
+        raise DockerDbRequestError(
             f"--password-text-env {env_name} names an environment variable that is empty; "
             "pass the password there, or give --password-ref alone to reuse a stored ref."
         )
     return value
+
+
+def _worker_host(value: str | None) -> str:
+    """``--worker-host`` as given, or ``""`` for a ``{worker_host}`` nothing filled in.
+
+    The bot fills that placeholder from the workers config.json declares; a node that declares
+    none - the soak node on a PC - passed the literal `{worker_host}` through, and a local build
+    would have recorded it as its host (the official test, 2026-09-24). Empty is what a local build
+    with no worker host always recorded.
+    """
+    text = str(value or "").strip()
+    return "" if text.startswith("{") and text.endswith("}") else text
+
+
+def _assert_password_can_be_stored(args: argparse.Namespace, spec, value: str, *, data_dir) -> None:
+    """Refuse up front what :func:`_store_password` would refuse after the build: a different
+    value already under this ref without ``--overwrite-secret``, or no passphrase to store with."""
+    from db_ops.common import data_sources
+    from db_ops.lib.secret_text import resolve_cli_key
+
+    key = resolve_cli_key(args.key, args.key_base64) or os.environ.get("DB_OPS_SECRET_KEY")
+    if not key:
+        raise DockerDbRequestError(
+            "Storing a password needs the secret-store passphrase (--key/--key-base64 or "
+            "DB_OPS_SECRET_KEY): the store is encrypted at rest."
+        )
+    existing = (data_sources.load_secret_text(data_dir, key=key) or {}).get(spec.password_env)
+    if existing is not None and existing != value and not args.overwrite_secret:
+        raise DockerDbRequestError(
+            f"Secret ref {spec.password_env} already exists with a different value. Pass "
+            "--overwrite-secret to replace it (from Telegram: answer 'yes' to recreate), or give "
+            "no password to reuse the stored one."
+        )
 
 
 def _store_password(args: argparse.Namespace, spec, value: str, *, data_dir, logger) -> None:
@@ -891,7 +952,7 @@ def _store_password(args: argparse.Namespace, spec, value: str, *, data_dir, log
 
     key = resolve_cli_key(args.key, args.key_base64) or os.environ.get("DB_OPS_SECRET_KEY")
     if not key:
-        raise ProvisionError(
+        raise DockerDbRequestError(
             "Storing a password needs the secret-store passphrase (--key/--key-base64 or "
             "DB_OPS_SECRET_KEY): the store is encrypted at rest."
         )

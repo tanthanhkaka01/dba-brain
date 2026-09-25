@@ -1,0 +1,198 @@
+"""``backup-chain``, ``copy-backup-dir``, ``prune-staged-backups`` — a restore's copy, as commands.
+
+Plumbing only: :mod:`db_ops.common.backup_copy` does the work, :mod:`db_ops.lib.response` shapes
+the answer. Until 0.23.0 the copy between hosts and the cleanup of the target's staging folder ran
+inside the backup_restore app, over sessions the app opened itself: a restore was one long call
+with two steps nobody could run, test or watch on their own (the operator, 2026-09-25: "not one
+long command - split it: common cli copy, common cli verify, common cli metadata ..."). The app
+now resolves the logins and decides; these do.
+
+**stdin only**, like ``run-sqlcmd``: every request carries SSH passwords.
+"""
+
+from __future__ import annotations
+
+import sys
+from typing import Any
+
+from db_ops.lib import response
+
+COMMANDS = ("backup-chain", "copy-backup-dir", "prune-staged-backups")
+
+_LOGIN = """{"host": "192.0.2.49", "port": 22, "username": "labuser",
+            "password": "..."}          // or "key_file": "/abs/path/key" - never a ref"""
+
+USAGE = {
+    "backup-chain": f"""\
+Usage: <request> | python -m db_ops.common.cli backup-chain -
+
+Which parts of a backup directory a restore needs, as path prefixes. Reads no config.
+
+  {{"db_type": "postgresql",                  // postgresql | oracle | sqlserver
+   "source": {_LOGIN},
+   "source_dir": "/opt/db_ops/backup/PG_LAB_A",   // on the source host
+   "backup_dir": "/opt/db_ops/backup/ORA_LAB_A",  // oracle: the path RMAN's catalog names
+   "container": "ORA_LAB_A",                      // oracle: where RMAN runs
+   "point_in_time": ""}}                          // set: the whole directory
+
+data: {{"include": [prefix, ...], "narrowed": bool}} - an empty include means "everything".
+""",
+    "copy-backup-dir": f"""\
+Usage: <request> | python -m db_ops.common.cli copy-backup-dir -
+
+Copy a backup directory from one host to another as one tar stream, mirroring the source.
+
+  {{"source": {_LOGIN},
+   "source_dir": "/opt/db_ops/backup/PG_LAB_A",
+   "target": {_LOGIN},
+   "target_dir": "/opt/db_ops/backup/pg_restore_from_a",
+   "include": ["base/20260925T004710Z_FULL", "wal/"],   // from backup-chain; [] = everything
+   "make_readable": true,       // sudo chmod -R a+rX on the source first (a live archivelog job)
+   "open_for_engine": true}}     // chmod -R a+rX on the target after (the engine's own uid)
+
+A file already on the target with the same size and not older is skipped; a staged file the source
+no longer has is removed. data: {{"copied", "skipped", "bytes_copied",
+"removed_absent_at_source", "opened_for_engine"}}. Progress goes to stderr.
+""",
+    "prune-staged-backups": f"""\
+Usage: <request> | python -m db_ops.common.cli prune-staged-backups -
+
+Delete what a restore's staging folder holds past its retention - the DELETE step of a restore.
+
+  {{"target": {_LOGIN},
+   "target_dir": "/opt/db_ops/backup/pg_restore_from_a",
+   "cleanup_retention": 259200}}   // seconds; 0 = keep everything
+
+data: {{"pruned", "retention_seconds", "skipped"?, "error"?}}.
+""",
+}
+
+
+def _log(line: str) -> None:
+    print(line, file=sys.stderr, flush=True)
+
+
+def _open(login: Any, *, role: str):
+    from db_ops.common.ssh import open_ssh_client
+
+    if not isinstance(login, dict) or not str(login.get("host") or "").strip():
+        raise ValueError(f"{role} must be an object with host, username and a password or key_file.")
+    return open_ssh_client(
+        str(login["host"]).strip(), str(login.get("username") or "").strip(),
+        port=int(login.get("port") or 22),
+        password=login.get("password") or None,
+        key_filename=login.get("key_file") or None,
+        timeout=int(login.get("open_timeout_seconds") or 30),
+    )
+
+
+def _required(request: dict[str, Any], *names: str) -> None:
+    missing = [name for name in names if not str(request.get(name) or "").strip()]
+    if missing:
+        raise ValueError(f"missing required field(s): {', '.join(missing)}.")
+
+
+def _backup_chain(request: dict[str, Any]) -> dict[str, Any]:
+    from db_ops.common import backup_copy
+
+    _required(request, "db_type", "source_dir")
+    client = _open(request.get("source"), role="source")
+    try:
+        include = backup_copy.chain_include(
+            str(request["db_type"]), client, source_dir=str(request["source_dir"]),
+            backup_dir=str(request.get("backup_dir") or ""),
+            container=str(request.get("container") or ""),
+            point_in_time=str(request.get("point_in_time") or ""), log=_log)
+    finally:
+        client.close()
+    return {"include": list(include), "narrowed": bool(include)}
+
+
+def _copy_backup_dir(request: dict[str, Any]) -> dict[str, Any]:
+    import shlex
+
+    from db_ops.common import backup_copy
+
+    _required(request, "source_dir", "target_dir")
+    source_dir, target_dir = str(request["source_dir"]), str(request["target_dir"])
+    source = _open(request.get("source"), role="source")
+    try:
+        if request.get("make_readable", True):
+            # Readable at the moment of reading: a copy of a large set takes minutes, and the
+            # archivelog job writes new 0640 pieces every 15 minutes - so a set fully readable when
+            # the copy started can grow an unreadable file while it runs.
+            _in, out, _err = source.exec_command(
+                f"sudo chmod -R a+rX {shlex.quote(source_dir)} 2>/dev/null || true")
+            out.channel.recv_exit_status()
+        target = _open(request.get("target"), role="target")
+        try:
+            result = backup_copy.sync_backup_dir(
+                source_client=source, source_dir=source_dir,
+                target_client=target, target_dir=target_dir,
+                include=tuple(str(item) for item in request.get("include") or ()), log=_log)
+            opened = (backup_copy.open_for_the_engine(target, target_dir, log=_log)
+                      if request.get("open_for_engine", True) else False)
+        finally:
+            target.close()
+    finally:
+        source.close()
+    return {**result.as_dict(), "opened_for_engine": opened}
+
+
+def _prune_staged_backups(request: dict[str, Any]) -> dict[str, Any]:
+    from db_ops.common import backup_copy
+
+    _required(request, "target_dir")
+    client = _open(request.get("target"), role="target")
+    try:
+        return backup_copy.prune_target_dir(
+            client, str(request["target_dir"]), int(request.get("cleanup_retention") or 0), log=_log)
+    finally:
+        client.close()
+
+
+_WORK = {"backup-chain": _backup_chain, "copy-backup-dir": _copy_backup_dir,
+         "prune-staged-backups": _prune_staged_backups}
+
+
+def _message(command: str, data: dict[str, Any]) -> str:
+    if command == "backup-chain":
+        return (f"{len(data['include'])} prefix(es) to copy" if data["narrowed"]
+                else "the whole directory")
+    if command == "copy-backup-dir":
+        return (f"{data['copied']} copied, {data['skipped']} already there, "
+                f"{data.get('removed_absent_at_source', 0)} removed (gone at the source)")
+    return f"{data.get('pruned', 0)} staged file(s) removed"
+
+
+def run(command: str, argv: list[str], *, read_request: Any) -> int:
+    usage = USAGE[command]
+    if argv and argv[0] in {"-h", "--help"}:
+        print(usage)
+        return 0
+    if not argv or argv[0] != "-":
+        print(usage, file=sys.stderr)
+        return response.emit(response.fail(
+            command, "the request must arrive on stdin (-): it carries SSH passwords, which inline "
+                     "are visible on the command line"))
+    request, code = read_request("-", usage)
+    if request is None:
+        return code
+
+    import contextlib
+
+    from db_ops.lib.ssh_errors import SshError
+
+    try:
+        # stdout is the answer and nothing else: opening a session prints "Connecting to ..." there,
+        # and the first lab run's answer arrived behind it, unreadable ("exited 0 without a JSON
+        # response", 2026-09-25). Everything said while working goes to stderr, as progress.
+        with contextlib.redirect_stdout(sys.stderr):
+            data = _WORK[command](request)
+    except (ValueError, SshError, OSError) as exc:
+        return response.emit(response.fail(command, str(exc)))
+    except Exception as exc:  # noqa: BLE001 - the caller parses an answer; a traceback is none
+        return response.emit(response.fail(command, f"{type(exc).__name__}: {exc}"))
+    if data.get("error"):
+        return response.emit(response.fail(command, str(data["error"])))
+    return response.emit(response.ok(command, message=_message(command, data), data=data))

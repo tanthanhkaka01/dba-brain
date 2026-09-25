@@ -575,7 +575,10 @@ def test_linux_restore_command_uses_long_login_and_unlimited_query_timeout(tmp_p
 
 
 def test_long_running_linux_restore_has_no_default_command_deadline(tmp_path, monkeypatch):
+    """The request `common.cli run-sqlcmd` is handed (1.38) - the command it builds from it is
+    held in tests/test_the_sql_server_restore_runs_through_common.py."""
     import db_ops.backup_restore.restore_database as restore_module
+    from db_ops.lib import common_cli
 
     config = dataclasses.replace(
         make_config(tmp_path),
@@ -583,58 +586,22 @@ def test_long_running_linux_restore_has_no_default_command_deadline(tmp_path, mo
         vm_credential_target="198.51.100.31",
     )
     cmd = build_sqlcmd_query_command(sql="RESTORE DATABASE [db] FROM DISK = N'/tmp/full.bak';", config=config)
-    captured = {}
+    sent = {}
 
-    class FakeChannel:
-        def __init__(self):
-            self.polls = 0
-            self.closed = False
+    def fake_run(command, request, **kwargs):
+        sent.update(request, _command=command, _stream=kwargs.get("stream_stderr"))
+        return True, {"via": "ssh", "exit_code": 0, "stdout": "", "stderr": "", "timed_out": False}, ""
 
-        def exec_command(self, remote_cmd):
-            captured["remote_cmd"] = remote_cmd
-
-        def exit_status_ready(self):
-            self.polls += 1
-            return self.polls > 4
-
-        def recv_ready(self):
-            return False
-
-        def recv_stderr_ready(self):
-            return False
-
-        def recv_exit_status(self):
-            return 0
-
-        def close(self):
-            self.closed = True
-
-    channel = FakeChannel()
-
-    class FakeTransport:
-        def open_session(self, timeout=None):
-            captured["open_timeout"] = timeout
-            return channel
-
-    class FakeSsh:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return None
-
-        def get_transport(self):
-            return FakeTransport()
-
-    monkeypatch.setattr(restore_module, "open_ssh_connection", lambda _config: FakeSsh())
-    monkeypatch.setattr(restore_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(common_cli, "run_allowing_failure", fake_run)
 
     result = restore_module._run_sqlcmd_via_ssh(cmd, config)
 
     assert result.returncode == 0
-    assert captured["open_timeout"] == 60
-    assert "-l 60 -t 0" in captured["remote_cmd"]
-    assert channel.closed is False
+    assert sent["_command"] == "run-sqlcmd" and sent["via"] == "ssh" and sent["_stream"] is True
+    assert sent["host"]["open_timeout_seconds"] == 60
+    assert (sent["login_timeout_seconds"], sent["query_timeout_seconds"]) == (60, 0)
+    assert sent["timeout_seconds"] == 0, "no default deadline on a long restore"
+    assert sent["sql"] == "RESTORE DATABASE [db] FROM DISK = N'/tmp/full.bak';"
 
 
 def test_transient_login_timeout_retries_before_restore_command(tmp_path, monkeypatch):
@@ -967,12 +934,10 @@ def test_run_restore_database_stops_before_recovery_when_full_fails(tmp_path, mo
 
 
 def test_run_sqlcmd_query_command_treats_restore_error_text_as_failure(monkeypatch):
-    class FakeResult:
-        returncode = 0
-        stdout = "Msg 3013, Level 16\nRESTORE LOG is terminating abnormally."
-        stderr = ""
-
-    monkeypatch.setattr("db_ops.backup_restore.restore_database.subprocess.run", lambda *args, **kwargs: FakeResult())
+    monkeypatch.setattr(
+        "db_ops.backup_restore.restore_database._sqlcmd_in_common",
+        lambda request, *, cmd: subprocess.CompletedProcess(
+            cmd, 0, "Msg 3013, Level 16\nRESTORE LOG is terminating abnormally.", ""))
 
     with pytest.raises(RuntimeError, match="Msg 3013"):
         run_sqlcmd_query_command(["sqlcmd", "-Q", "RESTORE"])
@@ -1052,17 +1017,10 @@ def test_run_restore_database_logs_execution_timeline_and_sanitizes_secrets(tmp_
 def test_run_sqlcmd_query_command_streams_restore_progress(monkeypatch):
     messages = []
 
-    class FakeStdout:
-        def __iter__(self):
-            return iter(["10 percent processed.\n", "20 percent processed.\n"])
-
-    class FakeProcess:
-        stdout = FakeStdout()
-
-        def wait(self):
-            return 0
-
-    monkeypatch.setattr("db_ops.backup_restore.restore_database.subprocess.Popen", lambda *args, **kwargs: FakeProcess())
+    monkeypatch.setattr(
+        "db_ops.backup_restore.restore_database._sqlcmd_in_common",
+        lambda request, *, cmd: subprocess.CompletedProcess(
+            cmd, 0, "10 percent processed.\n20 percent processed.\n", ""))
     monkeypatch.setattr("db_ops.backup_restore.restore_database.log_event", lambda _logger, **kwargs: messages.append(kwargs["message"]))
 
     result = run_sqlcmd_query_command(

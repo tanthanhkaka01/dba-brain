@@ -28,6 +28,8 @@ import subprocess
 from dataclasses import dataclass
 from typing import Any
 
+from db_ops.lib.shell import docker_cli
+
 #: The four shapes this estate actually runs, named in the request.
 WINDOWS = "windows"      # a Windows VM: PowerShell, no container
 LINUX = "linux"          # an Ubuntu/RHEL VM: the engine runs on the host itself
@@ -158,8 +160,7 @@ def wrap(host: Host, command: str) -> str:
         encoded = base64.b64encode(command.encode("utf-16-le")).decode("ascii")
         return f"powershell -NoProfile -NonInteractive -EncodedCommand {encoded}"
     if host.runtime == DOCKER:
-        inner = f"docker exec -i {shlex.quote(host.container)} sh -lc {shlex.quote(command)}"
-        return f"sudo {inner}" if host.sudo else inner
+        return f"{docker_cli(host.sudo)} exec -i {shlex.quote(host.container)} sh -lc {shlex.quote(command)}"
     if host.runtime == K8S:
         target = f"-n {shlex.quote(host.namespace)} {shlex.quote(host.pod)}"
         if host.pod_container:

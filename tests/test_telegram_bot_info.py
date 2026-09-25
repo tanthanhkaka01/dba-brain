@@ -65,9 +65,9 @@ def test_a_missing_field_becomes_an_empty_string_rather_than_the_word_none(monke
 
 
 def test_the_id_is_a_string_because_that_is_what_the_config_file_holds(monkeypatch):
-    _fake_get_me(monkeypatch, {"id": 8629909482, "username": "b"})
+    _fake_get_me(monkeypatch, {"id": 7000000002, "username": "b"})
     answer = api.bot_info(bot_token="x")
-    assert answer["telegram_bot_id"] == "8629909482"
+    assert answer["telegram_bot_id"] == "7000000002"
     assert isinstance(answer["telegram_bot_id"], str)
 
 

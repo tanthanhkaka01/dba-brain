@@ -354,6 +354,21 @@ class DbOpsStore:
                 )
             )
 
+    def job_run_started_since(self, job_code: str, since: str) -> bool:
+        """Whether a run of ``job_code`` started at or after ``since``.
+
+        One key, one indexed probe (``ix_job_runs_job_code_created_at``): asked before every claim
+        of a scheduled backup or restore, so it must not read every job's latest run the way
+        :meth:`fetch_latest_job_runs_by_job_code` does. See ``backup_restore.schedule.taken_since``.
+        """
+        self.initialize()
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM job_runs WHERE job_code = ? AND started_at >= ? LIMIT 1",
+                (job_code, since),
+            ).fetchone()
+        return row is not None
+
     def fetch_latest_job_runs_by_job_code(self) -> dict[str, sqlite3.Row]:
         self.initialize()
         with self.connect() as conn:
@@ -2035,6 +2050,21 @@ class DbOpsStore:
                 """
             ).fetchall()
         return {str(row["run_key"]): row for row in rows}
+
+    def sql_run_started_since(self, run_key: str, since: str) -> bool:
+        """Whether a run of this task-and-target started at or after ``since``.
+
+        The SQL task scan's counterpart of :meth:`job_run_started_since`: one indexed probe
+        (``ix_sql_runs_run_key_created_at``) before each due task, so an overlapping async scan's
+        finished work is never run a second time.
+        """
+        self.initialize()
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM sql_runs WHERE run_key = ? AND started_at >= ? LIMIT 1",
+                (run_key, since),
+            ).fetchone()
+        return row is not None
 
     def fetch_latest_sql_runs_by_run_key(self) -> dict[str, sqlite3.Row]:
         self.initialize()

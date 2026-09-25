@@ -185,67 +185,17 @@ def test_a_dry_run_ships_nothing(ran):
 # --------------------------------------------------------------------------- #
 # The instance metadata that a SQL Server backup does NOT contain
 # --------------------------------------------------------------------------- #
-def test_server_metadata_is_refused_for_engines_that_do_not_need_it():
-    """RMAN DUPLICATE and pg_basebackup are physical and whole-instance, so that state is inside
-    the data. Refused rather than ignored: a caller that set it believes it is getting something."""
-    with pytest.raises(BackupSpecError, match="SQL Server only"):
-        parse_backup_spec(_request(server_metadata={"target": "X", "output_dir": "/b"}))
-
-
-def test_server_metadata_requires_somewhere_to_put_it():
-    """The bundle belongs beside the backup it describes. A default would put it somewhere the
-    restore does not look, which is the same as not having it."""
-    with pytest.raises(BackupSpecError, match="output_dir is required"):
+def test_server_metadata_is_refused_and_the_refusal_says_where_it_went(ran):
+    """It looked its instance up in db_instances.json - the one config read behind
+    backup-database, found by the guard that holds backup to reading none (1.37). Refused rather
+    than ignored: a caller that set it believes it is getting the export."""
+    with pytest.raises(BackupSpecError, match="sqlserver-export-instance"):
         parse_backup_spec(_request(db_type="sqlserver", level="full",
-                                   server_metadata={"target": "ACME-192-0-2-115"}))
+                                   server_metadata={"target": "ACME-192-0-2-115",
+                                                    "output_dir": "/b/_instance"}))
+    assert ran == {}, "refused before anything reached the host"
 
 
-def test_metadata_is_exported_after_a_backup_that_completed(ran, monkeypatch):
-    exported = {}
-
-    def fake_export(request, **kwargs):
-        exported.update(request)
-        return {"ok": True, "artifacts": ["logins", "agent_jobs"]}
-
-    from db_ops.common import sqlserver_instance
-    monkeypatch.setattr(sqlserver_instance, "export_instance", fake_export)
-
-    result = run_backup(parse_backup_spec(_request(
-        db_type="sqlserver", level="full",
-        script_path="assets/backup/sqlserver/mssql_backup_database.sh",
-        server_metadata={"target": "ACME-192-0-2-115", "output_dir": "/b/_instance"})))
-
-    assert exported == {"target": "ACME-192-0-2-115", "output_dir": "/b/_instance"}
-    assert result["server_metadata_result"]["ok"] is True
-
-
-def test_metadata_is_not_exported_when_the_backup_failed(ran, monkeypatch):
-    """A bundle describing an instance whose backup did not complete is a set of files that look
-    like a matched pair and are not."""
-    from db_ops.common import sqlserver_instance
-    monkeypatch.setattr(sqlserver_instance, "export_instance",
-                        lambda *a, **k: pytest.fail("must not export after a failed backup"))
-    ran["answer"] = {"exit_code": 1, "stdout": "", "stderr": "BACKUP failed"}
-
-    result = run_backup(parse_backup_spec(_request(
-        db_type="sqlserver", level="full",
-        script_path="assets/backup/sqlserver/mssql_backup_database.sh",
-        server_metadata={"target": "T", "output_dir": "/b/_instance"})))
-
-    assert result["server_metadata_result"]["skipped"] is True
-
-
-def test_a_metadata_failure_does_not_fail_the_backup(ran, monkeypatch):
-    """The data is the thing that must not be lost. Losing a completed backup to a metadata step
-    that could not read sys.credentials would be absurd."""
-    from db_ops.common import sqlserver_instance
-    monkeypatch.setattr(sqlserver_instance, "export_instance",
-                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("login failed")))
-
-    result = run_backup(parse_backup_spec(_request(
-        db_type="sqlserver", level="full",
-        script_path="assets/backup/sqlserver/mssql_backup_database.sh",
-        server_metadata={"target": "T", "output_dir": "/b/_instance"})))
-
-    assert result["status"] == "done"
-    assert "login failed" in result["server_metadata_result"]["error"]
+def test_an_absent_or_empty_server_metadata_is_not_a_refusal():
+    for empty in (None, {}, False):
+        parse_backup_spec(_request(server_metadata=empty))

@@ -71,14 +71,24 @@ if [ -n "$container" ]; then
     $DOCKER info >/dev/null 2>&1 || DOCKER="sudo docker"
     $DOCKER inspect "$container" >/dev/null 2>&1 \
         || die "container '${container}' not found or docker unavailable on host."
+    # Present is not running. A stopped container used to fail further on, as whatever the first
+    # exec could not do - "no sqlcmd found (container X); install mssql-tools" on 2026-09-24 -
+    # which sends the reader to install tools that are there.
+    [ "$($DOCKER inspect -f '{{.State.Running}}' "$container" 2>/dev/null)" = "true" ] \
+        || die "container '${container}' is not running - start it (docker start ${container}) and run the backup again."
     # stdin is closed on every docker exec: this whole script arrives on the host's `bash -s`
     # stdin, and an exec that keeps it open would eat the rest of the script.
     exec_here() { $DOCKER exec -i "$container" "$@" < /dev/null; }
     probe_here() { $DOCKER exec "$container" sh -c "$1" >/dev/null 2>&1; }
+    # Root where the engine runs, for the one thing its own user cannot do: take over a backup
+    # folder someone else made (see "writable by the engine" below).
+    exec_as_root() { $DOCKER exec -u 0 -i "$container" "$@" < /dev/null; }
     where="container ${container}"
 else
     exec_here() { "$@" < /dev/null; }
     probe_here() { sh -c "$1" >/dev/null 2>&1; }
+    # Never prompts: a host whose sudo wants a password fails here and the folder is named below.
+    exec_as_root() { sudo -n "$@" < /dev/null; }
     where="this host"
 fi
 printf 'reaching the instance: %s\n' "$where"
@@ -110,6 +120,19 @@ query_sql() {   # single column, no headers, trimmed
 sql_escape() { printf '%s' "$1" | sed "s/'/''/g"; }
 
 run_sql "SELECT 1;" >/dev/null 2>&1 || die "cannot log in to '${container}' as ${mssql_user}."
+
+# The backup folder must be writable by SQL Server itself - uid 10001 in the image - not only by
+# whoever made the folder above it. A lab's bind mount belongs to the SSH user, so on 2026-09-24
+# every backup into it failed "mkdir: Permission denied" until the folder was handed over by hand.
+# So it is made as root where the engine runs and given to the user the engine runs as.
+backup_dir_writable() { exec_here mkdir -p "$backup_dir" 2>/dev/null && exec_here test -w "$backup_dir"; }
+if ! backup_dir_writable; then
+    engine_owner="$(exec_here sh -c 'echo "$(id -u):$(id -g)"' 2>/dev/null)"
+    [ -n "$engine_owner" ] && exec_as_root \
+        sh -c "mkdir -p '${backup_dir}' && chown -R '${engine_owner}' '${backup_dir}'" >/dev/null 2>&1
+fi
+backup_dir_writable \
+    || die "cannot write to ${backup_dir} as the SQL Server user (${where}) - give that folder to the user the engine runs as."
 
 # --------------------------------------------------------------------------- #
 # Encryption material: a master key + certificate, created once and exported so
@@ -237,6 +260,14 @@ for db in $databases; do
              -mtime +${retention_days} ! -newer '${newest_full}' -delete 2>/dev/null || true
     "
 done
+
+# Readable by the SSH user that copies them to another machine, as the Oracle and PostgreSQL jobs
+# do after every run - each run writes new pieces, so a one-off chmod stops being true within
+# minutes. SQL Server writes them 0660 as its own user; the transfer's `sudo chmod` is silent
+# where sudo wants a password, so without this a cross-machine restore could read nothing of a
+# chain the engine had just written (the lab drill, 2026-09-24). As the engine user, who owns them.
+exec_here chmod -R a+rX "$backup_dir" \
+    || printf 'warning: could not relax permissions on %s\n' "$backup_dir" >&2
 
 [ "$failed" -eq 0 ] || die "one or more ${level} backups failed."
 printf 'RESULT=ok level=%s databases=%s encrypted=%s\n' \

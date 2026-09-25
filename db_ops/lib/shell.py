@@ -14,6 +14,7 @@ import shutil
 
 __all__ = [
     "POWERSHELL_NOT_FOUND_HINT",
+    "docker_cli",
     "is_powershell_executable",
     "powershell_executable",
 ]
@@ -62,3 +63,20 @@ def is_powershell_executable(name: str) -> bool:
     if base.endswith(".exe"):
         base = base[:-4]
     return base in {"pwsh", "powershell"}
+
+
+#: Plain `docker` when this user may run it, `sudo docker` otherwise - decided on the host, at the
+#: moment of use, as the backup scripts have always decided it.
+_DOCKER_OR_SUDO = '$(docker info >/dev/null 2>&1 && echo docker || echo "sudo docker")'
+
+
+def docker_cli(sudo: bool) -> str:
+    """How to call docker on a remote host where ``sudo`` was asked for.
+
+    ``sudo docker`` outright fails on a host whose sudo wants a password - there is no terminal to
+    type it into - although the SSH user is usually in the docker group and needs no sudo at all.
+    Every PostgreSQL and Oracle restore onto such a machine failed that way (the lab drill,
+    2026-09-24); the cloud hosts, whose sudo asks for nothing, never showed it. So: plain docker
+    first, sudo only when docker itself refuses. The result is typed into a POSIX shell.
+    """
+    return _DOCKER_OR_SUDO if sudo else "docker"

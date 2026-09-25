@@ -290,17 +290,31 @@ def find_database_credential(
             "on the target."
         )
 
+    # On SQL Server `service_name` is a label, not something a login belongs to - the rule the task
+    # target lookup follows since 0.23.0 (§1.1). Filtering credential groups on it hid a credential
+    # that was right there: three worker targets saying SALES-PROD against the server's SALES-DEV
+    # group failed "Credential not found" on 2026-09-24. Oracle connects by service, so there it
+    # still narrows.
+    service_narrows = bool(service_name) and str(db_type or "").strip().lower() not in ("sqlserver", "mssql")
     available: list[str] = []
+    passed_over: list[str] = []
     for group in groups:
         if str(group.get("server_id", "")).strip() != str(server_id).strip():
             continue
+        names = [str(c.get("credential_name", "")).strip() for c in group.get("credentials", []) or []]
+        why = ""
         if db_type and str(group.get("db_type", "")).strip().lower() != db_type.strip().lower():
-            continue
-        if service_name and str(group.get("service_name", "")).strip():
-            if str(group.get("service_name", "")).strip().lower() != service_name.strip().lower():
-                continue
-        group_instance = str(group.get("instance_name") or group.get("sid") or "").strip()
-        if instance_name and group_instance and group_instance.lower() != instance_name.strip().lower():
+            why = f"db_type {group.get('db_type')!r}, the target says {db_type!r}"
+        elif (service_narrows and str(group.get("service_name", "")).strip()
+              and str(group.get("service_name", "")).strip().lower() != service_name.strip().lower()):
+            why = f"service_name {group.get('service_name')!r}, the target says {service_name!r}"
+        else:
+            group_instance = str(group.get("instance_name") or group.get("sid") or "").strip()
+            if instance_name and group_instance and group_instance.lower() != instance_name.strip().lower():
+                why = f"instance {group_instance!r}, the target says {instance_name!r}"
+        if why:
+            if wanted in names:
+                passed_over.append(why)
             continue
         for credential in group.get("credentials", []) or []:
             name = str(credential.get("credential_name", "")).strip()
@@ -309,8 +323,12 @@ def find_database_credential(
                 return dict(credential)
 
     known = ", ".join(name for name in available if name) or "none configured"
+    # Said when the credential exists but in a group this target did not match: "not found" alone
+    # sends the reader to users.json, where it plainly is.
+    elsewhere = (f" It is configured on {server_id}, in the group for {passed_over[0]}."
+                 if passed_over else "")
     raise CredentialNotFound(
-        f"Credential not found for server_id {server_id}: {wanted}. Available: {known}."
+        f"Credential not found for server_id {server_id}: {wanted}.{elsewhere} Available: {known}."
     )
 
 

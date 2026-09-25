@@ -722,6 +722,7 @@ def run_scheduler_scan(
     mark_stale_running_sql_runs(store=store, commands=commands, targets=targets,
                                 running_runs=store.fetch_running_sql_runs(),
                                 telegram_groups=telegram_groups, logger=logger)
+    listed_at = utc_now_text()
     latest_done_or_running_runs = store.fetch_latest_done_or_running_sql_runs_by_run_key()
     # The most recent run per key REGARDLESS of status — so a task that keeps FAILING is backed
     # off (retry_interval) instead of being retried every scan tick. Without this, a task with
@@ -741,6 +742,18 @@ def run_scheduler_scan(
                 f"db={sql_task_target.connect_database(target.db_type, target.database_name, target.service_name)} script_type={command.script_type} "
                 f"files={len(command.script_files)} file_order={format_script_file_order(command)}"
             )
+            continue
+        # Due when this scan listed it is not the same as still due. APP-SQL_TASKS is async: while
+        # one scan works through a slow task, the next takes the tasks behind it - and the claim
+        # stops the two only while a task is RUNNING, not the first from running it again once the
+        # second has finished it (the backup/restore schedule test, 2026-09-25, found the same gap
+        # there). On a production target that is the same SQL twice.
+        if store.sql_run_started_since(target.run_key, listed_at):
+            log_sql_task_event(
+                logger, "sql_tasks.runner.task.taken_by_another_scan", command=command, target=target,
+                sql_id=command.sql_id, sql_code=command.sql_code, status="skipped",
+                reason="run by another scan since this one listed it")
+            skipped_count += 1
             continue
         # A refused claim is an answer, not a failure: another scan is already running this task.
         # It is counted as neither a success nor an error, because it is neither — recording it as
@@ -1091,7 +1104,10 @@ def run_one_sql_task(
                 "credential_name) on this sql_targets entry."
             )
         if credential is None:
-            raise RuntimeError(f"Credential not found: {target.credential_name}")
+            # The lookup's own reason, not just the name: it says where the credential is when the
+            # target does not match its group, which "Credential not found: <name>" hid (1.10).
+            raise RuntimeError(credential_problem(target, credentials)
+                               or f"Credential not found: {target.credential_name}")
         password = resolve_password(credential, secrets)
         total_row_count = 0
         run_warnings: list[str] = []
@@ -2558,6 +2574,18 @@ def find_database_credential(target: SqlTarget, credential_groups: list[dict[str
         )
     except data_sources.CredentialNotFound:
         return None
+
+
+def credential_problem(target: SqlTarget, credential_groups: list[dict[str, Any]]) -> str:
+    """Why :func:`find_database_credential` found nothing, in the shared lookup's words ("" if it did)."""
+    try:
+        data_sources.find_database_credential(
+            credential_groups, server_id=target.server_id, credential_name=target.credential_name,
+            db_type=target.db_type, service_name=target.service_name,
+            instance_name=target.instance_name)
+    except data_sources.CredentialNotFound as exc:
+        return str(exc)
+    return ""
 
 
 if __name__ == "__main__":

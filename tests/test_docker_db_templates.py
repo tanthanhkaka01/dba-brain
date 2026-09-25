@@ -3,9 +3,9 @@ from __future__ import annotations
 import pytest
 import yaml
 
-from db_ops.sre.docker_db import compose as compose_mod
-from db_ops.sre.docker_db import provisioner, templates
-from db_ops.sre.docker_db.models import DockerDbSpec
+from db_ops.common.docker_db import compose as compose_mod
+from db_ops.common.docker_db import provisioner, templates
+from db_ops.lib.docker_db_spec import DockerDbSpec
 
 ALL_CASES = [
     ("pg", "postgres", "16", "single", 2, 5433),

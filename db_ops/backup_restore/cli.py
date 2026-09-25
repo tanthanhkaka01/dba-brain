@@ -454,6 +454,26 @@ def _retention_override(seconds: int | None, hours: int | None) -> int | None:
     return None
 
 
+def _run_script_restore_on_demand(args, app_config, config_path: str, restore_id: str, log_scope: str) -> int:
+    """``restore-workflow --restore-id <script-driven entry>``: one run, forced, active or not."""
+    from db_ops.backup_restore.workflow import run_scheduled_restores
+
+    logger = setup_app_logger(app_config, app_name=log_scope, log_scope=log_scope,
+                              enable_telegram_alerts=False, enable_console=False)
+    log_function_call(logger, function_name="backup_restore.restore-workflow")
+    summary = run_scheduled_restores(
+        app_config=app_config, config_path=config_path, logger=logger, restore_id=restore_id,
+        force=True, on_demand=True, key=getattr(args, "key", None),
+        key_base64=getattr(args, "key_base64", None),
+        point_in_time=str(getattr(args, "point_in_time", "") or ""))
+    sys.stdout.write(json.dumps(summary, ensure_ascii=False, indent=2, default=str) + "\n")
+    if summary.get("failed") or not summary.get("succeeded"):
+        return 1
+    # The line /spbot_restore's success_output_contains looks for, as the SQL Server path prints.
+    sys.stdout.write(f"restore-workflow completed status=SUCCESS restore_id={restore_id}\n")
+    return 0
+
+
 def _default_log_scope(command: str) -> str:
     """Long-running, separately scheduled commands get their own runtime log file."""
     if command == "restore-workflow":
@@ -476,6 +496,13 @@ def main(argv: list[str]) -> int:
     # the failure path) so no message about a run can be published without naming it — and so
     # a failure that happens before restore_configs resolve still says which ids it meant.
     _id_meta: dict[str, object] = {}
+    # The id the operator typed, before anything resolves it: the refusal of an unknown id is the
+    # message that most needs to name it, and it said `backup_id=<unknown>` for NO_SUCH_BACKUP
+    # (the bot's refusal cases, 2026-09-25).
+    for _arg, _key in (("restore_id", "restore_id"), ("restore_id_pos", "restore_id"),
+                       ("backup_id", "backup_id")):
+        if getattr(args, _arg, None) and _key not in _id_meta:
+            _id_meta[_key] = str(getattr(args, _arg))
     # Bound here, not where the entries are resolved: the failure path below reads it, and a
     # command that fails *before* resolving its entries (an unknown restore_id, a bad config)
     # would otherwise die with UnboundLocalError and hide the real error.
@@ -626,6 +653,14 @@ def main(argv: list[str]) -> int:
                 # found" sent an operator looking for a config problem that did not exist, on an
                 # entry sitting in the file they were reading. Name the command that runs it.
                 script_ids = {job.restore_id for job in load_script_restores(resolved_config_path)}
+                if restore_id_filter in script_ids and args.command == "restore-workflow":
+                    # Run it, by the scheduler's own runner. This used to refuse, naming a CLI
+                    # command - and `/spbot_restore` runs exactly this, so not one PostgreSQL,
+                    # Oracle or container SQL Server drill could be started from the bot
+                    # (2026-09-24). The runner writes the restore-workflow END/ERROR rows the
+                    # bot's completion probe reads, under this restore_id.
+                    return _run_script_restore_on_demand(args, app_config, resolved_config_path,
+                                                         restore_id_filter, log_scope)
                 if restore_id_filter in script_ids:
                     raise ValueError(
                         f"restore_id={restore_id_filter} is a script-driven restore (it declares "

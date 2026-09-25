@@ -103,6 +103,14 @@ def emit_backup_restore_event(
         **(metadata or {}),
     }
     event_metadata.setdefault(id_key, id_value)
+    # The reason goes where it is read. A failed restore's message was "finished: error." and its
+    # Telegram header "Restore workflow FAILED." - the why sat only in job_runs.error_text, where no
+    # operator looks from a phone. A failed backup already carries it in its message, so it is
+    # added only when the message does not hold it yet: never twice.
+    reason = " ".join(str(error_text or "").split())[:600]
+    if reason and phase.upper() == "ERROR" and reason not in " ".join(event_message.split()):
+        event_message = f"{event_message} - {reason}"
+        event_metadata.setdefault("error_text", reason)
 
     if logger:
         _safe_log_file(logger=logger, level=logical_level, message=event_message)
@@ -301,8 +309,20 @@ def _format_restore_workflow_telegram_message(*, level: str, message: str, metad
         if target_parts:
             lines.append(f"target={' / '.join(target_parts)}")
 
+    if phase == "END":
+        # What went in and whether it opened, and the warning a "done with a warning" is about.
+        # The header above is fixed text, so without these lines a script-driven restore's END
+        # said only `status=done` - and the warning that raised it to `warning` level was in the
+        # message this function does not print (1.23's warning, 2026-09-25).
+        for field in ("restored", "verified"):
+            if metadata.get(field):
+                lines.append(f"{field}={metadata[field]}")
+        for warning in metadata.get("warnings") or []:
+            lines.append(f"warning={warning}")
+
     if phase == "ERROR":
         for field in (
+            "error_text",
             "database_name",
             "exception_type",
             "exception_message",

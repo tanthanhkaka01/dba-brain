@@ -18,9 +18,9 @@ from __future__ import annotations
 
 import pytest
 
-from db_ops.sre.docker_db import compose as compose_mod
-from db_ops.sre.docker_db import templates
-from db_ops.sre.docker_db.models import DockerDbSpec
+from db_ops.common.docker_db import compose as compose_mod
+from db_ops.common.docker_db import templates
+from db_ops.lib.docker_db_spec import DockerDbSpec
 
 
 @pytest.fixture(scope="module")

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The Backup Restore App copies backup files, restores SQL Server FULL (and optionally DIFF + LOG) backups into a DR database, verifies restore health, and records restore history. Point-in-time restore (PITR) is supported when transaction log backups are available.
+The Backup Restore App copies backup files, restores SQL Server FULL (and optionally DIFF + LOG) backups into a DR database, verifies restore health, and records restore history. Point-in-time restore (PITR) is supported wherever the logs cover the moment: SQL Server transaction log backups, PostgreSQL WAL and Oracle archived logs. See *Point in time, drilled on every engine*.
 
 ## Before a restore copies anything: does it fit?
 
@@ -93,7 +93,11 @@ prefer `@file`: a single-quoted JSON argument does not survive the shell.
   Give the value or the existing ref, never both.
 * **What is written is validated by this app's own loader.** The candidate document goes to a
   temporary file, `load_backup_jobs` / `load_restore_configs` is pointed at *that*, and only a
-  document that loads is committed — so a refusal is the exact sentence the daemon would have
+  document that loads is committed. A restore is also checked by `load_script_restores`, the
+  loader the scheduler and `restore-workflow` run for a script-driven entry. `load_restore_configs`
+  steps over that shape, so until 2026-09-25 such an entry was checked by nothing: one routed to
+  a notify level no group defines was written, and from then on `list-restores` and every
+  `restore-workflow` failed on it, for every entry on the node. The check covers both shapes now — so a refusal is the exact sentence the daemon would have
   failed with at 01:00, and there is no second schema in the registration code to drift from the
   first. A bare `KeyError` from `parse_restore_config` is turned into `missing required field:
   <name>`; `'prod_backup_share'` as an entire error message cost a day in September 2026.
@@ -124,6 +128,18 @@ prefer `@file`: a single-quoted JSON argument does not survive the shell.
   because `run_mode: async` is paired with the claim (`ux_job_runs_claim`, one `running` row per
   backup job). It is the same rule as the SQL task app ([05](05_sql_task_runner.md), *The three
   clocks*).
+* **What "at the same time" means.** One run works through its due list **in order**: all due
+  backups, then all due restores. Overlap comes from the next async run, 30 s later, which takes
+  what is due and not yet started. Measured on the labs on 2026-09-25, with three single-instance
+  full backups due at 13:40 +08 and their restores to the second VM at 13:43:
+  - the backups ran one after another inside one run (SQL Server 3 s, PostgreSQL 2 s, Oracle
+    32 s), and the next run found nothing left;
+  - the restores did overlap: the first run restored SQL Server then PostgreSQL, and the next run
+    took the Oracle restore at 05:44:15Z while PostgreSQL was still restoring, until 05:44:24Z.
+
+  A job the next run has **finished** is not run again when the first run reaches it: before each
+  claim, the run checks whether one started since it read its list (`schedule.taken_since`). The
+  claim alone allowed that until 2026-09-25 ([03](03_app_command_daemon.md)).
 * **Two shapes, and the difference is the engine, not untidiness.** A backup entry holds `jobs[]`
   and each job carries its own `time_window`; a restore entry carries one directly. All three shapes
   are described field by field in `data/shared_config_objects.json` as `backup_entry`, `backup_job`
@@ -473,11 +489,30 @@ The workflow uses a different transport mechanism depending on `vm_platform` in 
 | **Backup file copy** | PowerShell `Get-ChildItem` scan source + `shutil.copy2` to UNC target | Python scan source + paramiko SFTP `put` to Linux target |
 | **Backup file selection** | `Path.rglob("*.bak")` over UNC mount | SSH `find ... -name "*.bak"` on remote Linux fs |
 | **Restore execution** | PowerShell `Invoke-Command -ComputerName` → sqlcmd on remote Windows | SSH `sqlcmd` executed on the remote Linux host |
+| **...run by** | `common.cli run-sqlcmd` (`via: winrm`), since 0.23.0 | `common.cli run-sqlcmd` (`via: ssh`), since 0.23.0 |
 | **Delete old files** | PowerShell `Get-ChildItem -Include *.bak,*.trn` + `Remove-Item` over UNC | SSH `find ... -name "*.bak" -o -name "*.trn"` + `rm` |
 | **Credentials** | `cmdkey /add:<host>` sets up Windows credential manager for SMB | the target's `username` + `password_ref` used for paramiko SSH auth |
 | **Log file** | `copy_sqlbk.log` written to `vm_log_unc` | Skipped (log not written for Linux targets) |
 | **Retention filter** | `*.bak` and `*.trn` only (no other files deleted) | `*.bak` and `*.trn` only |
 | **Cleanup timing** | After restore (copy → restore → delete) | After restore (copy → restore → delete) |
+
+**The restore's statements run through `common.cli` (0.23.0).** Every `sqlcmd` batch of this path -
+each RESTORE, the recovery, the recovery model, CHECKDB, the resume probe of an interrupted LOG
+chain - is handed to `common.cli run-sqlcmd` with every value resolved here: the instance, the SQL
+login, the host login, the timeouts. `common` reads no configuration and runs exactly the command
+this app used to run itself: the same `Invoke-Command` wrapper for a Windows target, the same
+`export PATH=…; sqlcmd … -C -b` over SSH for a Linux one - held byte for byte by
+`tests/test_the_sql_server_restore_runs_through_common.py`, because the Windows path cannot be
+proven from the Linux labs. What the app still owns is every decision: which files, which
+statements, what exit code 0 with *Msg 3013* in it means, when a lost connection is safe to retry
+and when a RESTORE LOG's state has to be inspected first. Staging the files - the SMB copy and
+the SFTP put above - stays in the app, like the tar stream of the script-driven restores.
+
+Proven on the labs (2026-09-25): an encrypted LABTEST full backup restored under another name
+on the `.250` SQL Server container through this path, *NN percent processed* streamed as it
+went; a wrong SQL password answered *Login failed for user 'sa'*, and a deadline raised the
+timeout the resume logic reads. The Linux path now logs its progress events too - only the
+Windows and local ones did.
 
 ## Running db_ops itself on Linux (containerized) — SMB source reads
 
@@ -1049,13 +1084,181 @@ sitting on the host in plain sight. Four nights of `CLOUD_PG_TO_CLOUD2` failed t
   keeping the old one pins the restore to whatever was staged first — pieces deleted at the source
   stay and get read hours later.
 
-The WAL directory goes through the same step: `restore_command` is run by the *server*, inside the
+The WAL directory has the same need: `restore_command` is run by the *server*, inside the
 container, so a configuration pointing at a host path produces a cluster that starts and silently
 replays nothing.
 
+**Since 0.23.0 a PostgreSQL restore into a container copies nothing in.** The throwaway container
+that combines the chain (see the drill below) mounts every path no volume serves **read-only at the
+same path**, and copies the WAL into the target's data volume itself - no copy to go stale, nothing
+that can write to the backups. `docker cp` staging, under the two rules above, remains for an Oracle
+duplicate's backup location and for a separate LOG step into a running container.
+
+### A SQL Server drill onto a fresh machine (0.23.0)
+
+The first cross-machine SQL Server drill between two labs (2026-09-24: encrypted FULL/DIFF/LOG
+from one lab host restored into another) failed six ways before any data arrived. What holds now, each measured on that drill:
+
+- **The target folder is created before it is read.** The transfer lists what the target already
+  has; a folder a first run had not made yet counted as "could not be read by the SSH user", so
+  every new cross-machine drill failed its first run.
+- **The staged pieces are opened to the engine** (`chmod -R a+rX`, no sudo - the SSH user owns what
+  it just wrote). SQL Server reads them as its own user (uid 10001 in the image), and a copy left at
+  the source's `0660` gave `Operating system error 5` (Msg 3201) on every piece.
+- **The backup certificate is imported before the backups are listed.** `RESTORE HEADERONLY` cannot
+  read an encrypted backup without it (Msg 33111), and the import used to be queued behind the
+  listing that needed it. It is idempotent (drop and recreate), so every run does it; a dry run
+  does not, and may fail its listing for that reason.
+- **A backup that cannot be read is named, not skipped.** Only a file SQL Server says is not a
+  backup (Msg 3241-3243 - the exported certificate beside the set) is skipped; anything else fails
+  the listing with the file's path. Both faults above used to read *no databases found*.
+- **The plan connects to the target's own port** - its `db_instances.json` record, or
+  `env.MSSQL_PORT` for a target named by a host record. It was always 1433, which on a host running a
+  1433 and an 11433 lab is the other instance.
+- **A failed restore says why.** The reason is appended to the event message and shown as
+  `error_text=` under *Restore workflow FAILED.*; before, it was only in `job_runs.error_text`.
+
+The source side needs two things of the backup job, both now in `mssql_backup_database.sh`: the
+backup folder writable **by the engine** (taken over as root inside the container when it is not -
+a lab's bind mount belongs to the SSH user), and the pieces relaxed to `a+rX` after every run, as the
+Oracle and PostgreSQL jobs always did, because the transfer reads them as the SSH user and its
+`sudo chmod` is silent where sudo wants a password. Every backup script also checks that its
+container is **running**, not only that it exists: a stopped one used to read *no sqlcmd found;
+install mssql-tools*.
+
+A cross-machine drill needs its source's backups on a host path (`source_backup_host_dir`). A lab
+built by `create-db-docker` has one when it was given `--backup-mount` (SQL Server by default), HA
+labs included, and is then backup-ready as built: its folder is `<mount>/<lab name>` - see
+`docs/10_sre_app.md`.
+
+**A piece that cannot be read as a backup** - a `.bak` / `.trn` SQL Server calls *not a backup*
+(3241-3243), such as a truncated newest FULL - is passed over and the restore uses the newest chain
+it can read, but it finishes **done with a warning** naming the file, at `warning` level; it used to
+say nothing and go back in time silently.
+
+### A PostgreSQL drill onto a lab machine (0.23.0)
+
+The same drill for PostgreSQL, onto a host reached as a docker-group user whose sudo asks for a
+password, found five more; each is fixed and was measured on it:
+
+- **The WAL is replayed.** The recovery configuration (`restore_command`, `recovery.signal`) is
+  written into the combined directory **before the container's first start**, the WAL is copied
+  into the data volume (`<staging parent>/dbops_wal`) by the same step, and the step waits until
+  `pg_is_in_recovery()` is false. It used to be a separate step run after the server had already started on the combined
+  data: no WAL was replayed, every PostgreSQL drill stopped at its last base or incremental backup
+  and reported verified, and the `recovery.signal` left behind would have replayed the source's WAL
+  onto the diverged cluster at its next restart. A container target has no separate LOG step now.
+- **The target's SSH password travels** in the host block when it logs in by password (the
+  key-login cloud hosts never showed the gap).
+- **`sudo` is a fallback, not a prefix**: plain `docker` when the SSH user may run it,
+  `sudo docker` only when it may not (`db_ops.lib.shell.docker_cli`) - a sudo that asks for a
+  password cannot be answered.
+- **The target need not be running.** It is stopped first, and the combine and the data swap run
+  in throwaway containers (`docker run --rm -u postgres --volumes-from <target>`, the target's own
+  image, its own paths) - never `docker exec` into it, never as root on the host against Docker's
+  volume folders. The combine used to run inside the live target, so a drill that failed once and
+  left it crash-looping made every later restore fail on *Container ... is restarting* until it
+  was repaired by hand. The target is started again whether or not a step failed, and a failed
+  step swaps nothing.
+- **The backup jobs take their folder over**: when the folder a PostgreSQL or Oracle job writes is
+  not writable by the database's user, it is made as root where the database runs and handed over,
+  recursively - as the SQL Server job does.
+
+A PostgreSQL or Oracle lab built with `--backup-mount` is backup-ready as built - `archive_mode`,
+`archive_command` into `<backup_dir>/wal` and `summarize_wal` for PostgreSQL, ARCHIVELOG for Oracle
+(`docs/10_sre_app.md`). One built without it, or before 0.23.0, is not: those are the DBA's to set,
+and the WAL job says so (*archive_mode is 'off'*) until they are.
+
+**Oracle, the same drill:** RMAN reads the `BACKUP LOCATION` inside the target container, and a
+location copied to the host and served by no volume was invisible to it - *RMAN-05579: CONTROLFILE
+backup not found*. The duplicate now stages it in first, by the PostgreSQL step's rule (a path a
+volume serves is left alone; otherwise it is copied in, replacing a previous copy). Measured: the
+duplicate restores everything up to the last archived-log backup, and nothing after it.
+
+### Point in time, drilled on every engine (0.23.0)
+
+`/spbot_restore <id> "<moment>"` (`restore-workflow --point-in-time`) was drilled on the labs for each
+engine: a marker row written, the moment noted, a second row written, a log / WAL / archived-log
+backup taken, then the restore. Every engine now keeps the first row and not the second. Before
+this, none of them reached the moment:
+
+- **The moment is read once, into the server's clock**: `db_ops.lib.restore.moment.server_clock_text`,
+  naive `YYYY-MM-DD HH:MM:SS`, UTC unless the server's offset is stated. Every container target runs
+  on UTC. A server on another clock needs the moment without an offset, in its own clock. The reasons:
+  - SQL Server's `STOPAT` refuses an offset (Msg 3217), and so does Oracle's `TO_DATE`.
+  - The backup listings cut every stamp to 19 characters and dropped its offset with it. A moment
+    in +08:00 chose backups eight hours off. PostgreSQL's finish times come from `stat`, in the
+    host's clock (+07:00 on the labs), and they were seven hours off even against a UTC moment.
+- **SQL Server: the log that holds the moment is in the chain.** The chain used to stop at the last
+  log finished *before* the moment, which leaves out the one containing it. With `STOPAT` on the
+  previous log, the restore reached that log's end and reported success.
+  `restore_by_id._logs_through` keeps every log up to and including the first one that finishes
+  after the moment.
+- **PostgreSQL's chain is read by name, and dated by its manifest.** The incrementals are every
+  `_INCR` whose stamp sorts after the chosen full's, which is `pg_combinebackup`'s own rule. They
+  used to be the ones that finished *after* the full, and on a staging copy those times are the
+  copy's: a full and its incremental staged in the same second tied, and the incremental was
+  dropped. A backup's time is its `backup_manifest`'s mtime, which pg_basebackup writes last and
+  the copy keeps. The listing gives it in the host's clock (`finished_at`, which retention reads)
+  and in UTC (`finished_at_utc`). A point in time is compared with the UTC one; against the
+  host's +07 clock it chose an older full than it needed.
+- **PostgreSQL promotes at the target.** `recovery_target_action` defaults to `pause`, which left the
+  data right but the server still in recovery. The step waits for `pg_is_in_recovery()` to turn
+  false, so it ran its 30 minutes and then failed. The configuration now says `promote`, and a
+  replay that pauses anyway (`pg_is_wal_replay_paused()`) fails the wait at once.
+- **Oracle: `SET UNTIL TIME` goes in a `RUN` block with the duplicate.** Outside one, RMAN refuses
+  it (RMAN-03031). Every gvenzl lab carries the image's DBID and incarnation, so RMAN cannot tell
+  two labs' pieces apart. Three things keep the duplicate to its own source's backups:
+  - **`BACKUP LOCATION` ends in `/`.** Without the slash RMAN reads the path as a prefix:
+    `.../ora_restore_from_249` also read `.../ora_restore_from_249ha`, the Data Guard lab's staging.
+    The point-in-time duplicate then recovered through that lab's logs and asked for a sequence its
+    own source never reached (RMAN-06054). The newest-point duplicate had got away with it.
+  - **`NORESUME`.** RMAN otherwise resumes onto any datafile a failed earlier duplicate left, if it
+    carries the right DBID.
+  - **The nomount step removes `$ORACLE_HOME/dbs/arch*.dbf`.** Those are archived logs an earlier
+    duplicate restored there. Media recovery would otherwise take a same-named file for this
+    source's.
+- **The staging copy mirrors the source** (next section): a piece from the source's previous life no
+  longer sits beside the new ones.
+
+## What a restore reports, step by step (0.23.0)
+
+Every restore that runs through `restore_by_id` reports each step as it starts and ends. That
+covers PostgreSQL, Oracle and container SQL Server, whether the scheduler, `/spbot_restore` or
+`restore-by-id` started it. Each step is its own `common.cli` command:
+
+| Event | Step | `common.cli` |
+| --- | --- | --- |
+| `START` | the run | - |
+| `COPY_START` / `COPY_DONE` | the staging copy, remote restores only: pieces, bytes, already there, removed | `backup-chain`, `copy-backup-dir` |
+| `METADATA_*` | instance logins, roles and Agent jobs before the databases; an entry without `server_metadata` says why, once | `sqlserver-replay-instance` |
+| `RESTORE_START` / `RESTORE_DONE` | what goes in (`base backup X + 2 incremental(s), then WAL replay`, `APPDB: full X + 4 log(s)`, `RMAN DUPLICATE of FREE from ...`) and to which point; how long it took | `restore-full` / `-diff` / `-log` |
+| `VERIFY_START` / `VERIFY_DONE` | whether the restored databases open: *N checked, M unusable* | `verify-restore` |
+| `METADATA_*` | the post-database phase, only after a restore that worked | `sqlserver-replay-instance` |
+| `DELETE_START` / `DELETE_DONE` | the staging folder past the entry's retention, only after a verify that passed | `prune-staged-backups` |
+| `END` / `ERROR` | `restored=`, `verified=` and every `warning=` in the message | - |
+
+Every one of these messages carries `restore_mode`: `LATEST`, or `POINT_IN_TIME` with
+`point_in_time=` (as typed) and `point_in_time_utc=`. Until the .251 drill (2026-09-25) a
+point-in-time run's messages all said `LATEST`, and only RESTORE_START named the moment.
+
+A failure stops at the step it happened in, and the ERROR follows it: nothing is verified after a
+failed restore step, and nothing is deleted or replayed after a failed verify.
+
+Until 2026-09-25 a PostgreSQL drill in Telegram read *started*, *copy started*, *copy finished*,
+*finished status=done*, and nothing between or after:
+- no restore or verify event;
+- the staging cleanup ran inside the copy, before the restore, and even for a drill that then failed;
+- no instance metadata was replayed on this path at all;
+- END never showed what was restored, or the warning a *done with a warning* was raised for.
+
+The same day also changed two refusals. A refused unknown id used to be named `backup_id=<unknown>`;
+it now carries the id that was typed.
+
 ## Host-to-Host Transfer: Failures Must Surface, Not Stall
 
-The copy from source host to target host is one `tar` stream through the orchestrator (`transfer.py`),
+The copy from source host to target host is one `tar` stream through the orchestrator
+(`common.cli copy-backup-dir`, `db_ops/common/backup_copy.py` - `transfer.py` in this app until 0.23.0),
 which makes it fast and makes its failure modes quiet — there is no per-file round trip in which an
 error can surface. Two guards exist for that, both added after a run hung for its full two-hour
 timeout with nothing to show for it:
@@ -1071,6 +1274,12 @@ timeout with nothing to show for it:
   only after `recv_exit_status()`, which cannot be reached while the transfer is still in flight — so
   a `tar` complaining once per file filled its stderr window, blocked on the write, stopped reading
   stdin, and seized the whole pipeline with no error anywhere and no timeout to break it.
+- **The copy is a mirror (0.23.0).** Before anything is copied, a staged file the source no longer
+  has is removed and counted in `removed_absent_at_source`. The copy used to only add. A source
+  rebuilt under the same name left its previous life's pieces beside the new ones, and a restore
+  could not tell them apart: the lab images repeat WAL names and Oracle DBIDs. What counts is the
+  whole source listing, not the part `include` limits one run to, because an older point in time
+  needs pieces a newest-chain copy skips.
 
 **On duration.** Every byte crosses the orchestrator twice (SFTP down, SFTP up) because the two
 database hosts are not assumed to reach each other. Measured on the CLOUD → CLOUD2 pair:
@@ -1105,8 +1314,10 @@ candidate and the chain rule alone decides: never the newest full, nor anything 
 
 The restore side is the *target's* retention and has nothing to do with the source's: the source
 decides how far back it can recover from, the target only needs enough to run its next restore.
-Without it a staging directory only grows — the transfer copies what the source has and never
-removes what the source dropped — until it fills the disk it restores onto.
+Without it a staging directory holds everything the source still keeps that a restore ever copied.
+The transfer removes what the source dropped (it did not before 0.23.0), but the source's own
+retention can be far longer than the target needs, and the extra copies can fill the disk the
+target restores onto.
 
 | Entry | Value | Why |
 | --- | --- | --- |

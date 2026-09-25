@@ -4,11 +4,12 @@ import subprocess
 
 import pytest
 
-from db_ops.sre.docker_db import compose as compose_mod
-from db_ops.sre.docker_db.healthcheck import native_probe_command
-from db_ops.sre.docker_db.models import ENGINE_META, DockerDbSpec
-from db_ops.sre.docker_db.provisioner import provision
-from db_ops.sre.remote import RemoteHostError, format_remote_command, resolve_remote_ssh_password
+from db_ops.common.docker_db import compose as compose_mod
+from db_ops.common.docker_db.healthcheck import native_probe_command
+from db_ops.lib.docker_db_spec import ENGINE_META, DockerDbSpec
+from db_ops.common.docker_db.provisioner import provision
+from db_ops.common.docker_db.remote_host import format_remote_command
+from db_ops.sre.remote import RemoteHostError, resolve_remote_ssh_password
 from conftest import shipped_config
 
 
@@ -32,7 +33,7 @@ def test_oracle_engine_meta_and_validation():
 
 
 def test_oracle_dataguard_plan_two_nodes_and_setup_script():
-    from db_ops.sre.docker_db import templates
+    from db_ops.common.docker_db import templates
 
     spec = _oracle_spec(name="ora_dg", mode="ha-lab", replicas=1, host_port=15210)
     plan = compose_mod.build_plan(spec, containers_dir="/opt/db_ops/containers",
@@ -165,7 +166,7 @@ class _FakeDockerHost:
 
 
 def test_ensure_docker_installs_when_missing():
-    from db_ops.sre.remote import ensure_docker
+    from db_ops.common.docker_db.remote_host import ensure_docker
     host = _FakeDockerHost(has_docker=False)
     summary = ensure_docker(host, sudo_password="pw", containers_dir="/opt/db_ops/containers")
     assert summary["installed"] is True and summary["already_present"] is False
@@ -176,7 +177,7 @@ def test_ensure_docker_installs_when_missing():
 
 
 def test_remote_host_accepts_key_or_password_and_requires_one():
-    from db_ops.sre.remote import RemoteHostError, RemoteUbuntuHost
+    from db_ops.common.docker_db.remote_host import RemoteHostError, RemoteUbuntuHost
     # key-only (Oracle Cloud style) and password-only both construct fine
     RemoteUbuntuHost("10.0.0.9", "ubuntu", key_filename="/path/id_rsa")
     RemoteUbuntuHost("10.0.0.9", "ubuntu", "pw")
@@ -186,7 +187,7 @@ def test_remote_host_accepts_key_or_password_and_requires_one():
 
 
 def test_ensure_docker_noop_when_present():
-    from db_ops.sre.remote import ensure_docker
+    from db_ops.common.docker_db.remote_host import ensure_docker
     host = _FakeDockerHost(has_docker=True)
     summary = ensure_docker(host, sudo_password="pw")
     assert summary["already_present"] is True and summary["installed"] is False
@@ -199,21 +200,19 @@ def test_provision_oracle_on_remote_host(monkeypatch):
     command goes through the remote runner, nothing touches the local disk."""
     remote = _FakeRemote()
     spec = _oracle_spec(host_port=15210)
-    monkeypatch.setenv("ORA_LAB_01_PASSWORD", "Secret#123")
 
-    rc = provision(
+    result = provision(
         spec,
+        password="Secret#123",
         containers_dir="/opt/db_ops/containers",
         worker_host="10.0.0.9",
-        data_dir=None,
         dry_run=False,
         force=False,
-        register=False,
         health_timeout=1,
         runner=remote.run,
         fs=remote,
     )
-    assert rc == 0
+    assert result["compose_path"] == "/opt/db_ops/containers/ora_lab_01/docker-compose.yml"
     compose_path = "/opt/db_ops/containers/ora_lab_01/docker-compose.yml"
     env_path = "/opt/db_ops/containers/ora_lab_01/.env"
     assert compose_path in remote.files and "gvenzl/oracle-free:26" in remote.files[compose_path]
@@ -238,13 +237,12 @@ def _fake_local_runner(calls):
 def test_remote_ha_post_start_runs_detached(monkeypatch):
     """The remote path (--remote-host) must run the long post-start step detached (run_detached),
     so a control-SSH blip cannot interrupt the Oracle Data Guard RMAN duplicate."""
-    monkeypatch.setenv("ORA_LAB_01_PASSWORD", "Secret#1")
     remote = _FakeRemote()
     spec = _oracle_spec(name="ora_dg", mode="ha-lab", replicas=1, host_port=15210)
-    rc = provision(spec, containers_dir="/opt/db_ops/containers", worker_host="10.0.0.9",
-                   data_dir=None, dry_run=False, force=False, register=False, health_timeout=1,
-                   runner=remote.run, fs=remote)
-    assert rc == 0
+    result = provision(spec, password="Secret#1", containers_dir="/opt/db_ops/containers",
+                       worker_host="10.0.0.9", dry_run=False, force=False, health_timeout=1,
+                       runner=remote.run, fs=remote)
+    assert result["mode"] == "ha-lab"
     assert ["DETACHED", "bash", "setup/setup_dataguard.sh"] in remote.commands
 
 
@@ -252,13 +250,12 @@ def test_local_ha_post_start_runs_synchronously(tmp_path, monkeypatch):
     """The old/local path (worker-run in-container, or plain local) must still work: with the
     default LocalFs the post-start step runs SYNCHRONOUSLY through the runner (no detach), and
     instance files land on the local disk. Guards against the fs/run_detached change regressing it."""
-    monkeypatch.setenv("ORA_LAB_01_PASSWORD", "Secret#1")
     calls: list = []
     spec = _oracle_spec(name="ora_dg", mode="ha-lab", replicas=1, host_port=15210)
-    rc = provision(spec, containers_dir=str(tmp_path), worker_host="", data_dir=None,
-                   dry_run=False, force=False, register=False, health_timeout=1,
-                   runner=_fake_local_runner(calls))  # fs omitted -> LocalFs (the old path)
-    assert rc == 0
+    result = provision(spec, password="Secret#1", containers_dir=str(tmp_path), worker_host="",
+                       dry_run=False, force=False, health_timeout=1,
+                       runner=_fake_local_runner(calls))  # fs omitted -> LocalFs (the old path)
+    assert result["healthy"] is True
     assert ["bash", "setup/setup_dataguard.sh"] in calls          # synchronous, not detached
     assert not any(c and c[0] == "DETACHED" for c in calls)
     assert (tmp_path / "ora_dg" / "docker-compose.yml").exists()  # files on the local disk
@@ -269,7 +266,7 @@ def test_oracle_gets_a_first_start_ceiling_the_other_engines_do_not_need():
     """Oracle's first start on an empty volume *creates the database*; the 180s that is
     plenty for "has postgres opened its port" timed both Data Guard nodes out before either
     had finished initialising, so the setup script was never reached."""
-    from db_ops.sre.docker_db.models import DEFAULT_HEALTH_TIMEOUT, ENGINE_META
+    from db_ops.lib.docker_db_spec import DEFAULT_HEALTH_TIMEOUT, ENGINE_META
 
     for engine in ("postgres", "mysql", "mssql"):
         assert ENGINE_META[engine].health_timeout == DEFAULT_HEALTH_TIMEOUT, engine
@@ -279,7 +276,7 @@ def test_oracle_gets_a_first_start_ceiling_the_other_engines_do_not_need():
 def test_the_post_start_step_has_its_own_budget():
     """It used to inherit the health timeout, so the RMAN duplicate — which copies the whole
     database — was given a number sized for "is the port open yet"."""
-    from db_ops.sre.docker_db.models import DEFAULT_POST_START_TIMEOUT, ENGINE_META
+    from db_ops.lib.docker_db_spec import DEFAULT_POST_START_TIMEOUT, ENGINE_META
 
     for engine, meta in ENGINE_META.items():
         assert meta.post_start_timeout >= DEFAULT_POST_START_TIMEOUT or engine == "oracle", engine
@@ -299,7 +296,7 @@ def test_every_engine_finishes_inside_the_callers_own_timeout():
     import json
     from pathlib import Path
 
-    from db_ops.sre.docker_db.models import (
+    from db_ops.lib.docker_db_spec import (
         CALLER_BUDGET_SECONDS,
         ENGINE_META,
         PULL_AND_STARTUP_ALLOWANCE,
@@ -326,7 +323,7 @@ def test_every_engine_finishes_inside_the_callers_own_timeout():
 def test_an_explicit_health_timeout_still_wins(monkeypatch, tmp_path):
     """The engine ceiling is a default, not a cap: an operator who knows their host is slower
     (or wants to fail fast) can still say so."""
-    import db_ops.sre.docker_db.provisioner as prov
+    import db_ops.common.docker_db.provisioner as prov
 
     seen = {}
 
@@ -337,7 +334,7 @@ def test_an_explicit_health_timeout_still_wins(monkeypatch, tmp_path):
     monkeypatch.setattr(prov.healthcheck, "wait_healthy", _fake_wait)
 
     # The resolution rule itself, isolated from a full provision run.
-    from db_ops.sre.docker_db.models import ENGINE_META
+    from db_ops.lib.docker_db_spec import ENGINE_META
     for explicit, expected in ((None, ENGINE_META["oracle"].health_timeout), (60, 60)):
         wait_seconds = int(explicit) if explicit else ENGINE_META["oracle"].health_timeout
         assert wait_seconds == expected
@@ -372,7 +369,7 @@ def test_a_container_that_exited_ends_the_wait_immediately(monkeypatch):
     called itself a timeout — sending the operator after a performance problem that was
     really a container that had crashed."""
     import time as _time
-    from db_ops.sre.docker_db import healthcheck
+    from db_ops.common.docker_db import healthcheck
 
     slept = []
     monkeypatch.setattr(_time, "sleep", slept.append)
@@ -388,7 +385,7 @@ def test_a_container_that_exited_ends_the_wait_immediately(monkeypatch):
 
 def test_a_container_that_was_never_created_is_reported_as_missing(monkeypatch):
     import time as _time
-    from db_ops.sre.docker_db import healthcheck
+    from db_ops.common.docker_db import healthcheck
 
     monkeypatch.setattr(_time, "sleep", lambda _s: None)
 
@@ -403,7 +400,7 @@ def test_a_running_but_unready_container_still_gets_its_full_wait(monkeypatch):
     """The fix must not turn 'not ready yet' into a hard failure — that is the normal case
     while Oracle opens its database."""
     import time as _time
-    from db_ops.sre.docker_db import healthcheck
+    from db_ops.common.docker_db import healthcheck
 
     ticks = []
     monkeypatch.setattr(_time, "sleep", ticks.append)
@@ -419,7 +416,7 @@ def test_a_running_but_unready_container_still_gets_its_full_wait(monkeypatch):
 
 def test_the_failure_carries_the_containers_own_last_words():
     """"timeout" alone sends someone to SSH into the host to find out what happened."""
-    from db_ops.sre.docker_db import healthcheck
+    from db_ops.common.docker_db import healthcheck
 
     detail = healthcheck.failure_detail(
         {"ora-primary": "healthy", "ora-standby-1": "exited"},
@@ -440,7 +437,7 @@ def test_an_ampersand_in_an_oracle_password_is_refused_up_front():
     the script as its value. The database then comes up *healthy* with a password nobody
     knows, and the Data Guard step dies on `connect target` with ORA-01017 — after copying
     the whole database. It has to be caught before anything is created."""
-    from db_ops.sre.docker_db.provisioner import ProvisionError, validate_password
+    from db_ops.common.docker_db.provisioner import ProvisionError, validate_password
 
     spec = _oracle_spec()
     with pytest.raises(ProvisionError, match="ORA-01017"):
@@ -451,7 +448,7 @@ def test_an_ampersand_in_an_oracle_password_is_refused_up_front():
 
 def test_ordinary_oracle_passwords_are_accepted():
     """The guard must not become a password policy — only the characters that break."""
-    from db_ops.sre.docker_db.provisioner import validate_password
+    from db_ops.common.docker_db.provisioner import validate_password
 
     spec = _oracle_spec()
     for good in ("Xk7q-tR2#91", "aB3-_.!%xyz", "plain12345"):
@@ -460,8 +457,8 @@ def test_ordinary_oracle_passwords_are_accepted():
 
 
 def test_engines_whose_init_path_is_unaffected_are_left_alone():
-    from db_ops.sre.docker_db.models import ENGINE_META
-    from db_ops.sre.docker_db.provisioner import validate_password
+    from db_ops.lib.docker_db_spec import ENGINE_META
+    from db_ops.common.docker_db.provisioner import validate_password
 
     for engine in ("postgres", "mysql", "mssql"):
         assert ENGINE_META[engine].forbidden_password_chars == ""
@@ -477,7 +474,7 @@ def test_the_shipper_validates_the_values_it_builds_a_filename_from():
     sqlplus output straight into `sed s///`. One '/' in a value made sed exit, $dest came out
     empty, and the copy became `cat > '<incoming>/'` -- "Is a directory", every 2 minutes, while
     the standby quietly stopped receiving redo. A shipper that ships nothing has to say so."""
-    from db_ops.sre.docker_db.templates import ORACLE_DG_SHIP_LOOP
+    from db_ops.common.docker_db.templates import ORACLE_DG_SHIP_LOOP
 
     # values are passed to awk as data, never spliced into a sed expression
     assert "awk -v t=" in ORACLE_DG_SHIP_LOOP
@@ -494,7 +491,7 @@ def test_the_shipper_validates_the_values_it_builds_a_filename_from():
 def test_the_shipper_never_writes_to_a_bare_directory_path():
     """The specific failure: $dest empty -> `cat > '<INCOMING>/'`. Guarded on both the empty and
     the trailing-slash case, because either one addresses the directory instead of a file."""
-    from db_ops.sre.docker_db.templates import ORACLE_DG_SHIP_LOOP
+    from db_ops.common.docker_db.templates import ORACLE_DG_SHIP_LOOP
 
     assert "''|*/)" in ORACLE_DG_SHIP_LOOP
     assert "unusable destination" in ORACLE_DG_SHIP_LOOP

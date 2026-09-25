@@ -53,7 +53,12 @@ KNOWN_DB_TYPES = ("sqlserver", "mysql", "postgresql", "oracle")
 #: ``Unsupported db_type: postgresql`` at 16:00:00Z — on a soak node, where a wasted run costs
 #: clock. The registrar now refuses at registration; the dispatch reads the same tuple, so widening
 #: it is one edit and cannot half-apply.
-SQL_TASK_DB_TYPES = ("sqlserver", "oracle")
+#:
+#: PostgreSQL joined on 2026-09-25: its tasks run through ``run-sql`` like the others, which now
+#: runs a PostgreSQL script one statement at a time (``lib.sql_text.split_postgresql_statements``).
+#: Task parameters are T-SQL ``DECLARE`` lines, so a PostgreSQL task takes none yet - refused at
+#: registration by ``sql-command-add``.
+SQL_TASK_DB_TYPES = ("sqlserver", "oracle", "postgresql")
 
 #: The ``db_type`` of a machine with **no database on it** - an application server, a hypervisor,
 #: a VM that only needs OS metrics. It exists so OS metrics are collected once per machine rather

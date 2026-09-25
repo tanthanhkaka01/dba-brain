@@ -1780,13 +1780,14 @@
                     "type": "string",
                     "required": true,
                     "default": "none",
-                    "range_text": "sqlserver | oracle",
+                    "range_text": "sqlserver | oracle | postgresql",
                     "constraint": {
                         "kind": "string",
                         "nullable": false,
                         "enum": [
                             "sqlserver",
-                            "oracle"
+                            "oracle",
+                            "postgresql"
                         ],
                         "case_insensitive": true
                     },
@@ -2079,14 +2080,15 @@
                     "type": "string",
                     "required": false,
                     "default": "the command's db_type",
-                    "range_text": "sqlserver | oracle",
+                    "range_text": "sqlserver | oracle | postgresql",
                     "constraint": {
                         "kind": "string",
                         "nullable": true,
                         "allow_empty": true,
                         "enum": [
                             "sqlserver",
-                            "oracle"
+                            "oracle",
+                            "postgresql"
                         ],
                         "case_insensitive": true
                     },
@@ -5206,7 +5208,7 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "Which engine runs in the container.",
-                    "rule": "Was `engine` until 0.22.0. The values are the provisioner's own (sre.docker_db.models.VALID_ENGINES), which name an image family - oracle-xe is not an inventory db_type"
+                    "rule": "Was `engine` until 0.22.0. The values are the provisioner's own (lib.docker_db_spec.VALID_ENGINES), which name an image family - oracle-xe is not an inventory db_type"
                 },
                 {
                     "field": "host",
@@ -9117,7 +9119,7 @@
             "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 5,
+            "field_count": 6,
             "required_field_count": 0,
             "fields": [
                 {
@@ -9190,7 +9192,21 @@
                         "allow_empty": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "When the backup finished."
+                    "purpose": "When the backup finished, `YYYY-MM-DD HH:MM:SS` in the clock the engine or the host printed: the SQL Server and Oracle instance's, the host's for PostgreSQL (its backup_manifest's mtime). Retention compares it with the wall clock."
+                },
+                {
+                    "field": "finished_at_utc",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The same moment in UTC, where the listing knows the offset (PostgreSQL). A point-in-time bound, which is converted to UTC, is compared with this."
                 }
             ]
         },
@@ -11464,7 +11480,7 @@
             "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 9,
+            "field_count": 8,
             "required_field_count": 0,
             "fields": [
                 {
@@ -11538,20 +11554,6 @@
                     "purpose": "What it produced."
                 },
                 {
-                    "field": "server_metadata_result",
-                    "type": "object",
-                    "required": false,
-                    "default": "absent when it does not apply",
-                    "range_text": "an object",
-                    "constraint": {
-                        "kind": "object",
-                        "nullable": true,
-                        "free_form": true
-                    },
-                    "measured_against": "not a time value",
-                    "purpose": "The metadata export, when asked for."
-                },
-                {
                     "field": "error",
                     "type": "string",
                     "required": false,
@@ -11591,6 +11593,1074 @@
                     },
                     "measured_against": "milliseconds of wall clock the command took",
                     "purpose": "How long it took."
+                }
+            ]
+        },
+        {
+            "object": "output_create_db_docker",
+            "kind": "output",
+            "required": false,
+            "one_line": "What create-db-docker built, for the caller to register.",
+            "parsed_in": "db_ops/common/docker_db/provisioner.py",
+            "produced_in": [
+                "db_ops/common/docker_db/provisioner.py",
+                "db_ops/common/cli_docker_db.py"
+            ],
+            "commands": [
+                "create-db-docker"
+            ],
+            "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 18,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "name",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The instance."
+                },
+                {
+                    "field": "engine",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Its engine."
+                },
+                {
+                    "field": "version",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Its image tag."
+                },
+                {
+                    "field": "mode",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "single | ha-lab."
+                },
+                {
+                    "field": "replicas",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "ha-lab: its standbys; null for single."
+                },
+                {
+                    "field": "host_port",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The published port of the primary."
+                },
+                {
+                    "field": "password_ref",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The secret ref the record should name."
+                },
+                {
+                    "field": "worker_host",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The machine it runs on - the remote host when there was one."
+                },
+                {
+                    "field": "instance_dir",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Its folder on that machine."
+                },
+                {
+                    "field": "compose_path",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Its compose file."
+                },
+                {
+                    "field": "backup_folder",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "<mount>/<name> when it has a backup mount: a backup entry's backup_dir."
+                },
+                {
+                    "field": "status",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "running | started (health check timed out) | dry-run (not created)."
+                },
+                {
+                    "field": "healthy",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Every node healthy; null on a dry run."
+                },
+                {
+                    "field": "statuses",
+                    "type": "object",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Health per container."
+                },
+                {
+                    "field": "docker",
+                    "type": "object",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "What install_docker found or did; null when not asked."
+                },
+                {
+                    "field": "dry_run",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Nothing was changed."
+                },
+                {
+                    "field": "plan_text",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Dry run: every file it would write (password masked) and the command."
+                },
+                {
+                    "field": "summary",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The lines a person reads: connection, backup folder, warnings."
+                }
+            ]
+        },
+        {
+            "object": "output_move_db_docker",
+            "kind": "output",
+            "required": false,
+            "one_line": "What move-db-docker moved, for the caller to repoint the registry.",
+            "parsed_in": "db_ops/common/docker_db/mover.py",
+            "produced_in": [
+                "db_ops/common/docker_db/mover.py"
+            ],
+            "commands": [
+                "move-db-docker"
+            ],
+            "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 13,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "instance",
+                    "type": "object",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "What was read on the source: containers, images, volumes, ports."
+                },
+                {
+                    "field": "engine",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The engine the health probe asked."
+                },
+                {
+                    "field": "source_host",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Where it ran."
+                },
+                {
+                    "field": "destination_host",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Where it runs now."
+                },
+                {
+                    "field": "instance_dir",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Its folder on the destination."
+                },
+                {
+                    "field": "compose_path",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Its compose file on the destination."
+                },
+                {
+                    "field": "statuses",
+                    "type": "object",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Health per container on the destination."
+                },
+                {
+                    "field": "bytes_transferred",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "bytes",
+                    "purpose": "What crossed between the hosts."
+                },
+                {
+                    "field": "artifacts",
+                    "type": "array",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The staged paths that were relayed."
+                },
+                {
+                    "field": "source_stopped",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The source stack was stopped after the move."
+                },
+                {
+                    "field": "dry_run",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Nothing was changed."
+                },
+                {
+                    "field": "plan_text",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "What it would move, as a person reads it."
+                },
+                {
+                    "field": "summary",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The lines a person reads afterwards."
+                }
+            ]
+        },
+        {
+            "object": "output_run_sqlcmd",
+            "kind": "output",
+            "required": false,
+            "one_line": "How one sqlcmd batch ran.",
+            "parsed_in": "db_ops/common/sqlcmd_run.py",
+            "produced_in": [
+                "db_ops/common/sqlcmd_run.py"
+            ],
+            "commands": [
+                "run-sqlcmd"
+            ],
+            "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 6,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "via",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "How it ran."
+                },
+                {
+                    "field": "exit_code",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "sqlcmd's exit code; null when it timed out."
+                },
+                {
+                    "field": "stdout",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Everything sqlcmd printed (progress, messages, errors)."
+                },
+                {
+                    "field": "stderr",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "What the transport printed on its error stream."
+                },
+                {
+                    "field": "timed_out",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Cut off at timeout_seconds - started, and not finished."
+                },
+                {
+                    "field": "duration_ms",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "milliseconds",
+                    "purpose": "How long it ran."
+                }
+            ]
+        },
+        {
+            "object": "input_backup_chain",
+            "kind": "input",
+            "required": false,
+            "one_line": "Which parts of a backup directory a restore needs.",
+            "parsed_in": "db_ops/common/cli_backup_copy.py",
+            "parsers": [
+                "db_ops/common/cli_backup_copy.py"
+            ],
+            "commands": [
+                "backup-chain"
+            ],
+            "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 6,
+            "required_field_count": 3,
+            "fields": [
+                {
+                    "field": "db_type",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "postgresql | oracle | sqlserver - which chain rule applies."
+                },
+                {
+                    "field": "source",
+                    "type": "object",
+                    "required": true,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The source host's SSH login: host, port, username and a RESOLVED password or key_file (an absolute path), open_timeout_seconds - never a secret ref: common resolves nothing."
+                },
+                {
+                    "field": "source_dir",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The backup directory on the source host."
+                },
+                {
+                    "field": "backup_dir",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "oracle: the directory as RMAN's catalog names it (inside the container)."
+                },
+                {
+                    "field": "container",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "oracle: the source container RMAN is asked in."
+                },
+                {
+                    "field": "point_in_time",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Set: the whole directory - a moment before the newest full needs an older chain."
+                }
+            ]
+        },
+        {
+            "object": "output_backup_chain",
+            "kind": "output",
+            "required": false,
+            "one_line": "The path prefixes a restore's copy is narrowed to.",
+            "parsed_in": "db_ops/common/cli_backup_copy.py",
+            "produced_in": [
+                "db_ops/common/cli_backup_copy.py"
+            ],
+            "commands": [
+                "backup-chain"
+            ],
+            "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 2,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "include",
+                    "type": "array",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "a list of path prefixes",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true,
+                        "item_kind": "string"
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Path prefixes under the source directory; empty = everything."
+                },
+                {
+                    "field": "narrowed",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "true or false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "false when the whole directory travels."
+                }
+            ]
+        },
+        {
+            "object": "input_copy_backup_dir",
+            "kind": "input",
+            "required": false,
+            "one_line": "A backup directory to copy from one host to another.",
+            "parsed_in": "db_ops/common/cli_backup_copy.py",
+            "parsers": [
+                "db_ops/common/cli_backup_copy.py"
+            ],
+            "commands": [
+                "copy-backup-dir"
+            ],
+            "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 7,
+            "required_field_count": 4,
+            "fields": [
+                {
+                    "field": "source",
+                    "type": "object",
+                    "required": true,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The source host's SSH login: host, port, username and a RESOLVED password or key_file (an absolute path), open_timeout_seconds - never a secret ref: common resolves nothing."
+                },
+                {
+                    "field": "source_dir",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The backup directory on the source host."
+                },
+                {
+                    "field": "target",
+                    "type": "object",
+                    "required": true,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The target host's SSH login: host, port, username and a RESOLVED password or key_file (an absolute path), open_timeout_seconds - never a secret ref: common resolves nothing."
+                },
+                {
+                    "field": "target_dir",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The staging directory on the target host."
+                },
+                {
+                    "field": "include",
+                    "type": "array",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "a list of path prefixes",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true,
+                        "item_kind": "string"
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Path prefixes to copy (backup-chain's answer); empty = everything."
+                },
+                {
+                    "field": "make_readable",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "true or false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "sudo chmod -R a+rX on the source first (a live archivelog job writes 0640). Default true."
+                },
+                {
+                    "field": "open_for_engine",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "true or false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "chmod -R a+rX on the target after, for the engine's own uid. Default true."
+                }
+            ]
+        },
+        {
+            "object": "output_copy_backup_dir",
+            "kind": "output",
+            "required": false,
+            "one_line": "What one host-to-host copy moved.",
+            "parsed_in": "db_ops/common/backup_copy.py",
+            "produced_in": [
+                "db_ops/common/backup_copy.py",
+                "db_ops/common/cli_backup_copy.py"
+            ],
+            "commands": [
+                "copy-backup-dir"
+            ],
+            "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 5,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "copied",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Files streamed."
+                },
+                {
+                    "field": "skipped",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Files already on the target, same size and not older."
+                },
+                {
+                    "field": "bytes_copied",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "bytes",
+                    "purpose": "Bytes streamed."
+                },
+                {
+                    "field": "removed_absent_at_source",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Staged files the source no longer has, removed - the copy mirrors the source."
+                },
+                {
+                    "field": "opened_for_engine",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "true or false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Whether every staged piece was made readable."
+                }
+            ]
+        },
+        {
+            "object": "input_prune_staged_backups",
+            "kind": "input",
+            "required": false,
+            "one_line": "A restore's staging folder to clear past its retention.",
+            "parsed_in": "db_ops/common/cli_backup_copy.py",
+            "parsers": [
+                "db_ops/common/cli_backup_copy.py"
+            ],
+            "commands": [
+                "prune-staged-backups"
+            ],
+            "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 3,
+            "required_field_count": 2,
+            "fields": [
+                {
+                    "field": "target",
+                    "type": "object",
+                    "required": true,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The target host's SSH login: host, port, username and a RESOLVED password or key_file (an absolute path), open_timeout_seconds - never a secret ref: common resolves nothing."
+                },
+                {
+                    "field": "target_dir",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The staging directory on the target host."
+                },
+                {
+                    "field": "cleanup_retention",
+                    "type": "integer",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "seconds",
+                    "purpose": "Seconds a staged file is kept; 0 keeps everything."
+                }
+            ]
+        },
+        {
+            "object": "output_prune_staged_backups",
+            "kind": "output",
+            "required": false,
+            "one_line": "What one staging cleanup removed.",
+            "parsed_in": "db_ops/common/backup_copy.py",
+            "produced_in": [
+                "db_ops/common/backup_copy.py"
+            ],
+            "commands": [
+                "prune-staged-backups"
+            ],
+            "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 4,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "pruned",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Files removed."
+                },
+                {
+                    "field": "retention_seconds",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "seconds",
+                    "purpose": "The retention applied."
+                },
+                {
+                    "field": "skipped",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Why nothing was judged (retention disabled)."
+                },
+                {
+                    "field": "error",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Why the cleanup command failed."
                 }
             ]
         },
@@ -16946,7 +18016,7 @@
             "legacy_fields": {
                 "database": "database_name"
             },
-            "field_count": 22,
+            "field_count": 23,
             "required_field_count": 1,
             "fields": [
                 {
@@ -17252,6 +18322,20 @@
                     },
                     "measured_against": "seconds",
                     "purpose": "How long to wait."
+                },
+                {
+                    "field": "recovery_timeout_seconds",
+                    "type": "integer",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "seconds",
+                    "purpose": "PostgreSQL into a container, with wal_dir: how long to wait for recovery to end (default 1800). A container that stops or restarts ends the wait at once."
                 }
             ]
         },
@@ -17888,7 +18972,7 @@
             "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 11,
+            "field_count": 10,
             "required_field_count": 1,
             "fields": [
                 {
@@ -18001,7 +19085,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "Export server metadata too."
+                    "purpose": "Refused since 0.23.0 - the export resolves its instance from the inventory, and backup-database reads no configuration. Run sqlserver-export-instance after the backup."
                 },
                 {
                     "field": "timeout",
@@ -18018,7 +19102,82 @@
                     "purpose": "How long it may run."
                 },
                 {
-                    "field": "output_dir",
+                    "field": "dry_run",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Plan only: change nothing."
+                }
+            ]
+        },
+        {
+            "object": "input_create_db_docker",
+            "kind": "input",
+            "required": false,
+            "one_line": "One lab database Docker instance to build.",
+            "parsed_in": "db_ops/common/cli_docker_db.py",
+            "parsers": [
+                "db_ops/common/cli_docker_db.py"
+            ],
+            "commands": [
+                "create-db-docker"
+            ],
+            "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 18,
+            "required_field_count": 3,
+            "fields": [
+                {
+                    "field": "name",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The instance's name: folder, compose project and container."
+                },
+                {
+                    "field": "engine",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "postgres | mysql | mssql | oracle | oracle-xe."
+                },
+                {
+                    "field": "version",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The image tag, checked against the registry first."
+                },
+                {
+                    "field": "mode",
                     "type": "string",
                     "required": false,
                     "default": "none - optional",
@@ -18029,7 +19188,188 @@
                         "allow_empty": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "Where the backup goes."
+                    "purpose": "single (default) | ha-lab."
+                },
+                {
+                    "field": "replicas",
+                    "type": "integer",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "ha-lab only: standbys. Omitted = the engine's default."
+                },
+                {
+                    "field": "host_port",
+                    "type": "integer",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The host port of the primary. Omitted = the engine's own."
+                },
+                {
+                    "field": "password_ref",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The secret REF the connection record names."
+                },
+                {
+                    "field": "password",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Its RESOLVED value. A dry run may omit it.",
+                    "rule": "stdin only: the request is refused inline or from a file"
+                },
+                {
+                    "field": "backup_mount",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Host folder bind-mounted at the same path. Omitted = the engine default, empty = none."
+                },
+                {
+                    "field": "network_subnet",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The compose network's /24. Omitted = derived from the name."
+                },
+                {
+                    "field": "containers_dir",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Where the instance folder is written on its host."
+                },
+                {
+                    "field": "worker_host",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The address recorded for an instance built on this machine."
+                },
+                {
+                    "field": "remote",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Build on this Ubuntu host over SSH. An ssh_login object: host, port (22), username, and a RESOLVED password or an absolute key_file path - never a ref; `label` names it in messages."
+                },
+                {
+                    "field": "install_docker",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "With remote: install Docker and prepare the folders first. Never on a dry run."
+                },
+                {
+                    "field": "sudo_password",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "With install_docker: sudo's password. Omitted = the SSH one."
+                },
+                {
+                    "field": "health_timeout",
+                    "type": "integer",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "seconds",
+                    "purpose": "How long to wait for health. Omitted = the engine's own ceiling."
+                },
+                {
+                    "field": "force",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Rebuild an existing instance - destroys its containers and volumes."
                 },
                 {
                     "field": "dry_run",
@@ -18042,7 +19382,378 @@
                         "nullable": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "Plan only: change nothing."
+                    "purpose": "Render the plan; connect to nothing, change nothing."
+                }
+            ]
+        },
+        {
+            "object": "input_move_db_docker",
+            "kind": "input",
+            "required": false,
+            "one_line": "One lab database Docker instance to move, data included.",
+            "parsed_in": "db_ops/common/cli_docker_db.py",
+            "parsers": [
+                "db_ops/common/cli_docker_db.py"
+            ],
+            "commands": [
+                "move-db-docker"
+            ],
+            "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 14,
+            "required_field_count": 4,
+            "fields": [
+                {
+                    "field": "name",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The instance: its folder name and compose project."
+                },
+                {
+                    "field": "engine",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Its engine, for the health probe. The caller reads it from the registry."
+                },
+                {
+                    "field": "source",
+                    "type": "object",
+                    "required": true,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Where it runs now. An ssh_login object: host, port (22), username, and a RESOLVED password or an absolute key_file path - never a ref; `label` names it in messages."
+                },
+                {
+                    "field": "destination",
+                    "type": "object",
+                    "required": true,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Where it goes. An ssh_login object: host, port (22), username, and a RESOLVED password or an absolute key_file path - never a ref; `label` names it in messages."
+                },
+                {
+                    "field": "containers_dir",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Instance folders on the source."
+                },
+                {
+                    "field": "dest_containers_dir",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Instance folders on the destination. Omitted = the source's."
+                },
+                {
+                    "field": "stage_dir",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Where the bundle is written on both hosts."
+                },
+                {
+                    "field": "include_volumes",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Ship the volumes' contents (default true). false = an EMPTY database there."
+                },
+                {
+                    "field": "commit_container",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Ship the container's own filesystem too - for an engine writing outside its volumes."
+                },
+                {
+                    "field": "stop_source",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Stop the source once the destination is healthy (kept, not removed)."
+                },
+                {
+                    "field": "keep_stage",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Leave the bundle on both hosts."
+                },
+                {
+                    "field": "force",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Replace an instance of the same name on the destination - destroys it."
+                },
+                {
+                    "field": "health_timeout",
+                    "type": "integer",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "seconds",
+                    "purpose": "How long to wait for health. Omitted = the engine's own ceiling."
+                },
+                {
+                    "field": "dry_run",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Read the source and say what would move; change nothing."
+                }
+            ]
+        },
+        {
+            "object": "input_run_sqlcmd",
+            "kind": "input",
+            "required": false,
+            "one_line": "One sqlcmd batch, and where to run it.",
+            "parsed_in": "db_ops/common/sqlcmd_run.py",
+            "parsers": [
+                "db_ops/common/sqlcmd_run.py",
+                "db_ops/common/cli_sqlcmd.py"
+            ],
+            "commands": [
+                "run-sqlcmd"
+            ],
+            "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 10,
+            "required_field_count": 2,
+            "fields": [
+                {
+                    "field": "sql",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The batch."
+                },
+                {
+                    "field": "instance",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The -S sqlcmd connects to, as the host running it sees it."
+                },
+                {
+                    "field": "sqlcmd_path",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The sqlcmd to run (default sqlcmd)."
+                },
+                {
+                    "field": "username",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "A SQL login. With password; give neither for -E."
+                },
+                {
+                    "field": "password",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Its RESOLVED value. stdin only."
+                },
+                {
+                    "field": "login_timeout_seconds",
+                    "type": "integer",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "seconds",
+                    "purpose": "sqlcmd -l (default 30)."
+                },
+                {
+                    "field": "query_timeout_seconds",
+                    "type": "integer",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "seconds",
+                    "purpose": "sqlcmd -t; 0 = none."
+                },
+                {
+                    "field": "timeout_seconds",
+                    "type": "integer",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "seconds",
+                    "purpose": "The whole run; 0 = none. Past it, the answer says timed_out."
+                },
+                {
+                    "field": "via",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "local | ssh (a Linux host) | winrm (a Windows host, through a local Invoke-Command)."
+                },
+                {
+                    "field": "host",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "ssh / winrm: host, port, username, a RESOLVED password or key_file, open_timeout_seconds."
                 }
             ]
         },
@@ -18583,7 +20294,7 @@
                         "allow_empty": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "sqlserver | oracle."
+                    "purpose": "sqlserver | oracle | postgresql (a postgresql task takes no parameters)."
                 },
                 {
                     "field": "sql_id",

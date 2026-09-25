@@ -191,3 +191,148 @@ _DEFINE_LINE = re.compile(
 #: second one. A DEFINE value is pasted into the SQL text, so any of them lets a supplied value
 #: change what the statement means rather than what it selects.
 _UNSAFE_IN_DEFINE = ("'", '"', ";", "--", "/*", "*/", "\n", "\r", "&")
+
+
+_DOLLAR_TAG_RE = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)?\$")
+
+
+def split_postgresql_statements(sql_text: str) -> list[str]:
+    """A PostgreSQL script as its statements, in order - split on ``;`` outside quotes and comments.
+
+    pg8000 runs a whole script in one execute and has no way to hand back more than one result set:
+    a task of ``SELECT pg_sleep(1); INSERT ...; SELECT count(*) ...`` came back as one set whose
+    rows were both SELECTs' under the last one's column name, and ``affected_rows`` 0 for the
+    INSERT (measured 2026-09-25, adding PostgreSQL SQL tasks). Run one statement at a time, each
+    set and each row count is its own.
+
+    Aware of what may hold a ``;``: single-quoted strings (``''`` doubled, ``E'...'`` with
+    backslash escapes), double-quoted identifiers, ``$$`` / ``$tag$`` dollar quoting (function
+    bodies, ``DO`` blocks), ``--`` line comments and nested ``/* */`` block comments. A part that
+    is only whitespace and comments is not a statement. The terminating ``;`` is not kept -
+    PostgreSQL needs none.
+    """
+    text = str(sql_text or "")
+    statements: list[str] = []
+    buf: list[str] = []
+    has_code = False
+    i, n = 0, len(text)
+
+    def _word_before(pos: int) -> bool:
+        return pos > 0 and (text[pos - 1].isalnum() or text[pos - 1] in "_$")
+
+    while i < n:
+        char = text[i]
+        if text.startswith("--", i):
+            end = text.find("\n", i)
+            end = n if end < 0 else end
+            buf.append(text[i:end])
+            i = end
+            continue
+        if text.startswith("/*", i):
+            depth, j = 1, i + 2
+            while j < n and depth:
+                if text.startswith("/*", j):
+                    depth, j = depth + 1, j + 2
+                elif text.startswith("*/", j):
+                    depth, j = depth - 1, j + 2
+                else:
+                    j += 1
+            buf.append(text[i:j])
+            i = j
+            continue
+        if char == "'":
+            backslash = i > 0 and text[i - 1] in "eE" and not _word_before(i - 1)
+            j = i + 1
+            while j < n:
+                if backslash and text[j] == "\\":
+                    j += 2
+                    continue
+                if text[j] == "'":
+                    if j + 1 < n and text[j + 1] == "'":
+                        j += 2
+                        continue
+                    j += 1
+                    break
+                j += 1
+            buf.append(text[i:j])
+            has_code, i = True, j
+            continue
+        if char == '"':
+            j = i + 1
+            while j < n:
+                if text[j] == '"':
+                    if j + 1 < n and text[j + 1] == '"':
+                        j += 2
+                        continue
+                    j += 1
+                    break
+                j += 1
+            buf.append(text[i:j])
+            has_code, i = True, j
+            continue
+        if char == "$" and not _word_before(i):
+            match = _DOLLAR_TAG_RE.match(text, i)
+            if match:
+                tag = match.group(0)
+                close = text.find(tag, match.end())
+                end = n if close < 0 else close + len(tag)
+                buf.append(text[i:end])
+                has_code, i = True, end
+                continue
+        if char == ";":
+            if has_code:
+                statements.append("".join(buf).strip())
+            buf, has_code, i = [], False, i + 1
+            continue
+        buf.append(char)
+        if not char.isspace():
+            has_code = True
+        i += 1
+    if has_code:
+        statements.append("".join(buf).strip())
+    return statements
+
+
+_PLSQL_BLOCK_RE = re.compile(
+    r"(?:BEGIN|DECLARE|CREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:NON)?EDITIONABLE\s+)?"
+    r"(?:PROCEDURE|FUNCTION|PACKAGE|TRIGGER|TYPE|LIBRARY))\b",
+    re.IGNORECASE,
+)
+
+
+def _after_leading_comments(text: str) -> str:
+    """``text`` from its first character that is neither whitespace nor inside a comment."""
+    rest = str(text or "")
+    while True:
+        rest = rest.lstrip()
+        if rest.startswith("--"):
+            end = rest.find("\n")
+            rest = "" if end < 0 else rest[end + 1:]
+        elif rest.startswith("/*"):
+            end = rest.find("*/")
+            rest = "" if end < 0 else rest[end + 2:]
+        else:
+            return rest
+
+
+def is_plsql_block(sql_text: str) -> bool:
+    """Whether an Oracle batch is PL/SQL: an anonymous block, or the CREATE of a stored unit."""
+    return bool(_PLSQL_BLOCK_RE.match(_after_leading_comments(sql_text)))
+
+
+def oracle_statement(batch: str) -> str:
+    """One Oracle batch as the driver must receive it: a statement without its ``;``, a block with.
+
+    Oracle's SQL parser refuses a trailing ``;`` (``SELECT 1 FROM dual;`` raises ORA-00911), and its
+    PL/SQL parser requires the one after ``END`` - without it ``BEGIN ... END`` raises PLS-00103.
+    ``run-sql`` stripped the ``;`` from every batch, so an Oracle task with a block could never run
+    (found 2026-09-25 registering the lab's Oracle tasks: ``BEGIN DBMS_SESSION.SLEEP(1); END;``).
+    A SQL*Plus ``/`` line after a block ends it in a script and is not SQL, so it is not sent.
+    """
+    text = str(batch or "").rstrip()
+    lines = text.splitlines()
+    if lines and lines[-1].strip() == "/":
+        text = "\n".join(lines[:-1]).rstrip()
+    if is_plsql_block(text):
+        return text
+    return text.rstrip(";").rstrip()

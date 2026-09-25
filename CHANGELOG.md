@@ -15,13 +15,27 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
-## [0.23.0] - 2026-09-24
+## [0.23.0] - 2026-09-26
 
 0.22.0 was built and soaked, then abandoned on 2026-09-24 before its day was out (the operator:
 skip 0.22, fix and run again). Its content ships in the next release, with what follows it.
 
 ### Added
 
+- **A SQL task can run on PostgreSQL.** `sql-command-add` and `add-sql` accepted only
+  `sqlserver` and `oracle`. `postgresql` is now in `SQL_TASK_DB_TYPES` and in the reference.
+  `run-sql` runs a PostgreSQL script one statement at a time
+  (`lib.sql_text.split_postgresql_statements`): pg8000 returns one result set per execute, so a
+  script of two SELECTs and an INSERT came back as one merged set with `affected_rows` 0. A `;`
+  inside a string, a quoted name, a comment or a `$$` body does not split. A PostgreSQL task with
+  `parameters` is refused at registration, because they are T-SQL `DECLARE` lines.
+- **`examples/lab-sql-tasks.md`**: scheduled SQL tasks on SQL Server, PostgreSQL and Oracle
+  labs - a 10-, a 5- and a 1-minute task on each, overlapping - with how each engine splits a
+  script and what `max_parallel` does to nine long tasks, measured.
+- **`examples/lab-create-backup-restore.md`**: a lab database built with `dbabrain sre
+  create-db-docker`, registered, backed up, restored onto a second machine, then restored to a
+  moment, for SQL Server, PostgreSQL and Oracle (Oracle XE too). It covers what MySQL can and
+  cannot do, and was written from the 0.23.0 lab drill.
 - **`checkdb` on a restore entry** (default `true`): `false` skips the `DBCC CHECKDB` after each
   restored database, and the run says it did.
 - **`upgrade-config`: one command after `pip install --upgrade`.** It moves your `data/*.json`
@@ -53,6 +67,31 @@ skip 0.22, fix and run again). Its content ships in the next release, with what 
 
 ### Changed
 
+- **A restore's copy and staging cleanup are `common.cli` commands**: `backup-chain` (which files
+  the restore needs), `copy-backup-dir` (host to host, one tar stream, mirroring the source) and
+  `prune-staged-backups`. All three are stdin only. They ran inside the backup_restore app, over
+  SSH sessions it opened itself, so a restore was one long call with two steps nobody could run or
+  watch alone. The app now resolves the logins and calls each step in turn. The code moved from
+  `db_ops.backup_restore.transfer` to `db_ops.common.backup_copy`.
+- **`create-db-docker` and `move-db-docker` run in `common.cli`** (JSON on stdin, JSON out), like
+  backup and restore. `sre.cli`'s commands, flags and `/spbot_create_db_docker` are unchanged: `sre`
+  stores and resolves the database password and the SSH logins, calls `common.cli`, and writes the
+  connection record; `common` reads no configuration. Progress streams to stderr as it happens.
+  The code moved: the spec and engine facts to `db_ops.lib.docker_db_spec` (was
+  `db_ops.sre.docker_db.models`), the provisioner, mover and templates to
+  `db_ops.common.docker_db` (was `db_ops.sre.docker_db`).
+- **The SMB SQL Server restore runs its statements through `common.cli run-sqlcmd`** - every
+  RESTORE, recovery, CHECKDB and resume probe, with the values resolved by the app and the same
+  `Invoke-Command` (Windows) or SSH `sqlcmd` (Linux) command as before. The Linux path now logs
+  its progress events, as the Windows one always did.
+- **`backup-database` refuses `server_metadata`.** It resolved its instance out of the inventory -
+  the one configuration read behind the command. Export with `sqlserver-export-instance` after the
+  backup, which is what the backup_restore app already does for an entry with the block.
+- **`db_ops.common.restore.sqlserver.timeparse` is `db_ops.lib.restore.moment`**, with
+  `server_clock_text`: every engine's restore reads a moment through it.
+- **`common.cli` is held to the operator's rule by tests**: backup, restore and the lab-docker
+  commands read no configuration (named, without exception), `common` imports only `lib`, launches
+  no CLI by any spelling, and the resolver tier that still reads config may only shrink.
 - **`sql-command-add` and `sql-target-add` refuse a key they do not know** instead of dropping it,
   check the record against the reference before writing, and now write `progress_per_file`, a
   target's `sql_access` and a `notify` block given as a block.
@@ -113,6 +152,115 @@ skip 0.22, fix and run again). Its content ships in the next release, with what 
 
 ### Fixed
 
+- **A PostgreSQL, Oracle or container SQL Server restore reported its copy and nothing else.** In
+  Telegram it read *started*, *copy started*, *copy finished*, *finished status=done*. It now
+  announces every step: `COPY_*`, `METADATA_*`, `RESTORE_START` (what goes in, to which point),
+  `RESTORE_DONE`, `VERIFY_START` / `VERIFY_DONE` (databases checked, unusable), `DELETE_START` /
+  `DELETE_DONE`. END carries `restored=`, `verified=` and every `warning=`; a *done with a
+  warning* used to drop the warning's text.
+- **The same restores never replayed instance metadata**, and cleaned their staging inside the
+  copy. The move onto `restore_by_id` left the logins, roles and Agent jobs behind, so a
+  container SQL Server entry with `server_metadata` on came back without them. The staging
+  cleanup ran before the restore, even for a drill that then failed. Metadata is replayed before
+  the databases and after them, and the cleanup runs after a verify that passed, as on the SQL
+  Server engine path.
+- **`check-identifiers` never searched for a Telegram id or username.** It passed the data folder
+  where the Telegram loaders take a file path, the read failed, and the failure was skipped as an
+  optional file. A person's or chat's id also counts as a hit now, not an ordinary word to review.
+- **`check-secret-literals` searches for the passphrase itself**, as typed and as base64, and both
+  checks read `tests/`, `CHANGELOG.md` and `.github/` by default: they ship, and were not read.
+- **`check-identifiers` reported Oracle Free's SID as an estate name.** An Oracle Free lab's
+  record says `"sid": "FREE"`, and the scan matched every `FREE_SPACE` in the tree. It is a vendor
+  constant now, like `FREEPDB1`.
+- **A PostgreSQL statement longer than the connect timeout failed with `timed out`.** pg8000
+  keeps its `timeout` on the socket for the connection's whole life. `db_connect` passed the
+  connect timeout there, so `run-sql`, a SQL task or a metric query running past it (30 s for a
+  task) died, reported as *could not reach* a reachable server. The connect keeps its deadline;
+  after it the socket waits the statement timeout plus 60 s (`PG_SOCKET_GRACE_SECONDS`).
+- **An Oracle SQL task with a PL/SQL block failed every run.** `run-sql` stripped the trailing `;`
+  from every Oracle batch, because the SQL parser refuses it (ORA-00911). The PL/SQL parser requires
+  the one after `END`, so `BEGIN DBMS_SESSION.SLEEP(60); END;` raised PLS-00103. A block (a
+  `BEGIN` / `DECLARE`, or the `CREATE` of a stored unit) now keeps it
+  (`lib.sql_text.oracle_statement`), and a SQL*Plus `/` line after it is not sent.
+- **A scheduled backup, restore or SQL task could run twice.** `APP-BACKUP-RESTORE` and
+  `APP-SQL_TASKS` are async: while one run works through its list, the next takes what it has not
+  reached yet. The claim stops the two from overlapping, but it held only while a job was RUNNING.
+  So a job the second run had already *finished* was run again when the first run got to it: a
+  second full backup, a second restore, the same SQL twice on the same target. Before each claim, a
+  scheduled run now checks whether another run started the job since it read its list
+  (`store.job_run_started_since`, `store.sql_run_started_since`, one indexed probe each). `--force`
+  still runs.
+- **Every message of a point-in-time PostgreSQL, Oracle or container SQL Server restore said
+  `restore_mode=LATEST`.** The moment appeared only inside RESTORE_START's text. Those messages now
+  carry `restore_mode=POINT_IN_TIME`, `point_in_time=` and `point_in_time_utc=`, as the SQL Server
+  SMB path's have.
+- **A PostgreSQL restore could leave out the incremental of its own chain**, and a point in time
+  chose its full by the wrong clock. The planner took the incrementals that finished after the
+  full, and on a staging copy both are dated by the copy: staged in the same second, they tied,
+  and the restore used the full alone. The moment was compared with the host's +07 clock, so an
+  older full than necessary was chosen; on a host behind UTC it would have chosen one finishing
+  after the moment. The chain is now read by name (`pg_combinebackup`'s rule) and dated by
+  `backup_manifest`. The listing adds `finished_at_utc`, which a point in time is compared with.
+- **A point-in-time restore to a moment before the newest full could not be staged.** The copy
+  took only the newest chain: PostgreSQL's newest full and its incrementals, or RMAN's preview of
+  the newest level 0. A moment before that full needs an older chain. With a moment, the whole
+  directory is copied.
+- **A refused unknown id was named `backup_id=<unknown>`** in its own refusal. It now carries the
+  id that was typed.
+- **`restore-add` wrote a script-driven restore that the loader then refused.** Only the SQL
+  Server loader checked the entry, and it steps over a PostgreSQL, Oracle or container restore.
+  One routed to a notify level no Telegram group defines was written, and from then on
+  `list-restores` and every `restore-workflow` failed on it, for every entry on the node. The
+  entry is now also loaded by the script-restore loader the scheduler runs.
+- **A point-in-time restore did not reach its moment on any engine** (`/spbot_restore <id>
+  "<moment>"`, drilled on the labs with marker rows either side of the moment):
+  - SQL Server refused the statement - *Invalid value specified for STOPAT parameter* (Msg 3217) -
+    because the moment went in as typed, offset and all; and the log chain stopped at the last log
+    finished *before* the moment, leaving out the one that holds it.
+  - PostgreSQL restored the right data and then paused at the target (the server's default), so the
+    restore waited its 30 minutes and called it a failure.
+  - Oracle's `TO_DATE` refused the offset, and `SET UNTIL TIME` outside a `RUN` block is refused
+    (RMAN-03031).
+  - Every backup listing compared stamps cut to 19 characters, the offset with them: a moment typed
+    in +08:00 chose backups eight hours off, and PostgreSQL's finish times (`stat`, in the host's
+    clock) were off by the host's offset.
+
+  The moment is turned into the server's clock for all three, and the listings compare in one
+  clock. The SQL Server chain takes the log holding the moment, PostgreSQL promotes at the target
+  (a recovery that pauses anyway fails at once), and Oracle's duplicate runs in a `RUN` block.
+- **An Oracle duplicate read another lab's backups.** RMAN takes `BACKUP LOCATION` as a prefix, so
+  `.../ora_restore_from_249` also read `.../ora_restore_from_249ha`. Every gvenzl lab shares the
+  image's DBID, so RMAN could not tell the two labs' pieces apart. The newest-point restore got away
+  with it; the point-in-time one recovered through the other lab's logs (RMAN-06054). The location
+  now ends in `/`. The duplicate also never resumes onto datafiles an earlier one left (`NORESUME`),
+  and it clears the archived logs an earlier duplicate restored into `$ORACLE_HOME/dbs`.
+- **The staging copy of a cross-machine restore only ever added files**, so a source rebuilt under
+  the same name left its previous life's pieces beside the new ones. The copy now mirrors the
+  source: a staged file the source no longer has is removed and counted in
+  `removed_absent_at_source`. `include` limits what one run copies, not what the staging folder may
+  keep.
+- **`/spbot_create_db_docker` did not offer `oracle-xe`**, one of the provisioner's five engines.
+  An Oracle XE lab built with a backup mount also came up NOARCHIVELOG, because the first-start
+  script was Oracle Free's only. XE is now backup-ready as built.
+- **The MySQL ha-lab could not be built**: `bitnami/mysql` has left Docker Hub, and the lab now
+  runs `bitnamilegacy/mysql`. The image check had passed anyway, because it asked only about the
+  single-mode image. It now asks about every image the compose file pulls and names the template
+  whose image has gone.
+- **A failed `create-db-docker` left the lab's password in the store.** The password is checked as
+  storable before the build and stored only after the build succeeds. A `{worker_host}` placeholder
+  nothing filled in is never recorded as a lab's host.
+- **Every generated compose file pointed its reader at `sre/docker_db/models.py`**, gone since the
+  spec moved to `lib`. `common.cli`'s usage listed `create-db-docker` out of its column.
+- **`create-db-docker --install-docker --dry-run` installed Docker** before looking at the dry
+  run. A dry run connects to nothing now.
+- **`move-db-docker` reported 0 bytes transferred** for every move: it read a key the relay never
+  answered.
+- **`move-db-docker` could not move a lab named in capitals** - this estate's convention - and said
+  *no containers belong to compose project*: compose lower-cases the project name, and the mover
+  asked Docker for the name as typed.
+- **Non-ASCII text in a `common.cli` answer arrived as U+FFFD on a Windows node** - an em dash in an
+  error message, a Vietnamese name: the answer left in the ANSI code page and its one client reads
+  UTF-8. It leaves as UTF-8 when stdout is a pipe.
 - **`create-db-docker` called any registry failure "Image not found".** A rate limit or a timeout
   read *Image not found: postgres:18 … Valid tags include: 18*. *Not found* is now said only when docker
   says the tag is not there; otherwise the message quotes docker and says the registry did not answer.
@@ -128,7 +276,8 @@ skip 0.22, fix and run again). Its content ships in the next release, with what 
   then failed with *Cannot create /opt/db_ops/backup … Permission denied* for an SSH user with full
   sudo rights: the backup bind mount is created later over SFTP, without sudo, inside a
   `/opt/db_ops` the preparation had left root-owned. Both folders are now created and handed to the
-  SSH user with sudo, and a preparation that fails says so instead of surfacing later.
+  SSH user with sudo - the backup mount at its top only, so the engines keep the backups they wrote
+  beneath it - and a preparation that fails says so instead of surfacing later.
 - **A SQL task refused a database it could have run on, in the wrong words.** Before connecting it
   compared `database_name` case-sensitively with the instance record's `database_names` - a list no
   code writes - so `APPDB_PROD` failed against `APPDB_Prod` and a database created yesterday would have
@@ -174,6 +323,79 @@ skip 0.22, fix and run again). Its content ships in the next release, with what 
   committed. A warning mixed with a real error is still an error.
 - `run-sql`'s message named no database since 0.22.0 renamed its answer key; it says
   `<server_id>.<database_name>` again.
+
+- **Every script-driven restore failed after its first step** (since 0.22.0): *restore-full
+  failed: 'engine'*. The step ran, then its summary read an answer key 0.22.0 had renamed, and the
+  database it had just restored was left RESTORING. It hit every SQL Server container, PostgreSQL and
+  Oracle drill.
+- **A new cross-machine restore failed its first run**: the target folder was read before it was
+  created, and a folder that did not exist yet counted as unreadable.
+- **A SQL Server drill onto another machine could not read what it had copied.** The pieces arrived
+  `0660`, owned by the SSH user, and SQL Server reads them as its own user (*Operating system error
+  5*, Msg 3201). They are opened to the engine after the copy.
+- **An encrypted SQL Server backup could not be restored onto a machine without its certificate.**
+  The backups were listed before the certificate import that listing needed (Msg 33111); it is now
+  imported first.
+- **An unreadable SQL Server backup was reported as "no databases found".** Only a file SQL Server
+  calls not a backup (Msg 3241-3243) is skipped now; any other error names the file.
+- **A SQL Server restore planned against port 1433 whatever the target.** It uses the target's own
+  port from its inventory record, or `env.MSSQL_PORT`.
+- **A failed restore did not say why** - *Restore workflow FAILED.* and *finished: error.*, with the
+  reason only in the run row. The log line and the alert carry it now.
+- **The SQL Server backup job could not write into a backup folder another user had made**, which
+  is what a lab's bind mount is: it takes the folder over for the engine's user. It also relaxes its
+  pieces to `a+rX` after every run, as the Oracle and PostgreSQL jobs always did, so a copy to
+  another machine can read them.
+- **A backup of a stopped container blamed missing tools** (*no sqlcmd found; install
+  mssql-tools*). All five backup scripts now say the container is not running.
+- **`create-db-docker --backup-mount` was dropped without a word by most templates.** PostgreSQL,
+  Oracle and MySQL single now mount it, and so do the HA labs (below).
+- **A PostgreSQL restore never replayed WAL.** The recovery configuration was written by a step run
+  after the server had already started on the combined data, so every PostgreSQL drill stopped at
+  its last base or incremental backup and reported verified - and left a `recovery.signal` in the
+  running cluster. It is written before the first start now, the WAL is copied into the data volume
+  with it, and the step waits for recovery to end. The file it wrote also ended in a stray `n`.
+- **A PostgreSQL restore into a container needed the target running**, so a target that a failed
+  restore had left crash-looping failed every later one (*Container ... is restarting*) until it was
+  repaired by hand. The target is stopped first and the whole rebuild runs in throwaway containers
+  from its image, with the backups mounted into them read-only rather than copied in; it is started
+  again whether or not a step failed.
+- **A PostgreSQL or Oracle restore onto a machine that logs in by password failed at planning**
+  (*needs either a password or a key_filename*); the host block carries the password.
+- **Restores used `sudo docker` outright**, which fails where sudo asks for a password. Plain
+  `docker` is used when the user may run it, `sudo` only as the fallback; the PostgreSQL data swap
+  runs in a throwaway container instead of as root on the host.
+- **The PostgreSQL and Oracle backup jobs could not write into a folder another user had made**
+  (a lab's bind mount); they take it over for the database's user, as the SQL Server job does.
+- **An Oracle restore into a container without a backup mount could not find its backups**
+  (*RMAN-05579: CONTROLFILE backup not found*): the pieces were copied to the host and never into
+  the container. The duplicate stages them in first.
+- **A lab built with a backup mount can be backed up as built, HA labs included.** Its backups go
+  under `<mount>/<lab name>` (printed); PostgreSQL archives WAL there with WAL summaries on, Oracle
+  turns ARCHIVELOG on at its first start, and the HA primaries mount the folder, so an HA lab can be
+  the source of a cross-machine restore.
+- **A newest backup SQL Server cannot read was passed over without a word.** The restore still uses
+  the newest readable chain, and now finishes *done with a warning* naming the file.
+- **A SQL task's credential was hidden by a `service_name` that did not match its group** - on SQL
+  Server a label - with *Credential not found* and the credential in `users.json`. The label no
+  longer narrows the lookup there, and a credential in an unmatched group is located in the message.
+- **The first process of a day archived the live log as yesterday**, whatever day its lines were
+  from; it is named after the day it was last written.
+- **`/spbot_restore` could not run a PostgreSQL, Oracle or container SQL Server drill**:
+  `restore-workflow` refused every script-driven entry and named a CLI command instead. It runs them,
+  on demand, by the scheduler's own runner.
+- **A restore could replay another cluster's WAL**: the copy took a same-named, same-size file for the
+  same file, so after the source lab was rebuilt the previous cluster's WAL stayed and the target
+  crash-looped (*WAL file is from different database system*) while the restore waited 30 minutes.
+  Size and modification time are compared; the wait ends at once, with the log, when the container
+  stops or restarts.
+- **`/spbot_create_db_docker` asks whether the lab should be backup-ready** (`backup_ready`), which
+  passes `--backup-mount`.
+- **Seventeen shell scripts and templates shipped with CRLF line endings** (the working tree the
+  export copies held them so); a test now fails a tree that would export one.
+- **`run-sql` with `autocommit` still ran PostgreSQL inside a transaction** when a statement timeout
+  was set - *CREATE DATABASE cannot run inside a transaction block* - and so did every metrics
+  connection. Autocommit is switched on before the first statement.
 
 ## [0.21.0] - 2026-09-22
 

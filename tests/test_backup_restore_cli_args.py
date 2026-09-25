@@ -80,18 +80,38 @@ def _config_with_script_restore(tmp_path):
     return config
 
 
-def test_a_script_restore_id_is_reported_as_script_driven_not_as_missing(tmp_path, monkeypatch, capsys):
-    config = _config_with_script_restore(tmp_path)
+def test_restore_workflow_runs_a_script_driven_entry_on_demand(tmp_path, monkeypatch, capsys):
+    """`/spbot_restore` runs `restore-workflow --restore-id`. It used to refuse a script-driven
+    entry and name a CLI command instead, so no PostgreSQL, Oracle or container SQL Server drill
+    could be started from the bot (1.35, 2026-09-24). It runs it now, by the scheduler's runner,
+    forced and whether or not the entry is active, and prints the line the bot looks for."""
+    import db_ops.backup_restore.workflow as workflow
 
+    config = _config_with_script_restore(tmp_path)
+    seen = {}
+
+    def fake_run(**kwargs):
+        seen.update(kwargs)
+        return {"ran": 1, "succeeded": 1, "failed": 0, "restores": []}
+
+    monkeypatch.setattr(workflow, "run_scheduled_restores", fake_run)
     exit_code = main(["--config", str(config), "restore-workflow",
                       "--restore-id", "CLOUD_MSSQL_TO_CLOUD2"])
 
-    message = capsys.readouterr().err
-    assert exit_code != 0
-    assert "script-driven restore" in message
-    # The point of the message: it names the command that does run it.
-    assert "workflow --restore-id CLOUD_MSSQL_TO_CLOUD2" in message
-    assert "No backup_restore entry found" not in message
+    assert exit_code == 0
+    assert (seen["restore_id"], seen["force"], seen["on_demand"]) == ("CLOUD_MSSQL_TO_CLOUD2", True, True)
+    assert "restore-workflow completed status=SUCCESS restore_id=CLOUD_MSSQL_TO_CLOUD2" in capsys.readouterr().out
+
+
+def test_a_script_driven_entry_that_fails_on_demand_exits_non_zero(tmp_path, monkeypatch, capsys):
+    import db_ops.backup_restore.workflow as workflow
+
+    config = _config_with_script_restore(tmp_path)
+    monkeypatch.setattr(workflow, "run_scheduled_restores",
+                        lambda **kw: {"ran": 1, "succeeded": 0, "failed": 1, "restores": []})
+
+    assert main(["--config", str(config), "restore-workflow", "--restore-id", "CLOUD_MSSQL_TO_CLOUD2"]) == 1
+    assert "status=SUCCESS" not in capsys.readouterr().out
 
 
 def test_an_id_that_really_does_not_exist_still_says_so(tmp_path, capsys):

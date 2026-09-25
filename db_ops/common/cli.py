@@ -104,6 +104,12 @@ USAGE = (
     "  send-file        Copy one named file from here to a host (see --help)\n"
     "  pack-files       Pack named files (or a folder) into one archive + sha256 (see --help)\n"
     "  relay-file       Copy one file from one host straight to another, hash-verified\n"
+    "  create-db-docker  Build one lab database Docker instance, here or over SSH (stdin only)\n"
+    "  run-sqlcmd       Run one sqlcmd batch where the SQL Server is: here, ssh, winrm (stdin only)\n"
+    "  backup-chain     Which parts of a backup directory a restore needs (stdin only)\n"
+    "  copy-backup-dir  Copy a backup directory host to host, one tar stream, mirrored (stdin only)\n"
+    "  prune-staged-backups  Delete a restore's staged backups past retention (stdin only)\n"
+    "  move-db-docker   Move a lab instance, data included, from one host to another (stdin only)\n"
     "  host-facts       Read one host's state: uptime, disks, services, pending reboot (see --help)\n"
     "  self-status      What THIS installation is: version, host, ip, cpu, memory, disk\n"
     "  describe-object  What a shared config object's fields mean: time_window, notify, ... (see --help)\n"
@@ -2603,6 +2609,18 @@ def main(argv: list[str] | None = None) -> int:
         from db_ops.common import cli_delete_files
 
         return cli_delete_files.run(argv[0], argv[1:], read_request=_read_json_request)
+    if argv[0] in {"backup-chain", "copy-backup-dir", "prune-staged-backups"}:
+        from db_ops.common import cli_backup_copy
+
+        return cli_backup_copy.run(argv[0], argv[1:], read_request=_read_json_request)
+    if argv[0] == "run-sqlcmd":
+        from db_ops.common import cli_sqlcmd
+
+        return cli_sqlcmd.run(argv[1:], read_request=_read_json_request)
+    if argv[0] in {"create-db-docker", "move-db-docker"}:
+        from db_ops.common import cli_docker_db
+
+        return cli_docker_db.run(argv[0], argv[1:], read_request=_read_json_request)
     if argv[0] == "backup-database":
         from db_ops.common import cli_backup
 
@@ -2636,4 +2654,10 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    # The answer leaves as UTF-8 when stdout is a pipe: lib.common_cli, this CLI's one client,
+    # decodes UTF-8, and a Windows pipe defaults to the ANSI code page - so every non-ASCII
+    # character in an answer arrived as U+FFFD, the em dash of an "already exists" refusal among
+    # them (found testing create-db-docker on the labs, 2026-09-25). A console keeps its own.
+    if not sys.stdout.isatty() and hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     raise SystemExit(main())
