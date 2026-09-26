@@ -27,7 +27,7 @@ from pathlib import Path
 
 import pytest
 
-from db_ops import scaffold
+from db_ops.common import scaffold
 
 
 @pytest.fixture(scope="module")
@@ -57,7 +57,9 @@ def test_every_command_the_guide_tells_you_to_run_exists(guide: str) -> None:
             if cleaned:
                 top_level_names.add(cleaned)
 
-    known = set(top_level.APPS) | top_level_names
+    # 0.24.0: `init`, `guide`, `encrypt-secret`, `export-data`, `import-data` are aliases the
+    # dispatcher forwards to `common.cli` (rules R41), read from its table like the apps are.
+    known = set(top_level.APPS) | set(top_level.ALIASES) | top_level_names
     assert known, "cannot enumerate commands from db_ops.cli — the dispatcher shape changed"
 
     documented = set(re.findall(r"db-ops ([a-z][a-z0-9-]+)", guide))
@@ -158,7 +160,8 @@ def test_with_no_tool_root_the_banner_says_what_to_type(tmp_path, monkeypatch, c
 def test_inside_a_tool_root_the_full_listing_comes_back(tmp_path, monkeypatch, capsys) -> None:
     """The first-run banner is for the first run only. Somebody standing in a configured root is
     asking the other question, and must not be told there is nothing here."""
-    from db_ops import cli, scaffold
+    from db_ops import cli
+    from db_ops.common import scaffold
 
     scaffold.initialise(tmp_path, app_name="dbabrain")
     monkeypatch.chdir(tmp_path)

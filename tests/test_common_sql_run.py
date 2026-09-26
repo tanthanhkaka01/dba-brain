@@ -16,6 +16,12 @@ from db_ops.lib.target_profile import TargetProfile
 # --------------------------------------------------------------------------- #
 
 
+
+#: The login a caller states - run-sql reads no configuration since 0.24.0 (rules R09), so every
+#: request below carries one, as the apps' do (db_ops.lib.data_sources.request_fill).
+_STATED = {"connection": {"db_type": "sqlserver", "host": "10.0.0.1", "port": 1433,
+                          "username": "dba_user", "password": "p1", "server_id": "ACME-x"}}
+
 def _dto_bytes(year, month, day, hour, minute, second, nanoseconds, tz_hour, tz_minute):
     return struct.pack(
         "<6hI2h", year, month, day, hour, minute, second, nanoseconds, tz_hour, tz_minute
@@ -86,7 +92,7 @@ def test_register_output_converters_ignores_drivers_without_support():
 
 
 def test_request_from_json_accepts_dict_and_text():
-    payload = {"target": "ACME-x", "sql": "SELECT 1", "database": "SALESDB", "max_rows": 10}
+    payload = {**_STATED, "target": "ACME-x", "sql": "SELECT 1", "database": "SALESDB", "max_rows": 10}
     parsed = sql_run.SqlRunRequest.from_json(payload)
     assert parsed.target == "ACME-x"
     assert parsed.database == "SALESDB"
@@ -99,19 +105,19 @@ def test_request_from_json_accepts_dict_and_text():
 def test_request_from_json_reads_sql_file(tmp_path):
     sql_file = tmp_path / "query.sql"
     sql_file.write_text("﻿SELECT 1 AS x", encoding="utf-8")  # SSMS writes a BOM
-    parsed = sql_run.SqlRunRequest.from_json({"target": "ACME-x", "sql_file": str(sql_file)})
+    parsed = sql_run.SqlRunRequest.from_json({**_STATED, "target": "ACME-x", "sql_file": str(sql_file)})
     assert parsed.sql == "SELECT 1 AS x"
 
 
 @pytest.mark.parametrize(
     "payload, message",
     [
-        ({}, "target is required"),
-        ({"target": "ACME-x"}, "sql is required"),
-        ({"target": "ACME-x", "sql": "SELECT 1", "sql_file": "q.sql"}, "not both"),
-        ({"target": "ACME-x", "sql_file": "missing.sql"}, "not found"),
-        ({"target": "ACME-x", "sql": "SELECT 1", "max_rows": 0}, "max_rows must be >= 1"),
-        ({"target": "ACME-x", "sql": "SELECT 1", "timeout_seconds": "soon"}, "must be an integer"),
+        ({"target": "ACME-x", "sql": "SELECT 1"}, 'needs a "connection"'),
+        ({**_STATED, "target": "ACME-x"}, "sql is required"),
+        ({**_STATED, "target": "ACME-x", "sql": "SELECT 1", "sql_file": "q.sql"}, "not both"),
+        ({**_STATED, "target": "ACME-x", "sql_file": "missing.sql"}, "not found"),
+        ({**_STATED, "target": "ACME-x", "sql": "SELECT 1", "max_rows": 0}, "max_rows must be >= 1"),
+        ({**_STATED, "target": "ACME-x", "sql": "SELECT 1", "timeout_seconds": "soon"}, "must be an integer"),
         ("[]", "must be a JSON object"),
         ("{oops", "not valid JSON"),
     ],
@@ -195,15 +201,15 @@ class FakeConn:
 def _patch(monkeypatch, conn, **resolved):
     target = {"server_id": "ACME-x", "db_type": "sqlserver", "database_name": "master", **resolved}
 
-    def fake_resolve(spec, data_dir=None, database="", credential_name="", sql_access=None,
-                     profile=None, driver="", oracle_client_mode=""):  # noqa: ARG001
+    def fake_resolve(spec, *, database="", sql_access=None, driver="", oracle_client_mode="",
+                     profile=None):  # noqa: ARG001
         from db_ops.lib.target_profile import TargetProfile
 
-        stated = profile or TargetProfile()
+        stated = TargetProfile()
         return {
             **target,
             "database_name": database or target["database_name"],
-            "credential_name": credential_name or target.get("credential_name", ""),
+            "credential_name": spec.credential_name or target.get("credential_name", ""),
             # Every target here is a normal database connection; the legacy Oracle transports
             # have their own tests.
             "sql_access": sql_access or {"method": "direct"},
@@ -213,7 +219,7 @@ def _patch(monkeypatch, conn, **resolved):
             "tool": {"tool": driver or "auto", "chosen_by": "default", "reason": ""},
         }
 
-    monkeypatch.setattr(sql_run, "resolve_sqlserver_target", fake_resolve)
+    monkeypatch.setattr(sql_run, "resolve_connection_spec", fake_resolve)
     # Records how it was asked to connect, so a test can assert on autocommit.
     def fake_connect(target, timeout_seconds, connect_timeout_seconds=0,  # noqa: ARG001
                      autocommit=False):
@@ -228,7 +234,7 @@ def test_run_sql_returns_first_result_set_and_rolls_back(monkeypatch):
     conn = FakeConn(FakeCursor([([("Id",), ("Name",)], [[1, "a"], [2, "b"]], -1)]))
     _patch(monkeypatch, conn)
 
-    result = sql_run.run_sql({"target": "ACME-x", "sql": "SELECT Id, Name FROM t", "database": "SALESDB"})
+    result = sql_run.run_sql({**_STATED, "target": "ACME-x", "sql": "SELECT Id, Name FROM t", "database": "SALESDB"})
     assert result["ok"] is True
     assert result["columns"] == ["Id", "Name"]
     assert result["row_count"] == 2
@@ -241,7 +247,7 @@ def test_run_sql_commit_true_commits_and_does_not_roll_back(monkeypatch):
     conn = FakeConn(FakeCursor([(None, [], 4)]))
     _patch(monkeypatch, conn)
 
-    result = sql_run.run_sql({"target": "ACME-x", "sql": "UPDATE t SET a=1", "commit": True})
+    result = sql_run.run_sql({**_STATED, "target": "ACME-x", "sql": "UPDATE t SET a=1", "commit": True})
     assert result["affected_rows"] == 4
     assert result["committed"] is True
     assert conn.committed is True and conn.rolled_back is False
@@ -252,7 +258,7 @@ def test_run_sql_splits_go_batches(monkeypatch):
     conn = FakeConn(cursor)
     _patch(monkeypatch, conn)
 
-    sql_run.run_sql({"target": "ACME-x", "sql": "USE SALESDB;\nGO\nSELECT 1 AS x"})
+    sql_run.run_sql({**_STATED, "target": "ACME-x", "sql": "USE SALESDB;\nGO\nSELECT 1 AS x"})
     assert cursor.executed == ["USE SALESDB;", "SELECT 1 AS x"]
 
 
@@ -265,8 +271,45 @@ def test_run_sql_wraps_driver_errors_and_still_closes(monkeypatch):
     _patch(monkeypatch, conn)
 
     with pytest.raises(sql_run.SqlRunError, match="SQL failed"):
-        sql_run.run_sql({"target": "ACME-x", "sql": "SELECT 1"})
+        sql_run.run_sql({**_STATED, "target": "ACME-x", "sql": "SELECT 1"})
     assert conn.rolled_back is True and conn.closed is True
+
+
+class _DroppedConn(FakeConn):
+    """A target that went away mid-statement: the statement fails, and so does every call after it -
+    pg8000 raises on closing a dead socket."""
+
+    def rollback(self):
+        raise ConnectionResetError("network error")
+
+    def close(self):
+        raise ConnectionResetError("network error")
+
+
+def test_a_target_that_drops_mid_statement_is_reported_as_the_statement_failing(monkeypatch):
+    """0.24.0 §1.60, seen on the 0.23.0 soak: the close in the `finally` raised on the dead socket
+    and replaced the SqlRunError, so run-sql answered a traceback instead of a reason."""
+    class Dropped(FakeCursor):
+        def execute(self, sql):
+            raise ConnectionResetError("server closed the connection unexpectedly")
+
+    _patch(monkeypatch, _DroppedConn(Dropped([])))
+
+    with pytest.raises(sql_run.SqlRunError, match="SQL failed: server closed the connection"):
+        sql_run.run_sql({**_STATED, "target": "ACME-x", "sql": "SELECT pg_sleep(60)"})
+
+
+def test_run_sql_answers_in_its_envelope_whatever_escapes(monkeypatch, capsys):
+    """Rules R15: a caller parses an answer; a traceback is none. Whatever the engine raises that is
+    not a SqlRunError is still one envelope on stdout."""
+    def explode(_request):
+        raise ConnectionResetError("network error")
+
+    monkeypatch.setattr(sql_run, "run_sql", explode)
+
+    assert cli.main(["run-sql", json.dumps({**_STATED, "sql": "SELECT 1"})]) == 1
+    answer = json.loads(capsys.readouterr().out)
+    assert answer["success"] is False and "ConnectionResetError: network error" in answer["error"]
 
 
 def test_json_safe_result_makes_rows_serializable(monkeypatch):
@@ -274,7 +317,7 @@ def test_json_safe_result_makes_rows_serializable(monkeypatch):
     conn = FakeConn(FakeCursor([([("when",)], [[stamp]], -1)]))
     _patch(monkeypatch, conn)
 
-    result = sql_run.run_sql({"target": "ACME-x", "sql": "SELECT SYSDATETIMEOFFSET() AS [when]"})
+    result = sql_run.run_sql({**_STATED, "target": "ACME-x", "sql": "SELECT SYSDATETIMEOFFSET() AS [when]"})
     assert result["rows"] == [[stamp]]  # native value for the caller
     assert json.dumps(sql_run.json_safe_result(result))  # and a serializable copy
 
@@ -358,49 +401,12 @@ def test_run_sql_cli_rejects_unknown_option(capsys):
 # --------------------------------------------------------------------------- #
 
 
-def _patch_inventory(monkeypatch, *, default_credential_name="dba", credentials=None):
-    from db_ops.common import data_sources
-    from db_ops.common import data_sources as target_resolve
-
-    monkeypatch.setattr(
-        target_resolve,
-        "resolve_target_instance",
-        lambda spec, data_dir=None: {"server_id": "ACME-x", "db_type": "sqlserver", "ip": "10.0.0.1",
-                                     "database": "AppDb",
-                                     "default_credential_name": default_credential_name},
-    )
-    monkeypatch.setattr(
-        data_sources,
-        "load_credentials",
-        lambda db_type, data_dir=None: [
-            {"server_id": "ACME-x", "credentials": credentials if credentials is not None else [
-                {"credential_name": "dba", "username": "dba_user", "password": "p1"},
-                {"credential_name": "readonly", "username": "monitor", "password": "p2"},
-            ]}
-        ],
-    )
-    monkeypatch.setattr(data_sources, "load_secret_text", lambda data_dir=None, **_k: {})
-    return data_sources
-
-
-def test_resolve_uses_the_instance_default_credential(monkeypatch):
-    _patch_inventory(monkeypatch)
-    resolved = sql_run.resolve_sqlserver_target("ACME-x")
-    assert resolved["credential_name"] == "dba"
-    assert resolved["username"] == "dba_user"
-
-
-def test_credential_name_in_the_request_overrides_the_default(monkeypatch):
-    _patch_inventory(monkeypatch)
-    resolved = sql_run.resolve_sqlserver_target("ACME-x", credential_name="readonly")
-    assert resolved["username"] == "monitor"
-    # user_ref is the accepted alias in the JSON object.
-    parsed = sql_run.SqlRunRequest.from_json({"target": "ACME-x", "sql": "SELECT 1", "user_ref": "readonly"})
-    assert parsed.credential_name == "readonly"
+# The login is the request's since 0.24.0 (rules R09): which one a server_id gets - the named
+# credential, else the instance default, never a guess - is request_fill's, and is tested there
+# (tests/test_an_app_finishes_a_common_request_before_it_calls.py).
 
 
 def test_run_sql_reports_the_login_it_connected_as(monkeypatch):
-    _patch_inventory(monkeypatch)
     conn = FakeConn(FakeCursor([([("Id",)], [[1]], -1)]))
     # Records how it was asked to connect, so a test can assert on autocommit.
     def fake_connect(target, timeout_seconds, connect_timeout_seconds=0,  # noqa: ARG001
@@ -411,40 +417,10 @@ def test_run_sql_reports_the_login_it_connected_as(monkeypatch):
 
     monkeypatch.setattr(sql_run, "connect_target", fake_connect)
 
-    result = sql_run.run_sql({"target": "ACME-x", "sql": "SELECT 1", "credential_name": "readonly"})
+    result = sql_run.run_sql({"target": "ACME-x", "sql": "SELECT 1", "connection": {
+        **_STATED["connection"], "credential_name": "readonly", "username": "monitor", "password": "p2"}})
     assert result["credential_name"] == "readonly"
     assert result["username"] == "monitor"
-
-
-def test_unknown_credential_name_lists_what_exists(monkeypatch):
-    _patch_inventory(monkeypatch)
-    with pytest.raises(sql_run.SqlRunError, match="Available: dba, readonly"):
-        sql_run.resolve_sqlserver_target("ACME-x", credential_name="nope")
-
-
-def test_instance_without_a_declared_credential_is_refused(monkeypatch):
-    """No name, no run. Falling back to the first entry made file order decide which login
-    a production query used; an unconfigured instance must be fixed, not guessed around."""
-    _patch_inventory(monkeypatch, default_credential_name="")
-    with pytest.raises(sql_run.SqlRunError, match="No credential configured for ACME-x"):
-        sql_run.resolve_sqlserver_target("ACME-x")
-
-
-def test_server_without_any_credential_is_a_run_error(monkeypatch):
-    _patch_inventory(monkeypatch, default_credential_name="", credentials=[])
-    with pytest.raises(sql_run.SqlRunError, match="No credential configured"):
-        sql_run.resolve_sqlserver_target("ACME-x")
-
-
-def test_missing_secret_key_is_a_run_error_not_a_traceback(monkeypatch):
-    data_sources = _patch_inventory(monkeypatch)
-
-    def no_key(data_dir=None, **_kwargs):
-        raise RuntimeError("No decryption key provided. Pass --key or set DB_OPS_SECRET_KEY.")
-
-    monkeypatch.setattr(data_sources, "load_secret_text", no_key)
-    with pytest.raises(sql_run.SqlRunError, match="No decryption key provided"):
-        sql_run.resolve_sqlserver_target("ACME-x")
 
 
 def test_autocommit_connects_without_a_transaction_and_never_rolls_back(monkeypatch):
@@ -459,7 +435,7 @@ def test_autocommit_connects_without_a_transaction_and_never_rolls_back(monkeypa
     conn = FakeConn(FakeCursor([([("x",)], [[1]], -1)]))
     _patch(monkeypatch, conn)
 
-    result = sql_run.run_sql({"target": "ACME-x", "sql": "SELECT 1", "autocommit": True})
+    result = sql_run.run_sql({**_STATED, "target": "ACME-x", "sql": "SELECT 1", "autocommit": True})
 
     assert conn.opened_autocommit is True
     # Nothing to undo: the driver committed each statement as it ran.
@@ -471,7 +447,7 @@ def test_without_autocommit_the_rollback_contract_is_unchanged(monkeypatch):
     conn = FakeConn(FakeCursor([([("x",)], [[1]], -1)]))
     _patch(monkeypatch, conn)
 
-    sql_run.run_sql({"target": "ACME-x", "sql": "SELECT 1"})
+    sql_run.run_sql({**_STATED, "target": "ACME-x", "sql": "SELECT 1"})
 
     assert conn.opened_autocommit is False
     assert conn.rolled_back is True
@@ -484,7 +460,7 @@ def test_autocommit_does_not_also_issue_an_explicit_commit(monkeypatch):
     _patch(monkeypatch, conn)
 
     result = sql_run.run_sql(
-        {"target": "ACME-x", "sql": "UPDATE t SET a=1", "autocommit": True, "commit": True})
+        {**_STATED, "target": "ACME-x", "sql": "UPDATE t SET a=1", "autocommit": True, "commit": True})
 
     assert conn.committed is False
     assert result["committed"] is True
@@ -507,7 +483,7 @@ def test_params_are_bound_and_never_reach_the_sql_text(monkeypatch):
     conn = FakeConn(cursor)
     _patch(monkeypatch, conn)
 
-    sql_run.run_sql({"target": "ACME-x", "sql": "SELECT * FROM t WHERE spid = ?",
+    sql_run.run_sql({**_STATED, "target": "ACME-x", "sql": "SELECT * FROM t WHERE spid = ?",
                      "params": [505, "'; DROP TABLE t; --"]})
 
     assert cursor.executed == ["SELECT * FROM t WHERE spid = ?"]
@@ -531,7 +507,7 @@ def test_a_run_that_needs_no_parameters_is_unchanged(monkeypatch, request_extra)
     cursor = FakeCursor([([("n",)], [[1]], -1)])
     _patch(monkeypatch, FakeConn(cursor))
 
-    result = sql_run.run_sql({"target": "ACME-x", "sql": "SELECT 1 AS n", **request_extra})
+    result = sql_run.run_sql({**_STATED, "target": "ACME-x", "sql": "SELECT 1 AS n", **request_extra})
 
     assert result["ok"] is True and result["rows"] == [[1]]
     assert cursor.arity == [1]               # execute(sql), not execute(sql, ())
@@ -545,7 +521,7 @@ def test_an_empty_prelude_does_not_touch_the_sql_text(monkeypatch):
     cursor = FakeCursor([([("n",)], [[1]], -1)])
     _patch(monkeypatch, FakeConn(cursor))
 
-    sql_run.run_sql({"target": "ACME-x", "sql": "  SELECT 1 AS n  ", "prelude": ""})
+    sql_run.run_sql({**_STATED, "target": "ACME-x", "sql": "  SELECT 1 AS n  ", "prelude": ""})
 
     assert cursor.executed == ["SELECT 1 AS n"]
 
@@ -558,6 +534,7 @@ def test_the_prelude_goes_in_front_of_every_batch_with_the_values_bound_again(mo
     _patch(monkeypatch, FakeConn(cursor))
 
     sql_run.run_sql({
+        **_STATED,
         "target": "ACME-x",
         "sql": "SELECT @spid AS n\nGO\nSELECT @spid AS n",
         "prelude": "DECLARE @spid int = ?;\n",
@@ -575,13 +552,13 @@ def test_params_as_an_object_is_refused_by_name():
     """
     with pytest.raises(sql_run.SqlRunError, match="not an object"):
         sql_run.SqlRunRequest.from_json(
-            {"target": "ACME-x", "sql": "SELECT 1", "params": {"spid": 505}})
+            {**_STATED, "target": "ACME-x", "sql": "SELECT 1", "params": {"spid": 505}})
 
 
 def test_a_bare_string_is_not_a_parameter_list():
     """`"params": "505"` would otherwise bind three characters as three parameters."""
     with pytest.raises(sql_run.SqlRunError, match="got a single string"):
-        sql_run.SqlRunRequest.from_json({"target": "ACME-x", "sql": "SELECT 1", "params": "505"})
+        sql_run.SqlRunRequest.from_json({**_STATED, "target": "ACME-x", "sql": "SELECT 1", "params": "505"})
 
 
 def test_the_legacy_oracle_bridge_refuses_params_instead_of_dropping_them(monkeypatch):
@@ -589,9 +566,8 @@ def test_the_legacy_oracle_bridge_refuses_params_instead_of_dropping_them(monkey
     either fail on a stray `?` or — for a prelude that happens to parse — run with the values
     missing and report success."""
     monkeypatch.setattr(
-        sql_run, "resolve_sqlserver_target",
-        lambda spec, data_dir=None, database="", credential_name="", sql_access=None,
-        profile=None, driver="", oracle_client_mode="": {
+        sql_run, "resolve_connection_spec",
+        lambda spec, **_kwargs: {
             "server_id": "LEGACYDB-8I", "db_type": "oracle", "database_name": "LTR",
             "credential_name": "c", "username": "sys", "password": "x", "ip": "10.0.0.1",
             "port": 1521, "service_name": "LEGACYDB",
@@ -601,7 +577,7 @@ def test_the_legacy_oracle_bridge_refuses_params_instead_of_dropping_them(monkey
         })
 
     with pytest.raises(sql_run.SqlRunError, match="binds no parameters"):
-        sql_run.run_sql({"target": "LEGACYDB-8I", "sql": "SELECT 1 FROM dual", "params": [1]})
+        sql_run.run_sql({**_STATED, "target": "LEGACYDB-8I", "sql": "SELECT 1 FROM dual", "params": [1]})
 
 
 # --------------------------------------------------------------------------- #
@@ -623,7 +599,7 @@ def test_the_default_still_keeps_only_the_first_set_and_drains_the_rest(monkeypa
     ])
     _patch(monkeypatch, FakeConn(cursor))
 
-    result = sql_run.run_sql({"target": "ACME-x", "sql": "SELECT 1; SELECT 2"})
+    result = sql_run.run_sql({**_STATED, "target": "ACME-x", "sql": "SELECT 1; SELECT 2"})
 
     assert result["columns"] == ["a"] and result["rows"] == [[1]]
     assert len(result["result_sets"]) == 1          # always present, holding the one set
@@ -637,7 +613,7 @@ def test_capture_all_returns_every_set_as_an_array(monkeypatch):
     ])
     _patch(monkeypatch, FakeConn(cursor))
 
-    result = sql_run.run_sql({"target": "ACME-x", "sql": "SELECT 1; SELECT 2", "capture": "all"})
+    result = sql_run.run_sql({**_STATED, "target": "ACME-x", "sql": "SELECT 1; SELECT 2", "capture": "all"})
 
     assert [item["columns"] for item in result["result_sets"]] == [["a"], ["b", "c"]]
     assert result["result_sets"][1]["rows"] == [[2, "x"], [3, "y"]]
@@ -656,7 +632,7 @@ def test_each_set_is_capped_and_says_so_on_its_own(monkeypatch):
     _patch(monkeypatch, FakeConn(cursor))
 
     result = sql_run.run_sql(
-        {"target": "ACME-x", "sql": "SELECT 1; SELECT 2", "capture": "all", "max_rows": 3})
+        {**_STATED, "target": "ACME-x", "sql": "SELECT 1; SELECT 2", "capture": "all", "max_rows": 3})
 
     assert result["result_sets"][0]["truncated"] is False
     assert result["result_sets"][1]["truncated"] is True
@@ -669,7 +645,7 @@ def test_more_sets_than_the_cap_is_reported_not_swallowed(monkeypatch):
     cursor = FakeCursor([([("a",)], [[n]], -1) for n in range(5)])
     _patch(monkeypatch, FakeConn(cursor))
 
-    result = sql_run.run_sql({"target": "ACME-x", "sql": "SELECT 1", "capture": "all",
+    result = sql_run.run_sql({**_STATED, "target": "ACME-x", "sql": "SELECT 1", "capture": "all",
                               "max_result_sets": 2})
 
     assert len(result["result_sets"]) == 2
@@ -680,7 +656,7 @@ def test_max_result_sets_zero_means_no_cap(monkeypatch):
     cursor = FakeCursor([([("a",)], [[n]], -1) for n in range(5)])
     _patch(monkeypatch, FakeConn(cursor))
 
-    result = sql_run.run_sql({"target": "ACME-x", "sql": "SELECT 1", "capture": "all",
+    result = sql_run.run_sql({**_STATED, "target": "ACME-x", "sql": "SELECT 1", "capture": "all",
                               "max_result_sets": 0})
 
     assert len(result["result_sets"]) == 5 and result["result_sets_truncated"] is False
@@ -690,8 +666,8 @@ def test_a_misspelled_capture_mode_is_refused_rather_than_defaulted():
     """Defaulting would be invisible: the caller asked for every set, got one, and the only
     symptom is a report that looks a little short."""
     with pytest.raises(sql_run.SqlRunError, match="capture must be one of"):
-        sql_run.SqlRunRequest.from_json({"target": "ACME-x", "sql": "SELECT 1", "capture": "ALL "})
-        sql_run.SqlRunRequest.from_json({"target": "ACME-x", "sql": "SELECT 1", "capture": "every"})
+        sql_run.SqlRunRequest.from_json({**_STATED, "target": "ACME-x", "sql": "SELECT 1", "capture": "ALL "})
+        sql_run.SqlRunRequest.from_json({**_STATED, "target": "ACME-x", "sql": "SELECT 1", "capture": "every"})
 
 
 def test_json_safe_result_converts_the_rows_inside_every_set():
@@ -815,78 +791,55 @@ def test_a_result_set_cut_by_the_cap_says_so():
     assert result["truncated"] is True
 
 
-
-
 # --------------------------------------------------------------------------- #
-# Which tool the resolved target implies (2026-08-19)
+# Which tool the stated target implies (2026-08-19; stated, not looked up, since 0.24.0)
 # --------------------------------------------------------------------------- #
-def _patch_oracle_inventory(monkeypatch, **instance_extra):
-    """An 8i instance shaped like `ACME-192-0-2-136`: legacy, and with no bridge configured."""
-    from db_ops.common import data_sources
-    from db_ops.common import data_sources as target_resolve
-
-    monkeypatch.setattr(
-        target_resolve, "resolve_target_instance",
-        lambda spec, data_dir=None: {"server_id": "ACME-192-0-2-136", "db_type": "oracle",
-                                     "ip": "192.0.2.136", "port": 1521, "service_name": "LEGACYDB",
-                                     "default_credential_name": "sys_cred", **instance_extra},
-    )
-    monkeypatch.setattr(
-        data_sources, "load_credentials",
-        lambda db_type, data_dir=None: [
-            {"server_id": "ACME-192-0-2-136",
-             "credentials": [{"credential_name": "sys_cred", "username": "sys", "password": "p"}]}
-        ],
-    )
-    monkeypatch.setattr(data_sources, "load_secret_text", lambda data_dir=None, **_k: {})
+#: An 8i instance shaped like `ACME-192-0-2-136`, as its app states it: legacy, no bridge.
+_ORACLE_8I = {"db_type": "oracle", "host": "192.0.2.136", "port": 1521, "service_name": "LEGACYDB",
+              "username": "sys", "password": "p", "server_id": "ACME-192-0-2-136"}
 
 
-def test_an_8i_target_with_no_bridge_is_refused_by_name_instead_of_dying_as_dpy_3010(monkeypatch):
-    """`ACME-192-0-2-136` is the real one: Oracle 8.1.7, `major_version` unset in config and no
-    `sql_access` block, so run-sql handed it to python-oracledb — which speaks 12.1 and newer — and
-    failed with a driver code naming neither the cause nor the fix. Stating the version in the
-    request is now enough to get the sentence instead."""
-    _patch_oracle_inventory(monkeypatch)
-
+def test_an_8i_target_with_no_bridge_is_refused_by_name_instead_of_dying_as_dpy_3010():
+    """`ACME-192-0-2-136` is the real one: Oracle 8.1.7 with no `sql_access` block, so run-sql
+    handed it to python-oracledb - which speaks 12.1 and newer - and failed with a driver code
+    naming neither the cause nor the fix. Stating the version is enough to get the sentence."""
     with pytest.raises(sql_run.SqlRunError) as raised:
-        sql_run.resolve_sqlserver_target("ACME-192-0-2-136", profile=TargetProfile(major_version=8))
+        sql_run.resolve_stated_connection({"connection": {**_ORACLE_8I, "major_version": 8}})
 
     message = str(raised.value)
     assert "ACME-192-0-2-136" in message      # which target, not just "a connect failed"
     assert '"method": "api"' in message and "thick" in message   # both ways out
 
 
-def test_the_same_8i_target_is_not_refused_when_it_is_configured_for_the_bridge(monkeypatch):
-    """A legacy target opens no driver at all, so asking the driver rule about it would refuse an
-    instance for being 8i — which is exactly why it is routed around the driver."""
-    _patch_oracle_inventory(
-        monkeypatch,
-        major_version=8,
-        sql_access={"method": "api", "bridge_url": "http://192.0.2.93:8765/query"},
-    )
+def test_the_version_stated_beside_the_connection_decides_the_driver_too(monkeypatch):
+    """run-sql's top-level `major_version` is documented as THE field that decides a driver. When
+    every request began to come through the connection door (0.24.0) it was parsed and dropped - an
+    8i target stated as 8 went to python-oracledb anyway. It is laid over the connection's facts."""
+    def never(*_args, **_kwargs):
+        raise AssertionError("a driver was opened for a target the rule refuses")
 
-    resolved = sql_run.resolve_sqlserver_target("ACME-192-0-2-136")
+    monkeypatch.setattr(sql_run, "connect_target", never)
+
+    with pytest.raises(sql_run.SqlRunError, match="thin mode"):
+        sql_run.run_sql({"connection": _ORACLE_8I, "major_version": 8, "sql": "SELECT 1 FROM dual"})
+
+
+def test_the_same_8i_target_is_not_refused_when_it_is_routed_to_the_bridge():
+    """A legacy target opens no driver at all, so asking the driver rule about it would refuse an
+    instance for being 8i - which is exactly why it is routed around the driver."""
+    resolved = sql_run.resolve_stated_connection({"connection": {
+        **_ORACLE_8I, "major_version": 8,
+        "sql_access": {"method": "api", "bridge_url": "http://192.0.2.93:8765/query"}}})
 
     assert resolved["tool"]["tool"] == "api"
-    assert resolved["tool"]["chosen_by"] == "config"
     assert resolved["profile"].major_version == 8
 
 
-def test_the_inventorys_version_is_read_when_the_request_states_none(monkeypatch):
-    """The inventory is still the source of record; the request only overrides it. Without this,
-    filling `major_version` in `db_instances.json` would buy nothing."""
-    _patch_oracle_inventory(monkeypatch, major_version=8)
-
-    with pytest.raises(sql_run.SqlRunError, match="thin mode"):
-        sql_run.resolve_sqlserver_target("ACME-192-0-2-136")
-
-
-def test_a_modern_target_reports_its_driver_and_who_chose_it(monkeypatch):
+def test_a_modern_target_reports_its_driver_and_who_chose_it():
     """The answer says what ran the SQL. Before this, pyodbc and pymssql were indistinguishable
-    from the outside — and they bind parameters differently, which is a difference callers feel."""
-    _patch_inventory(monkeypatch)
-
-    resolved = sql_run.resolve_sqlserver_target("ACME-x", driver="pymssql")
+    from the outside - and they bind parameters differently, which is a difference callers feel."""
+    resolved = sql_run.resolve_connection_spec(
+        sql_run.ConnectionSpec.from_json(_STATED["connection"]), driver="pymssql")
 
     assert resolved["tool"] == {"tool": "pymssql", "chosen_by": "request",
                                 "reason": "explicitly requested"}

@@ -82,7 +82,7 @@ def known_chat_levels() -> tuple[str, ...]:
     block into an error.
     """
     try:
-        from db_ops.config import load_config
+        from db_ops.lib.config import load_config
 
         level_chat_map = load_config().telegram.level_chat_map or {}
         configured = tuple(str(level).strip().lower() for level in level_chat_map)

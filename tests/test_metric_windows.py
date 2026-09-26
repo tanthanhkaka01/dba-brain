@@ -4,6 +4,9 @@ The metrics confined to 01-06h are the expensive ones - DBCC CHECKDB, index frag
 scans, an Oracle restore validation. `/spbot_report_hourly_metrics` collects with --force, and
 --force used to bypass the window check as well as the interval, so typing that command at
 15:00 ran all of them against a production instance.
+
+Since 0.24.0 that report collects nothing at all - it reads the stored results - so the rule
+here is `metrics.cli collect --force`'s alone: --force skips the interval, never the window.
 """
 
 from datetime import datetime
@@ -71,35 +74,10 @@ def test_the_skip_reason_names_the_hours_so_the_log_explains_itself():
     assert _window_label(_metric(schedule_window=None)) == "always open"
 
 
-@pytest.mark.parametrize("include_windowed,expected", [(False, False), (True, True)])
-def test_the_reports_collect_step_passes_the_flag_only_when_asked(include_windowed, expected, monkeypatch):
-    """The report shells out to `metrics.cli collect --force`; --include-windowed must appear
-    in that argv only on request, since it is what re-enables CHECKDB at 15:00."""
-    import db_ops.reports.service as service
-
-    seen = {}
-
-    class _Completed:
-        returncode = 0
-        stdout = "{}"
-        stderr = ""
-
-    def _fake_run(argv, **kwargs):
-        seen["argv"] = argv
-        return _Completed()
-
-    monkeypatch.setattr(service.subprocess, "run", _fake_run)
-    monkeypatch.setattr(service, "_collect_summary_from_cli_output", lambda _out: {})
-
-    service.collect_target_metrics(config_path="config.json", target_id="T1",
-                                   include_windowed=include_windowed)
-
-    assert ("--include-windowed" in seen["argv"]) is expected
-    assert "--force" in seen["argv"]      # the interval is still bypassed either way
-
-
 def _hourly_command():
-    """The `/spbot_report_hourly_metrics` definition, shaped like the shipped one.
+    """A flag-word command, shaped like `/spbot_report_hourly_metrics` until 0.24.0 - the shipped
+    one lost its `full` word when the report stopped collecting, but the parser still offers
+    flag words to any command, and this is the definition that exercises them.
 
     It used to be read out of the operator's live `data/telegram_support_commands.json`, which
     tied this test to one estate's catalogue *and* to the inventory that catalogue resolves

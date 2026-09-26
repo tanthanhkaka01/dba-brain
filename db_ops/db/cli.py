@@ -33,7 +33,7 @@ from db_ops.lib import json_io, response, secret_text
 from db_ops.lib.timezone import display_now
 # One request parser for the whole tool. The JSON-object contract is `common`'s to define; this
 # module is a caller of it, not a second implementation — two would drift on `@file` and stdin.
-from db_ops.common import data_sources
+from db_ops.lib import data_sources
 from db_ops.common.cli import _read_json_request
 from db_ops.config import DEFAULT_CONFIG_PATH, load_config, resolve_config_path
 from db_ops.db import declaration
@@ -89,6 +89,15 @@ def build_parser() -> argparse.ArgumentParser:
     _add_secret_args(check)
     check.add_argument("--counts", action="store_true", help="Also count rows per table.")
     check.set_defaults(handler=_handle_check)
+
+    keys = subparsers.add_parser(
+        "archive-keys",
+        help="Give job_runs_history and metric_results_archive their primary keys on a store made "
+             "before 0.24.0. Reports first; --apply adds a key only where the report is clean.")
+    _add_secret_args(keys)
+    keys.add_argument("--apply", action="store_true",
+                      help="Add the keys. Without it this only reads: rows, missing ids, duplicate ids.")
+    keys.set_defaults(handler=_handle_archive_keys)
 
     create = subparsers.add_parser(
         "create-store-database",
@@ -146,6 +155,15 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Upsert this node's row in runtime_nodes.")
     tzc.add_argument("--list", dest="list_nodes", action="store_true",
                      help="Read back every node that has reported.")
+    tzc.add_argument("--format", choices=("json", "txt"), default="json",
+                     help="txt prints the chat listing and nothing else; json (default) the envelope.")
+    # The request `common.cli timezone` took until 0.24.0 - `{"format": "txt"}` - so a command line
+    # `upgrade-config` pointed here from there (moved-commands) runs unchanged.
+    # ...and with `--config` after the command, where that line put it. SUPPRESS keeps the top-level
+    # --config when this one is not given.
+    tzc.add_argument("--config", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+    tzc.add_argument("request", nargs="?", default="",
+                     help='Optional JSON object: {"format": "txt", "record": true, "list": true, "set": "UTC"}.')
     tzc.set_defaults(handler=_handle_timezone)
 
     ver = subparsers.add_parser(
@@ -391,6 +409,35 @@ def _handle_check(args) -> int:
                 count = conn.execute(f"SELECT count(*) AS n FROM {table}").fetchone()["n"]
                 print(f"  {table:34} {count:>12}")
     return 0
+
+
+def _handle_archive_keys(args) -> int:
+    """``archive-keys`` - the archives' primary keys on an older store, run when the store can take it.
+
+    Never run by an app starting: on the estate's store the archive is 14 million rows, and adding
+    a key reads all of it and holds the table while the index builds (``db_ops/db/archive_keys.py``).
+    A table with a missing or duplicated id is left alone and named, and the exit code says so.
+    """
+    from db_ops.db import archive_keys
+    from db_ops.db.metric_store import SCHEMA_SQL as METRIC_SCHEMA_SQL
+    from db_ops.db.store import SCHEMA_SQL as STORE_SCHEMA_SQL
+    from db_ops.lib import response
+
+    _config, target = _active_target(args)
+    backend = target.store.backend
+    with target.connect() as conn:
+        report = (archive_keys.apply(conn, backend=backend, schema_sql={
+            "job_runs_history": STORE_SCHEMA_SQL, "metric_results_archive": METRIC_SCHEMA_SQL})
+            if args.apply else archive_keys.plan(conn, backend=backend))
+    if args.apply and target.is_sqlite and any(entry["state"] == "keyed-now" for entry in report):
+        # A SQLite table is rebuilt to take its key, and its indexes went with the old one.
+        for store_class in _store_classes():
+            store_class(target).initialize(force=True)
+    blocked = [entry["table"] for entry in report if entry["state"] == "blocked"]
+    summary = ", ".join(f"{entry['table']}: {entry['state']}" for entry in report)
+    response.emit(response.ok("archive-keys", message=summary, data={
+        "backend": backend, "applied": bool(args.apply), "tables": report}))
+    return 1 if blocked else 0
 
 
 def _list_tables(target) -> list[str]:
@@ -987,92 +1034,6 @@ OPS_STATUS_USAGE = (
 )
 
 
-SELF_STATUS_USAGE = (
-    "usage: python -m db_ops.db.cli self-status <json>|@<file>|- "
-    "[--config ...] [--key ... | --key-base64 ...]\n"
-    "\n"
-    "The same report as `python -m db_ops.common.cli self-status` - version, host, store, cpu,\n"
-    "memory, disk, links and the app commands this node schedules - plus each app command's\n"
-    "LAST RUN from job_runs. That column is the one part that needs the store, which is why this\n"
-    "front door lives in db: common may not import it. /spbot_self_status calls this one.\n"
-    "\n"
-    "A store that cannot be read costs the column and names why; the report still prints.\n"
-    "\n"
-    '  {"format": "txt"}      // optional; txt for the chat listing, json (default) for the envelope\n'
-)
-
-
-def _self_status_command(argv: list[str]) -> int:
-    """``self-status`` with the last-run column - see :data:`SELF_STATUS_USAGE`.
-
-    Asked for on 2026-09-23: with two schedulers running disjoint sets on two schemas, the answer
-    an operator can get from a phone described the machine and not what it schedules.
-    """
-    from datetime import datetime, timedelta, timezone
-
-    from db_ops.common import cli as common_cli
-    from db_ops.common import self_status
-    from db_ops.db import DbOpsStore
-    from db_ops.db import ops_status as ops
-    from db_ops.lib.secret_text import set_key_env
-
-    source = ""
-    config_path = None
-    key = key_base64 = None
-    rest = list(argv)
-    while rest:
-        token = rest.pop(0)
-        if token in {"-h", "--help"}:
-            print(SELF_STATUS_USAGE)
-            return 0
-        if token == "--config":
-            config_path = rest.pop(0) if rest else None
-        elif token == "--key":
-            key = rest.pop(0) if rest else None
-        elif token in {"--key-base64", "--key_base64"}:
-            key_base64 = rest.pop(0) if rest else None
-        elif not source:
-            source = token
-        else:
-            print(f"Unexpected argument: {token}\n\n{SELF_STATUS_USAGE}", file=sys.stderr)
-            return 2
-    try:
-        set_key_env(key, key_base64)
-    except ValueError as exc:
-        print(str(exc), file=sys.stderr)
-        return 2
-
-    request, code = _read_json_request(source or "{}", SELF_STATUS_USAGE)
-    if request is None:
-        return code
-
-    facts, config = common_cli.collect_self_status(config_path)
-    try:
-        commands = common_cli.read_app_commands()
-    except Exception:  # noqa: BLE001 - collect_self_status has already named the unreadable file.
-        commands = None
-    if commands is not None:
-        last_runs = None
-        store_error = ""
-        if config is None:
-            store_error = "no config.json, so no store to read"
-        else:
-            try:
-                store = DbOpsStore.from_config(config)
-                since = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime(
-                    "%Y-%m-%dT%H:%M:%SZ")
-                codes = sorted({str(c.get("app_command_id") or c.get("app_code") or "")
-                                for c in commands} - {""})
-                last_runs = ops.latest_runs(store, codes, since=since)
-            except Exception as exc:  # noqa: BLE001 - the column is optional; the report is not.
-                first = (str(exc).splitlines() or [type(exc).__name__])[0]
-                store_error = f"store not read: {first[:160]}"
-        facts["apps"] = self_status.summarize_apps(
-            commands, node_role=str(facts.get("node_role") or ""), last_runs=last_runs,
-            store_error=store_error)
-    return common_cli.emit_self_status(facts, request)
-
-
 def _ops_status_command(argv: list[str]) -> int:
     """``ops-status`` - the CLI face of :mod:`db_ops.db.ops_status`.
 
@@ -1236,7 +1197,7 @@ def _ops_status_command(argv: list[str]) -> int:
 def _active_group_levels(data_dir: Path) -> dict[str, str]:
     """``notify_level -> group_id`` for the active Telegram groups.
 
-    Read through ``common.data_sources`` rather than the Telegram app's ``groups`` subprocess:
+    Read through ``lib.data_sources`` rather than the Telegram app's ``groups`` subprocess:
     this command has to work when other apps do not, and shelling out to one of them to find out
     where to report their failure is the dependency it exists without. An import is not a
     process, so the constraint holds and the file still has exactly one reader.
@@ -1608,7 +1569,6 @@ def _run_app_command(argv: list[str]) -> int:
 _JSON_COMMANDS = {
     "queue-telegram-message": lambda rest: _queue_telegram_message_command(rest),
     "ops-status": lambda rest: _ops_status_command(rest),
-    "self-status": lambda rest: _self_status_command(rest),
     "restore-drill-status": lambda rest: _restore_drill_command(rest),
     "sql-run-history": lambda rest: _sql_run_history_command(rest),
     "telegram-command-history": lambda rest: _telegram_command_history_command(rest),
@@ -1674,12 +1634,26 @@ def _write_config_timezone(config_path: Path, zone: str) -> None:
         config_path, json.dumps(document, ensure_ascii=False, indent=2) + chr(10))
 
 
-def _handle_timezone(args: argparse.Namespace) -> int:
-    """Put which clock this node is on into the store, and read the cluster back.
+def _timezone_request(text: str) -> dict:
+    """The JSON object `timezone` may be given, or ``{}``; anything else is refused by name."""
+    if not str(text).strip():
+        return {}
+    try:
+        value = json.loads(text)
+    except ValueError as exc:
+        raise SystemExit(f"timezone takes flags or one JSON object; this is neither: {exc}") from exc
+    if not isinstance(value, dict):
+        raise SystemExit("timezone's request must be a JSON object.")
+    return value
 
-    The reporting half is ``python -m db_ops.common.cli timezone``, which touches nothing and
-    still answers when the store is down. This is the half that writes, so it lives here with
-    every other store operation — ``common`` may not import ``db``.
+
+def _handle_timezone(args: argparse.Namespace) -> int:
+    """Which clock this node is on - and, asked, put it in the store and read the cluster back.
+
+    The one command for it since 0.24.0 (rules R43; ``common.cli timezone`` reported the same thing
+    and went, the operator's choice). Asked nothing more, it reads this node's config and opens no
+    store, so it still answers when the store is down - one of the times somebody wants to know
+    what clock they are on - and when ``config.json`` cannot be read, which it says.
 
     Why the table exists: master and worker share one store and each reads its own ``config.json``.
     Nothing else could answer "is the estate on one clock?", and a ``time_window`` firing at the
@@ -1691,11 +1665,16 @@ def _handle_timezone(args: argparse.Namespace) -> int:
     import socket
 
     import db_ops
-    from db_ops.common.cli import timezone_listing, timezone_node_id
     from db_ops.db import DbOpsStore
     from db_ops.lib import timezone as timezone_lib
 
     config_path = Path(resolve_config_path("db", args.config))
+    stated = _timezone_request(getattr(args, "request", "") or "")
+    args.format = str(stated.get("format") or args.format or "json").strip().lower()
+    args.record = bool(args.record or stated.get("record"))
+    args.list_nodes = bool(args.list_nodes or stated.get("list"))
+    if stated.get("set") and not getattr(args, "set_timezone", ""):
+        args.set_timezone = str(stated["set"])
     # Written before the clock is described, so what is reported is what the node will now run on
     # rather than what it ran on a moment ago. `timezone` in config.json is what every schedule is
     # read against - `time_window.from_hour` is a LOCAL hour - so two nodes on different zones run
@@ -1704,23 +1683,37 @@ def _handle_timezone(args: argparse.Namespace) -> int:
     set_zone = str(getattr(args, "set_timezone", "") or "").strip()
     if set_zone:
         _write_config_timezone(config_path, set_zone)
-    config = load_config(str(config_path))
+    config = None
+    config_error = ""
+    try:
+        # Loading the config is what BINDS the display zone (db_ops.lib.config.parse_config), so it
+        # comes before describe(), or this would report UTC for a node on another clock.
+        config = load_config(str(config_path))
+    except Exception as exc:  # noqa: BLE001 - no config is a fact about the install, not an error.
+        config_error = str(exc)
     facts = timezone_lib.describe()
-    node_id = timezone_node_id(config)
+    node_id = timezone_lib.node_id(config)
     hostname = socket.gethostname()
     data = {
         **facts,
         "node_id": node_id,
-        "node_role": config.node_role,
+        "node_role": str(getattr(config, "node_role", "") or "master"),
         "hostname": hostname,
-        "source": "env" if timezone_lib.declaration_from_env() else "config.json",
+        "source": ("env" if timezone_lib.declaration_from_env()
+                   else ("config.json" if config is not None else "default")),
         "set": set_zone or None,
         "app_version": db_ops.__version__,
         "recorded": False,
     }
+    if config_error:
+        data["config_error"] = config_error
+    if (args.record or args.list_nodes) and config is None:
+        raise SystemExit(f"--record and --list need the store config.json names: {config_error}")
 
-    store = DbOpsStore.from_config(config, key=_resolved_key(args),
-                                   password=getattr(args, "password", None))
+    # The store only when it is asked for: reporting this node needs none.
+    store = (DbOpsStore.from_config(config, key=_resolved_key(args),
+                                    password=getattr(args, "password", None))
+             if args.record or args.list_nodes else None)
     if args.record:
         store.record_runtime_node(
             node_id=node_id, node_role=config.node_role, hostname=hostname,
@@ -1735,10 +1728,14 @@ def _handle_timezone(args: argparse.Namespace) -> int:
     if args.list_nodes or args.record:
         data["nodes"] = store.list_runtime_nodes()
 
+    listing = timezone_lib.listing(data)
+    if getattr(args, "format", "json") == "txt":
+        print(listing)
+        return 0
     return response.emit(response.ok(
         "timezone",
         message=f"{data['timezone']} ({data['utc_offset']}) on {node_id}",
-        data={"listing": timezone_listing(data), **data},
+        data={"listing": listing, **data},
         metrics={"utc_offset_minutes": int(facts["utc_offset_minutes"]),
                  "node_count": len(data.get("nodes") or [])},
     ))

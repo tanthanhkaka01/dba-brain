@@ -120,7 +120,9 @@ def test_every_variant_file_the_two_metrics_name_exists(metrics):
     for code in ("QUERY_STORE_QUERY_ISSUES", "QUERY_STORE_COVERAGE"):
         for variant in metrics[code]["variants"]:
             if variant.get("file"):
-                assert (resolve_tool_path("assets/metrics") / variant["file"]).is_file(), variant["file"]
+                # Per file, as the engine resolves them (db_ops.lib.paths.asset_dir): an operator's
+                # own assets/metrics/ folder would otherwise hide every shipped query.
+                assert resolve_tool_path(f"assets/metrics/{variant['file']}").is_file(), variant["file"]
 
 
 def test_coverage_groups_by_instance_not_by_database(metrics):

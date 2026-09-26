@@ -122,25 +122,28 @@ that exist: each one reviewed when it was written, each one logged the way a hum
 
 Ordered to match the reference docs; the **ORD** number links to each one.
 
-| ORD | Component | Package / config | Responsibility |
-| :---: | --- | --- | --- |
-| [01](./docs/01_runtime_store.md) | Runtime store | `db_ops/db`, `data/store_config.json` | The database the toolkit keeps its **own** data in — job runs, measurements, report state, the delivery queue, restore history. SQLite to start, PostgreSQL when you outgrow it; the backend is one word in one file. |
-| [02](./docs/02_logging_engine.md) | Logging engine | `db_ops/logging_ops`, `logs/` | Scoped application logs, runtime logs, shared errors, and daily archives. |
-| [03](./docs/03_app_command_daemon.md) | App command daemon | `db_ops/jobs`, `data/app_commands.json` | The scheduler: runs each app on its own interval inside its allowed hours, skips one that is still running, and forwards the secret passphrase to every child process. |
-| [04](./docs/04_metrics_engine.md) | Metrics engine | `db_ops/metrics`, `data/db_instances.json`, `data/metric_definitions.json` | Around ninety metrics across four engines — availability, capacity, performance, recoverability, security, maintenance — collected and normalised into one shape. |
-| [05](./docs/05_sql_task_runner.md) | SQL task runner | `db_ops/sql_tasks`, `data/sql_commands.json`, `data/sql_targets.json` | Your own SQL, on a schedule or on request, against approved targets, delivered as text or a spreadsheet. The SQL is a reviewable file, never a string in configuration. |
-| [06](./docs/06_reports_app.md) | Reports | `db_ops/reports`, `data/reports_config.json` | Turns measurements into scheduled reports and inventory pages, with a freshness gate so a stale number is never reported as a current one. |
-| [07](./docs/07_telegram_app.md) | Chat delivery and commands | `db_ops/telegram`, the Telegram data files | Delivers the outgoing queue one message at a time, and executes the commands people send back — gated by the person's clearance *and* the chat's. |
-| [08](./docs/08_backup_restore_app.md) | Backup / restore | `db_ops/backup_restore`, `data/restore_config.json` | Runs backups, restores them onto a disposable target, verifies the result, and records what was proven and when. |
-| [09](./docs/09_sla_slo_compliance_app.md) | SLA / SLO compliance | `db_ops/sla`, `data/sla_policies.json` | Computes indicators from stored measurement history, evaluates objectives with an error budget, and reports what is left of it. |
-| [10](./docs/10_sre_app.md) | SRE | `db_ops/sre`, `data/sre_config.json` | Provisions the disposable lab databases that drills and rehearsals need — single instances or small HA clusters, in Docker or on VMs. |
-| [11](./docs/11_control_app.md) | Control | `db_ops/control`, `config.json` | Builds and deploys the toolkit to another node, and watches the toolkit itself — the one app that reports on the others. |
-| [12](./docs/12_webhost_app.md) | Web host | `db_ops/webhost`, `data/webhost_config.json` | Serves the rendered reports over HTTP and hosts the console. Publishes files; never generates them. |
-| [13](./docs/13_common.md) | **Common** — shared operations | `db_ops/common` | Reaching a host, running SQL, moving a file, rotating a password, confirming something dangerous. Every command takes one JSON object. **Invoked as a CLI, never imported.** |
-| [14](./docs/14_lib.md) | **Lib** — shared rules | `db_ops/lib` | Values and rules that are pure functions of their arguments: time windows, notify routing, severity, formatting. Imports nothing from the rest of the project. **Only ever imported, never run as a CLI.** |
+**Fifteen components of two kinds.** An **app** (10: `jobs`, `metrics`, `sql_tasks`, `reports`, `telegram`, `backup_restore`, `sla`, `sre`, `control`, `webhost`) does one job, has its own `cli.py`, and never imports another app. A **shared layer** (5: `db`, `logging_ops`, `common`, `lib`, `transport`) is what every app stands on, and never imports an app. The root package `db_ops` is neither: it is the `db-ops` entry point and only dispatches. The same table, and who may import or run whom, is in [`docs/rules.md`](./docs/rules.md#the-components).
 
-**Fourteen components, and the list is closed.** ORD 01–12 are the apps — one directory, one CLI
-each — and 13/14 are the two shared layers they all sit on.
+| ORD | Component | Kind | Package / config | Responsibility |
+| :---: | --- | --- | --- | --- |
+| [01](./docs/01_runtime_store.md) | Runtime store | shared layer | `db_ops/db`, `data/store_config.json` | The database the toolkit keeps its **own** data in — job runs, measurements, report state, the delivery queue, restore history. SQLite to start, PostgreSQL when you outgrow it; the backend is one word in one file. |
+| [02](./docs/02_logging_engine.md) | Logging engine | shared layer | `db_ops/logging_ops`, `logs/` | Scoped application logs, runtime logs, shared errors, and daily archives. |
+| [03](./docs/03_app_command_daemon.md) | App command daemon | app | `db_ops/jobs`, `data/app_commands.json` | The scheduler: runs each app on its own interval inside its allowed hours, skips one that is still running, and forwards the secret passphrase to every child process. |
+| [04](./docs/04_metrics_engine.md) | Metrics engine | app | `db_ops/metrics`, `data/db_instances.json`, `data/metric_definitions.json` | Around ninety metrics across four engines — availability, capacity, performance, recoverability, security, maintenance — collected and normalised into one shape. |
+| [05](./docs/05_sql_task_runner.md) | SQL task runner | app | `db_ops/sql_tasks`, `data/sql_commands.json`, `data/sql_targets.json` | Your own SQL, on a schedule or on request, against approved targets, delivered as text or a spreadsheet. The SQL is a reviewable file, never a string in configuration. |
+| [06](./docs/06_reports_app.md) | Reports | app | `db_ops/reports`, `data/reports_config.json` | Turns measurements into scheduled reports and inventory pages, with a freshness gate so a stale number is never reported as a current one. |
+| [07](./docs/07_telegram_app.md) | Chat delivery and commands | app | `db_ops/telegram`, the Telegram data files | Delivers the outgoing queue one message at a time, and executes the commands people send back — gated by the person's clearance *and* the chat's. |
+| [08](./docs/08_backup_restore_app.md) | Backup / restore | app | `db_ops/backup_restore`, `data/restore_config.json` | Runs backups, restores them onto a disposable target, verifies the result, and records what was proven and when. |
+| [09](./docs/09_sla_slo_compliance_app.md) | SLA / SLO compliance | app | `db_ops/sla`, `data/sla_policies.json` | Computes indicators from stored measurement history, evaluates objectives with an error budget, and reports what is left of it. |
+| [10](./docs/10_sre_app.md) | SRE | app | `db_ops/sre`, `data/sre_config.json` | Provisions the disposable lab databases that drills and rehearsals need — single instances or small HA clusters, in Docker or on VMs. |
+| [11](./docs/11_control_app.md) | Control | app | `db_ops/control`, `config.json` | Builds and deploys the toolkit to another node, and watches the toolkit itself — the one app that reports on the others. |
+| [12](./docs/12_webhost_app.md) | Web host | app | `db_ops/webhost`, `data/webhost_config.json` | Serves the rendered reports over HTTP and hosts the console. Publishes files; never generates them. |
+| [13](./docs/13_common.md) | **Common** — shared operations | shared layer | `db_ops/common` | Reaching a host, running SQL, moving a file, rotating a password, confirming something dangerous. Every command takes one JSON object. **Invoked as a CLI, never imported.** |
+| [14](./docs/14_lib.md) | **Lib** — shared rules | shared layer | `db_ops/lib` | Values and rules that are pure functions of their arguments: time windows, notify routing, severity, formatting. Imports nothing from the rest of the project. **Only ever imported, never run as a CLI.** |
+| [15](./docs/15_transport.md) | **Transport** — the one client | shared layer | `db_ops/transport` | Starts `common.cli` and `db.cli` for every component: `lib` builds the command and reads the answer, this runs the process between them. Imports only `lib`. |
+
+**Fifteen components, and the list is closed.** Ten apps and five shared layers, as the Kind column
+says; anything new is one of them or a sixteenth ORD with its own directory and its own doc.
 
 > **Every component has a doc, and every doc has a component.** One `docs/NN_*.md` per package,
 > both directions, enforced by `tests/test_docs_cover_every_component.py`. A component is not
@@ -403,7 +406,7 @@ backup rather than a file.
 ```bash
 python -m db_ops.backup_restore.cli --config config.json restore-latest    # newest FULL, with recovery
 python -m db_ops.backup_restore.cli --config config.json restore-workflow  # copy, restore, then clean up
-python -m db_ops.common.cli restore-database @request.json                 # one configured restore, PITR where supported
+python -m db_ops.backup_restore.cli --config config.json restore-workflow --restore-id <id> --point-in-time "2026-09-25 12:00:00 +07:00"
 ```
 
 **A physical restore carries the source's logins with it.** After a drill the target answers to the
@@ -506,6 +509,8 @@ See **[`docs/architecture.md`](./docs/architecture.md)**.
 | [`docs/12_webhost_app.md`](./docs/12_webhost_app.md) | Serving reports, the stable `latest` link, snapshot selection |
 | [`docs/13_common.md`](./docs/13_common.md) | The shared operations layer, command by command |
 | [`docs/14_lib.md`](./docs/14_lib.md) | The pure rules layer, the purity guarantee, and the module index |
+| [`docs/15_transport.md`](./docs/15_transport.md) | The one client of `common.cli` and `db.cli`, and why the launch has a layer of its own |
+| [`docs/rules.md`](./docs/rules.md) | Every rule the project keeps, numbered, with the test that guards it |
 
 | Project | |
 | --- | --- |

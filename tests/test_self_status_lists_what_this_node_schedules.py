@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import datetime, timezone
+from pathlib import Path
 
 from db_ops.common import self_status
 from db_ops.db import ops_status
@@ -192,13 +193,16 @@ def test_latest_runs_with_no_codes_does_not_touch_the_store():
 
 
 # --------------------------------------------------------------------------- #
-# The two front doors
+# One command, and who states the last runs (0.24.0, rules R43)
 # --------------------------------------------------------------------------- #
-def test_the_telegram_command_calls_the_front_door_that_can_read_the_store():
-    """`common` may not import `db`, so the last-run column is added by `db.cli self-status`. The
-    bot command pointing at the `common` door would reply without it and nobody would notice."""
+def test_the_telegram_command_calls_common_and_the_bot_finishes_it():
+    """`db.cli self-status` was a second door to this report, there only because `common` may not
+    open the store (R04). It went (the operator, 2026-09-26): the bot runs `common.cli self-status`
+    and states the last-run column itself - so every copy of the command must point there, and the
+    bot must know to finish it, or the reply comes back without the column and nobody notices."""
     import json
-    from pathlib import Path
+
+    from db_ops.telegram import command_processor
 
     root = Path(__file__).resolve().parents[1]
     copies = [root / "db_ops" / "telegram" / "catalogue" / "telegram_support_commands.json",
@@ -208,15 +212,57 @@ def test_the_telegram_command_calls_the_front_door_that_can_read_the_store():
         rows = json.loads(path.read_text(encoding="utf-8-sig"))["telegram_support_commands"]
         command = next(r for r in rows if r["command_text"] == "spbot_self_status")
         argv = command["action_config"]["command_argv"]
-        assert argv[2:4] == ["db_ops.db.cli", "self-status"], f"{path.name}: {argv}"
+        assert argv[2:4] == ["db_ops.common.cli", "self-status"], f"{path.name}: {argv}"
         # Refusing without a key would cost the whole reply; the key only buys one column.
         assert not command["action_config"].get("requires_secret_key"), path.name
+    assert command_processor.finishes("self-status")
 
 
-def test_the_db_front_door_answers_with_no_config_at_all(monkeypatch, capsys):
+class _Store:
+    pass
+
+
+def test_the_bot_states_each_apps_newest_run_from_its_store(monkeypatch, tmp_path):
+    import json
+
+    from db_ops.telegram import command_processor
+
+    (tmp_path / "app_commands.json").write_text(json.dumps({"app_commands": [
+        _command("APP-A"), _command("APP-B")]}), encoding="utf-8")
+    seen = {}
+
+    def latest(store, codes, *, since):
+        seen.update(store=store, codes=codes)
+        return {"APP-A": {"status": "done", "started_at": "2026-09-23T06:59:30Z"}}
+
+    monkeypatch.setattr(ops_status, "latest_runs", latest)
+    store = _Store()
+
+    finished = command_processor.with_last_runs({"format": "txt"}, store=store, data_dir=tmp_path)
+
+    assert finished["last_runs"] == {"APP-A": {"status": "done", "started_at": "2026-09-23T06:59:30Z"}}
+    assert seen == {"store": store, "codes": ["APP-A", "APP-B"]}
+    assert finished["format"] == "txt"
+
+
+def test_a_store_the_bot_cannot_read_costs_the_column_never_the_reply(monkeypatch, tmp_path):
+    from db_ops.telegram import command_processor
+
+    def down(*_args, **_kwargs):
+        raise ConnectionRefusedError("could not connect to server\nsecond line")
+
+    monkeypatch.setattr(ops_status, "latest_runs", down)
+
+    finished = command_processor.with_last_runs({}, store=_Store(), data_dir=tmp_path)
+
+    assert "last_runs" not in finished
+    assert finished["store_error"] == "store not read: could not connect to server"
+
+
+def _no_config(monkeypatch):
     import db_ops.config as db_ops_config
     from db_ops.common import cli as common_cli
-    from db_ops.db import cli as db_cli
+    from db_ops.lib import config as lib_config
 
     # The load has to FAIL, not be skipped: loading this tree's config.json binds the process-wide
     # display timezone, and the first version of this test left it bound for every test after it -
@@ -225,10 +271,28 @@ def test_the_db_front_door_answers_with_no_config_at_all(monkeypatch, capsys):
         raise FileNotFoundError("no config on this machine")
 
     monkeypatch.setattr(db_ops_config, "load_config", refuse)
+    monkeypatch.setattr(lib_config, "load_config", refuse)
     monkeypatch.setattr(common_cli, "read_app_commands",
                         lambda data_dir=None: [_command("APP-A")])
+    return common_cli
 
-    assert db_cli.main(["self-status", '{"format": "txt"}']) == 0
+
+def test_common_answers_with_no_config_and_says_the_column_was_not_stated(monkeypatch, capsys):
+    common_cli = _no_config(monkeypatch)
+
+    assert common_cli.main(["self-status", '{"format": "txt"}']) == 0
     out = capsys.readouterr().out
     assert "APP-A" in out
-    assert "(last run unknown: no config.json, so no store to read)" in out
+    assert "not stated" in out, "an unstated column must not read as never ran"
+
+
+def test_common_reports_the_last_runs_it_is_given(monkeypatch, capsys):
+    import json
+
+    common_cli = _no_config(monkeypatch)
+    moment = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    request = {"format": "txt", "last_runs": {"APP-A": {"status": "done", "started_at": moment}}}
+
+    assert common_cli.main(["self-status", json.dumps(request)]) == 0
+    out = capsys.readouterr().out
+    assert "last done" in out and "not stated" not in out

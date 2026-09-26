@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from db_ops.lib.field_names import with_both_names
-from db_ops.levels import ERROR, LOGGING, WARNING
+from db_ops.lib.levels import ERROR, LOGGING, WARNING
 from db_ops.lib.paths import DEFAULT_DATA_DIR
 
 

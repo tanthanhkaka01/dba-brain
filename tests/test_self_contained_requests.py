@@ -175,7 +175,6 @@ def test_resolve_host_builds_a_target_from_an_inline_block_against_an_empty_data
     target = host_ops.resolve_host(
         {"access": {"method": "winrm", "host": "10.0.0.7", "username": "svc", "password": "p",
                     "os": "Windows Server 2008 R2"}},
-        data_dir=str(tmp_path),
     )
 
     assert target.host == "10.0.0.7" and target.platform == "windows"

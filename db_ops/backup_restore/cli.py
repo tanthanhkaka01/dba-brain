@@ -17,7 +17,7 @@ from db_ops.backup_restore.backup import (
     load_backup_jobs,
     run_backup,
 )
-from db_ops.lib import common_cli
+from db_ops.transport import common_cli
 from db_ops.lib import sql_instance
 from db_ops.backup_restore.restore_script import load_script_restores
 from db_ops.lib.time_window import weekdays_text
@@ -35,18 +35,12 @@ from db_ops.backup_restore.delete_backup import run_delete_backup
 from db_ops.backup_restore.preflight import PreflightError, run_target_preflight
 from db_ops.backup_restore.events import announce, emit_backup_restore_event, resolve_run_id
 from db_ops.backup_restore.restore_database import (
-    build_restore_candidate,
-    get_latest_full_backup_for_database,
     parse_point_in_time,
     run_restore_all_latest,
     run_restore_database,
-    run_restore_diff,
-    run_restore_full,
-    run_restore_log,
     summarize_error_tail,
 )
 from db_ops.backup_restore.sanitize import sanitize_text, sanitize_value
-from db_ops.backup_restore.verify_restore import run_verify_restore
 from db_ops.lib.notify import NotifyConfig
 from db_ops.lib.secret_text import add_key_argument, set_key_env
 from db_ops.config import DEFAULT_CONFIG_PATH, load_config, resolve_config_path
@@ -257,21 +251,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Override execution_mode for this run only (sync or unsync). Defaults to the value in config.",
     )
 
-    restore_step = argparse.ArgumentParser(add_help=False)
-    restore_step.add_argument("--backup-file", help="Restore step against a specific VM import UNC .bak file.")
-    restore_step.add_argument("--source-id", help="Run restore step for only one configured source/server.")
-    restore_step.add_argument("--restore-id", help="Run restore step only for the entry with this restore_id.")
-    restore_step.add_argument("--database", help="Run restore step for one source database.")
-    restore_step.add_argument("--target-database", help="Override target database name when --database is used.")
-    for step_name in ("restore-full", "restore-diff", "restore-log"):
-        subparsers.add_parser(step_name, parents=[config_parent, restore_step], help=argparse.SUPPRESS)
+    # `restore-full`, `restore-diff` and `restore-log` were hidden commands here until 0.24.0 - one
+    # step of a configured restore, the job `common.cli restore-full/-diff/-log` does (rules R43).
+    # The diff and log ones were handed no file and only ever skipped.
 
     by_id = subparsers.add_parser(
         "restore-by-id", parents=[config_parent],
         help="Restore one configured entry through the db_ops.common primitives (JSON request).")
     by_id.add_argument("request", help="JSON object: {\"restore_id\": ..., \"point_in_time\": ..., \"dry_run\": ...}")
 
-    subparsers.add_parser("verify-restore", parents=[config_parent], help="Run DBCC CHECKDB against the restored database.")
+    # `verify-restore` was here until 0.24.0 - its own CHECKDB through run-sqlcmd, the job
+    # `common.cli verify-restore` does on every engine (rules R43, the operator's choice). The
+    # restore workflow's last phase asks common's; a person does the same, with the login stated.
     subparsers.add_parser(
         "list-restores",
         parents=[config_parent],
@@ -876,20 +867,6 @@ def main(argv: list[str]) -> int:
                     **_summarize_restore_sources(source_outputs),
                     "sources": source_outputs,
                 }
-        elif args.command in {"restore-full", "restore-diff", "restore-log"}:
-            selected_config = _find_config_for_backup(Path(args.backup_file), restore_configs) if args.backup_file else restore_config
-            database = DatabaseRestoreMapping(
-                source_database=args.database,
-                target_database=args.target_database or "",
-            ) if args.database else None
-            selected_backup = Path(args.backup_file) if args.backup_file else get_latest_full_backup_for_database(selected_config, database)
-            candidate = build_restore_candidate(selected_backup, selected_config, database=database)
-            if args.command == "restore-full":
-                output = run_restore_full(config=selected_config, candidate=candidate, logger=logger)
-            elif args.command == "restore-diff":
-                output = run_restore_diff(config=selected_config, candidate=candidate, logger=logger)
-            else:
-                output = run_restore_log(config=selected_config, candidate=candidate, logger=logger)
         elif args.command == "restore-workflow":
             def _rw_announce(phase: str, message: str, extra: dict[str, object] | None = None) -> None:
                 # Same events the scheduler emits. A run reports the same way whether an operator
@@ -935,16 +912,6 @@ def main(argv: list[str]) -> int:
                 _meta_reports.update(_report)
             if _meta_reports:
                 output["server_metadata"] = _meta_reports
-        elif args.command == "verify-restore":
-            source_outputs = []
-            for config in restore_configs:
-                result = run_verify_restore(config)
-                source_outputs.append({"source_id": config.source_id, "returncode": result.returncode})
-            output = {
-                "status": "SUCCESS",
-                "sources_considered": len(source_outputs),
-                "sources": source_outputs,
-            }
         else:
             raise ValueError(f"Unknown command: {args.command}")
 

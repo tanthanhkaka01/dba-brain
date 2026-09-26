@@ -18,7 +18,7 @@ import json
 from pathlib import Path
 
 from db_ops.common import app_command_admin, field_migration
-from db_ops.common import data_sources
+from db_ops.lib import data_sources
 from db_ops.lib import field_names, shared_objects
 from db_ops.lib.target_flags import is_metrics_enabled, is_target_enabled
 from db_ops.telegram.command_processor import menu_order_of
@@ -324,7 +324,7 @@ def test_the_store_reads_its_database_under_either_name():
 def test_a_docker_connection_is_registered_under_the_standard_names():
     import inspect
 
-    from db_ops.sre.docker_db import register_config
+    from db_ops.lib import docker_db_registry as register_config
 
     source = inspect.getsource(register_config)
     assert '"db_type": spec.engine' in source and '"password_ref": spec.password_env' in source

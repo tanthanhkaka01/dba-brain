@@ -1,7 +1,7 @@
 """Naming and daily archiving of published report files — pure, path in / path out.
 
 Split from the ``report_base_url`` lookup on 2026-08-15: that one reads
-``data/reports_config.json`` and went to ``common.data_sources``, while everything here works on
+``data/reports_config.json`` and went to ``lib.data_sources``, while everything here works on
 the paths it is handed and belongs where every component can call it in-process.
 
 Keep one dated copy per day of a report that is otherwise overwritten in place.

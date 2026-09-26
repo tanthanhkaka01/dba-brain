@@ -2,7 +2,6 @@
 
 __all__ = ["__version__"]
 
-# Single source of truth for the db_ops version. Bump this on every fix/change;
-# the Docker build (docker/build_and_package.ps1) reads it to tag the image
-# (db_ops:<version>). Format: MAJOR.MINOR.PATCH (zero-padded).
-__version__ = "0.23.0"
+# The version's one source is db_ops/lib/version.py (0.24.0): `common` may import nothing but
+# `lib`, and it reports the version. Re-exported so `db_ops.__version__` reads as it always did.
+from db_ops.lib.version import __version__  # noqa: E402

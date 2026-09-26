@@ -1,43 +1,32 @@
-"""The one client for the ``db_ops.common`` CLI.
+"""A call to ``common.cli`` or ``db.cli``: the command built, and the answer read. Both pure.
 
-An app does not import ``common``; it hands ``common`` a JSON object and reads a JSON object
-back. This module is the transport for that, and there is exactly one copy of it.
-
-**It lives in ``lib`` rather than in each app**, and the distinction from ``queue_message.py`` —
-which *is* duplicated per app — is worth stating, because the first attempt at this file copied it
-into five app folders on that precedent. ``queue_message.py`` has to be app-side: it falls back to
-an in-process insert and therefore imports ``db_ops.db``, which an app may do and ``lib`` may not.
-This module imports **nothing** from ``db_ops`` at all — the module it runs appears in an argv
-list, as a string. Nothing forces it into five folders, and five copies of a transport is exactly
-how six copies of ``queue_message.py`` once drifted into three behaviours.
-
-Three details are decisions, not defaults:
+An app does not import ``common``; it hands ``common`` a JSON object and reads a JSON object back.
+**Starting the process is ``transport``'s** (docs/15_transport.md): ``lib`` builds the command,
+``transport`` runs it, ``lib`` reads the answer. Until 0.24.0 this module also started the process,
+which put an operation inside the layer everything imports (rules R07). What stayed here is every
+decision about the call - and each of them was a finding before it was a rule:
 
 * **The payload goes in on stdin**, never argv. These requests carry resolved passwords, and argv
-  is readable by anyone who can run ``ps`` on the machine.
+  is readable by anyone who can run ``ps`` on the machine (R14).
 * **No deadline by default.** A restore or a backup of a large database legitimately runs for
   hours. The app command that schedules the work carries the window and the daemon kills the
   parent — one deadline, at the level that knows the number. ``timeout_seconds`` exists for the
   caller that genuinely knows its own: the instance-metadata replay caps itself at 30 minutes.
 * **stderr is captured unless the caller streams it.** Most commands answer in seconds and their
-  stderr belongs in an error message. Building a lab database takes minutes - an Oracle first
-  start creates the database - and a person watching ``sre.cli create-db-docker`` (or the Telegram
-  chat relaying it) saw nothing until the end when that work moved into ``common`` (0.23.0).
-  ``stream_stderr=True`` passes the child's progress straight through; stdout is still the answer.
-* **Two shapes, because callers genuinely differ.** :func:`run` raises when the command reports
-  failure; :func:`run_allowing_failure` hands the failure back as data. Which one is right is a
-  property of the work, not a preference — see :func:`run_allowing_failure`.
-
-**Two readers, not three.** There was a ``run_ok`` here for the commands that answered
-``{"ok": …}`` instead of the six-key envelope; it was written as transitional and it is gone —
-every ``common`` and ``db`` command answers in the envelope now, so there is one shape to read.
+  stderr belongs in an error message. Building a lab database takes minutes, and a person watching
+  ``sre.cli create-db-docker`` (or the Telegram chat relaying it) saw nothing until the end when
+  that work moved into ``common`` (0.23.0). ``stream_stderr=True`` passes the child's progress
+  straight through; stdout is still the answer.
+* **Bytes, pinned to UTF-8, strict going out and forgiving coming back** - see :func:`decode`.
+* **Two readers**, because callers genuinely differ: ``transport.common_cli.run`` raises when the
+  command reports failure, ``run_allowing_failure`` hands the failure back as data.
 """
 
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -45,111 +34,122 @@ class CommonCliError(RuntimeError):
     """A ``common`` CLI command did not answer, or answered that the work failed."""
 
 
-def run(command: str, request: dict[str, Any], *,
-        timeout_seconds: int | None = None, stream_stderr: bool = False) -> dict[str, Any]:
-    """Run ``db_ops.common.cli <command>`` with ``request`` and return the response's ``data``.
+#: The dispatcher a command belongs to. ``db_ops.db.cli`` owns the commands that open the runtime
+#: store (ORD 01); everything else is ``common``.
+DEFAULT_MODULE = "db_ops.common.cli"
+DB_MODULE = "db_ops.db.cli"
+#: The only two CLIs a command is built for (rules R38).
+MODULES = (DEFAULT_MODULE, DB_MODULE)
+
+
+@dataclass(frozen=True)
+class CommandSpec:
+    """Everything needed to start one call, and nothing that starts it."""
+
+    command: str
+    executable: str
+    args: tuple[str, ...]
+    stdin: bytes
+    timeout_seconds: int | None = None
+    stream_stderr: bool = False
+
+    @property
+    def argv(self) -> list[str]:
+        return [self.executable, *self.args]
+
+
+def build_command(command: str, request: dict[str, Any], *, module: str = DEFAULT_MODULE,
+                  timeout_seconds: int | None = None, stream_stderr: bool = False) -> CommandSpec:
+    """The call ``python -m <module> <command> -`` with ``request`` on stdin.
+
+    The request is encoded strictly: a payload that cannot be encoded is a caller's bug and must not
+    be delivered with a character silently swapped.
+    """
+    if module not in MODULES:
+        raise ValueError(f"{module!r} is not a CLI a command is built for; expected one of {MODULES}.")
+    payload = json.dumps(request, ensure_ascii=False, default=str).encode("utf-8")
+    return CommandSpec(command=command, executable=sys.executable, args=("-m", module, command, "-"),
+                       stdin=payload, timeout_seconds=timeout_seconds, stream_stderr=stream_stderr)
+
+
+def decode(raw: bytes | None) -> str:
+    """What came back, as text: UTF-8, with any byte that is not replaced rather than raised.
+
+    The child's stdout is not only the JSON answer - a native tool it shells out to writes there
+    too, in whatever code page the machine has. One cp1252 byte (0x97, an em dash from a Windows
+    console) used to kill the reader and the answer never arrived: the gate had run, exited 0 and
+    printed valid JSON, and the caller was told "authorize exited 0 without a JSON response". A
+    replaced byte costs one character of an error message; a raised decode costs the answer.
+
+    The pipe carries bytes for the same reason in the other direction: ``text=True`` encodes through
+    the machine's ANSI code page on Windows, so one program talking to itself depended on the
+    console it happened to be started from (an em dash in a task's SQL once arrived as the lone
+    surrogate U+DC97, reported at a position the script did not have).
+    """
+    return (raw or b"").decode("utf-8", errors="replace")
+
+
+def read_answer(command: str, *, returncode: int | None, stdout: str,
+                stderr: str) -> tuple[bool, dict[str, Any], str]:
+    """``(success, data, error)`` from the envelope a command printed.
+
+    A command that printed no JSON at all raises :class:`CommonCliError`: that is not a failed
+    command, it is no answer, and the two must not be recorded as the same thing.
+    """
+    text = (stdout or "").strip()
+    try:
+        answer = json.loads(text)
+    except ValueError:
+        detail = (stderr or text or "").strip()[:400]
+        raise CommonCliError(f"{command} exited {returncode} without a JSON response: {detail}") from None
+    data = answer.get("data")
+    return (bool(answer.get("success")),
+            data if isinstance(data, dict) else {},
+            str(answer.get("error") or ""))
+
+
+def data_or_raise(command: str, answer: tuple[bool, dict[str, Any], str]) -> dict[str, Any]:
+    """The answer's ``data``, or :class:`CommonCliError` when the command reported failure.
 
     The unwrapping is what keeps callers unchanged: the CLI wraps the very dict the in-process
     function used to return in ``data``, so a caller sees exactly what it saw before.
-
-    A failed command raises. That is right wherever the failure is fatal to what the caller is
-    doing — a restore step, a table load nobody can use half of — because letting it flow back as
-    data would make it indistinguishable from a command that ran and found nothing to do.
     """
-    success, data, error = _call(command, request, timeout_seconds=timeout_seconds,
-                                 stream_stderr=stream_stderr)
+    success, data, error = answer
     if not success:
         raise CommonCliError(f"{command} failed: {error or 'no reason given'}")
     return data
 
 
-def run_allowing_failure(command: str, request: dict[str, Any], *,
-                         timeout_seconds: int | None = None,
-                         stream_stderr: bool = False) -> tuple[bool, dict[str, Any], str]:
-    """Like :func:`run`, but a failed command comes back as data instead of an exception.
+@dataclass(frozen=True)
+class Invocation:
+    """A configured command line that runs ``python -m db_ops.common.cli <command> <json>``."""
 
-    A **backup** that fails is a recorded outcome, not a stop: the app writes a ``job_runs`` row
-    with the exit code, the stderr and the error text, reports it, and carries on to the next job.
-    Raising would throw away exactly the fields that row is made of — and the CLI does send them,
-    answering ``success: false`` with the full result still in ``data``.
+    command: str
+    request: dict[str, Any]
+    #: Where the JSON sits in the argv, so a caller can put ``-`` there and send the request on
+    #: stdin instead - a request that carries a password must never be an argument.
+    request_index: int
 
-    Returns ``(success, data, error)``. A command that could not run **at all** still raises: that
-    is not a failed backup, it is no backup, and the two must not be recorded as the same thing.
+
+def common_invocation(argv: list[str]) -> Invocation | None:
+    """What a configured argv asks ``common.cli`` for, or ``None`` when it runs something else.
+
+    The bot's actions are data: an argv with the request rendered into one argument. Since 0.24.0
+    ``common.cli`` reads no configuration (rules R09), so the app has to finish such a request
+    before it runs - which needs the command and the request out of the argv, read here once.
+    A request argument that is ``-`` or ``@file``, or not a JSON object, is not one to finish.
     """
-    return _call(command, request, timeout_seconds=timeout_seconds, stream_stderr=stream_stderr)
-
-
-#: The dispatcher a command belongs to. ``db_ops.db.cli`` owns the three that open the runtime
-#: store (ORD 01); everything else is ``common``. A parameter rather than a second copy of this
-#: function: ``db/queue_message.py`` had its own ``subprocess.run([... "db_ops.db.cli" ...])``,
-#: which is the same twenty lines with one string changed — and "spawn a db_ops CLI and read JSON
-#: back" existing twice is how the two grow different answers for a command that printed nothing.
-DEFAULT_MODULE = "db_ops.common.cli"
-
-
-def spawn(command: str, request: dict[str, Any], *, module: str = DEFAULT_MODULE,
-          timeout_seconds: int | None = None, stream_stderr: bool = False):
-    """Run the command with the request on stdin. Returns ``(completed, error_text)``.
-
-    Public because ``db/queue_message.py`` needs the spawn without the reading: it falls back to
-    an in-process insert when the subprocess cannot deliver, which is a policy this module cannot
-    hold (``lib`` may not import ``db``).
-    """
-    payload = json.dumps(request, ensure_ascii=False, default=str)
-    try:
-        completed = subprocess.run(
-            [sys.executable, "-m", module, command, "-"],
-            input=payload.encode("utf-8"), stdout=subprocess.PIPE,
-            # None = inherited: the child's progress reaches this process's stderr as it is written.
-            stderr=None if stream_stderr else subprocess.PIPE, timeout=timeout_seconds,
-            # **Bytes, and pinned to UTF-8 below.** `text=True` encodes through
-            # `locale.getpreferredencoding()`, which on Windows is the machine's ANSI code page.
-            # One program talking to itself over a pipe then depends on the console it happened to
-            # be started from — and the two ends do not always agree, because the child's
-            # `sys.stdin` is opened with `errors="surrogateescape"`. The pipe carries bytes here so
-            # that each direction can state its own error handling; see below for why they differ.
-            #
-            # The failure that found it: a task's SQL held an em dash. The parent wrote it as
-            # cp1252 0x97; the child read UTF-8 and recovered the undecodable byte as the lone
-            # surrogate U+DC97, which pyodbc then refused to encode to UTF-16LE — reported as
-            # position 350 of a script whose own bytes hold no 0x97 anywhere. It reproduced under
-            # the daemon and never from an Administrator console, because those two had different
-            # code pages, which is what "depends on the console" costs.
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        return None, f"{command} could not run: {exc}"
-    # **Written and read in different directions on purpose.** The request goes out as strict
-    # UTF-8: a payload that cannot be encoded is a caller's bug and must not be delivered with a
-    # character silently swapped. What comes back is decoded with `errors="replace"`, because the
-    # child's stdout is not only the JSON answer — a native tool it shells out to writes there too,
-    # in whatever code page the machine has. One cp1252 byte (0x97, an em dash from a Windows
-    # console) used to kill the reader and the answer never arrived: the gate had run, exited 0 and
-    # printed valid JSON, and the caller was told "authorize exited 0 without a JSON response".
-    # A replaced byte costs one character of an error message; a raised decode costs the answer.
-    return subprocess.CompletedProcess(
-        completed.args, completed.returncode,
-        (completed.stdout or b"").decode("utf-8", errors="replace"),
-        (completed.stderr or b"").decode("utf-8", errors="replace"),
-    ), ""
-
-
-
-def _call(command: str, request: dict[str, Any], *, timeout_seconds: int | None = None,
-          stream_stderr: bool = False) -> tuple[bool, dict[str, Any], str]:
-    completed, error = spawn(command, request, timeout_seconds=timeout_seconds,
-                             stream_stderr=stream_stderr)
-    if completed is None:
-        raise CommonCliError(error)
-
-    stdout = (completed.stdout or "").strip()
-    try:
-        answer = json.loads(stdout)
-    except ValueError:
-        detail = (completed.stderr or stdout or "").strip()[:400]
-        raise CommonCliError(
-            f"{command} exited {completed.returncode} without a JSON response: {detail}") from None
-
-    data = answer.get("data")
-    return (bool(answer.get("success")),
-            data if isinstance(data, dict) else {},
-            str(answer.get("error") or ""))
+    parts = [str(part) for part in argv]
+    for index in range(len(parts) - 2):
+        if parts[index] == "-m" and parts[index + 1] == DEFAULT_MODULE:
+            command_index, request_index = index + 2, index + 3
+            if request_index >= len(parts):
+                return None
+            try:
+                request = json.loads(parts[request_index])
+            except ValueError:
+                return None
+            if not isinstance(request, dict):
+                return None
+            return Invocation(parts[command_index], request, request_index)
+    return None

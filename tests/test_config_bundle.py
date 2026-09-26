@@ -539,8 +539,8 @@ def test_export_then_import_stands_a_second_machine_up(
     bundle = tmp_path / "prod-bundle.json"
     target = tmp_path / "second-machine"
 
-    assert cli.main(["export-data", str(bundle), "--root", str(source_root)]) == 0
-    assert cli.main(["import-data", str(bundle), "--root", str(target)]) == 0
+    assert _tool(cli, "export-data", bundle=str(bundle), root=str(source_root)) == 0
+    assert _tool(cli, "import-data", bundle=str(bundle), root=str(target)) == 0
 
     capsys.readouterr()
     for entry in _entries(source_root):
@@ -555,8 +555,8 @@ def test_export_refuses_to_clobber_an_existing_bundle(
     bundle = tmp_path / "prod-bundle.json"
     bundle.write_text("{}", encoding="utf-8")
 
-    assert cli.main(["export-data", str(bundle), "--root", str(source_root)]) == 2
-    assert "--force" in capsys.readouterr().err
+    assert _tool(cli, "export-data", bundle=str(bundle), root=str(source_root)) == 1
+    assert '"force"' in capsys.readouterr().err
     assert bundle.read_text(encoding="utf-8") == "{}"
 
 
@@ -571,12 +571,11 @@ def test_export_warns_when_the_filename_is_one_git_would_take(
     """
     from db_ops import cli
 
-    assert cli.main(["export-data", str(tmp_path / "estate.json"),
-                     "--root", str(source_root)]) == 0
+    assert _tool(cli, "export-data", bundle=str(tmp_path / "estate.json"), root=str(source_root)) == 0
     assert "WARNING" in capsys.readouterr().out
 
-    assert cli.main(["export-data", str(tmp_path / "prod-bundle.json"),
-                     "--root", str(source_root)]) == 0
+    assert _tool(cli, "export-data", bundle=str(tmp_path / "prod-bundle.json"),
+                 root=str(source_root)) == 0
     assert "WARNING" not in capsys.readouterr().out
 
 
@@ -587,10 +586,10 @@ def test_plan_changes_nothing_and_names_every_action(
 
     bundle = tmp_path / "prod-bundle.json"
     target = tmp_path / "second-machine"
-    cli.main(["export-data", str(bundle), "--root", str(source_root)])
+    _tool(cli, "export-data", bundle=str(bundle), root=str(source_root))
     capsys.readouterr()
 
-    assert cli.main(["import-data", str(bundle), "--root", str(target), "--plan"]) == 0
+    assert _tool(cli, "import-data", bundle=str(bundle), root=str(target), plan_only=True) == 0
 
     printed = capsys.readouterr().out
     assert "create" in printed and "data/db_instances.json" in printed
@@ -605,7 +604,7 @@ def test_a_bundle_that_is_not_json_is_a_sentence_not_a_traceback(
     broken = tmp_path / "prod-bundle.json"
     broken.write_text("{ this is not json", encoding="utf-8")
 
-    assert cli.main(["import-data", str(broken), "--root", str(tmp_path / "t")]) == 1
+    assert _tool(cli, "import-data", bundle=str(broken), root=str(tmp_path / "t")) == 1
     assert "not readable as JSON" in capsys.readouterr().err
 
 
@@ -617,6 +616,12 @@ def test_both_commands_are_reachable_and_named_in_the_usage(capsys: pytest.Captu
     assert "export-data" in usage and "import-data" in usage
     assert cli.main(["export-data", "--help"]) == 0
     assert cli.main(["import-data", "--help"]) == 0
+
+
+def _tool(cli, command: str, **request) -> int:
+    """``db-ops export-data`` / ``import-data`` as a person types them since 0.24.0: one JSON object
+    (rules R41 - the root's own commands became ``common.cli`` commands), read as text."""
+    return cli.main([command, json.dumps({**request, "format": "txt"})])
 
 
 # -- the file no serialiser wrote ------------------------------------------------------------ #
@@ -749,12 +754,12 @@ def test_an_import_into_site_packages_is_refused_rather_than_reported_as_success
     site_packages.mkdir(parents=True)
     monkeypatch.setattr("db_ops.lib.paths.TOOL_ROOT", site_packages)
 
-    code = cli._import_data_command([str(bundle)])
+    code = _tool(cli, "import-data", bundle=str(bundle))
     printed = "".join(capsys.readouterr())
 
-    assert code == 2, f"an import into site-packages must fail, not succeed: {printed}"
+    assert code == 1, f"an import into site-packages must fail, not succeed: {printed}"
     assert "site-packages" in printed
-    assert "--root" in printed and "db-ops init" in printed
+    assert '"root"' in printed and "db-ops init" in printed
     assert not (site_packages / "config.json").exists(), "nothing may be written on a refusal"
 
 
@@ -768,7 +773,7 @@ def test_stating_the_root_still_allows_an_unusual_destination(
     bundle = _bundle_file(source_root, tmp_path / "estate-bundle.json")
     destination = tmp_path / "lib" / "site-packages"
 
-    code = cli._import_data_command([str(bundle), "--root", str(destination)])
+    code = _tool(cli, "import-data", bundle=str(bundle), root=str(destination))
 
     assert code == 0, "".join(capsys.readouterr())
     assert (destination / "config.json").exists()
@@ -789,7 +794,7 @@ def test_an_estate_whose_commands_are_all_worker_says_so_after_importing(
     ]}), encoding="utf-8")
     bundle = _bundle_file(source_root, tmp_path / "estate-bundle.json")
 
-    code = cli._import_data_command([str(bundle), "--root", str(tmp_path / "estate")])
+    code = _tool(cli, "import-data", bundle=str(bundle), root=str(tmp_path / "estate"))
     printed = "".join(capsys.readouterr())
 
     assert code == 0, printed
@@ -809,6 +814,6 @@ def test_an_estate_that_would_run_here_says_nothing_about_roles(
     ]}), encoding="utf-8")
     bundle = _bundle_file(source_root, tmp_path / "estate-bundle.json")
 
-    cli._import_data_command([str(bundle), "--root", str(tmp_path / "estate")])
+    _tool(cli, "import-data", bundle=str(bundle), root=str(tmp_path / "estate"))
 
     assert "DB_OPS_NODE_ROLE" not in "".join(capsys.readouterr())

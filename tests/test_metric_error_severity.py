@@ -20,10 +20,12 @@ import pytest
 
 from db_ops.lib.event_policy import PHASE_CONNECT, PHASE_EXECUTE, resolve_failure_phase
 from db_ops.common import remote_exec
+# Which half of a remote attempt broke is read off remote_exec's exception classes, which only
+# `common` knows - so since 0.24.0 it is decided there, inside `metric-batch`.
+from db_ops.common.metric_batch import _remote_failure_phase
 from db_ops.metrics.collector import (
     MetricCommandError,
     _collect_one_metric,
-    _remote_failure_phase,
 )
 from conftest import shipped_config
 from db_ops.metrics.definitions import load_metric_definitions
@@ -260,3 +262,31 @@ def test_warn_is_accepted_as_a_spelling_of_warning(tmp_path):
     definition = load_metric_definitions(catalog, sql_dir=sql_dir)[0]
 
     assert (definition.connection_error_severity, definition.execution_error_severity) == ("WARNING", "WARNING")
+
+
+# --------------------------------------------------------------------------- #
+# Oracle's own words for "the database did not answer" (0.24.0)
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("message", [
+    "Legacy Oracle run failed: ORA-12541: TNS:no listener",
+    "ORA-12514: TNS:listener does not currently know of service requested in connect descriptor",
+    "ORA-12170: TNS:Connect timeout occurred",
+    "ORA-01033: ORACLE initialization or shutdown in progress",
+    "ORA-01034: ORACLE not available",
+    "ORA-01017: invalid username/password; logon denied",
+])
+def test_an_oracle_target_that_did_not_answer_is_a_connect_failure(message):
+    """An 8i target reached through the legacy bridge reports these as text: the bridge answered,
+    the target's listener, instance or login did not. Graded as a failed query until 0.24.0, so an
+    availability metric said WARNING about a database that was down - the operator's call to fix."""
+    assert resolve_failure_phase(RuntimeError(message)) == PHASE_CONNECT
+
+
+@pytest.mark.parametrize("message", [
+    "Oracle bridge at http://127.0.0.1:8765 did not answer ([WinError 10061] refused).",
+    "ORA-00942: table or view does not exist",
+])
+def test_a_dead_bridge_or_a_bad_query_is_still_not_a_connect_failure(message):
+    """The bridge process not answering is the monitoring's failure - the target may be fine, and
+    calling it down would be the louder claim made on a guess."""
+    assert resolve_failure_phase(RuntimeError(message)) == PHASE_EXECUTE

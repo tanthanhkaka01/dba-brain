@@ -188,27 +188,6 @@ def test_env_var_names_follow_naming_convention():
 # No cross-app CLI imports (import boundary enforcement)
 # ---------------------------------------------------------------------------
 
-def test_no_direct_import_of_reports_from_telegram():
-    """telegram.metrics_reports must call reports via subprocess, not import it."""
-    import ast
-    import importlib.util
-
-    spec = importlib.util.find_spec("db_ops.telegram.metrics_reports")
-    assert spec is not None
-    source = Path(spec.origin).read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.Import, ast.ImportFrom)):
-            names = (
-                [alias.name for alias in node.names]
-                if isinstance(node, ast.Import)
-                else ([node.module] if node.module else [])
-            )
-            for name in names:
-                assert not (name or "").startswith("db_ops.reports"), (
-                    f"telegram.metrics_reports must not import from db_ops.reports directly; found: {name}"
-                )
-
 
 def test_no_direct_import_of_telegram_from_sql_tasks():
     """sql_tasks.runner must not import telegram modules directly.

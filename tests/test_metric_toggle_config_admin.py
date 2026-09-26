@@ -192,7 +192,7 @@ def test_execute_metric_toggle_command_maps_args(monkeypatch):
     this path no longer calls. What is asserted is the request — the bot's only job here is to
     say which server, which scope and which direction.
     """
-    from db_ops.lib import common_cli
+    from db_ops.transport import common_cli
     from db_ops.telegram import command_processor
 
     calls = {}

@@ -6,8 +6,8 @@ from typing import Any
 # Imported by name, not as a module: `sql_text` is also a local variable in this file
 # (the SQL itself), and a module bound to the same name shadows it silently.
 from db_ops.lib.sql_text import DEFAULT_MAX_ROWS, DEFAULT_TIMEOUT_SECONDS
-from db_ops.common import data_sources
-from db_ops.lib import common_cli
+from db_ops.lib import data_sources
+from db_ops.transport import common_cli
 from db_ops.lib.paths import REPO_ROOT, TOOL_ROOT  # noqa: F401 - one definition, see that module
 from db_ops.lib.paths import asset_candidates
 
@@ -27,6 +27,17 @@ DEFAULT_SQL_TO_XLSX_MAX_ROWS = DEFAULT_MAX_ROWS
 # the CLI boundary exists to stop. Callers catch it by this name and always did.
 class SqlToXlsxError(RuntimeError):
     """A ``/spbot_sql_to_xlsx`` run that failed for a reason the operator can read."""
+
+
+def _finished(request: dict[str, Any], *, data_dir: str | Path | None = None) -> dict[str, Any]:
+    """``request`` with the login stated - ``run-sql`` reads no configuration (rules R09), so the
+    server_id the command names is turned into its connection here, from this node's data/."""
+    from db_ops.lib.data_sources import request_fill
+
+    try:
+        return request_fill.fill_request("run-sql", request, data_dir=data_dir)
+    except request_fill.RequestFillError as exc:
+        raise RuntimeError(str(exc)) from exc
 
 
 def execute_sql_support_command(*, command: Any, args: list[str]) -> dict[str, Any]:
@@ -53,7 +64,8 @@ def execute_sql_support_command(*, command: Any, args: list[str]) -> dict[str, A
     # reported success. That is why this could not be routed through `run_sql` before it took
     # `params`: the values are **bound**, never pasted into the SQL, and they come from a chat
     # message.
-    success, result, error = common_cli.run_allowing_failure("run-sql", {
+    # The login is this node's to state (rules R09): run-sql reads no configuration.
+    success, result, error = common_cli.run_allowing_failure("run-sql", _finished({
         "target": str(config.get("server_id") or ""),
         "database_name": database_name,
         "credential_name": str(config.get("credential_name") or ""),
@@ -62,7 +74,7 @@ def execute_sql_support_command(*, command: Any, args: list[str]) -> dict[str, A
         "commit": True,
         "timeout_seconds": int(config.get("connect_timeout_seconds",
                                           DEFAULT_CONNECT_TIMEOUT_SECONDS)),
-    })
+    }))
     if not success:
         raise RuntimeError(error or "run-sql failed without a reason.")
 
@@ -102,15 +114,18 @@ def run_sql_to_xlsx(
     environment, which is where the daemon put it, and putting a passphrase on a command line
     would publish it to the process table.
     """
-    success, result, error = common_cli.run_allowing_failure("run-sql", {
-        "target": target,
-        "sql_text": sql_text,
-        "database_name": database,
-        "credential_name": credential_name,
-        "max_rows": max_rows,
-        "timeout_seconds": timeout_seconds,
-        "data_dir": str(data_dir) if data_dir else "",
-    })
+    try:
+        request = _finished({
+            "target": target,
+            "sql_text": sql_text,
+            "database_name": database,
+            "credential_name": credential_name,
+            "max_rows": max_rows,
+            "timeout_seconds": timeout_seconds,
+        }, data_dir=data_dir)
+    except RuntimeError as exc:
+        raise SqlToXlsxError(str(exc)) from exc
+    success, result, error = common_cli.run_allowing_failure("run-sql", request)
     if not success:
         raise SqlToXlsxError(error or "run-sql failed without a reason.")
     if not result["columns"]:
@@ -175,16 +190,10 @@ def find_database(config: dict[str, Any]) -> dict[str, Any]:
 def find_credential(config: dict[str, Any]) -> dict[str, Any]:
     """The credential the command's ``action_config`` names — required, never inferred.
 
-    Selection is the shared :func:`db_ops.common.data_sources.find_database_credential`.
+    The rule is :func:`db_ops.lib.data_sources.find_command_credential`, which
+    ``common.cli check-credentials`` asks too.
     """
-    return data_sources.find_database_credential(
-        data_sources.load_credentials("sqlserver"),
-        server_id=str(config.get("server_id", "")),
-        credential_name=str(config.get("credential_name", "")),
-        db_type=str(config.get("db_type", "sqlserver")),
-        service_name=str(config.get("service_name", "")),
-        instance_name=str(config.get("instance_name", "")),
-    )
+    return data_sources.find_command_credential(config)
 
 
 def resolve_telegram_sql_file(file_name: str) -> Path:

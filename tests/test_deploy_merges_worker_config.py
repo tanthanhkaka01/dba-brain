@@ -50,16 +50,6 @@ class _FakeSFTP:
         pass
 
 
-class _FakeClient:
-    def __init__(self, sftp):
-        self._sftp = sftp
-
-    def open_sftp(self):
-        return self._sftp
-
-    def close(self):
-        pass
-
 
 def _task(sql_id, *, name, interval=300):
     return {"sql_id": sql_id, "target_no": 1, "server_id": "ACME-192-0-2-248",
@@ -72,7 +62,7 @@ def _merge(tmp_path, monkeypatch, *, master, worker, dry_run=False, unreadable=(
         (tmp_path / name).write_text(json.dumps(payload), encoding="utf-8")
     sftp = _FakeSFTP({name: json.dumps(payload) for name, payload in worker.items()},
                      unreadable=unreadable)
-    monkeypatch.setattr(worker_data, "ssh_connect", lambda *a, **k: _FakeClient(sftp))
+    monkeypatch.setattr(worker_data, "ssh_connect", lambda *a, **k: sftp)
     return worker_data.merge_worker_config(
         host="h", user="u", password="p", to_master_path=str(tmp_path), dry_run=dry_run)
 
@@ -369,7 +359,7 @@ def test_the_file_keeps_the_indent_it_already_used(tmp_path, monkeypatch, indent
                     encoding="utf-8")
     sftp = _FakeSFTP({"sql_commands.json": json.dumps(
         {"sql_commands": [{"sql_id": 16}, {"sql_id": 17}]})})
-    monkeypatch.setattr(worker_data, "ssh_connect", lambda *a, **k: _FakeClient(sftp))
+    monkeypatch.setattr(worker_data, "ssh_connect", lambda *a, **k: sftp)
 
     worker_data.merge_worker_config(host="h", user="u", password="p",
                                     to_master_path=str(tmp_path))

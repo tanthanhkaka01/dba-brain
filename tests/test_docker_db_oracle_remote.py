@@ -88,8 +88,10 @@ def test_resolve_remote_ssh_password_requires_ref_or_value():
         resolve_remote_ssh_password(password=None, password_ref=None)
 
 
-def test_common_ssh_resolve_key(tmp_path):
-    from db_ops.common.ssh import SshError, resolve_ssh_key
+def test_a_key_is_found_by_its_name_or_taken_by_its_path(tmp_path):
+    # The finder is the data reader's (lib.data_sources) - common.ssh re-exported it until 0.24.0.
+    from db_ops.lib.data_sources import resolve_ssh_key
+    from db_ops.lib.ssh_errors import SshError
     keys = tmp_path / "ssh_keys"
     keys.mkdir()
     (keys / "id_test.key").write_text("KEYDATA", encoding="utf-8")

@@ -6,17 +6,18 @@ same host/user/key resolution as every other control command):
 * :func:`pull_data_config` — copy updated ``data/`` config files from the worker
   back to the master. The worker's ``data/`` is bind-mounted on the host at
   ``<remote-dir>/data``, so this is a plain SFTP fetch (no docker cp needed).
-* :func:`create_db_docker_on_worker` — run ``sre.cli create-db-docker`` inside
-  the worker container via ``worker-run``, then optionally pull the config back.
+* :func:`create_db_docker_on_worker` — build a lab database on the worker's host through
+  ``common.cli create-db-docker``, and register it here.
 """
 
 from __future__ import annotations
-from db_ops.common.data_sources import REGISTRY_FILENAME  # noqa: F401 - one definition
+from db_ops.lib.data_sources import REGISTRY_FILENAME  # noqa: F401 - one definition
 
 import copy
 import json
 import os
 import stat as stat_mod
+import sys
 import tempfile
 from pathlib import Path
 
@@ -26,7 +27,6 @@ from db_ops.control._support import (
     DEFAULT_REMOTE_DIR,
     ssh_connect,
 )
-from db_ops.control.worker_exec import run_worker_command
 from db_ops.lib.paths import OPERATOR_ASSET_KINDS
 from db_ops.lib.data_files import known_names, pullable_names
 
@@ -100,10 +100,10 @@ class WorkerConfigUnreadable(RuntimeError):
     """A worker config file exists but cannot be read, so the merge cannot honour it."""
 
 
-def _remote_exists(sftp, remote: str) -> bool:
+def _remote_exists(client, remote: str) -> bool:
     """Is ``remote`` there at all? ``stat`` needs only directory search, not file read."""
     try:
-        sftp.stat(remote)
+        client.stat(remote)
         return True
     except IOError:
         return False
@@ -348,26 +348,22 @@ def merge_worker_secrets(
 
     client = ssh_connect(host, user, password, port)
     try:
-        sftp = client.open_sftp()
+        print(f"# merge worker secrets {user}@{host}:{remote} -> {local}"
+              f"{' (dry-run)' if dry_run else ''}", flush=True)
         try:
-            print(f"# merge worker secrets {user}@{host}:{remote} -> {local}"
-                  f"{' (dry-run)' if dry_run else ''}", flush=True)
-            try:
-                sftp.stat(remote)
-            except IOError:
-                print("  MISSING  encrypted_secret_text.json (not on worker)", flush=True)
-                return "MISSING"
-            if not local.exists():
-                print("  MISSING  encrypted_secret_text.json (not on master)", flush=True)
-                return "MISSING"
-            action = _merge_secret_store(
-                sftp, remote=remote, local=local, key=key, dry_run=dry_run,
-                plaintext=plaintext if plaintext.exists() else None,
-            )
-            print(f"  {action:<8} encrypted_secret_text.json", flush=True)
-            return action
-        finally:
-            sftp.close()
+            client.stat(remote)
+        except IOError:
+            print("  MISSING  encrypted_secret_text.json (not on worker)", flush=True)
+            return "MISSING"
+        if not local.exists():
+            print("  MISSING  encrypted_secret_text.json (not on master)", flush=True)
+            return "MISSING"
+        action = _merge_secret_store(
+            client, remote=remote, local=local, key=key, dry_run=dry_run,
+            plaintext=plaintext if plaintext.exists() else None,
+        )
+        print(f"  {action:<8} encrypted_secret_text.json", flush=True)
+        return action
     finally:
         client.close()
 
@@ -398,38 +394,34 @@ def merge_worker_config(
     to_master = Path(to_master_path or DEFAULT_MASTER_DATA_PATH)
     client = ssh_connect(host, user, password, port)
     try:
-        sftp = client.open_sftp()
-        try:
-            def read_source(name: str):
-                remote = f"{from_worker_path.rstrip('/')}/{name}"
-                try:
-                    with tempfile.TemporaryDirectory() as tmpdir:
-                        worker_copy = Path(tmpdir) / name
-                        sftp.get(remote, str(worker_copy))
-                        return json.loads(worker_copy.read_text(encoding="utf-8-sig"))
-                except IOError as exc:
-                    # A file that is *there but unreadable* is the dangerous case, and it used to
-                    # be indistinguishable from an absent one: both printed "not on worker", the
-                    # merge skipped, and the copy step then overwrote whatever the operator had
-                    # changed. That is how a `/spbot_metric_toggle` was lost on 2026-08-05 — the
-                    # container had rewritten the file as root 0600 and the master reads it as
-                    # tuser. Refuse instead: nothing is built or shipped yet, so stopping is free,
-                    # and continuing means destroying the very change this step exists to keep.
-                    if _remote_exists(sftp, remote):
-                        raise WorkerConfigUnreadable(
-                            f"{name} exists on the worker but could not be read over SFTP as this "
-                            f"user ({exc}). Merging would skip it and the deploy would then "
-                            f"overwrite it, losing whatever was changed on the worker. Fix the "
-                            f"file's ownership/permissions on the worker and deploy again — "
-                            f"`ls -l {remote}` shows who owns it."
-                        ) from exc
-                    return None
+        def read_source(name: str):
+            remote = f"{from_worker_path.rstrip('/')}/{name}"
+            try:
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    worker_copy = Path(tmpdir) / name
+                    client.get(remote, str(worker_copy))
+                    return json.loads(worker_copy.read_text(encoding="utf-8-sig"))
+            except IOError as exc:
+                # A file that is *there but unreadable* is the dangerous case, and it used to
+                # be indistinguishable from an absent one: both printed "not on worker", the
+                # merge skipped, and the copy step then overwrote whatever the operator had
+                # changed. That is how a `/spbot_metric_toggle` was lost on 2026-08-05 — the
+                # container had rewritten the file as root 0600 and the master reads it as
+                # tuser. Refuse instead: nothing is built or shipped yet, so stopping is free,
+                # and continuing means destroying the very change this step exists to keep.
+                if _remote_exists(client, remote):
+                    raise WorkerConfigUnreadable(
+                        f"{name} exists on the worker but could not be read over SFTP as this "
+                        f"user ({exc}). Merging would skip it and the deploy would then "
+                        f"overwrite it, losing whatever was changed on the worker. Fix the "
+                        f"file's ownership/permissions on the worker and deploy again — "
+                        f"`ls -l {remote}` shows who owns it."
+                    ) from exc
+                return None
 
-            return merge_config_sources(
-                read_source=read_source, to_master=to_master,
-                source_label=f"{user}@{host}:{from_worker_path}", dry_run=dry_run)
-        finally:
-            sftp.close()
+        return merge_config_sources(
+            read_source=read_source, to_master=to_master,
+            source_label=f"{user}@{host}:{from_worker_path}", dry_run=dry_run)
     finally:
         client.close()
 
@@ -520,7 +512,7 @@ def merge_config_sources(
 
 
 def _merge_secret_store(
-    sftp,
+    client,
     *,
     remote: str,
     local: Path,
@@ -547,7 +539,7 @@ def _merge_secret_store(
 
     with tempfile.TemporaryDirectory() as tmp:
         worker_copy = Path(tmp) / local.name
-        sftp.get(remote, str(worker_copy))
+        client.get(remote, str(worker_copy))
         return _merge_secret_stores_from_files(
             node=worker_copy, master=local, key=key, plaintext=plaintext, dry_run=dry_run)
 
@@ -653,7 +645,7 @@ def _merge_secret_stores_from_files(
     return "MERGED"
 
 
-def _remote_json_files(sftp, remote_dir: str, *, include_secrets: bool) -> list[str]:
+def _remote_json_files(client, remote_dir: str, *, include_secrets: bool) -> list[str]:
     """Which of the worker's ``*.json`` a sweep may take — the manifest first, the worker second.
 
     This was ``sorted(sftp.listdir(remote_dir))``, and that is the defect. Without ``--overwrite``
@@ -668,7 +660,7 @@ def _remote_json_files(sftp, remote_dir: str, *, include_secrets: bool) -> list[
     travel, not what exists on any particular host.
     """
     allowed = [name for name in pullable_names() if include_secrets or name not in SECRET_FILES]
-    present = set(sftp.listdir(remote_dir))
+    present = set(client.listdir(remote_dir))
     unknown = sorted(name for name in present
                      if name.endswith(".json") and name not in known_names())
     if unknown:
@@ -710,51 +702,47 @@ def pull_data_config(
     copied: list[str] = []
     skipped: list[str] = []
     try:
-        sftp = client.open_sftp()
-        try:
-            if all_json:
-                names = _remote_json_files(sftp, from_worker_path, include_secrets=include_secrets)
-            else:
-                names = list(files or [REGISTRY_FILENAME])
+        if all_json:
+            names = _remote_json_files(client, from_worker_path, include_secrets=include_secrets)
+        else:
+            names = list(files or [REGISTRY_FILENAME])
 
-            print(f"# pull {user}@{host}:{from_worker_path} -> {to_master} "
-                  f"({'dry-run' if dry_run else 'copy'}; overwrite={overwrite})", flush=True)
-            to_master.mkdir(parents=True, exist_ok=True)
+        print(f"# pull {user}@{host}:{from_worker_path} -> {to_master} "
+              f"({'dry-run' if dry_run else 'copy'}; overwrite={overwrite})", flush=True)
+        to_master.mkdir(parents=True, exist_ok=True)
 
-            for name in names:
-                remote = f"{from_worker_path.rstrip('/')}/{name}"
-                local = to_master / name
-                try:
-                    remote_stat = sftp.stat(remote)
-                except IOError:
-                    print(f"  MISSING  {name} (not on worker)", flush=True)
-                    continue
-                if local.exists() and not overwrite:
-                    print(f"  SKIP     {name} (exists; pass --overwrite)", flush=True)
-                    skipped.append(name)
-                    continue
-                if name in SECRET_FILES and merge_secrets:
-                    action = _merge_secret_store(
-                        sftp, remote=remote, local=local, key=secret_key, dry_run=dry_run,
-                        plaintext=plaintext_secret,
-                    )
-                    print(f"  {action:<8} {name}", flush=True)
-                    copied.append(name)
-                    continue
-                if dry_run:
-                    print(f"  WOULD    {name} ({remote_stat.st_size} bytes)", flush=True)
-                    copied.append(name)
-                    continue
-                sftp.get(remote, str(local))
-                if remote_stat.st_mode is not None:
-                    try:
-                        os.chmod(local, stat_mod.S_IMODE(remote_stat.st_mode))
-                    except OSError:
-                        pass
-                print(f"  COPIED   {name} ({remote_stat.st_size} bytes)", flush=True)
+        for name in names:
+            remote = f"{from_worker_path.rstrip('/')}/{name}"
+            local = to_master / name
+            try:
+                remote_stat = client.stat(remote)
+            except IOError:
+                print(f"  MISSING  {name} (not on worker)", flush=True)
+                continue
+            if local.exists() and not overwrite:
+                print(f"  SKIP     {name} (exists; pass --overwrite)", flush=True)
+                skipped.append(name)
+                continue
+            if name in SECRET_FILES and merge_secrets:
+                action = _merge_secret_store(
+                    client, remote=remote, local=local, key=secret_key, dry_run=dry_run,
+                    plaintext=plaintext_secret,
+                )
+                print(f"  {action:<8} {name}", flush=True)
                 copied.append(name)
-        finally:
-            sftp.close()
+                continue
+            if dry_run:
+                print(f"  WOULD    {name} ({remote_stat.st_size} bytes)", flush=True)
+                copied.append(name)
+                continue
+            client.get(remote, str(local))
+            if remote_stat.st_mode is not None:
+                try:
+                    os.chmod(local, stat_mod.S_IMODE(remote_stat.st_mode))
+                except OSError:
+                    pass
+            print(f"  COPIED   {name} ({remote_stat.st_size} bytes)", flush=True)
+            copied.append(name)
     finally:
         client.close()
 
@@ -763,7 +751,7 @@ def pull_data_config(
     return 0
 
 
-def _iter_remote_sql_files(sftp, remote_dir: str, rel: str = "") -> list[str]:
+def _iter_remote_sql_files(client, remote_dir: str, rel: str = "") -> list[str]:
     """Return sql-tree files as posix relative paths, recursing into subdirs.
 
     Only ``*.sql`` files are pulled; directories are walked but never fetched.
@@ -783,7 +771,7 @@ def _iter_remote_sql_files(sftp, remote_dir: str, rel: str = "") -> list[str]:
     out: list[str] = []
     base = f"{remote_dir.rstrip('/')}/{rel}".rstrip("/")
     try:
-        entries = sftp.listdir_attr(base)
+        entries = client.listdir_attr(base)
     except IOError:
         return out
     for entry in sorted(entries, key=lambda item: item.filename):
@@ -792,7 +780,7 @@ def _iter_remote_sql_files(sftp, remote_dir: str, rel: str = "") -> list[str]:
             if not rel and entry.filename not in OPERATOR_ASSET_KINDS:
                 print(f"  SKIP     {entry.filename}/ (not an operator asset kind)", flush=True)
                 continue
-            out.extend(_iter_remote_sql_files(sftp, remote_dir, child_rel))
+            out.extend(_iter_remote_sql_files(client, remote_dir, child_rel))
         elif entry.filename.endswith(".sql"):
             out.append(child_rel)
     return out
@@ -820,33 +808,37 @@ def pull_sql_tree(
     copied: list[str] = []
     skipped: list[str] = []
     try:
-        sftp = client.open_sftp()
-        try:
-            rel_files = _iter_remote_sql_files(sftp, from_worker_path)
-            print(f"# pull-sql {user}@{host}:{from_worker_path} -> {to_master} "
-                  f"({'dry-run' if dry_run else 'copy'}; overwrite={overwrite}); {len(rel_files)} file(s)", flush=True)
-            for rel in rel_files:
-                remote = f"{from_worker_path.rstrip('/')}/{rel}"
-                local = to_master / Path(rel)
-                if local.exists() and not overwrite:
-                    print(f"  SKIP     {rel} (exists; pass --overwrite)", flush=True)
-                    skipped.append(rel)
-                    continue
-                if dry_run:
-                    print(f"  WOULD    {rel}", flush=True)
-                    copied.append(rel)
-                    continue
-                local.parent.mkdir(parents=True, exist_ok=True)
-                sftp.get(remote, str(local))
-                print(f"  COPIED   {rel}", flush=True)
+        rel_files = _iter_remote_sql_files(client, from_worker_path)
+        print(f"# pull-sql {user}@{host}:{from_worker_path} -> {to_master} "
+              f"({'dry-run' if dry_run else 'copy'}; overwrite={overwrite}); {len(rel_files)} file(s)", flush=True)
+        wanted: list[tuple[str, Path]] = []
+        for rel in rel_files:
+            local = to_master / Path(rel)
+            if local.exists() and not overwrite:
+                print(f"  SKIP     {rel} (exists; pass --overwrite)", flush=True)
+                skipped.append(rel)
+                continue
+            if dry_run:
+                print(f"  WOULD    {rel}", flush=True)
                 copied.append(rel)
-        finally:
-            sftp.close()
+                continue
+            wanted.append((f"{from_worker_path.rstrip('/')}/{rel}", local))
+        # One tar for the lot: a task tree is a few hundred small files, and each fetch on its own
+        # is a session of its own.
+        client.get_files(wanted)
+        for remote, local in wanted:
+            rel = local.relative_to(to_master).as_posix()
+            print(f"  COPIED   {rel}", flush=True)
+            copied.append(rel)
     finally:
         client.close()
     verb = "would copy" if dry_run else "copied"
     print(f"\n{verb} {len(copied)} sql file(s); skipped {len(skipped)}.", flush=True)
     return 0
+
+
+#: What a record built by :func:`create_db_docker_on_worker` says made it.
+CREATED_BY_WORKER_COMMAND = "db_ops.control.worker-create-db-docker"
 
 
 def create_db_docker_on_worker(
@@ -855,20 +847,109 @@ def create_db_docker_on_worker(
     user: str,
     password: str | None,
     port: int = 22,
-    container: str = DEFAULT_CONTAINER,
-    sre_args: list[str],
-    pull_config: bool = False,
-    pull_kwargs: dict | None = None,
+    name: str,
+    engine: str,
+    version: str,
+    mode: str = "single",
+    replicas: int | None = None,
+    host_port: int | None = None,
+    password_ref: str | None = None,
+    password_text: str | None = None,
+    containers_dir: str | None = None,
+    network_subnet: str | None = None,
+    worker_host: str | None = None,
+    install_docker: bool = False,
+    overwrite_secret: bool = False,
+    force: bool = False,
+    dry_run: bool = False,
+    register: bool = True,
+    key: str | None = None,
+    key_base64: str | None = None,
+    data_dir: str | Path | None = None,
 ) -> int:
-    """Run ``sre.cli create-db-docker`` inside the worker container, then
-    optionally pull the updated data config back to the master."""
-    command = ["python", "-m", "db_ops.sre.cli", "create-db-docker", *sre_args]
-    rc = run_worker_command(host=host, user=user, password=password, port=port,
-                            container=container, command=command)
-    if rc == 0 and pull_config:
-        print("\n=== worker-pull-data-config ===", flush=True)
-        pull_data_config(host=host, user=user, password=password, port=port, **(pull_kwargs or {}))
-    return rc
+    """Build a lab database on the worker's host, then register it on this node.
+
+    Until 0.24.0 this ran ``sre.cli create-db-docker`` inside the worker container - one app
+    driving another's CLI (rules R42), with the secret-store passphrase on that command line, and
+    the record written into the *worker's* ``data/`` for ``--pull-config`` to fetch back. Now the
+    build is ``common.cli create-db-docker`` with the worker's SSH login as ``remote`` (on stdin,
+    like the database password), and everything around it - the password, the secret store, the
+    registry - is ``lib.docker_db_registry``, the one copy ``sre`` uses too.
+
+    So the record and a new password land **here**, where configuration starts, and reach the
+    worker with the next deploy - the direction every other change takes.
+    """
+    from db_ops.lib import docker_db_registry as registry
+    from db_ops.lib.data_sources import DEFAULT_DATA_DIR
+    from db_ops.lib.docker_db_spec import ENGINE_META, DockerDbSpec
+    from db_ops.transport import common_cli
+
+    data_dir = Path(data_dir or DEFAULT_DATA_DIR)
+    meta = ENGINE_META.get(engine)
+    replicas_explicit = replicas is not None
+    spec = DockerDbSpec(
+        name=name, engine=engine, version=version, mode=mode,
+        # Oracle ha-lab is Data Guard 1/1, so its implicit default is one standby.
+        replicas=replicas if replicas_explicit else (1 if engine == "oracle" else 2),
+        host_port=host_port or (meta.container_port if meta else 0),
+        password_env=password_ref or f"{str(name or '').upper()}_PASSWORD",
+        network_subnet=str(network_subnet or "").strip(),
+    )
+    try:
+        # A bad spec, or a password the store would refuse, fails before anything is built.
+        spec.validate(replicas_explicit=replicas_explicit)
+        if password_text:
+            registry.assert_password_can_be_stored(
+                spec.password_env, password_text, data_dir=data_dir, key=key,
+                key_base64=key_base64, overwrite=overwrite_secret)
+            db_password = password_text
+        else:
+            print(f"Secret ref {spec.password_env}: no password given, reusing the stored value.")
+            db_password, _source = registry.resolve_password_value(
+                spec.password_env, key=key, key_base64=key_base64, data_dir=data_dir,
+                allow_missing=dry_run)
+        request = {
+            "name": spec.name, "engine": spec.engine, "version": spec.version, "mode": spec.mode,
+            "host_port": spec.host_port, "password_ref": spec.password_env,
+            "password": db_password or "", "network_subnet": spec.network_subnet,
+            "containers_dir": containers_dir,
+            "remote": {"host": host, "port": int(port), "username": user,
+                       "password": password or "", "key_file": ""},
+            "install_docker": bool(install_docker),
+            "force": bool(force), "dry_run": bool(dry_run),
+        }
+        if replicas_explicit:
+            request["replicas"] = spec.replicas
+        # stderr streams: an Oracle first start takes many minutes, and the progress is the point.
+        result = common_cli.run("create-db-docker", request, stream_stderr=True)
+        if password_text and not dry_run:
+            written = registry.store_password(
+                spec.password_env, password_text, data_dir=data_dir, key=key,
+                key_base64=key_base64, overwrite=overwrite_secret)
+            print(f"Secret ref {spec.password_env}: "
+                  f"{'stored in the encrypted secret store' if written else 'already had this value'}.")
+    except (ValueError, registry.DockerDbRequestError, common_cli.CommonCliError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
+    # Where the database answers: --worker-host when the worker is known to clients by another
+    # address than the one this node reaches it on, else the host it was built on.
+    recorded_host = str(worker_host or result.get("worker_host") or host)
+    entry = registry.build_connection_entry(
+        spec, host=recorded_host, compose_path=str(result.get("compose_path") or ""),
+        worker_host=recorded_host, created_by=CREATED_BY_WORKER_COMMAND)
+    registry_path = registry.default_registry_path(data_dir)
+    if dry_run:
+        print(result.get("plan_text") or "")
+        print(f"\n# connection entry that would be registered "
+              f"({'skipped: --no-register' if not register else registry_path}):")
+        print(json.dumps({registry.REGISTRY_ROOT_KEY: [entry]}, indent=2, ensure_ascii=False))
+    elif register:
+        action = registry.register_connection(registry_path, entry)
+        print(f"Connection {action} in {registry_path} - the worker has it after the next deploy.",
+              flush=True)
+    print("\n" + str(result.get("summary") or ""))
+    return 0
 
 
 def merge_node_config(

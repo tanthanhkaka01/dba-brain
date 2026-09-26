@@ -17,6 +17,7 @@ an OS login is never guessed at.
 
 from __future__ import annotations
 
+from pathlib import PurePath
 from typing import Any
 
 from db_ops.lib.coerce import as_bool
@@ -65,6 +66,19 @@ __all__ = [
     "resolve_cmd_credential",
     "resolve_platform",
 ]
+
+
+def is_key_name(key_file: str) -> bool:
+    """Whether ``key_file`` names a key by its bare file name - one to be found under
+    ``data/ssh_keys/`` - rather than giving a path.
+
+    One rule for the reader that finds it (``lib.data_sources.resolve_ssh_key``) and for the
+    ``common`` code that refuses it, since ``common`` reads no configuration (rules R09). A path is
+    anything with a directory part, so ``/keys/id_rsa`` counts as one on a Windows master too,
+    where it names nothing but is not a name to look up either.
+    """
+    text = str(key_file or "").strip()
+    return bool(text) and PurePath(text).name == text and not PurePath(text).is_absolute()
 
 
 def resolve_platform(item: dict[str, Any]) -> str:

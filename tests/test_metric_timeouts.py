@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+from conftest import answer_metric_items
 from db_ops.metrics.collector import _collect_one_metric
 from db_ops.metrics.definitions import load_metric_definitions
 from db_ops.metrics.models import MetricDefinition, MetricTarget
@@ -61,22 +62,11 @@ def test_collect_one_metric_passes_metric_timeout_to_executor(monkeypatch):
         db_type="sqlserver",
         db_name="master",
         credential_name="test",
+        credential={"username": "monitor", "password": "pw"},
     )
-    captured = {}
-
-    def fake_execute_metric_sql(**kwargs):
-        captured.update(kwargs)
-        return [
-            {
-                "metric_item": "server",
-                "metric_value": "1",
-                "metric_unit": "status",
-                "status": "OK",
-                "message": "Online.",
-            }
-        ]
-
-    monkeypatch.setattr("db_ops.metrics.collector.execute_metric_sql", fake_execute_metric_sql)
+    sent = answer_metric_items(monkeypatch, lambda _item: {"rows": [{
+        "metric_item": "server", "metric_value": "1", "metric_unit": "status", "status": "OK",
+        "message": "Online."}]})
 
     results = _collect_one_metric(
         metric=metric,
@@ -86,5 +76,5 @@ def test_collect_one_metric_passes_metric_timeout_to_executor(monkeypatch):
         collected_at="2026-05-25T00:00:00Z",
     )
 
-    assert captured["sql_timeout_seconds"] == 9
+    assert sent[0]["timeout_seconds"] == 9
     assert results[0].status == "OK"

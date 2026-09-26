@@ -139,7 +139,7 @@ def parse_server_metadata(
     # The policy is read through `data_sources` — the one reader of the data folder — and ordered
     # by `lib`. Neither half is an operation, so neither goes through the CLI: this runs while a
     # config entry is being validated, long before anything is connected to.
-    from db_ops.common import data_sources
+    from db_ops.lib import data_sources
 
     known = set(instance_bundle.artifacts_in_order(
         data_sources.load_sqlserver_instance_policy()))
@@ -223,7 +223,7 @@ def resolve_replay_target(
     if plan.target:
         return plan.target
 
-    from db_ops.common.data_sources import load_config_metric_targets
+    from db_ops.lib.data_sources import load_config_metric_targets
 
     targets = (load_config_metric_targets(data_dir=data_dir) if data_dir is not None
                else load_config_metric_targets())

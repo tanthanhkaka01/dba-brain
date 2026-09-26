@@ -3,8 +3,6 @@ from db_ops.lib.coerce import as_optional_int as _optional_int, as_text
 from db_ops.lib.text_format import format_utc as _format_utc  # noqa: F401 - one definition, see that module
 
 import json
-import os
-import subprocess
 import sys
 import threading
 import time
@@ -14,8 +12,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from db_ops.common import data_sources, remote_exec
-from db_ops.lib.shell import powershell_executable
+from db_ops.lib import data_sources
+from db_ops.lib.shell import SHELL_BASH, SHELL_POWERSHELL, powershell_executable
 from db_ops.lib.event_policy import (
     PHASE_CONNECT,
     PHASE_EXECUTE,
@@ -28,7 +26,9 @@ from db_ops.lib.time_window import is_time_window_open, job_due
 from db_ops.lib.timezone import to_display
 from db_ops.config import DbOpsConfig
 from db_ops.metrics.definitions import DEFAULT_DEFINITIONS_PATH, load_max_parallel_servers, load_metric_definitions
-from db_ops.metrics.executor import execute_metric_sql
+from db_ops.metrics import batch
+from db_ops.metrics.batch import Prepared
+from db_ops.metrics.executor import prepare_sql
 from db_ops.metrics.importance import DEFAULT_OVERRIDES_PATH, load_metric_importance_overrides, resolve_metric_importance
 from db_ops.metrics.models import CollectSummary, MetricDefinition, MetricResult, MetricTarget
 from db_ops.metrics.storage import MetricStore
@@ -113,10 +113,14 @@ def _collect_target(
 ) -> None:
     """Walk one target's metrics in catalog order, recording what happened into ``tally``.
 
-    Lifted out of :func:`collect_metrics` unchanged so that a server_id's metrics keep running
-    strictly one after another: only whole targets are handed to different workers.
+    Lifted out of :func:`collect_metrics` so that a server_id's metrics keep running strictly one
+    after another: only whole targets are handed to different workers. Since 0.24.0 the metrics
+    that are due run as one ``common.cli metric-batch`` - still one after another, inside it.
     """
     target_metrics = [item for item in definitions if _metric_supports_db_type(item, target.db_type, include_unsupported=True)]
+    # The metrics that are due go to `common` together - one process per target, not one per
+    # metric (rules R03, R10; the start-up cost is measured in test_app_common_imports.py).
+    pending: list[tuple[MetricDefinition, int]] = []
     for metric in target_metrics:
         unsupported_reason = _metric_unsupported_reason(metric, target)
         if unsupported_reason:
@@ -173,15 +177,35 @@ def _collect_target(
             continue
 
         tally.executed_count += 1
-        results = _collect_one_metric(
-            metric=metric,
-            target=target,
-            importance=importance,
-            secrets=secrets,
-            collected_at=_format_utc(datetime.now(timezone.utc)),
-            store=store,
-        )
-        assert store is not None and run_id is not None
+        if metric.schedule_window is not None:
+            # A windowed metric is one of the expensive ones - DBCC CHECKDB, an index scan, a
+            # restore validation - and runs in a batch of its own, so the minutes it takes never
+            # hold the quick metrics' rows back from the store.
+            _flush(pending, target=target, secrets=secrets, store=store, run_id=run_id, tally=tally)
+            _flush([(metric, importance)], target=target, secrets=secrets, store=store, run_id=run_id,
+                   tally=tally)
+            continue
+        pending.append((metric, importance))
+    _flush(pending, target=target, secrets=secrets, store=store, run_id=run_id, tally=tally)
+
+
+def _flush(
+    pending: list[tuple[MetricDefinition, int]],
+    *,
+    target: MetricTarget,
+    secrets: dict[str, str],
+    store: MetricStore | None,
+    run_id: int | None,
+    tally: _Tally,
+) -> None:
+    """Run the metrics gathered so far as one batch, then store and count each one, in order."""
+    if not pending:
+        return
+    planned = list(pending)
+    pending.clear()
+    assert store is not None and run_id is not None
+    for (metric, _importance), results in zip(
+            planned, _collect_metric_batch(target=target, planned=planned, secrets=secrets)):
         inserted = store.insert_results(run_id=run_id, results=results)
         tally.result_count += inserted
         tally.ok_count += sum(1 for item in results if item.status.upper() in {"OK", "LOGGING"})
@@ -363,18 +387,87 @@ def _collect_one_metric(
     collected_at: str,
     store: MetricStore | None = None,
 ) -> list[MetricResult]:
-    try:
+    """One metric, run on its own (a batch of one) and graded."""
+    def produce() -> tuple[list[dict[str, Any]], CommandExecution | None]:
         if metric.collector_type == "sql":
-            rows = _run_sql_file(metric=metric, target=target, secrets=secrets)
-            command_meta = None
-        elif metric.collector_type == "cmd":
+            return _run_sql_file(metric=metric, target=target, secrets=secrets), None
+        if metric.collector_type == "cmd":
             command_meta = _run_command_file(metric=metric, target=target, secrets=secrets)
-            rows = command_meta.rows
-        elif metric.collector_type == "docker":
+            return command_meta.rows, command_meta
+        if metric.collector_type == "docker":
             command_meta = _run_docker_metric(metric=metric, target=target, secrets=secrets)
-            rows = command_meta.rows
-        else:
-            raise UnsupportedCollectorType(f"Unsupported collector_type: {metric.collector_type}")
+            return command_meta.rows, command_meta
+        raise UnsupportedCollectorType(f"Unsupported collector_type: {metric.collector_type}")
+
+    return _results(metric, target, importance, collected_at, produce)
+
+
+def _collect_metric_batch(
+    *,
+    target: MetricTarget,
+    planned: list[tuple[MetricDefinition, int]],
+    secrets: dict[str, str],
+) -> list[list[MetricResult]]:
+    """The results of each planned metric, in order, from one ``metric-batch`` for the target.
+
+    A metric that cannot be prepared - no credential, an env secret missing, a path that does not
+    resolve - fails here without being sent, exactly as it failed before running in-process.
+    Every row is stamped with when *its* metric ran, not when the batch did.
+    """
+    prepared: list[Prepared | Exception] = []
+    for metric, _importance in planned:
+        try:
+            prepared.append(_prepare(metric, target, secrets))
+        except Exception as exc:  # noqa: BLE001 - this metric's failure is its result.
+            prepared.append(exc)
+    items = [entry.item for entry in prepared if isinstance(entry, Prepared)]
+    answers = iter(batch.run(target, secrets, items) if items else [])
+    outcomes: list[list[MetricResult]] = []
+    for (metric, importance), entry in zip(planned, prepared):
+        if isinstance(entry, Exception):
+            outcomes.append(_results(metric, target, importance, _format_utc(datetime.now(timezone.utc)),
+                                     lambda failure=entry: _raise(failure)))
+            continue
+        answer = next(answers)
+        started = answer.get("started_at")
+        collected_at = _format_utc(datetime.fromtimestamp(float(started), timezone.utc)
+                                   if started else datetime.now(timezone.utc))
+        outcomes.append(_results(metric, target, importance, collected_at,
+                                 lambda entry=entry, answer=answer: entry.interpret(answer)))
+    return outcomes
+
+
+def _raise(exc: Exception) -> Any:
+    raise exc
+
+
+def _prepare(metric: MetricDefinition, target: MetricTarget, secrets: dict[str, str]) -> Prepared:
+    """The item for one metric, whose ``interpret`` answers ``(rows, command_meta)``."""
+    if metric.collector_type == "sql":
+        sql = _prepare_sql_file(metric=metric, target=target, secrets=secrets)
+        return Prepared(item=sql.item, interpret=lambda answer: (sql.interpret(answer), None))
+    if metric.collector_type in {"cmd", "docker"}:
+        prepare = _prepare_command_file if metric.collector_type == "cmd" else _prepare_docker_metric
+        command = prepare(metric=metric, target=target, secrets=secrets)
+
+        def interpret(answer: dict[str, Any]) -> tuple[list[dict[str, Any]], CommandExecution]:
+            meta = command.interpret(answer)
+            return meta.rows, meta
+
+        return Prepared(item=command.item, interpret=interpret)
+    raise UnsupportedCollectorType(f"Unsupported collector_type: {metric.collector_type}")
+
+
+def _results(
+    metric: MetricDefinition,
+    target: MetricTarget,
+    importance: int,
+    collected_at: str,
+    produce: Any,
+) -> list[MetricResult]:
+    """Grade what one metric produced - its rows, or the exception its collection raised."""
+    try:
+        rows, command_meta = produce()
         if not rows:
             if metric.empty_result_is_ok:
                 return [_metric_result(metric, target, importance, collected_at, status="OK", message="SQL returned no rows.")]
@@ -442,22 +535,31 @@ class MetricCommandError(RuntimeError):
 
 
 def _run_sql_file(*, metric: MetricDefinition, target: MetricTarget, secrets: dict[str, str]) -> list[dict[str, Any]]:
+    return batch.run_one(target, secrets, _prepare_sql_file(metric=metric, target=target, secrets=secrets))
+
+
+def _prepare_sql_file(*, metric: MetricDefinition, target: MetricTarget, secrets: dict[str, str]) -> Prepared:
     path = _resolve_metric_file_path(metric, target)
     if path is None:
         raise RuntimeError(f"Metric SQL path is not resolved: {metric.metric_code}")
     sql_text = Path(path).read_text(encoding="utf-8-sig")
-    rows = execute_metric_sql(
+    sql = prepare_sql(
         target=target,
         sql_text=sql_text,
         secrets=secrets,
         sql_timeout_seconds=metric.default_timeout,
         max_rows=metric.max_rows,
         per_database=_variant_is_per_database(metric, target),
+        item_id=metric.metric_code,
     )
+
     # Normalize column-name case to the lowercase result contract. Oracle folds unquoted
     # aliases (AS metric_value) to UPPERCASE, so direct oracledb and the api bridge both
     # return METRIC_VALUE etc.; SQL Server already preserves the lowercase aliases (no-op).
-    return [{str(key).lower(): value for key, value in row.items()} for row in rows]
+    def interpret(answer: dict[str, Any]) -> list[dict[str, Any]]:
+        return [{str(key).lower(): value for key, value in row.items()} for row in sql.interpret(answer)]
+
+    return Prepared(item=sql.item, interpret=interpret)
 
 
 def _apply_postgresql_collection_policy(
@@ -490,6 +592,10 @@ def _apply_postgresql_collection_policy(
 
 
 def _run_docker_metric(*, metric: MetricDefinition, target: MetricTarget, secrets: dict[str, str]) -> CommandExecution:
+    return batch.run_one(target, secrets, _prepare_docker_metric(metric=metric, target=target, secrets=secrets))
+
+
+def _prepare_docker_metric(*, metric: MetricDefinition, target: MetricTarget, secrets: dict[str, str]) -> Prepared:
     """Collect one container's stats/state by running the metric's docker script with the
     target's container name in ``DOCKER_CONTAINER``.
 
@@ -516,18 +622,18 @@ def _run_docker_metric(*, metric: MetricDefinition, target: MetricTarget, secret
     cmd_access = target.cmd_access or {}
     method = str(cmd_access.get("method") or "").strip().lower()
     if bool(cmd_access.get("enabled", False)) and method == "ssh":
-        return execute_ssh(
-            Path(path), target=target, secrets=secrets,
-            timeout_seconds=metric.default_timeout, collector_env=collector_env,
-        )
-    return execute_local(
-        Path(path),
-        timeout_seconds=metric.default_timeout,
-        collector_env=collector_env,
-    )
+        return _prepare_remote(Path(path), target=target, timeout_seconds=metric.default_timeout,
+                               collector_env=collector_env, shell=_remote_shell_for(Path(path), target),
+                               item_id=metric.metric_code)
+    return _prepare_local(Path(path), timeout_seconds=metric.default_timeout,
+                          collector_env=collector_env, item_id=metric.metric_code)
 
 
 def _run_command_file(*, metric: MetricDefinition, target: MetricTarget, secrets: dict[str, str]) -> CommandExecution:
+    return batch.run_one(target, secrets, _prepare_command_file(metric=metric, target=target, secrets=secrets))
+
+
+def _prepare_command_file(*, metric: MetricDefinition, target: MetricTarget, secrets: dict[str, str]) -> Prepared:
     path = _resolve_metric_file_path(metric, target)
     if path is None:
         raise RuntimeError(f"Metric command path is not resolved: {metric.metric_code}")
@@ -543,20 +649,19 @@ def _run_command_file(*, metric: MetricDefinition, target: MetricTarget, secrets
     if method == "local":
         # `local` runs the script inside the collector (the worker container). Pointed at another
         # machine it does not fail — it succeeds and files THIS host's numbers under that host's
-        # name, so the target looks monitored while none of its OS data is its own. Refuse
-        # instead: a config error someone can fix beats data nobody can trust.
-        remote_exec.assert_local_host(str(cmd_access.get("host") or ""), method=method)
-        return execute_local(Path(path), timeout_seconds=metric.default_timeout, collector_env=collector_env)
+        # name, so the target looks monitored while none of its OS data is its own. `common`
+        # refuses it: a config error someone can fix beats data nobody can trust.
+        return _prepare_local(Path(path), timeout_seconds=metric.default_timeout,
+                              collector_env=collector_env, item_id=metric.metric_code,
+                              local_host=str(cmd_access.get("host") or ""))
     if method == "ssh":
-        return execute_ssh(
-            Path(path), target=target, secrets=secrets,
-            timeout_seconds=metric.default_timeout, collector_env=collector_env,
-        )
+        return _prepare_remote(Path(path), target=target, timeout_seconds=metric.default_timeout,
+                               collector_env=collector_env, shell=_remote_shell_for(Path(path), target),
+                               item_id=metric.metric_code)
     if method == "winrm":
-        return execute_winrm(
-            Path(path), target=target, secrets=secrets,
-            timeout_seconds=metric.default_timeout, collector_env=collector_env,
-        )
+        return _prepare_remote(Path(path), target=target, timeout_seconds=metric.default_timeout,
+                               collector_env=collector_env, shell=SHELL_POWERSHELL,
+                               item_id=metric.metric_code)
     raise UnsupportedExecutionMethod(f"Unsupported cmd_access.method: {method or '<missing>'}")
 
 
@@ -644,98 +749,56 @@ def sensitive_env_name(name: str) -> bool:
     return any(word in lowered for word in ("password", "secret", "token", "key", "credential"))
 
 
-def _shell_prelude(collector_env: dict[str, str], *, powershell: bool) -> str:
-    """Assignments prepended to the script so a remote shell sees the values as env vars.
-    The quoting rules live in ``common.remote_exec`` — every transport shares them."""
-    return remote_exec.shell_prelude(
-        collector_env,
-        shell=remote_exec.SHELL_POWERSHELL if powershell else remote_exec.SHELL_BASH,
-    )
-
-
-def _script_with_env(path: Path, collector_env: dict[str, str], *, powershell: bool) -> str:
-    return _shell_prelude(collector_env, powershell=powershell) + Path(path).read_text(encoding="utf-8-sig")
+#: The shells ``common.remote_exec`` knows, by the names it knows them.
 
 
 def execute_local(path: Path, *, timeout_seconds: int, collector_env: dict[str, str] | None = None) -> CommandExecution:
-    command = _command_args(Path(path))
-    env = os.environ.copy()
-    env.update(collector_env or {})
-    started = time.monotonic()
-    try:
-        completed = subprocess.run(
-            command,
-            cwd=str(Path(path).parent),
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-            check=False,
-            env=env,
-        )
-        execution_time = round(time.monotonic() - started, 3)
-    except subprocess.TimeoutExpired as exc:
-        execution_time = round(time.monotonic() - started, 3)
-        raise MetricCommandError(
-            f"Command timed out after {timeout_seconds} seconds.",
-            raw_stdout=exc.stdout or "",
-            raw_stderr=exc.stderr or "",
-            execution_time=execution_time,
-        ) from exc
-    raw_stdout = completed.stdout or ""
-    raw_stderr = completed.stderr or ""
-    if completed.returncode != 0:
-        raise MetricCommandError(
-            f"Command exited with code {completed.returncode}.",
-            raw_stdout=raw_stdout,
-            raw_stderr=raw_stderr,
-            exit_code=completed.returncode,
-            execution_time=execution_time,
-        )
-    try:
-        parsed = json.loads(raw_stdout)
-    except json.JSONDecodeError as exc:
-        raise MetricCommandError(
-            f"Command stdout is not valid JSON: {exc.msg}.",
-            raw_stdout=raw_stdout,
-            raw_stderr=raw_stderr,
-            exit_code=completed.returncode,
-            execution_time=execution_time,
-        ) from exc
-    if not isinstance(parsed, list):
-        raise MetricCommandError(
-            "Command stdout must be a JSON array.",
-            raw_stdout=raw_stdout,
-            raw_stderr=raw_stderr,
-            exit_code=completed.returncode,
-            execution_time=execution_time,
-        )
-    rows = []
-    for index, item in enumerate(parsed, start=1):
-        if not isinstance(item, dict):
-            raise MetricCommandError(
-                f"Command JSON row {index} must be an object.",
-                raw_stdout=raw_stdout,
-                raw_stderr=raw_stderr,
-                exit_code=completed.returncode,
-                execution_time=execution_time,
-            )
-        rows.append(item)
-    return CommandExecution(
-        rows=rows,
-        raw_stdout=raw_stdout,
-        raw_stderr=raw_stderr,
-        exit_code=completed.returncode,
-        execution_time=execution_time,
-    )
+    """A metric script run on this machine (in the worker container), on its own."""
+    return batch.run_one(None, {}, _prepare_local(Path(path), timeout_seconds=timeout_seconds,
+                                                  collector_env=collector_env))
+
+
+def _prepare_local(
+    path: Path, *, timeout_seconds: int, collector_env: dict[str, str] | None,
+    item_id: str = "", local_host: str | None = None,
+) -> Prepared:
+    item = {"id": item_id, "kind": "local", "path": str(path), "argv": _command_args(path),
+            "env": dict(collector_env or {}), "timeout_seconds": int(timeout_seconds),
+            "require_local_host": local_host is not None, "host": local_host or ""}
+    return Prepared(item=item, interpret=_command_execution)
+
+
+def _command_args(path: Path) -> list[str]:
+    """The command line that runs a local metric script - this app's decision, sent in the item."""
+    suffix = path.suffix.lower()
+    if suffix == ".py":
+        return [sys.executable, str(path)]
+    if suffix in {".bat", ".cmd"}:
+        return ["cmd.exe", "/c", str(path)]
+    if suffix == ".ps1":
+        return [powershell_executable(), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(path)]
+    if suffix == ".sh":
+        # Always invoke via bash rather than executing the file directly: a bind-mounted
+        # script (e.g. the docker collector on the Linux worker) may not carry the +x bit,
+        # which would fail with "Permission denied" if run as ./script.sh.
+        return ["bash", str(path)]
+    return [str(path)]
 
 
 def _cmd_access_json(target: MetricTarget) -> dict[str, Any]:
     """The target's ``cmd_access`` object, with the target IP as the default host.
 
-    This *is* the JSON input ``db_ops.common.remote_exec`` expects — the collector does no
-    translation, it just fills in the host that db_instances.json leaves implicit."""
+    This *is* the JSON input ``common.remote_exec`` expects — the collector does no translation,
+    it fills in the host that db_instances.json leaves implicit, and resolves a key named by its
+    bare file name to the file, so ``common`` is not left to look it up (rules R09)."""
     access = dict(target.cmd_access or {})
     access.setdefault("host", target.ip)
+    key_file = str(access.get("key_file") or "").strip()
+    if key_file and not Path(key_file).is_absolute():
+        try:
+            access["key_file"] = data_sources.resolve_ssh_key(key_file)
+        except Exception:  # noqa: BLE001 - left as named: `common` refuses it in the same words.
+            pass
     return access
 
 
@@ -744,74 +807,29 @@ def _remote_shell_for(path: Path, target: MetricTarget) -> str:
     target's declared shell, so a ``.ps1`` reaches a Windows host as PowerShell even when
     ``cmd_access.shell`` was left unset."""
     if path.suffix.lower() == ".ps1":
-        return remote_exec.SHELL_POWERSHELL
+        return SHELL_POWERSHELL
     declared = str((target.cmd_access or {}).get("shell") or "").strip().lower()
-    return declared or remote_exec.SHELL_BASH
+    return declared or SHELL_BASH
 
 
-def _run_remote_metric_script(
-    path: Path, *, target: MetricTarget, secrets: dict[str, str], timeout_seconds: int,
-    collector_env: dict[str, str] | None, shell: str,
-) -> CommandExecution:
-    """Run a metric script on the target through ``common.remote_exec`` and adapt the
-    result to :class:`CommandExecution`.
+def _prepare_remote(
+    path: Path, *, target: MetricTarget, timeout_seconds: int,
+    collector_env: dict[str, str] | None, shell: str, item_id: str = "",
+) -> Prepared:
+    """A metric script shipped to the target, its environment prepended there by ``common``.
 
     Transport, auth and the env prelude live in ``common``; what stays here is the metrics
-    contract on top of it — a non-zero exit or non-JSON stdout is a *metric* failure, so
-    every transport error is re-raised as :class:`MetricCommandError` carrying the raw
-    streams the metric row records."""
-    started = time.monotonic()
-    try:
-        result = remote_exec.run_script(
-            _cmd_access_json(target),
-            path,
-            credential=target.cmd_credential or {},
-            secrets=secrets,
-            shell=shell,
-            timeout_seconds=timeout_seconds,
-            env=collector_env or {},
-            default_timeout_seconds=timeout_seconds,
-        )
-    except remote_exec.RemoteExecError as exc:
-        raise MetricCommandError(
-            str(exc),
-            raw_stdout=exc.stdout,
-            raw_stderr=exc.stderr,
-            execution_time=exc.duration_seconds or round(time.monotonic() - started, 3),
-            failure_phase=_remote_failure_phase(exc),
-        ) from exc
-    raw_stdout = as_text(result.stdout)
-    raw_stderr = as_text(result.stderr)
-    if result.exit_code != 0:
-        raise MetricCommandError(
-            f"Command exited with code {result.exit_code}.",
-            raw_stdout=raw_stdout,
-            raw_stderr=raw_stderr,
-            exit_code=result.exit_code,
-            execution_time=result.duration_seconds,
-        )
-    return CommandExecution(
-        rows=_parse_command_stdout(raw_stdout, raw_stderr, result.exit_code, result.duration_seconds),
-        raw_stdout=raw_stdout,
-        raw_stderr=raw_stderr,
-        exit_code=result.exit_code,
-        execution_time=result.duration_seconds,
-    )
-
-
-def _remote_failure_phase(exc: remote_exec.RemoteExecError) -> str:
-    """Whether a remote_exec failure happened opening the session or running the script.
-
-    ``remote_exec`` raises one exception family for both halves, so the verdict is read off the
-    subclass: auth rejected and host unreachable can only be the session. A timeout is the one
-    ambiguous case — the same class covers "the connect never completed" and "the script ran too
-    long" — and ``command`` separates them: it is set only once there is a command to run.
-    """
-    if isinstance(exc, (remote_exec.RemoteAuthError, remote_exec.RemoteConnectError)):
-        return PHASE_CONNECT
-    if isinstance(exc, remote_exec.RemoteTimeoutError) and not str(getattr(exc, "command", "") or ""):
-        return PHASE_CONNECT
-    return PHASE_EXECUTE
+    contract on top of it — a non-zero exit or non-JSON stdout is a *metric* failure, and every
+    transport error comes back as :class:`MetricCommandError` carrying the raw streams the metric
+    row records."""
+    item = {
+        "id": item_id, "kind": "script", "access": _cmd_access_json(target),
+        "credential": target.cmd_credential or {},
+        # utf-8-sig: PowerShell scripts authored on Windows carry a BOM.
+        "script": Path(path).read_text(encoding="utf-8-sig"), "shell": shell,
+        "env": dict(collector_env or {}), "timeout_seconds": int(timeout_seconds),
+    }
+    return Prepared(item=item, interpret=_command_execution)
 
 
 def execute_ssh(
@@ -819,10 +837,9 @@ def execute_ssh(
     collector_env: dict[str, str] | None = None,
 ) -> CommandExecution:
     """Run a metric script on the target over SSH (Linux, or Windows with OpenSSH Server)."""
-    return _run_remote_metric_script(
-        path, target=target, secrets=secrets, timeout_seconds=timeout_seconds,
-        collector_env=collector_env, shell=_remote_shell_for(path, target),
-    )
+    return batch.run_one(target, secrets, _prepare_remote(
+        Path(path), target=target, timeout_seconds=timeout_seconds, collector_env=collector_env,
+        shell=_remote_shell_for(Path(path), target)))
 
 
 def execute_winrm(
@@ -835,40 +852,41 @@ def execute_winrm(
     available. WinRM needs pypsrp (or a PowerShell on the collector host) and
     Negotiate/NTLM auth, which often fails across networks and domains. Kept for targets
     that cannot run OpenSSH Server."""
-    return _run_remote_metric_script(
-        path, target=target, secrets=secrets, timeout_seconds=timeout_seconds,
-        collector_env=collector_env, shell=remote_exec.SHELL_POWERSHELL,
-    )
+    return batch.run_one(target, secrets, _prepare_remote(
+        Path(path), target=target, timeout_seconds=timeout_seconds, collector_env=collector_env,
+        shell=SHELL_POWERSHELL))
 
 
-def _run_subprocess_command(command: list[str], *, cwd: Path, timeout_seconds: int) -> CommandExecution:
-    started = time.monotonic()
-    try:
-        completed = subprocess.run(command, cwd=str(cwd), capture_output=True, text=True, timeout=timeout_seconds, check=False)
-        execution_time = round(time.monotonic() - started, 3)
-    except subprocess.TimeoutExpired as exc:
-        execution_time = round(time.monotonic() - started, 3)
+def _command_execution(answer: dict[str, Any]) -> CommandExecution:
+    """A script's answer, held to the metrics contract: exit 0, and a JSON array of objects."""
+    error = answer.get("error")
+    if error:
+        if error.get("kind") in {"timeout", "remote"}:
+            raise MetricCommandError(
+                str(error.get("message") or ""),
+                raw_stdout=error.get("stdout") or "",
+                raw_stderr=error.get("stderr") or "",
+                execution_time=error.get("duration_seconds"),
+                failure_phase=str(error.get("failure_phase") or PHASE_EXECUTE),
+            )
+        batch.raise_other(error)
+    raw_stdout = as_text(answer.get("stdout"))
+    raw_stderr = as_text(answer.get("stderr"))
+    exit_code = int(answer.get("exit_code") or 0)
+    execution_time = answer.get("duration_seconds")
+    if exit_code != 0:
         raise MetricCommandError(
-            f"Command timed out after {timeout_seconds} seconds.",
-            raw_stdout=exc.stdout or "",
-            raw_stderr=exc.stderr or "",
-            execution_time=execution_time,
-        ) from exc
-    raw_stdout = completed.stdout or ""
-    raw_stderr = completed.stderr or ""
-    if completed.returncode != 0:
-        raise MetricCommandError(
-            f"Command exited with code {completed.returncode}.",
+            f"Command exited with code {exit_code}.",
             raw_stdout=raw_stdout,
             raw_stderr=raw_stderr,
-            exit_code=completed.returncode,
+            exit_code=exit_code,
             execution_time=execution_time,
         )
     return CommandExecution(
-        rows=_parse_command_stdout(raw_stdout, raw_stderr, completed.returncode, execution_time),
+        rows=_parse_command_stdout(raw_stdout, raw_stderr, exit_code, execution_time),
         raw_stdout=raw_stdout,
         raw_stderr=raw_stderr,
-        exit_code=completed.returncode,
+        exit_code=exit_code,
         execution_time=execution_time,
     )
 
@@ -906,23 +924,6 @@ def _parse_command_stdout(raw_stdout: str, raw_stderr: str, exit_code: int, exec
             )
         rows.append(item)
     return rows
-
-
-
-def _command_args(path: Path) -> list[str]:
-    suffix = path.suffix.lower()
-    if suffix == ".py":
-        return [sys.executable, str(path)]
-    if suffix in {".bat", ".cmd"}:
-        return ["cmd.exe", "/c", str(path)]
-    if suffix == ".ps1":
-        return [powershell_executable(), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(path)]
-    if suffix == ".sh":
-        # Always invoke via bash rather than executing the file directly: a bind-mounted
-        # script (e.g. the docker collector on the Linux worker) may not carry the +x bit,
-        # which would fail with "Permission denied" if run as ./script.sh.
-        return ["bash", str(path)]
-    return [str(path)]
 
 
 def _row_to_result(

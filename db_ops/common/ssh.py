@@ -1,15 +1,15 @@
-"""Shared SSH transport + credential resolution (db_ops.common).
+"""Shared SSH transport (db_ops.common).
 
 Every place that reaches an Ubuntu host over SSH opens its paramiko connection through this one
 module, so the connect rules — which auth paths are allowed, and how a failure is classified —
 are defined once. It connects to no app and imports no app.
 
-**What is left here is the transport.** The credential *resolution* this module used to own is
-``db_ops.common.data_sources.ssh_auth`` (finding the key under ``data/ssh_keys/``, resolving a
-password from a value, an env var or the encrypted store) and the exception vocabulary is
-``db_ops.lib.ssh_errors``; both are re-exported below, so a caller that opens a client still finds
-everything under this name. The split happened because four app-side modules imported this one for
-nothing but a key path or an error class — see ``docs/13_common.md``.
+**Only the transport is here, and it reads nothing.** The credential *resolution* this module used
+to own is ``db_ops.lib.data_sources.ssh_auth`` (finding the key under ``data/ssh_keys/``, resolving a
+password from a value, an env var or the encrypted store), where an app asks for it; the exception
+vocabulary is ``db_ops.lib.ssh_errors``, re-exported below. The finders were re-exported here too
+until 0.24.0, which put a reader of ``data/`` behind this name (rules R09) - the caller hands this
+module a key path and a password.
 
 Failures are classified where the paramiko exception type is still in hand: ``SshAuthError`` (the
 host answered and said no) and ``SshConnectError`` / ``SshTimeoutError`` (nothing answered) are
@@ -22,18 +22,9 @@ from __future__ import annotations
 import socket
 from pathlib import Path
 
-# The two halves that are not transport, re-exported so this module's published surface is
-# unchanged for callers that legitimately open a client. Finding the key file and resolving the
-# password are reads of `data/`, which has one reader; the four exception names are vocabulary an
-# app may need without importing paramiko at all. Both moved on 2026-08-15.
 from db_ops.lib.packaging import install_hint
-from db_ops.common.data_sources import (  # noqa: F401 - one definition, see that module
-    SSH_KEYS_DIRNAME,
-    resolve_ssh_key,
-    resolve_ssh_password,
-    ssh_keys_dir,
-)
-from db_ops.lib.paths import DEFAULT_DATA_DIR, TOOL_ROOT  # noqa: F401 - one definition, see that module
+# The exception names are vocabulary an app may need without importing paramiko at all; they moved
+# to `lib` on 2026-08-15 and stay reachable under this name for a caller that opens a client.
 from db_ops.lib.ssh_errors import (  # noqa: F401 - one definition, see that module
     SshAuthError,
     SshConnectError,

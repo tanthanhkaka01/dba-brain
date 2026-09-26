@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import json
 
-from db_ops import scaffold
+from db_ops.common import scaffold
 from db_ops.lib.paths import builtin_asset_root
 
 from conftest import shipped_config

@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from db_ops.common import data_sources
+from db_ops.lib import data_sources
 from db_ops.lib import secret_text
 from db_ops.config import TelegramConfig
 

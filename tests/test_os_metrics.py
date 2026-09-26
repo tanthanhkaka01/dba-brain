@@ -11,7 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.metrics.collector import _collector_env, _script_with_env, _shell_prelude
+from db_ops.common.remote_exec import shell_prelude
+from db_ops.metrics.collector import _collector_env, _prepare_remote, _remote_shell_for
 from db_ops.metrics.definitions import load_metric_definitions
 from conftest import shipped_config
 
@@ -125,17 +126,23 @@ def test_collector_env_refuses_to_carry_secrets():
 
 
 def test_shell_prelude_quotes_values_for_each_shell():
+    """The prelude is `common`'s since 0.24.0 - built inside `metric-batch` from the item's env."""
     env = {"OS_SERVICE_NAMES": "It's here,W32Time"}
-    assert _shell_prelude(env, powershell=True) == "$env:OS_SERVICE_NAMES = 'It''s here,W32Time'\n"
-    assert _shell_prelude(env, powershell=False) == "export OS_SERVICE_NAMES='It'\\''s here,W32Time'\n"
-    assert _shell_prelude({}, powershell=True) == ""
+    assert shell_prelude(env, shell="powershell") == "$env:OS_SERVICE_NAMES = 'It''s here,W32Time'\n"
+    assert shell_prelude(env, shell="bash") == "export OS_SERVICE_NAMES='It'\\''s here,W32Time'\n"
+    assert shell_prelude({}, shell="powershell") == ""
 
 
-def test_script_with_env_prepends_assignments_to_the_real_script(tmp_path):
+def test_a_remote_item_carries_the_real_script_and_its_env_for_common_to_prepend(tmp_path):
     script = tmp_path / "005.ps1"
     script.write_text("$names = $env:OS_SERVICE_NAMES\n", encoding="utf-8")
-    text = _script_with_env(script, {"OS_SERVICE_NAMES": "W32Time"}, powershell=True)
-    assert text == "$env:OS_SERVICE_NAMES = 'W32Time'\n$names = $env:OS_SERVICE_NAMES\n"
+    target = _target({})
+    item = _prepare_remote(script, target=target, timeout_seconds=5,
+                           collector_env={"OS_SERVICE_NAMES": "W32Time"},
+                           shell=_remote_shell_for(script, target)).item
+    assert item["script"] == "$names = $env:OS_SERVICE_NAMES\n"
+    assert item["env"] == {"OS_SERVICE_NAMES": "W32Time"}
+    assert item["shell"] == "powershell"
 
 
 # --------------------------------------------------------------------------- #

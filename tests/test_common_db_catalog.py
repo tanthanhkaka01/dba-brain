@@ -21,6 +21,11 @@ import pytest
 from db_ops.common import db_catalog
 
 
+#: The login a caller states - common.cli reads no configuration (rules R09), so every request here
+#: carries one. RFC 5737 address; nothing connects to it.
+CONNECTION = {"db_type": "sqlserver", "host": "192.0.2.10", "port": 1433, "username": "u", "password": "p"}
+
+
 def _stub(monkeypatch, *, db_type: str, rows, resolved_extra=None):
     """Answer every query with ``rows``; resolve the target without touching config."""
     resolved = {"server_id": "TEST-1", "db_type": db_type, "ip": "10.0.0.1", "port": 1433,
@@ -55,8 +60,8 @@ def test_sql_server_system_databases_are_hidden_unless_asked_for(monkeypatch):
     ]
     _stub(monkeypatch, db_type="sqlserver", rows=rows)
 
-    hidden = db_catalog.list_databases({"target": "TEST-1"})
-    shown = db_catalog.list_databases({"target": "TEST-1", "include_system": True})
+    hidden = db_catalog.list_databases({"target": "TEST-1", "connection": CONNECTION})
+    shown = db_catalog.list_databases({"target": "TEST-1", "connection": CONNECTION, "include_system": True})
 
     assert [db["name"] for db in hidden["databases"]] == ["APPDB"]
     assert hidden["system_hidden"] == 2
@@ -70,7 +75,7 @@ def test_the_state_each_engine_reports_is_carried_through_not_flattened(monkeypa
           rows=[{"name": "APPDB", "state": "RESTORING", "recovery_model": "FULL",
                  "is_system": 0}])
 
-    data = db_catalog.list_databases({"target": "TEST-1"})
+    data = db_catalog.list_databases({"target": "TEST-1", "connection": CONNECTION})
 
     assert data["databases"][0]["state"] == "RESTORING"
     assert data["databases"][0]["recovery_model"] == "FULL"
@@ -84,7 +89,7 @@ def test_postgres_templates_count_as_system(monkeypatch):
         {"name": "app", "state": "ONLINE", "is_template": False},
     ])
 
-    data = db_catalog.list_databases({"target": "TEST-1"})
+    data = db_catalog.list_databases({"target": "TEST-1", "connection": CONNECTION})
 
     assert [db["name"] for db in data["databases"]] == ["app"]
 
@@ -94,7 +99,7 @@ def test_mysql_says_that_its_databases_are_also_its_schemas(monkeypatch):
     commands, with no explanation, reads as a bug."""
     _stub(monkeypatch, db_type="mysql", rows=[{"name": "app", "state": "ONLINE"}])
 
-    data = db_catalog.list_databases({"target": "TEST-1"})
+    data = db_catalog.list_databases({"target": "TEST-1", "connection": CONNECTION})
 
     assert "no layer between server and schema" in data["note"]
 
@@ -103,7 +108,7 @@ def test_an_engine_the_command_does_not_know_is_named_in_the_refusal(monkeypatch
     _stub(monkeypatch, db_type="host", rows=[])
 
     with pytest.raises(db_catalog.DbCatalogError, match="does not know engine 'host'"):
-        db_catalog.list_databases({"target": "TEST-1"})
+        db_catalog.list_databases({"target": "TEST-1", "connection": CONNECTION})
 
 
 # --------------------------------------------------------------------------- #
@@ -119,7 +124,7 @@ def test_a_cdb_reports_its_root_its_seed_and_every_pdb(monkeypatch):
         {"CON_ID": 3, "NAME": "FREEPDB1", "OPEN_MODE": "READ WRITE", "RESTRICTED": "NO"},
     ])
 
-    data = db_catalog.list_databases({"target": "TEST-1", "include_system": True})
+    data = db_catalog.list_databases({"target": "TEST-1", "connection": CONNECTION, "include_system": True})
 
     assert data["container_type"] == "CDB"
     kinds = {db["name"]: db["kind"] for db in data["databases"]}
@@ -133,7 +138,7 @@ def test_the_root_and_the_seed_are_system_so_only_real_pdbs_are_offered(monkeypa
         {"CON_ID": 3, "NAME": "FREEPDB1", "OPEN_MODE": "READ WRITE"},
     ])
 
-    data = db_catalog.list_databases({"target": "TEST-1"})
+    data = db_catalog.list_databases({"target": "TEST-1", "connection": CONNECTION})
 
     assert [db["name"] for db in data["databases"]] == ["FREEPDB1"]
     assert data["system_hidden"] == 2
@@ -150,7 +155,7 @@ def test_a_non_cdb_falls_back_to_v_dollar_database_instead_of_failing(monkeypatc
 
     _stub(monkeypatch, db_type="oracle", rows=rows)
 
-    data = db_catalog.list_databases({"target": "TEST-1"})
+    data = db_catalog.list_databases({"target": "TEST-1", "connection": CONNECTION})
 
     assert data["container_type"] == "NON_CDB"
     assert [db["name"] for db in data["databases"]] == ["LEGACYDB"]
@@ -165,7 +170,7 @@ def test_oracle_column_names_are_folded_so_one_caller_reads_every_engine(monkeyp
         {"CON_ID": 3, "NAME": "FREEPDB1", "OPEN_MODE": "READ WRITE"},
     ])
 
-    data = db_catalog.list_databases({"target": "TEST-1"})
+    data = db_catalog.list_databases({"target": "TEST-1", "connection": CONNECTION})
 
     assert set(data["databases"][0]) >= {"name", "con_id", "kind", "open_mode"}
 
@@ -180,7 +185,7 @@ def test_a_schema_listing_without_a_database_is_refused_not_defaulted(monkeypatc
     _stub(monkeypatch, db_type="sqlserver", rows=[])
 
     with pytest.raises(db_catalog.DbCatalogError, match="Run list-databases first"):
-        db_catalog.list_schemas({"target": "TEST-1"})
+        db_catalog.list_schemas({"target": "TEST-1", "connection": CONNECTION})
 
 
 def test_the_named_database_is_the_one_the_query_runs_in(monkeypatch):
@@ -198,7 +203,7 @@ def test_the_named_database_is_the_one_the_query_runs_in(monkeypatch):
 
     monkeypatch.setattr(db_catalog, "_query", fake_query)
 
-    data = db_catalog.list_schemas({"target": "TEST-1", "database": "APPDB"})
+    data = db_catalog.list_schemas({"target": "TEST-1", "connection": CONNECTION, "database": "APPDB"})
 
     assert seen["database"] == "APPDB"
     assert data["database_name"] == "APPDB"
@@ -217,7 +222,7 @@ def test_oracle_system_schemas_are_hidden_so_the_list_is_the_applications(monkey
         {"NAME": "LTR", "OWNER": "LTR"},
     ], resolved_extra={"database_name": "LEGACYAPP"})
 
-    data = db_catalog.list_schemas({"target": "TEST-1", "database": "LEGACYAPP"})
+    data = db_catalog.list_schemas({"target": "TEST-1", "connection": CONNECTION, "database": "LEGACYAPP"})
 
     assert [s["name"] for s in data["schemas"]] == ["LTR"]
     assert data["system_hidden"] == 3
@@ -233,14 +238,15 @@ def test_postgres_internal_schemas_are_matched_by_prefix_not_by_a_list(monkeypat
         {"name": "app", "owner": "app_owner"},
     ], resolved_extra={"database_name": "appdb"})
 
-    data = db_catalog.list_schemas({"target": "TEST-1", "database": "appdb"})
+    data = db_catalog.list_schemas({"target": "TEST-1", "connection": CONNECTION, "database": "appdb"})
 
     assert [s["name"] for s in data["schemas"]] == ["app"]
 
 
-def test_a_request_with_no_target_is_refused_by_both_commands():
+def test_a_request_with_no_login_is_refused_by_both_commands():
+    """The login is the request's to state (rules R09) - never looked up behind a server_id."""
     for runner in (db_catalog.list_databases, db_catalog.list_schemas):
-        with pytest.raises(db_catalog.DbCatalogError, match='needs a "target"'):
+        with pytest.raises(db_catalog.DbCatalogError, match='needs a "connection"'):
             runner({})
 
 

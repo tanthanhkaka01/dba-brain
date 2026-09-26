@@ -48,12 +48,14 @@ from db_ops.lib.cmd_access import (  # noqa: F401 - one definition, see that mod
     SUPPORTED_CMD_ACCESS_METHODS,
     SUPPORTED_PLATFORMS,
     infer_platform_from_os,
+    is_key_name,
     resolve_cmd_access,
     resolve_cmd_credential,
     resolve_platform,
 )
 
 import json
+import os
 import socket
 import time
 from dataclasses import dataclass, field
@@ -61,12 +63,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
-from db_ops.common import confirm, data_sources, hostcmd, remote_exec
-from db_ops.common import data_sources as target_resolve
+from db_ops.common import confirm, hostcmd, remote_exec
+
 from db_ops.lib import time_window
 from db_ops.lib.timezone import display_now, format_display
 from db_ops.lib.target_profile import (
-    RUNTIME_DOCKER, RUNTIME_K8S, SOURCE_CONFIG, SOURCE_REQUEST, TargetProfile,
+    RUNTIME_DOCKER, RUNTIME_K8S, SOURCE_REQUEST, TargetProfile,
     parse_os_version, select_powershell_dialect,
 )
 from db_ops.common.evidence import FAIL, OK, WARN, GateReport
@@ -82,7 +84,8 @@ __all__ = [
     "check_maintenance_window",
     "host_facts",
     "is_service_up",
-    "load_maintenance_policy",
+    "maintenance_policy",
+    "resolve_stated_host",
     "open_host_session",
     "parse_json_output",
     "read_facts",
@@ -104,7 +107,6 @@ __all__ = [
 # against "Running" and silently reports every Linux unit as down.
 _UP_STATES = {"running", "active"}
 
-POLICY_FILE = "maintenance_policy.json"
 
 # Defaults for every timing decision here. They are policy, so they live in
 # data/maintenance_policy.json; these are the fallbacks when it says nothing.
@@ -194,22 +196,20 @@ class HostTarget:
 def resolve_host(
     spec: str | dict[str, Any],
     *,
-    data_dir: str | Path | None = None,
     access: dict[str, Any] | None = None,
     platform: str = "",
     profile: TargetProfile | None = None,
 ) -> HostTarget:
-    """Resolve a host target from ``db_instances.json``, or from an inline access object.
+    """The host a request's ``access`` block states - never looked up in ``db_instances.json``.
 
-    ``spec`` accepts what every other db_ops entry point accepts — a ``server_id``, a bare ip, or
-    ``<db_type> <ip> [port]`` — because an operator holding a runbook has the ip, and a
-    scheduled task has the server_id. An explicit ``access`` object skips the inventory
-    entirely, so a host that is not (yet) in ``db_instances.json`` can still be operated on.
+    ``target`` / ``server_id`` is only the label the host is called by: this process reads no
+    configuration (rules R09), so the caller states the login (``db_ops.lib.data_sources.
+    request_fill`` does it from a node's data/). Call it through :func:`resolve_stated_host`, which
+    also refuses every way the block could still send this process to the data folder.
 
     ``profile`` is what the *caller* knows about the machine — ``os``, ``os_major``, ``runtime``.
-    It is merged over whatever the inventory says, never under it, and the merged answer rides on
-    the returned target so a script builder downstream can ask which PowerShell exists there
-    rather than assuming the newest.
+    It is merged over what the block says, never under it, and rides on the returned target so a
+    script builder downstream can ask which PowerShell exists there rather than assuming the newest.
     """
     stated = profile if profile is not None else TargetProfile()
     original_spec = spec if isinstance(spec, dict) else {}
@@ -223,69 +223,27 @@ def resolve_host(
         )
         spec = str(spec.get("target") or spec.get("server_id") or "")
     text = str(spec or "").strip()
+    if not access:
+        raise HostOpsError(NO_ACCESS.format(what="this command"))
 
-    if access:
-        resolved_platform = (
-            str(platform or access.get("platform") or "").strip().lower()
-            or infer_platform_from_os(str(access.get("os") or ""))
-            or (PLATFORM_WINDOWS if str(access.get("method") or "") == "winrm" else PLATFORM_LINUX)
-        )
-        block = resolve_cmd_access({"cmd_access": access}, platform=resolved_platform,
-                                   host=str(access.get("host") or text))
-        credential = resolve_cmd_credential(block, _remote_credentials_for(block, data_dir))
-        return HostTarget(
-            server_id=text or str(block.get("host") or ""),
-            host=str(block.get("host") or text),
-            platform=resolved_platform,
-            access=block,
-            credential=credential,
-            profile=stated.merge(TargetProfile.from_json(access)).with_(platform=resolved_platform),
-            runtime_target=_runtime_target(original_spec, access),
-        )
-
-    if not text:
-        raise HostOpsError("target is required (a server_id, an ip, or '<db_type> <ip> [port]').")
-
-    instance = _find_instance(text, data_dir=data_dir)
-    try:
-        resolved_platform = str(platform or "").strip().lower() or resolve_platform(instance)
-        block = resolve_cmd_access(instance, platform=resolved_platform, host=str(instance.get("ip") or ""))
-        credential = resolve_cmd_credential(block, _remote_credentials_for(block, data_dir))
-    except RuntimeError as exc:
-        raise HostOpsError(f"{text}: {exc}") from exc
-
-    if not block or not block.get("enabled", True):
-        raise HostOpsError(
-            f"{text} has no usable cmd_access block in db_instances.json, so there is no way to "
-            "reach the host. Add one (method ssh|winrm plus a credential_name), or pass an "
-            "inline 'access' object."
-        )
+    resolved_platform = (
+        str(platform or access.get("platform") or "").strip().lower()
+        or infer_platform_from_os(str(access.get("os") or ""))
+        or (PLATFORM_WINDOWS if str(access.get("method") or "") == "winrm" else PLATFORM_LINUX)
+    )
+    block = resolve_cmd_access({"cmd_access": access}, platform=resolved_platform,
+                               host=str(access.get("host") or text))
+    # No credential groups: the block states its own login (a username with a password, or a key).
+    credential = resolve_cmd_credential(block, [])
     return HostTarget(
-        server_id=str(instance.get("server_id") or text),
-        host=str(block.get("host") or instance.get("ip") or ""),
+        server_id=text or str(block.get("host") or ""),
+        host=str(block.get("host") or text),
         platform=resolved_platform,
         access=block,
         credential=credential,
-        instance=instance,
-        profile=stated.merge(
-            TargetProfile.from_json(instance, source=SOURCE_CONFIG)
-        ).with_(platform=resolved_platform),
-        runtime_target=_runtime_target(original_spec, instance),
+        profile=stated.merge(TargetProfile.from_json(access)).with_(platform=resolved_platform),
+        runtime_target=_runtime_target(original_spec, access),
     )
-
-
-def _remote_credentials_for(block: dict[str, Any], data_dir: str | Path | None) -> list[dict[str, Any]]:
-    """The credential groups — loaded only when the block cannot answer for itself.
-
-    An access block carrying ``username`` plus ``password``/``password_ref`` is the self-contained
-    door: reading ``users.json`` for it would defeat the point and would fail outright on a node
-    that has no inventory, which is precisely the case that door exists for.
-    """
-    if str(block.get("credential_name") or "").strip():
-        return data_sources.load_remote_credentials(data_dir)
-    if str(block.get("username") or "").strip() and (block.get("password") or block.get("password_ref")):
-        return []
-    return data_sources.load_remote_credentials(data_dir)
 
 
 def _runtime_target(request: dict[str, Any], source: dict[str, Any]) -> dict[str, Any]:
@@ -412,42 +370,19 @@ def os_drift(profile: TargetProfile | None, observed: str) -> str:
     )
 
 
-def _find_instance(spec: str, *, data_dir: str | Path | None) -> dict[str, Any]:
-    """The db instance a spec names — server_id / triple first, then a bare ip.
-
-    ``target_resolve`` reads a single token as a ``server_id``, which is right for a database
-    target but wrong for a host: OS-only entries (an application server, a host whose database
-    is not monitored) are reached by ip far more often than by id.
-    """
-    try:
-        return target_resolve.resolve_target_instance(spec, data_dir=data_dir)
-    except target_resolve.TargetResolveError as exc:
-        matches = [
-            item
-            for item in data_sources.load_db_instances(data_dir)
-            if str(item.get("ip") or "").strip() == spec
-        ]
-        if not matches:
-            raise HostOpsError(str(exc)) from exc
-        # Several instances can share a host (two SQL Server instances on one VM). They also
-        # share the machine, so any of them answers "how do I reach this host" identically.
-        return dict(matches[0])
-
-
 def open_host_session(
     target: HostTarget,
     *,
-    data_dir: str | Path | None = None,
     secrets: dict[str, str] | None = None,
     connect_timeout_seconds: int | None = None,
 ) -> RemoteSession:
-    """Open a session to the target's host, with the credential its config names."""
+    """Open a session to the target's host, with the login its request stated."""
     access = dict(target.access)
     if connect_timeout_seconds:
         access["timeout_seconds"] = int(connect_timeout_seconds)
     try:
         return remote_exec.open_session(
-            access, credential=target.credential, secrets=secrets, data_dir=data_dir
+            access, credential=target.credential, secrets=secrets
         )
     except RemoteExecError as exc:
         raise HostOpsError(f"{target.describe()}: {exc}") from exc
@@ -456,29 +391,20 @@ def open_host_session(
 # --------------------------------------------------------------------------- #
 # Policy
 # --------------------------------------------------------------------------- #
-def load_maintenance_policy(
-    data_dir: str | Path | None = None, *, server_id: str = "", overrides: dict[str, Any] | None = None
+def maintenance_policy(
+    stated: dict[str, Any] | None = None, *, overrides: dict[str, Any] | None = None
 ) -> dict[str, Any]:
-    """Timing and threshold policy: built-in defaults < file defaults < per-server < request.
+    """Timing and threshold policy: built-in defaults < what the request states < ``wait``.
 
-    The numbers live in ``data/maintenance_policy.json`` because they are config, not code: a
-    host with slow storage needs a longer services budget, and that is an operator's decision to
-    record, not a constant to edit in Python.
+    The numbers are an operator's to set - a host with slow storage needs a longer services
+    budget - and they live in ``data/maintenance_policy.json``. This process does not read it
+    (rules R09): the app that calls reads the node's file and sends the server's merged policy as
+    ``"policy"`` (``db_ops.lib.data_sources.request_fill.maintenance_policy``). A request with none,
+    run by hand, gets the defaults below.
     """
     policy = dict(DEFAULT_POLICY)
-    path = Path(data_dir) / POLICY_FILE if data_dir else data_sources.users_path().parent / POLICY_FILE
-    if path.exists():
-        try:
-            raw = json.loads(path.read_bytes().decode("utf-8-sig"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise HostOpsError(f"{path} is not readable JSON: {exc}") from exc
-        block = raw.get("maintenance_policy", raw) or {}
-        policy.update({k: v for k, v in (block.get("defaults") or {}).items()})
-        if server_id:
-            policy.update({k: v for k, v in ((block.get("servers") or {}).get(server_id) or {}).items()})
-    for key, value in (overrides or {}).items():
-        if value not in (None, ""):
-            policy[key] = value
+    for layer in (stated or {}, overrides or {}):
+        policy.update({key: value for key, value in layer.items() if value not in (None, "")})
     return policy
 
 
@@ -981,7 +907,7 @@ def host_facts(
     report.note("target", target.to_dict())
 
     with open_host_session(
-        target, data_dir=data_dir, connect_timeout_seconds=int(policy["connect_timeout_seconds"])
+        target, connect_timeout_seconds=int(policy["connect_timeout_seconds"])
     ) as session:
         # Which PowerShell exists on that host decides which script can run at all. Passing the
         # dialect rather than assuming the newest is the difference between a fact sheet and
@@ -1024,7 +950,7 @@ def service_control(
 
     changing = action != "status"
     with open_host_session(
-        target, data_dir=data_dir, connect_timeout_seconds=int(policy["connect_timeout_seconds"])
+        target, connect_timeout_seconds=int(policy["connect_timeout_seconds"])
     ) as session:
         before = service_states(session, services, platform=target.platform)
         report.note("states_before", before)
@@ -1124,7 +1050,7 @@ def restart_host(
     check_maintenance_window(report, request.get("window"), ignore=bool(request.get("ignore_window")))
 
     session = open_host_session(
-        target, data_dir=data_dir, connect_timeout_seconds=int(policy["connect_timeout_seconds"])
+        target, connect_timeout_seconds=int(policy["connect_timeout_seconds"])
     )
     try:
         facts = read_facts(
@@ -1206,7 +1132,7 @@ def restart_host(
         return _finish(report, request, overrides)
 
     with open_host_session(
-        target, data_dir=data_dir, connect_timeout_seconds=int(policy["connect_timeout_seconds"])
+        target, connect_timeout_seconds=int(policy["connect_timeout_seconds"])
     ) as session:
         if services:
             report.say("Waiting for the services to start...")
@@ -1295,20 +1221,50 @@ def _windows_reason(reason: str) -> str:
 # --------------------------------------------------------------------------- #
 # Shared request plumbing
 # --------------------------------------------------------------------------- #
+#: What a host operation says when its request states no way into the host. The fix is the
+#: caller's, and the message says whose.
+NO_ACCESS = (
+    '{what} needs an "access" object - the host, its method (ssh or winrm) and the login (username '
+    "with password, or key_file). common.cli reads no configuration (rules R09): the app that holds a "
+    "server_id states it (db_ops.lib.data_sources.request_fill does it from this node's data/)."
+)
+
+
+def resolve_stated_host(request: dict[str, Any], *, what: str = "this command") -> HostTarget:
+    """The host a request states in its ``access`` block - how the operations below reach one since
+    0.24.0 (rules R09). ``target`` is only the label it is called by.
+
+    Every way the block could still send this process to the data folder is refused rather than
+    followed: a ``credential_name`` (a ``users.json`` entry), a ``password_ref`` the environment does
+    not hold (the secret store), a key file named rather than located (``data/ssh_keys``).
+    """
+    access = request.get("access") if isinstance(request, dict) else None
+    if not isinstance(access, dict) or not access:
+        raise HostOpsError(NO_ACCESS.format(what=what))
+    if str(access.get("credential_name") or "").strip() and not str(access.get("username") or "").strip():
+        raise HostOpsError(
+            f"access.credential_name names a login in users.json, which {what} does not read "
+            '(rules R09): state "username" with "password" or "key_file".')
+    ref = str(access.get("password_ref") or "").strip()
+    if ref and not access.get("password") and not os.getenv(ref, "").strip():
+        raise HostOpsError(
+            f"access.password_ref {ref!r} is not in this process's environment, and {what} reads no "
+            'secret store (rules R09): send "password".')
+    key_file = str(access.get("key_file") or "").strip()
+    if is_key_name(key_file):
+        raise HostOpsError(
+            f"access.key_file {key_file!r} is a name, which would be looked up under data/ssh_keys; "
+            f"{what} reads no configuration (rules R09): give the key's full path.")
+    return resolve_host(request, platform=str(request.get("platform") or ""))
+
+
 def _prepare(
     request: dict[str, Any], *, data_dir: str | Path | None
 ) -> tuple[HostTarget, dict[str, Any], list[str]]:
     if not isinstance(request, dict):
         raise HostOpsError("request must be a JSON object.")
-    target = resolve_host(
-        str(request.get("target") or ""),
-        data_dir=data_dir,
-        access=request.get("access") or None,
-        platform=str(request.get("platform") or ""),
-    )
-    policy = load_maintenance_policy(
-        data_dir, server_id=target.server_id, overrides=request.get("wait") or {}
-    )
+    target = resolve_stated_host(request)
+    policy = maintenance_policy(request.get("policy") or {}, overrides=request.get("wait") or {})
     overrides = list(request.get("overrides") or [])
     if request.get("ignore_window"):
         overrides.append("ignore-window")
@@ -1336,7 +1292,7 @@ def _authorized(
     (``confirm``) **plus** a human typing ``yes`` at a terminal that shows this target and this
     consequence. Callers must have handled ``dry_run`` before reaching here.
     """
-    rules = confirm.load_operation(operation)
+    rules = confirm.rules_for(request, operation)
     return confirm.require_confirmation(
         report,
         request,

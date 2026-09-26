@@ -145,6 +145,14 @@
       "doc": "docs/14_lib.md",
       "summary": "Pure values and rules - time windows, notify routing, severity, formatting. Imported everywhere, runs nothing.",
       "app_command_ids": []
+    },
+    {
+      "app_code": "transport",
+      "sort_order": 15,
+      "display_name": "Transport",
+      "doc": "docs/15_transport.md",
+      "summary": "The one client of common.cli and db.cli: lib builds the command and reads the answer, this starts the process between them. Imports only lib, runs nothing of its own.",
+      "app_command_ids": []
     }
   ]
 }

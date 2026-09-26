@@ -30,7 +30,8 @@ python -m db_ops.db.cli --config config.json store-info
 
 One row per node, keyed by `node_id`, upserted by
 `python -m db_ops.db.cli --config config.json timezone --record` and by the daemon at start-up.
-(`common.cli timezone` reports the same answer but writes nothing — `common` may not import `db`.)
+(Without `--record` it reports and writes nothing, and opens no store - `common.cli timezone` did
+that until 0.24.0 and went, one command per job: rules R43.)
 
 **`timezone --set <ZONE>`** writes the zone into `config.json` and reports the clock it resolves
 to. **It does not change what is stored.** Every timestamp the store writes is UTC — see
@@ -342,7 +343,7 @@ python -m db_ops.control.cli deploy --key-base64 "<K>"
 python -m db_ops.db.cli check --counts --key-base64 "<K>"
 ```
 
-**`--delta` is what you want for a re-run.** A full copy of this store is ~10 minutes; the delta is ~3. Per table it picks one of three strategies: reload whole (small, or no identity key — exact, and the only way to pick up `UPDATE`s, which nearly every store table receives), append rows above the target's max id plus re-sync the recent window, or — for a keyless table like `metric_results_archive` — delta on its timestamp column. It also **prunes** rows the source no longer has, because `archive_old_results()` trims old rows and an append-only delta would otherwise leave the target *larger* than the source.
+**`--delta` is what you want for a re-run.** A full copy of this store is ~10 minutes; the delta is ~3. Per table it picks one of three strategies: reload whole (small, or no identity key — exact, and the only way to pick up `UPDATE`s, which nearly every store table receives), append rows above the target's max id plus re-sync the recent window, or — for a table with no identity key, like `metric_results_archive` — delta on its timestamp column. It also **prunes** rows the source no longer has, because `archive_old_results()` trims old rows and an append-only delta would otherwise leave the target *larger* than the source.
 
 `snapshot-sqlite` gives a consistent source without stopping anything (needs free disk equal to the store size), but a migration from a snapshot still misses whatever the daemon wrote afterwards — it is for rehearsing and timing the cutover, not for the cutover itself.
 
@@ -389,7 +390,7 @@ The path form is deliberate: ~20 call sites in `db_ops/` and the whole test suit
 | --- | --- | --- |
 | `schema_meta` | Runtime Store | Schema version tracking. |
 | `job_runs` | Runtime Store / App Command Daemon | App command starts, finishes, failures, timeouts, and manual CLI job events. |
-| `job_runs_history` | Runtime Store | Rows aged out of `job_runs` (15-day retention). Moved, not deleted — same trade as `metric_results_archive`. |
+| `job_runs_history` | Runtime Store | Rows aged out of `job_runs` (15-day retention). Moved, not deleted — same trade as `metric_results_archive`. Keyed by the `log_id` each row kept (0.24.0). |
 
 `job_runs` cannot be pruned on its own: `app_command_requests.job_run_id` is a real foreign key with no `ON DELETE`, so one finished request pointing into the batch failed the whole delete — and the daemon swallows a failed sweep by design, so the busiest table in the store stopped pruning and said so in one log line per interval. The archive moves the referencing requests first, in the same transaction. Found on 2026-09-04 on a live daemon: `23503 … Key (log_id)=(1601189) is still referenced from table "app_command_requests"`.
 
@@ -419,6 +420,29 @@ The path form is deliberate: ~20 call sites in `db_ops/` and the whole test suit
 | `web_login_attempts` | Web Host | Every login attempt, successful or not, with the reason, IP and user agent. |
 | `app_command_requests` | Web Host / App Command Daemon | "Run now" requests. The console writes them; the daemon starts the command and links the run back. |
 | `app_command_requests_history` | Web Host / App Command Daemon | Requests whose run has aged out of `job_runs`. Moved with it, in the same transaction — the foreign key is what makes the order matter. **Created by the sweep when it is missing**: `RunRequestStore` builds it only when the console runs, so every store upgraded from an earlier build had the requests table and no archive, and the sweep went on failing. Created once before the first batch, never inside one — `executescript` commits, and copy+delete being one transaction is what stops a row being archived twice. |
+
+### The archives' keys - `db.cli archive-keys` (0.24.0)
+
+`job_runs_history` and `metric_results_archive` had no primary key until 0.24.0 (rules R22's guard
+found them). Each row keeps the id it had in `job_runs` / `metric_results`, and that is its key now:
+a store made from 0.24.0 declares `log_id` and `result_id` `PRIMARY KEY` (`BIGINT PRIMARY KEY` on
+PostgreSQL - a key, not an identity, so the migration tool still copies the archive by its
+timestamp).
+
+A store made before keeps its tables: `CREATE TABLE IF NOT EXISTS` changes nothing that exists.
+**No app adds the key on its own.** On this estate's `db_ops` schema the archive is ~14 million rows
+(7 GB): adding the key reads all of it and holds the table while the index builds, and one
+duplicated id would make it fail - on every start, if an app tried. So it is a command, run when the
+store can take it:
+
+```bash
+python -m db_ops.db.cli archive-keys                # reads only: rows, missing ids, duplicate ids
+python -m db_ops.db.cli archive-keys --apply        # keys every table the report found clean
+```
+
+Each table answers `keyed` (nothing to do), `ready`, `blocked` (a missing or duplicated id - left
+alone, named, exit 1) or, with `--apply`, `keyed-now`. On PostgreSQL the key is added where the
+table stands; a SQLite table is rebuilt from the new declaration and its indexes re-made.
 
 ## Core Tables
 
@@ -780,8 +804,12 @@ has — `sla_runs` on a store whose SLA app never ran — is skipped rather than
 
 ## Schema Export Command
 
+The store's own command (`db.cli`). The root entry point's copy of it - `db-ops --export-sqlite-schema`,
+with the `--message` / `--recent` smoke test beside it - went in 0.24.0: the root holds nothing of its
+own (rules R41).
+
 ```powershell
-python -m db_ops.cli --config config.json --export-sqlite-schema --schema-output-dir runtime
+python -m db_ops.db.cli --config config.json export-sqlite-schema
 ```
 
 **This is SQLite-only, whatever the active backend is.** `db/schema_export.py` opens

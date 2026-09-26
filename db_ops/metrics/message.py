@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from db_ops.levels import ERROR, LOGGING, WARNING
+from db_ops.lib.levels import ERROR, LOGGING, WARNING
 from db_ops.lib.timezone import format_display
 from db_ops.metrics.health import InstanceHealth
 

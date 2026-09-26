@@ -173,7 +173,7 @@ catalog carry the flag; the rest deliberately do not.
 SQL Server already iterates databases inside the SQL with a cursor and `USE`, so looping the
 connection as well would collect everything twice.
 
-Four rules in `executor._execute_per_database`:
+Four rules - the walk is `common.metric_batch._per_database`, the rows `executor._per_database_rows`:
 
 - **One database failing costs its own rows and nothing else** — the same rule
   `load_metric_targets` applies to a broken `cmd_access`. A database dropped mid-run, or one this
@@ -566,11 +566,12 @@ reporting it below a full transaction log understates the estate's most serious 
 server is down" and "this check is broken" are different claims, and a capacity query failing on
 one host genuinely is a warning — so the answer belongs to each metric, per phase, in config.
 
-**Which phase a failure is.** The raiser says so; the message is only a fallback.
-`db_ops/metrics/executor.py` holds the connect and the execute apart itself
-(`MetricConnectionError` / `MetricExecutionError`), and the cmd/docker transports read the verdict
-off the `remote_exec` exception class (auth rejected and host unreachable are the session; a
-timeout is the session only when no command had been sent yet). Anything that declares no phase is
+**Which phase a failure is.** The raiser says so; the message is only a fallback. The connect and
+the execute are held apart where they run - `common.cli metric-batch` answers each item's error
+with the phase it declared - and `db_ops/metrics/executor.py` raises `MetricConnectionError` /
+`MetricExecutionError` from that answer. The script transports' verdict is read off the
+`remote_exec` exception class, in `common` too (auth rejected and host unreachable are the session;
+a timeout is the session only when no command had been sent yet). Anything that declares no phase is
 classified from its message by `db_ops/lib/event_policy.py::resolve_failure_phase` — the legacy
 Oracle bridge is the real case, since it connects and queries in one call. **Unknown counts as an
 execution failure**, never a connection one: the louder claim is never made on a guess.
@@ -584,9 +585,32 @@ Today only `INSTANCE_STATUS` is `CRITICAL`/`CRITICAL`; every other metric in the
 `WARNING`/`WARNING`. `INSTANCE_STATUS` is one multi-engine metric with SQL Server, Oracle, MySQL
 and PostgreSQL variants, so that setting covers every engine at once.
 
+## Where a metric runs: `common.cli metric-batch` (0.24.0)
+
+`metrics` decides; `common` runs. Deciding is this app's: which metrics are due, the file that fits
+the target, a script's environment and `env_secrets`, the password, the argv of a local script -
+and what an answer means: the JSON-rows contract, the phase that grades a failure, the severity map,
+the stored row. Running is an operation, and operations are `common`'s (rules R03, R10): the
+driver connect, the per-database walk, the 8i bridge, a script over SSH/WinRM or on this machine.
+
+A target's due metrics go to `common.cli metric-batch` **as one process** - still one after
+another, in catalog order, inside it - because a process per metric was measured at 43-138 s of
+interpreter start-up a pass (`tests/test_app_common_imports.py`). **A windowed metric runs in a
+batch of its own**, so the minutes a CHECKDB takes never hold the quick metrics' rows back from the
+store. Each row is stamped with when *its* metric started, not the batch. A batch that does not
+answer at all - a driver hung below its own timeout - fails its items with the reason after a
+bound well past what its items may take, where in-process it held that server's worker for the rest
+of the pass.
+
+`tests/test_metric_outcomes_survive_the_batch.py` was written against the in-process code before
+the move and holds 23 scenarios to the rows that code stored. The request, the answer and the item
+kinds: [`13_common.md`](./13_common.md) → `metric-batch`.
+
 ## Package / Files
 
-- `db_ops/metrics/`
+- `db_ops/metrics/` - `batch.py` sends a target's prepared items; `executor.py` prepares a SQL
+  metric and reads its answer; `collector.py` decides and grades
+- `db_ops/common/metric_batch.py` - where the items run
 - `data/db_instances.json`
 - `data/metric_definitions.json`
 - `data/metric_importance_overrides.json`
@@ -747,7 +771,7 @@ entirely and connects by **service**.
 
 ## Data Flow
 
-Target config + metric definitions + metric files + secrets -> collector dispatch -> SQL execution or command execution -> normalized `MetricResult` rows -> `metric_runs`, `metric_results`, and `target_health` in the runtime store -> reports/SLA/manual CLI reads.
+Target config + metric definitions + metric files + secrets -> collector dispatch -> one `common.cli metric-batch` per target (SQL, script or local items) -> the answers graded -> normalized `MetricResult` rows -> `metric_runs`, `metric_results`, and `target_health` in the runtime store -> reports/SLA/manual CLI reads.
 
 ## How to Run
 
@@ -1344,4 +1368,4 @@ The metrics app has no optional integrations. It writes to the runtime store and
 ## EXE Packaging Notes
 
 - `DEFAULT_DATA_DIR` and `DEFAULT_DEFINITIONS_PATH` are resolved relative to the Python package location. Pass `--data-dir` explicitly when running outside the repo.
-- Secrets (`data/encrypted_secret_text.json`, decrypted at runtime with the `--key_base64`/`--key` passphrase or `DB_OPS_SECRET_KEY`) and inventory (`data/db_instances.json`) are resolved from the `data/` directory via `db_ops/common/data_sources/`. Both degrade gracefully to empty if absent — targets relying on them will fail to connect.
+- Secrets (`data/encrypted_secret_text.json`, decrypted at runtime with the `--key_base64`/`--key` passphrase or `DB_OPS_SECRET_KEY`) and inventory (`data/db_instances.json`) are resolved from the `data/` directory via `db_ops/lib/data_sources/`. Both degrade gracefully to empty if absent — targets relying on them will fail to connect.

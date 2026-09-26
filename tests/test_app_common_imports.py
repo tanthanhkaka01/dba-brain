@@ -5,16 +5,19 @@ the work, it hands back a JSON object. Importing it instead means the app is rea
 the API into its internals, and then the CLI is not the contract — it is one of two contracts, and
 the second one is invisible to everything that checks the first.
 
-Three exemptions, all deliberate, all narrow, and each with its reason attached:
+No app is exempt any more. Three were, each with its reason, and each has gone:
 
-* **``control``** is the deploy tool. It builds the image and the bundle, so it necessarily
-  touches every part of the tree at once. Holding it to this rule would mean deploying through a
-  CLI it is in the middle of replacing.
-* **``common.data_sources``** is the one reader of the ``data/`` folder. Routing it through a
-  subprocess would mean a process per config read, and the reason it is *shared* rather than
-  copied into each app is exactly that every app asks it the same questions.
-* **``metrics``, for the four modules it executes through** — see :data:`EXEMPT_APPS`. That one is
-  a measurement, not a judgement, and the measurement is written down there.
+* **``control``** was left out as the deploy tool - *it builds the image and the bundle, so it
+  touches every part of the tree at once*. The operator, 2026-09-26: **``control`` does not import
+  ``common`` either; it runs ``common.cli``** (rule R03). Its four imports - ``ssh``,
+  ``identifier_scan`` (twice), ``confirm`` - were counted in :data:`REMAINING`; the scan and the
+  prompt now run ``check-identifiers`` and ``ask``, and the SSH session is a
+  ``lib.remote_host.RemoteHost`` whose calls are ``common.cli`` commands.
+* **``lib.data_sources``** is the one reader of the ``data/`` folder. It was ``common``'s; since
+  0.24.0 it is ``lib``'s, which an app imports freely.
+* **``metrics``, for the four modules it executed through** - gone since 0.24.0, when execution
+  moved to ``common.cli metric-batch``, one process per target. The measurement that made it a
+  batch rather than a call per metric is kept at :data:`EXEMPT_APPS`.
 
 Anything that is a **value** rather than an operation is not in ``common`` at all any more — it is
 in ``db_ops/lib/`` (pure helpers, imported freely) or ``db_ops/db/`` (row shapes, next to the
@@ -38,14 +41,16 @@ import pytest
 
 DB_OPS_ROOT = Path(__file__).resolve().parents[1] / "db_ops"
 
-#: Apps the rule applies to. `control` is exempt — see the module docstring.
+#: Apps the rule applies to - every app. `control` joined on 2026-09-26 (the module docstring).
 APPS = frozenset({
     "jobs", "metrics", "sql_tasks", "reports", "telegram",
-    "backup_restore", "sla", "sre", "webhost",
+    "backup_restore", "sla", "sre", "webhost", "control",
 })
 
-#: `common` submodules an app may still import, exempt from the rule.
-EXEMPT_MODULES = frozenset({"data_sources"})
+#: `common` submodules an app may still import, exempt from the rule. Empty since 0.24.0:
+#: `data_sources`, the one entry, moved to `lib/data_sources/` - the apps read the data folder
+#: in-process through `lib`, which is what an app may import.
+EXEMPT_MODULES: frozenset[str] = frozenset()
 
 #: One app, four modules, and a measurement — not a judgement.
 #:
@@ -66,12 +71,10 @@ EXEMPT_MODULES = frozenset({"data_sources"})
 #: across a process boundary: a behaviour change to the estate's own monitoring, which wants its
 #: guarding test written first. Recorded as work, not as an opinion.
 #:
-#: Until then `metrics` imports these four directly. **Nothing else about the rule is relaxed**:
-#: every other `common` module is still refused to `metrics`, and every other app is still
-#: refused these four.
-EXEMPT_APPS: dict[str, frozenset[str]] = {
-    "metrics": frozenset({"db_connect", "sql_execution", "oracle_bridge", "remote_exec"}),
-}
+#: **Done in 0.24.0:** `common.cli metric-batch` runs a target's due metrics in one process, with
+#: `tests/test_metric_outcomes_survive_the_batch.py` written first and holding the stored rows to
+#: what the in-process code stored. `metrics` imports no `common` module, and this is empty.
+EXEMPT_APPS: dict[str, frozenset[str]] = {}
 
 #: The migration baseline: `common` submodule -> the apps still importing it. Measured
 #: 2026-08-15 at 2.85.10, immediately after `lib` and the row shapes were split out: 74 import
@@ -184,10 +187,25 @@ EXEMPT_APPS: dict[str, frozenset[str]] = {
 #: went with it — most had already stopped being used. Before converting, both resolvers were run
 #: over all 12 configured task targets and agreed on ip, port and login for every one. Down to
 #: 5 / 2, and the SQL trio is closed.
-REMAINING: dict[str, frozenset[str]] = {
-    "remote_exec": frozenset({"backup_restore", "sre"}),
-    "ssh": frozenset({"backup_restore"}),
-}
+#:
+#: Then `sre` (0.24.0): a config section's `*_password_ref` resolves through `lib.secret_value`,
+#: and a host's SSH login through `lib.data_sources.ssh_login` - held to `RemoteAccess` by
+#: `test_an_ssh_login_resolves_as_a_session_would.py`. What is left is the SMB/Windows restore.
+#:
+#: Then `control` came under the rule (2026-09-26, the operator: *control does not import common
+#: either, it runs common.cli*), with the four imports it had: the deploy's SSH/SFTP session
+#: (`ssh`, in `_support.py`), the export's identifier scan (`identifier_scan`, in `cli.py` and
+#: `export_public.py`) and the config gate's prompt (`confirm`, in `config_gate.py`). 4 / 3.
+#:
+#: The same day the scan became `common.cli check-identifiers` (a refusal answers `refused`, so the
+#: export still says SKIPPED for it and stops for anything else) and the prompt `common.cli ask`.
+#:
+#: And the last three, also that day: the SSH clients. `control` drove the worker and
+#: `backup_restore` staged backups on a Linux restore target through a paramiko client out of
+#: `common.ssh` / `common.remote_exec`; both hold a `lib.remote_host.RemoteHost` now, whose every
+#: method is one `common.cli` call (`run-cmd`, `push-file`, `pull-file`), and preflight's WinRM share
+#: is a `run-cmd` too. Empty: R03 is absolute, and an import of `common` from an app fails here.
+REMAINING: dict[str, frozenset[str]] = {}
 
 
 def _app_files() -> list[Path]:

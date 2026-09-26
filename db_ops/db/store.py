@@ -2318,7 +2318,7 @@ CREATE INDEX IF NOT EXISTS ix_job_runs_status_created_at
 -- is by then well past any live retention window.
 CREATE TABLE IF NOT EXISTS job_runs_history
 (
-    log_id INTEGER,
+    log_id INTEGER PRIMARY KEY,
     created_at TEXT,
     started_at TEXT NULL,
     finished_at TEXT NULL,

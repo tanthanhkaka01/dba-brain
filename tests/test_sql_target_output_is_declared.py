@@ -19,7 +19,7 @@ import pytest
 
 from conftest import shipped_data_dir
 from db_ops.lib.task_output import FILE_OUTPUT_FORMATS, OUTPUT_FORMATS
-from db_ops.sql_tasks.runner import _target_notify, _target_output
+from db_ops.lib.sql_task_catalog import _target_notify, _target_output
 
 DATA_DIR = shipped_data_dir()
 

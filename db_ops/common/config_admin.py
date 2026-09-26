@@ -110,7 +110,7 @@ class ConfigAdminError(ValueError):
 
 
 # `resolve_target_from_server_id` — "what does db_instances.json already say about this server?" —
-# moved to `db_ops.common.data_sources.target_resolve` on 2026-08-15. It is a *read of the data
+# moved to `db_ops.lib.data_sources.target_resolve` on 2026-08-15. It is a *read of the data
 # folder*, which has exactly one reader, and the Telegram app needs that answer before it calls
 # this command; leaving it here meant an app importing `common` for a config lookup.
 #
@@ -138,6 +138,17 @@ def _read_json(path: Path) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ConfigAdminError(f"{path.name} is not a JSON object.")
     return data
+
+
+def _read_json_or_empty(path: Path) -> dict[str, Any]:
+    """The file a registrar is about to write, or an empty object when it does not exist yet.
+
+    A command whose job is to record something runs on an empty configuration and creates the file
+    it writes (rules R09). "Config file not found" for that very file refused the first task on
+    every new install. Only for the file being written: a file a command merely consults is still
+    read strictly, and a malformed one is still refused.
+    """
+    return _read_json(path) if path.exists() else {}
 
 
 def next_sql_id(commands: dict[str, Any]) -> int:
@@ -251,8 +262,8 @@ def add_sql_task(
     root = Path(tool_root).resolve() if tool_root else TOOL_ROOT
     commands_path = data_root / "sql_commands.json"
     targets_path = data_root / "sql_targets.json"
-    commands = _read_json(commands_path)
-    targets = _read_json(targets_path)
+    commands = _read_json_or_empty(commands_path)
+    targets = _read_json_or_empty(targets_path)
     commands.setdefault("sql_commands", [])
     targets.setdefault("sql_targets", [])
 

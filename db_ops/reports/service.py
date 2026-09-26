@@ -1,9 +1,6 @@
 from __future__ import annotations
 
 import ipaddress
-import json
-import subprocess
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,10 +8,9 @@ from time import perf_counter
 from typing import Any
 
 from db_ops.lib.telegram_route import telegram_groups
-from db_ops.common.data_sources import DEFAULT_DATA_DIR, resolve_config_metric_target
+from db_ops.lib.data_sources import DEFAULT_DATA_DIR, resolve_config_metric_target
 from db_ops.config import DbOpsConfig
 from db_ops.db import DbOpsStore
-from db_ops.lib.paths import TOOL_ROOT
 
 
 class ReportWorkflowError(RuntimeError):
@@ -37,6 +33,21 @@ def force_hourly_report(
     config_path: str | Path | None = None,
     include_windowed: bool = False,
 ) -> dict[str, Any]:
+    """Report a target from the metric results already stored, and push the alerts.
+
+    **It collects nothing** (the operator, 2026-09-26: *a report does not run metrics*). Until
+    0.24.0 it started `metrics.cli collect --force` for the target first - one app running another's
+    CLI (rules R42), and on-demand work against a production instance at whatever hour someone
+    typed the command. Collecting is `metrics`' job, on its own schedule; the report reads what that
+    schedule stored, so it is at most one collection cycle old.
+    """
+    if include_windowed:
+        # Refused rather than ignored: a node whose bot catalogue predates 0.24.0 still sends it
+        # for `full`, and silently dropping the word would answer a question nobody asked.
+        raise ReportWorkflowError(
+            "--include-windowed is gone: force-hourly-report no longer collects metrics, it reports "
+            "the stored results (0.24.0). To collect a windowed metric out of its hours, run "
+            "`metrics.cli collect --target-id <id> --force --include-windowed` first.", exit_code=2)
     # server_id is the unique per-instance key and needs no db_type/port disambiguation; an IP can
     # be shared by several instances. Accept either; require one.
     normalized_server_id = str(server_id or "").strip()
@@ -53,7 +64,6 @@ def force_hourly_report(
         "target_id": "",
         "summary_limit": summary_limit,
         "dedupe_seconds": dedupe_seconds,
-        "include_windowed": bool(include_windowed),
         "exit_code": 1,
         "status": "running",
         "steps": [],
@@ -84,29 +94,17 @@ def force_hourly_report(
         if not normalized_server_id:
             normalized_server_id = str(getattr(target, "server_id", "") or "")
             result["server_id"] = normalized_server_id
-        metrics_enabled = bool(getattr(target, "metrics_enabled", True))
-
-        if metrics_enabled:
-            collect_summary = _run_step(
-                logger=logger,
-                command_name=command_name,
-                step_name="collect metrics",
-                target_ip=normalized_ip,
-                target_id=target_id,
-                action=lambda: collect_target_metrics(
-                    config_path=config_path, target_id=target_id, include_windowed=include_windowed,
-                ),
-            )
-        else:
-            collect_summary = _run_step(
-                logger=logger,
-                command_name=command_name,
-                step_name="use stored metrics",
-                target_ip=normalized_ip,
-                target_id=target_id,
-                action=lambda: stored_metric_summary(sqlite_path=config.store, target_id=target_id),
-            )
-        result["collect"] = _collect_summary_dict(collect_summary)
+        stored_summary = _run_step(
+            logger=logger,
+            command_name=command_name,
+            step_name="use stored metrics",
+            target_ip=normalized_ip,
+            target_id=target_id,
+            action=lambda: stored_metric_summary(
+                sqlite_path=config.store, target_id=target_id,
+                metrics_enabled=bool(getattr(target, "metrics_enabled", True))),
+        )
+        result["stored"] = _collect_summary_dict(stored_summary)
 
         created = _run_step(
             logger=logger,
@@ -359,12 +357,16 @@ def resolve_report_target(
     return SimpleNamespace(target_id=target_ids[0], ip=target_ip)
 
 
-def stored_metric_summary(*, sqlite_path: str | Path, target_id: str) -> Any:
+def stored_metric_summary(*, sqlite_path: str | Path, target_id: str, metrics_enabled: bool = False) -> Any:
     store = DbOpsStore(sqlite_path)
     rows = store.fetch_latest_metric_report_results(target_id=target_id)
     if not rows:
+        # Two different states, and the fix for each is different: switch collection on, or wait
+        # for the schedule to reach a target that was only just added.
+        reason = ("metrics has not stored a result for it yet - it collects on its own schedule"
+                  if metrics_enabled else "metrics collection is disabled for it")
         raise ReportWorkflowError(
-            f"metrics collection is disabled for target {target_id} and no stored metric rows are available",
+            f"no stored metric rows are available for target {target_id}: {reason}",
             exit_code=2,
         )
     statuses = [str(row["status"] or "").upper() for row in rows]
@@ -385,38 +387,6 @@ def _data_dir_from_config_path(config_path: str | Path | None) -> Path:
     if config_path is None:
         return DEFAULT_DATA_DIR
     return Path(config_path).resolve().parent / "data"
-
-
-def collect_target_metrics(
-    *, config_path: str | Path | None, target_id: str, include_windowed: bool = False
-) -> Any:
-    argv = [
-        sys.executable,
-        "-m",
-        "db_ops.metrics.cli",
-        "--config",
-        str(config_path or "config.json"),
-        "collect",
-        "--target-id",
-        target_id,
-        "--force",
-    ]
-    # Opt-in only: see collector._metric_window_open. Without this the on-demand report ran
-    # DBCC CHECKDB and an index-fragmentation scan at whatever hour someone typed it.
-    if include_windowed:
-        argv.append("--include-windowed")
-    completed = subprocess.run(
-        argv,
-        cwd=TOOL_ROOT,
-        capture_output=True,
-        text=True,
-        shell=False,
-        check=False,
-    )
-    if completed.returncode != 0:
-        error_text = completed.stderr.strip() or completed.stdout.strip() or f"Metrics CLI failed with exit code {completed.returncode}"
-        raise ReportWorkflowError(safe_error_summary(error_text), exit_code=completed.returncode)
-    return _collect_summary_from_cli_output(completed.stdout)
 
 
 def create_hourly_metrics_report(*, sqlite_path: str, summary_limit: int, target_id: str) -> dict[str, Any]:
@@ -569,30 +539,6 @@ def _collect_summary_dict(summary: Any) -> dict[str, Any]:
         "critical_count": getattr(summary, "critical_count", 0),
         "duration_seconds": getattr(summary, "duration_seconds", 0),
     }
-
-
-def _collect_summary_from_cli_output(stdout: str) -> Any:
-    values: dict[str, Any] = {}
-    for line in stdout.splitlines():
-        if ":" not in line:
-            continue
-        key, value = line.split(":", 1)
-        key = key.strip()
-        value = value.strip()
-        if not key:
-            continue
-        if value.replace(".", "", 1).isdigit():
-            values[key] = float(value) if "." in value else int(value)
-        else:
-            values[key] = value
-    if not values:
-        try:
-            parsed = json.loads(stdout)
-            if isinstance(parsed, dict):
-                values = parsed
-        except json.JSONDecodeError:
-            values = {"stdout": stdout.strip()}
-    return SimpleNamespace(**values)
 
 
 __all__ = [

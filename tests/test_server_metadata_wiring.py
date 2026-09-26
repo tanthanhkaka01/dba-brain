@@ -357,7 +357,7 @@ def _target(server_id, ip, instance_name="", db_type="sqlserver"):
 
 
 def _with_inventory(monkeypatch, targets):
-    import db_ops.common.data_sources as mtc
+    import db_ops.lib.data_sources as mtc
     monkeypatch.setattr(mtc, "load_config_metric_targets", lambda **k: targets)
 
 
@@ -453,7 +453,7 @@ def test_both_phases_run_and_the_post_phase_comes_after_the_restore():
 
     source = (_p.Path(wf.__file__).parent / "cli.py").read_text(encoding="utf-8")
     body = source[source.index('elif args.command == "restore-workflow":'):]
-    body = body[:body.index('elif args.command == "verify-restore":')]
+    body = body[:body.index('raise ValueError(f"Unknown command: {args.command}")')]
 
     pre = body.index("PRE_DATABASE")
     run = body.index("output = run_restore_workflow(")

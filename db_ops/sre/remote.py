@@ -13,8 +13,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from db_ops.common.data_sources import resolve_ssh_key, resolve_ssh_password
-from db_ops.common.remote_exec import RemoteAccess, RemoteExecError
+from db_ops.lib.data_sources import resolve_ssh_key, resolve_ssh_password, ssh_login
+from db_ops.lib.secret_value import SecretValueError
 from db_ops.lib.ssh_errors import SshError
 
 
@@ -34,7 +34,7 @@ def resolve_remote_ssh_password(
     key_base64: str | None = None,
     data_dir: str | Path | None = None,
 ) -> str:
-    """Thin wrapper over :func:`db_ops.common.data_sources.resolve_ssh_password` (kept for callers that
+    """Thin wrapper over :func:`db_ops.lib.data_sources.resolve_ssh_password` (kept for callers that
     import it from here). Password resolution is a read of the encrypted store, so it lives with the data folder's
     one reader and every app shares it."""
     try:
@@ -59,11 +59,11 @@ def resolve_ubuntu_login(target: str, *, data_dir=None) -> dict:
     ``data_sources`` for the record and the credentials, ``lib.cmd_access`` for what the block
     means — rather than a call into ``host_ops``, because an app does not import ``common``.
     Nothing here is a second interpretation of the block: the rules live in ``lib``, and both
-    callers ask them. The password or the key path is resolved by ``RemoteAccess.from_json``, the
-    same resolution a session would make, and the result goes to ``common.cli move-db-docker``
-    in its request: that command reads nothing (0.23.0).
+    callers ask them. The password or the key path is resolved by ``lib.data_sources.ssh_login``,
+    the same resolution a session would make (held to it by a test), and the result goes to
+    ``common.cli move-db-docker`` in its request: that command reads nothing (0.23.0).
     """
-    from db_ops.common.data_sources import load_remote_credentials, resolve_target_instance
+    from db_ops.lib.data_sources import load_remote_credentials, resolve_target_instance
     from db_ops.lib.cmd_access import resolve_cmd_access, resolve_cmd_credential, resolve_platform
 
     text = str(target or "").strip()
@@ -89,9 +89,7 @@ def resolve_ubuntu_login(target: str, *, data_dir=None) -> dict:
             "SSH-reachable Linux host, because docker and compose run there."
         )
     try:
-        access = RemoteAccess.from_json(block, credential=credential, data_dir=data_dir)
-    except RemoteExecError as exc:
+        login = ssh_login(block, credential, data_dir=data_dir, default_host=text)
+    except (SshError, SecretValueError) as exc:
         raise RemoteHostError(f"{text}: {exc}") from exc
-    return {"host": access.host or text, "port": int(access.port or 22),
-            "username": access.username, "password": access.password or "",
-            "key_file": access.key_file or ""}
+    return {**login, "host": login["host"] or text}

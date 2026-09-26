@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from db_ops import scaffold
+from db_ops.common import scaffold
 from db_ops.lib.paths import builtin_asset_root
 
 

@@ -10,12 +10,12 @@ from types import SimpleNamespace
 from pathlib import Path
 from typing import Any
 
-from db_ops.common.data_sources import DEFAULT_DATA_DIR, load_config_metric_targets, resolve_config_metric_target
+from db_ops.lib.data_sources import DEFAULT_DATA_DIR, load_config_metric_targets, resolve_config_metric_target
 from db_ops.lib.policy_engine import apply_report_policy, render_policy_event, row_status, status_rank
 from db_ops.lib.rows import row_text
 from db_ops.db.queue_message import queue_message, store_block_from
 from db_ops.lib.time_window import TimeWindow, is_time_window_open, parse_time_window_config, repeat_due, time_window_closed_reason
-from db_ops.common import data_sources
+from db_ops.lib import data_sources
 from db_ops.db.metric_definitions import definition_supports_db_type
 from db_ops.db.metric_store import MetricStore
 from db_ops.db.metric_results import rows_by_target

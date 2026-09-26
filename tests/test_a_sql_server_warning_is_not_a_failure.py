@@ -25,7 +25,7 @@ from db_ops.common import sql_execution, sql_run
 from db_ops.lib import driver_warnings
 from db_ops.lib.telegram_severity import classify_message
 from db_ops.sql_tasks import runner
-from tests.test_common_sql_run import FakeConn, FakeCursor, _patch
+from tests.test_common_sql_run import _STATED, FakeConn, FakeCursor, _patch
 
 WARNING_8153 = ("01003", "[01003] [Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Warning: Null "
                 "value is eliminated by an aggregate or other SET operation. (8153) (SQLMoreResults)")
@@ -101,7 +101,7 @@ def test_an_autocommit_run_past_a_warning_succeeds_and_says_so(monkeypatch):
     conn = FakeConn(RaisingCursor([FIRST_SET, SECOND_SET], error=WARNING_8153))
     _patch(monkeypatch, conn)
 
-    result = sql_run.run_sql({"target": "ACME-x", "sql_text": "EXEC dbo.engine;", "autocommit": True})
+    result = sql_run.run_sql({**_STATED, "target": "ACME-x", "sql_text": "EXEC dbo.engine;", "autocommit": True})
 
     assert result["ok"] is True
     assert len(result["warnings"]) == 1
@@ -115,7 +115,7 @@ def test_a_transaction_past_a_warning_is_rolled_back_with_the_reason(monkeypatch
     _patch(monkeypatch, conn)
 
     with pytest.raises(sql_run.SqlRunError, match="rolled back") as raised:
-        sql_run.run_sql({"target": "ACME-x", "sql_text": "EXEC dbo.engine;", "commit": True})
+        sql_run.run_sql({**_STATED, "target": "ACME-x", "sql_text": "EXEC dbo.engine;", "commit": True})
 
     assert "autocommit" in str(raised.value)
     assert conn.committed is False and conn.rolled_back is True
@@ -126,7 +126,7 @@ def test_a_real_error_still_fails_the_run(monkeypatch):
     _patch(monkeypatch, conn)
 
     with pytest.raises(sql_run.SqlRunError, match="Invalid object name"):
-        sql_run.run_sql({"target": "ACME-x", "sql_text": "SELECT 1; SELECT * FROM dbo.nope;",
+        sql_run.run_sql({**_STATED, "target": "ACME-x", "sql_text": "SELECT 1; SELECT * FROM dbo.nope;",
                          "autocommit": True})
 
 
@@ -134,7 +134,7 @@ def test_a_run_with_no_warning_answers_an_empty_list(monkeypatch):
     conn = FakeConn(FakeCursor([FIRST_SET]))
     _patch(monkeypatch, conn)
 
-    assert sql_run.run_sql({"target": "ACME-x", "sql_text": "SELECT 1"})["warnings"] == []
+    assert sql_run.run_sql({**_STATED, "target": "ACME-x", "sql_text": "SELECT 1"})["warnings"] == []
 
 
 # --------------------------------------------------------------------------- #

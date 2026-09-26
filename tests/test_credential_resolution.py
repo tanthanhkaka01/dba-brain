@@ -5,8 +5,8 @@ import json
 
 import pytest
 
-from db_ops.common import data_sources
-from db_ops.common.data_sources import CredentialNotFound, find_database_credential
+from db_ops.lib import data_sources
+from db_ops.lib.data_sources import CredentialNotFound, find_database_credential
 
 
 GROUPS = [
@@ -122,12 +122,12 @@ def _write_config(data_dir, *, default_credential_name="dba"):
 
 
 def test_check_credentials_cli_passes_on_a_complete_config(tmp_path, capsys):
-    # Moved out of db_ops.common.cli on 2026-08-15: the command needs two apps' resolvers, and
-    # the shared layer may import none. db_ops/cli.py is a root module, so it may.
+    # Back in `common` since 0.24.0 (rules R41): its two resolvers are lib's, so the shared layer
+    # can ask them. `db-ops check-credentials` is an alias of the common command.
     from db_ops import cli
 
     _write_config(tmp_path)
-    assert cli.main(["check-credentials", str(tmp_path)]) == 0
+    assert cli.main(["check-credentials", json.dumps({"data_dir": str(tmp_path)})]) == 0
     answer = json.loads(capsys.readouterr().out)
     assert answer["success"] is True and answer["data"]["problems"] == []
     assert "0 without a resolvable credential" in answer["message"]
@@ -139,7 +139,7 @@ def test_check_credentials_cli_fails_when_a_target_names_no_login(tmp_path, caps
     from db_ops import cli
 
     _write_config(tmp_path, default_credential_name="")
-    assert cli.main(["check-credentials", str(tmp_path)]) == 1
+    assert cli.main(["check-credentials", json.dumps({"data_dir": str(tmp_path)})]) == 1
     # The finding is **in the answer** since 2026-08-16, not only in the exit code with the detail
     # on stderr — that split is what made this command unusable from a program. The exit code
     # still agrees with it, because a runbook and a scheduled caller both read `$?`.

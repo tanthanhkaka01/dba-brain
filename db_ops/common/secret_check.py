@@ -39,7 +39,10 @@ import re
 from pathlib import Path
 from typing import Any
 
-from db_ops.common import data_sources, db_connect, host_probe, oracle_bridge, remote_exec, sql_run
+from db_ops.common import db_connect, host_probe, oracle_bridge, remote_exec, sql_run
+
+from db_ops.lib import data_sources
+from db_ops.lib.data_sources import request_fill
 from db_ops.common.password_rotation import target_from_ref_name
 from db_ops.lib import field_names
 from db_ops.lib import sql_access
@@ -145,8 +148,10 @@ def resolve_check_target(
     for instance in instances:
         if str(instance.get("default_credential_name") or "") in db_creds and db_creds:
             try:
-                target = sql_run.resolve_sqlserver_target(
-                    str(instance.get("server_id") or ""), data_dir=data_dir)
+                # Filled the way every app fills a request (rules R09): run-sql's resolver stopped
+                # reading the inventory, and this module - whose job is the store - reads it here.
+                target = sql_run.resolve_stated_connection({"connection": request_fill.sql_connection(
+                    str(instance.get("server_id") or ""), data_dir=data_dir)}, what="check-secret")
             except Exception:  # noqa: BLE001 - fall through to the other sources.
                 break
             target.update(kind="db", source="db_instances.json")
@@ -493,7 +498,7 @@ def _check_remote(result: dict[str, Any], target: dict[str, Any], password: str,
             access = remote_exec.RemoteAccess.from_json(
                 {"method": method, "host": host, "port": candidate_port, "username": username,
                  "password": password, "auth_type": "password",
-                 "timeout_seconds": timeout_seconds}, resolve_key=False)
+                 "timeout_seconds": timeout_seconds})
             with remote_exec.open_session(access) as session:
                 session.run("echo db_ops_probe" if method == "ssh" else "Write-Output db_ops_probe")
             result.update(status="OK", detail=f"authenticated over {method}")
@@ -557,3 +562,123 @@ def check(request: dict[str, Any], *, data_dir: str | Path | None = None,
     unresolved = [i["password_ref"] for i in results if i["status"] == "NO_TARGET"]
     return {"ok": not unresolved, "selected": len(results), "summary": summary,
             "results": results}
+
+
+def check_credentials(requested_dir: str = "") -> dict[str, Any]:
+    """``check-credentials``: does every configured target resolve to a real login.
+
+    The sibling of the ref audit above, and here for the same reason: the configuration is the
+    subject, so reading it is the work (rules R09). ``common.cli check-credentials`` asks it; the
+    root ``db-ops`` answered it itself until 0.24.0 (R41). ``{"data_dir", "checked", "problems"}``;
+    a folder that is not there raises ``FileNotFoundError`` - nothing checked is not the same
+    answer as nothing wrong - and targets that cannot be read raise ``ValueError``.
+
+    A legacy-Oracle target is checked by what it actually needs: the credential its connect string
+    is built from, plus the bridge's shared secret over ``api``. A credential is required, never
+    inferred (:func:`db_ops.lib.data_sources.find_database_credential`), so a config edit that
+    drops ``default_credential_name`` / ``credential_name`` stops that target here, before a deploy.
+    """
+    from db_ops.lib.data_sources import collection_targets
+
+    # load_metric_targets needs a concrete folder; default to the one data_sources resolves.
+    data_dir = Path(requested_dir) if requested_dir else data_sources.users_path().parent
+    if not data_dir.is_dir():
+        raise FileNotFoundError(f"no such folder: {data_dir}")
+
+    problems: list[str] = []
+    checked = 0
+    # `None` means "the store could not be read here", which is a different answer from "the ref
+    # is not in it" and must never be reported as a missing secret. A tree with no store file at
+    # all is that case too: an unprovisioned node has nothing to compare against, and saying every
+    # ref is missing would bury the one finding that matters.
+    secrets: dict[str, str] | None = None
+    if data_sources.secret_text_path(data_dir).exists():
+        try:
+            secrets = data_sources.load_secret_text(data_dir)
+        except Exception:  # noqa: BLE001 - no key here is normal; it costs one check, not the run.
+            secrets = None
+
+    try:
+        configured = collection_targets.load_metric_targets(data_dir=data_dir)
+    except Exception as exc:  # noqa: BLE001 - a broken file is an answer, in the envelope (R15).
+        raise ValueError(f"could not read the targets in {data_dir}: {exc}") from exc
+    for target in configured:
+        # Host-only entries carry no DB login by design. Asked through `sql_access.is_host_only`,
+        # which accepts both spellings: this test read `if not target.db_type`, which was right
+        # while a host carried `null` and silently wrong the day the estate normalised those
+        # records to `"host"` - four correct entries then reported "no credential" here, on the
+        # command whose whole value is being believed.
+        if sql_access.is_host_only(target.db_type):
+            continue
+        checked += 1
+        access = target.sql_access or {}
+        refs = sql_access.secret_refs(access)
+
+        # A named ref that is not *in* the store fails exactly like one that was never named - for
+        # example a secret present on the master and absent on the node running the collection.
+        # Only asked when the store opens - this command is documented as
+        # needing no key, so a node without one keeps the config-level answer below rather than
+        # reporting every ref as missing.
+        for field, ref in refs.items():
+            if secrets is not None and ref not in secrets:
+                problems.append(
+                    f"metrics target {target.target_id}: sql_access.{field} names '{ref}', "
+                    "which is not in the secret store"
+                )
+
+        # A legacy-Oracle target (`sql_access.method` api/subprocess) used to be skipped here
+        # entirely, as carrying "no DB login by design". It carries one: the bridge builds
+        # `user/password@host/service` from this target's own credential, and over `api` it needs
+        # a second secret as well - the shared token named by `sql_access.secret_ref`. Neither was
+        # looked at, so every collection for that target failed with "bridge secret not found"
+        # while this command - the one you run to decide whether to look further - reported clean.
+        if sql_access.is_legacy(access):
+            if str(access.get("method")) == "api" and not refs.get("secret_ref"):
+                problems.append(
+                    f"metrics target {target.target_id}: sql_access.method is 'api' and names no "
+                    "secret_ref, so no bridge token can be signed"
+                )
+            if refs.get("connect_ref"):
+                # That one secret holds the whole connect string, so this target has no separate
+                # credential to resolve and the check above is the whole answer for it.
+                continue
+        if not target.credential:
+            problems.append(
+                f"metrics target {target.target_id}: no credential "
+                f"(default_credential_name={target.credential_name or '<unset>'})"
+            )
+
+    groups = data_sources.load_all_credentials(data_dir)
+    targets_file = data_dir / "sql_targets.json"
+    if targets_file.exists():
+        entries = json.loads(targets_file.read_bytes().decode("utf-8-sig")).get("sql_targets", [])
+        for entry in entries:
+            if str(entry.get("active", 1)) in ("0", "false", "False"):
+                continue
+            checked += 1
+            db_type = str(entry.get("db_type") or "").lower()
+            try:
+                data_sources.find_database_credential(
+                    groups.get(db_type, []),
+                    server_id=str(entry.get("server_id") or ""),
+                    credential_name=str(entry.get("credential_name") or ""),
+                    db_type=db_type,
+                    service_name=str(entry.get("service_name") or ""),
+                    instance_name=str(entry.get("instance_name") or ""),
+                )
+            except data_sources.CredentialNotFound as exc:
+                problems.append(f"sql target {entry.get('sql_id')}/{entry.get('target_no')}: {exc}")
+
+    commands_file = data_dir / "telegram_support_commands.json"
+    if commands_file.exists():
+        commands = json.loads(commands_file.read_bytes().decode("utf-8-sig"))
+        for command in commands.get("telegram_support_commands", []):
+            if str(command.get("action_type")) != "sql_execute":
+                continue
+            checked += 1
+            try:
+                data_sources.find_command_credential(command.get("action_config") or {}, data_dir)
+            except Exception as exc:  # noqa: BLE001 - report, do not abort the whole check.
+                problems.append(f"telegram command {command.get('command_text')}: {exc}")
+
+    return {"data_dir": str(data_dir), "checked": checked, "problems": problems}

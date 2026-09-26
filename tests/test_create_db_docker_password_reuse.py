@@ -24,7 +24,7 @@ import json
 import pytest
 
 from db_ops.sre.cli import SKIP_SENTINEL, _supplied_password_text
-from db_ops.sre.docker_db.resolve import DockerDbRequestError
+from db_ops.lib.docker_db_registry import DockerDbRequestError
 from db_ops.telegram.command_processor import DEFAULT_COMMANDS_PATH, build_cli_argv
 
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import socket
 
-from db_ops.levels import CRITICAL, ERROR, LOGGING, WARNING
+from db_ops.lib.levels import CRITICAL, ERROR, LOGGING, WARNING
 from db_ops.logging_ops.formatter import LOG_HEADER
 from db_ops.lib.timezone import display_today, to_display
 from datetime import datetime, timezone

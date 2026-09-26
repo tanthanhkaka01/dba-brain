@@ -84,7 +84,7 @@ def _write_config(root, *, base_url, port=8080):
 def test_published_links_pointing_at_another_host_are_reported_as_a_disagreement(tmp_path, monkeypatch):
     # The 2026-09-10 finding, as a test: the node serves on .93 and every page it publishes says
     # .249. Nothing detected it until a reader clicked a link and landed on a retired machine.
-    from db_ops.common import data_sources
+    from db_ops.lib import data_sources
 
     _write_config(tmp_path, base_url="http://192.0.2.249:8080/report_dba/")
     monkeypatch.setattr(data_sources, "_resolve_data_dir", lambda _=None: tmp_path)
@@ -97,7 +97,7 @@ def test_published_links_pointing_at_another_host_are_reported_as_a_disagreement
 
 
 def test_a_base_url_naming_this_node_is_not_reported_as_a_problem(tmp_path, monkeypatch):
-    from db_ops.common import data_sources
+    from db_ops.lib import data_sources
 
     _write_config(tmp_path, base_url="http://192.0.2.93:8080/report_dba/")
     monkeypatch.setattr(data_sources, "_resolve_data_dir", lambda _=None: tmp_path)
@@ -146,7 +146,7 @@ def test_a_container_does_not_offer_its_bridge_address_as_a_link(tmp_path, monke
     is a mapping the container cannot see, so the node genuinely does not know how anyone reaches
     it. `report_base_url` is somebody stating exactly that fact, so it is used instead.
     """
-    from db_ops.common import data_sources
+    from db_ops.lib import data_sources
 
     _write_config(tmp_path, base_url="http://192.0.2.20:8080/report_dba/")
     monkeypatch.setattr(data_sources, "_resolve_data_dir", lambda _=None: tmp_path)
@@ -159,7 +159,7 @@ def test_a_container_does_not_offer_its_bridge_address_as_a_link(tmp_path, monke
 
 def test_a_container_with_nothing_configured_prints_a_blank_to_fill_in(tmp_path, monkeypatch):
     # A placeholder is honest; a bridge address that looks clickable is not.
-    from db_ops.common import data_sources
+    from db_ops.lib import data_sources
     from db_ops.lib import webhost_endpoints as lib
 
     _write_config(tmp_path, base_url="")
@@ -174,7 +174,7 @@ def test_a_container_with_nothing_configured_prints_a_blank_to_fill_in(tmp_path,
 def test_a_container_does_not_raise_the_stale_link_warning(tmp_path, monkeypatch):
     # The comparison would be a bridge address against a real one: always "different", never
     # meaningful. A warning that fires on every containerised node is noise.
-    from db_ops.common import data_sources
+    from db_ops.lib import data_sources
 
     _write_config(tmp_path, base_url="http://192.0.2.20:8080/report_dba/")
     monkeypatch.setattr(data_sources, "_resolve_data_dir", lambda _=None: tmp_path)
@@ -184,7 +184,7 @@ def test_a_container_does_not_raise_the_stale_link_warning(tmp_path, monkeypatch
 
 
 def test_a_node_on_the_operating_system_still_answers_for_itself(tmp_path, monkeypatch):
-    from db_ops.common import data_sources
+    from db_ops.lib import data_sources
 
     _write_config(tmp_path, base_url="http://192.0.2.93:8080/report_dba/")
     monkeypatch.setattr(data_sources, "_resolve_data_dir", lambda _=None: tmp_path)
@@ -235,7 +235,7 @@ def test_the_published_base_is_derived_from_the_worker_the_estate_already_declar
     already states the port and mount. Both move when the estate moves, so a derived answer follows
     it. The literal it replaced was wrong three times in one day on 2026-09-10.
     """
-    from db_ops.common import data_sources
+    from db_ops.lib import data_sources
 
     data_sources._clear_report_base_url_cache()
     data = _write_root(tmp_path, worker_host="192.0.2.77", port=8081)
@@ -243,7 +243,7 @@ def test_the_published_base_is_derived_from_the_worker_the_estate_already_declar
 
 
 def test_an_explicit_setting_still_wins_because_a_proxy_or_a_dns_name_cannot_be_derived(tmp_path):
-    from db_ops.common import data_sources
+    from db_ops.lib import data_sources
 
     data_sources._clear_report_base_url_cache()
     data = _write_root(tmp_path, worker_host="192.0.2.77",
@@ -254,7 +254,7 @@ def test_an_explicit_setting_still_wins_because_a_proxy_or_a_dns_name_cannot_be_
 def test_a_root_that_declares_no_worker_stays_empty_rather_than_inventing_a_host(tmp_path):
     # Empty means "not configured", which the callers already handle: the pages fall back to
     # relative hrefs and Telegram leaves the link out. A guessed host would 404 instead.
-    from db_ops.common import data_sources
+    from db_ops.lib import data_sources
 
     data_sources._clear_report_base_url_cache()
     data = tmp_path / "data"
@@ -267,7 +267,7 @@ def test_a_root_that_declares_no_worker_stays_empty_rather_than_inventing_a_host
 def test_deriving_the_base_url_does_not_call_back_into_the_thing_that_asked_for_it(tmp_path):
     # webhost_endpoints asks report_base_url for the published base; report_base_url derives from
     # the same config. Routing the derivation through webhost_endpoints recursed forever.
-    from db_ops.common import data_sources
+    from db_ops.lib import data_sources
 
     data_sources._clear_report_base_url_cache()
     data = _write_root(tmp_path, worker_host="192.0.2.77")

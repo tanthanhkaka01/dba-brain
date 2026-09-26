@@ -57,7 +57,7 @@ from db_ops.backup_restore.config import (
     DEFAULT_CLEANUP_RETENTION,
     parse_cleanup_retention,
 )
-from db_ops.lib import common_cli
+from db_ops.transport import common_cli
 from db_ops.lib import instance_bundle
 from db_ops.lib.shell import docker_cli
 from db_ops.lib.notify import NotifyConfig
@@ -276,7 +276,7 @@ def _ssh_login(target: BackupTarget, *, data_dir, key, key_base64) -> dict[str, 
 
     ``common`` reads no configuration, so the secret ref and the key name stop at this line.
     """
-    from db_ops.common.data_sources import resolve_ssh_key, resolve_ssh_password
+    from db_ops.lib.data_sources import resolve_ssh_key, resolve_ssh_password
 
     login: dict[str, Any] = {"host": target.host, "port": target.port, "username": target.username}
     key_filename = resolve_ssh_key(target.key_file, data_dir) if target.key_file else None

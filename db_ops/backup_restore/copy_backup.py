@@ -3,23 +3,21 @@ from db_ops.backup_restore.shell_quoting import _BACKUP_TIMESTAMP_RE, backup_tim
 
 import dataclasses
 import datetime as dt
-import json
+import fnmatch
 import logging
 import os
 import re
 import shlex
 import shutil
-import signal
 import stat
-import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path, PurePosixPath
 
 from db_ops.backup_restore.config import BackupRestoreConfig, load_restore_config
-from db_ops.common import data_sources, remote_exec
-from db_ops.lib.shell import powershell_executable
+from db_ops.lib import data_sources
+from db_ops.lib.remote_host import RemoteHost
 from db_ops.logging_ops import log_event
 
 
@@ -47,7 +45,9 @@ class CopyBackupResult:
     replaced: int = 0
 
 
-def build_cmdkey_command(*, credential_target: str, username: str, password_env: str) -> list[str] | None:
+def share_login_request(*, credential_target: str, username: str, password_env: str) -> dict[str, str] | None:
+    """The ``smb-credential`` request for one share login, the password resolved here - or ``None``
+    when no login is configured. ``cmdkey`` itself runs in ``common`` since 0.24.0 (rules R10)."""
     if not credential_target and not username and not password_env:
         return None
     if not credential_target or not username or not password_env:
@@ -55,12 +55,15 @@ def build_cmdkey_command(*, credential_target: str, username: str, password_env:
     password = resolve_password_ref(password_env)
     if not password:
         raise RuntimeError(f"Password ref not found in environment or secret_text.json: {password_env}")
-    return [
-        "cmdkey",
-        f"/add:{credential_target}",
-        f"/user:{username}",
-        f"/pass:{password}",
-    ]
+    return {"target": credential_target, "username": username, "password": password}
+
+
+def store_share_logins(requests: list[dict[str, str]]) -> None:
+    """Store each login Windows needs for the UNC paths that follow (``common.cli smb-credential``)."""
+    from db_ops.backup_restore import share
+
+    for request in requests:
+        share.store_login(**request)
 
 
 def resolve_password_ref(password_ref: str) -> str:
@@ -71,27 +74,29 @@ def resolve_password_ref(password_ref: str) -> str:
     return str(secrets.get(password_ref, "")).strip()
 
 
-def build_copy_cmdkey_commands(config: BackupRestoreConfig) -> list[list[str]]:
-    commands = []
-    prod_cmd = build_cmdkey_command(
+def copy_share_login_requests(config: BackupRestoreConfig) -> list[dict[str, str]]:
+    """The share logins a copy needs stored: the source share's, and a Windows target's."""
+    requests = []
+    prod = share_login_request(
         credential_target=config.prod_smb_credential_target,
         username=config.prod_smb_username,
         password_env=config.prod_smb_password_env,
     )
-    if prod_cmd:
-        commands.append(prod_cmd)
+    if prod:
+        requests.append(prod)
     if not config.is_linux:
-        vm_cmd = build_cmdkey_command(
+        vm = share_login_request(
             credential_target=config.vm_credential_target,
             username=config.vm_username,
             password_env=config.vm_password_env,
         )
-        if vm_cmd:
-            commands.append(vm_cmd)
-    return commands
+        if vm:
+            requests.append(vm)
+    return requests
 
 
-def should_use_powershell_unc_copy(config: BackupRestoreConfig) -> bool:
+def should_list_the_share(config: BackupRestoreConfig) -> bool:
+    """A Windows node copying UNC to UNC lists the source through ``smb-list``."""
     return os.name == "nt" and str(config.prod_backup_share).startswith("\\\\") and str(config.vm_import_unc).startswith("\\\\")
 
 
@@ -181,87 +186,44 @@ def copy_backup_file(source_file: Path, *, source_root: Path, target_root: Path)
     )
 
 
-def list_recent_backup_files_with_powershell(
+def list_recent_backup_files_on_share(
     config: BackupRestoreConfig,
     *,
     now: float | None = None,
 ) -> list[Path]:
-    cutoff_iso = ""
+    """The recent backups on a Windows source share, read through ``common.cli smb-list`` (R10).
+
+    The same selection the PowerShell scan made until 0.24.0: every file whose NAME matches a copy
+    pattern (case-insensitive, as ``Get-ChildItem -Include`` matched) and whose last write falls in
+    the copy window - oldest first, then by full path.
+    """
+    from db_ops.backup_restore import share
+
     cutoff_ts, end_ts = _copy_window_timestamps(config, now=now)
-    if cutoff_ts is not None:
-        cutoff_iso = dt.datetime.fromtimestamp(cutoff_ts, tz=dt.timezone.utc).isoformat()
-    end_iso = "" if end_ts is None else dt.datetime.fromtimestamp(end_ts, tz=dt.timezone.utc).isoformat()
-    script = r"""
-param(
-    [string] $SourceRoot,
-    [string] $PatternsJson,
-    [string] $CutoffIso,
-    [string] $EndIso
-)
-$ErrorActionPreference = 'Stop'
-$patterns = [string[]] @(ConvertFrom-Json -InputObject $PatternsJson)
-$cutoff = $null
-if ($CutoffIso) {
-    $cutoff = [DateTimeOffset]::Parse($CutoffIso).UtcDateTime
-}
-$end = $null
-if ($EndIso) {
-    $end = [DateTimeOffset]::Parse($EndIso).UtcDateTime
-}
-$allFiles = Get-ChildItem -LiteralPath $SourceRoot -Recurse -File -Include $patterns
-$files = New-Object System.Collections.Generic.List[object]
-foreach ($file in @($allFiles | Sort-Object LastWriteTimeUtc, FullName)) {
-    if ($cutoff -ne $null -and $file.LastWriteTimeUtc -lt $cutoff) {
-        continue
-    }
-    if ($end -ne $null -and $file.LastWriteTimeUtc -gt $end) {
-        continue
-    }
-    $files.Add([pscustomobject]@{
-        full_name = $file.FullName
-        last_write_time_utc = $file.LastWriteTimeUtc
-    }) | Out-Null
-}
-$files | ConvertTo-Json -Depth 4 -Compress
-""".strip()
-    script_path = _write_temp_powershell_script(script)
-    cmd = [
-        powershell_executable(),
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        str(script_path),
-        str(config.prod_backup_share),
-        json.dumps(list(config.copy_file_patterns)),
-        cutoff_iso,
-        end_iso,
-    ]
-    try:
-        result = subprocess.run(cmd, capture_output=True, check=False, text=True)
-    finally:
-        script_path.unlink(missing_ok=True)
-    if result.returncode != 0:
-        details = [f"PowerShell backup scan failed with exit code {result.returncode}."]
-        if result.stdout.strip():
-            details.append(f"stdout:\n{result.stdout.strip()}")
-        if result.stderr.strip():
-            details.append(f"stderr:\n{result.stderr.strip()}")
-        raise RuntimeError("\n".join(details))
-    raw_output = result.stdout.strip()
-    if not raw_output:
-        return []
-    payload = json.loads(raw_output)
-    rows = payload if isinstance(payload, list) else [payload]
-    return [Path(str(item["full_name"])) for item in rows if isinstance(item, dict) and item.get("full_name")]
+    password = resolve_password_ref(config.prod_smb_password_env) if config.prod_smb_password_env else ""
+    root = str(config.prod_backup_share).replace("/", "\\").rstrip("\\")
+    patterns = [pattern.lower() for pattern in config.copy_file_patterns]
+    chosen: list[tuple[float, Path]] = []
+    for item in share.list_files(config.prod_backup_share, username=config.prod_smb_username or "",
+                                 password=password):
+        name = str(item.get("name") or "").lower()
+        modified = item.get("modified_epoch")
+        if not any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns) or modified is None:
+            continue
+        if cutoff_ts is not None and float(modified) < cutoff_ts:
+            continue
+        if end_ts is not None and float(modified) > end_ts:
+            continue
+        chosen.append((float(modified), Path(root + "\\" + str(item["path"]))))
+    return [path for _, path in sorted(chosen, key=lambda item: (item[0], str(item[1]).lower()))]
 
 
-def copy_recent_backup_files_with_powershell(
+def copy_recent_backup_files_on_share(
     config: BackupRestoreConfig,
     *,
     now: float | None = None,
 ) -> tuple[CopyBackupFileResult, ...]:
-    selected_files = list_recent_backup_files_with_powershell(config, now=now)
+    selected_files = list_recent_backup_files_on_share(config, now=now)
     return tuple(
         copy_backup_file(
             source_file,
@@ -341,62 +303,44 @@ def copy_backup_file_with_logging(
     return result
 
 
-def ssh_access_json(config: BackupRestoreConfig) -> dict[str, object]:
-    """The restore target as the JSON access object ``db_ops.common.remote_exec`` takes.
+#: How long opening a session to the Linux restore target may take; a command itself is unbounded.
+SSH_CONNECT_TIMEOUT_SECONDS = 30
 
-    One place turns a ``BackupRestoreConfig`` into remote-access inputs, so the SSH
-    details of a Linux restore target are described once rather than at each call site.
+
+def open_ssh_connection(config: BackupRestoreConfig) -> RemoteHost:
+    """The Linux restore target, reached through ``common.cli`` - ``run-cmd``, ``push-file``.
+
+    Until 0.24.0 this handed out a raw paramiko client from ``common.remote_exec``, which made this
+    app one that imports ``common`` (rules R03). The password is resolved here, as the session
+    used to - the environment first, then the secret store - and travels in each request on stdin.
+    Nothing is open between calls, so closing it (or leaving the ``with``) costs nothing.
     """
-    return {
-        "method": "ssh",
-        "host": config.vm_credential_target,
-        "username": config.vm_username,
-        "platform": "linux",
-        "auth_type": "password" if config.vm_password_env else "key",
-        "password_ref": config.vm_password_env or "",
-        "timeout_seconds": config.remote_command_timeout_seconds or remote_exec.DEFAULT_SESSION_TIMEOUT_SECONDS,
-    }
+    from db_ops.transport import common_cli
 
-
-def open_ssh_connection(config: BackupRestoreConfig):
-    """Return an open paramiko SSHClient for the VM target. Caller must close it.
-
-    The connect goes through ``common.remote_exec``; a raw paramiko client comes back
-    because the restore paths use SFTP and incremental channel reads directly on it.
-    """
     if not config.is_linux:
         raise RuntimeError(
             f"Target context mismatch: restore_id={config.restore_id} target_host={config.vm_credential_target} "
             "target_os_type=windows cannot execute remote_exec_type=ssh."
         )
-    session = remote_exec.open_session(ssh_access_json(config))
-    try:
-        return session.client
-    except remote_exec.RemoteExecError as exc:
-        raise RuntimeError(str(exc)) from exc
+    password = resolve_password_ref(config.vm_password_env) if config.vm_password_env else ""
+    if config.vm_password_env and not password:
+        raise RuntimeError(f"password not found for vm_password_env={config.vm_password_env}")
+    return RemoteHost(
+        host=config.vm_credential_target, username=config.vm_username, password=password,
+        auth_type="password" if config.vm_password_env else "key",
+        connect_timeout_seconds=config.remote_command_timeout_seconds or SSH_CONNECT_TIMEOUT_SECONDS,
+        call=common_cli.run_allowing_failure)
 
 
-def _sftp_makedirs(sftp, path: str) -> None:
-    parts = PurePosixPath(path).parts
-    current = ""
-    for part in parts:
-        current = str(PurePosixPath(current) / part) if current else part
-        try:
-            sftp.mkdir(current)
-        except OSError:
-            pass
-
-
-def _prepare_linux_base_import_dir(ssh, config: BackupRestoreConfig) -> None:
+def _prepare_linux_base_import_dir(remote: RemoteHost, config: BackupRestoreConfig) -> None:
     """Ensure the Linux import base dir exists and is traversable+writable by the SSH user."""
     linux_import = str(config.vm_import_unc).replace("\\", "/")
     username = config.vm_username
     # Fast path: plain mkdir (works if parent chain is already writable by this user)
-    _, out, _ = ssh.exec_command(f"mkdir -p {shlex.quote(linux_import)}")
-    out.read()  # drain
-    if out.channel.recv_exit_status() == 0:
+    if remote.run(f"mkdir -p {shlex.quote(linux_import)}").ok:
         return
-    # Need sudo. Also fix ancestor dirs that might block traverse (e.g. /var/opt/mssql/backup owned by mssql).
+    # Need root. Also fix ancestor dirs that might block traverse (e.g. /var/opt/mssql/backup owned
+    # by mssql). One line under `sudo`, the login's password on stdin (run-cmd's own).
     ancestors = []
     current = PurePosixPath("/")
     for part in PurePosixPath(linux_import).parts[1:]:  # skip root '/'
@@ -406,20 +350,17 @@ def _prepare_linux_base_import_dir(ssh, config: BackupRestoreConfig) -> None:
     ancestor_dirs = ancestors[:-1]
     chmod_part = ""
     if ancestor_dirs:
-        chmod_part = "sudo chmod o+x " + " ".join(shlex.quote(d) for d in ancestor_dirs) + " && "
+        chmod_part = "chmod o+x " + " ".join(shlex.quote(d) for d in ancestor_dirs) + " && "
     cmd = (
-        f"sudo mkdir -p {shlex.quote(linux_import)} && "
+        f"mkdir -p {shlex.quote(linux_import)} && "
         f"{chmod_part}"
-        f"sudo chown {shlex.quote(username)} {shlex.quote(linux_import)}"
+        f"chown {shlex.quote(username)} {shlex.quote(linux_import)}"
     )
-    _, out, err = ssh.exec_command(cmd)
-    stdout_data = out.read().decode("utf-8", errors="replace")
-    stderr_data = err.read().decode("utf-8", errors="replace")
-    rc = out.channel.recv_exit_status()
-    if rc != 0:
+    result = remote.run(cmd, sudo=True)
+    if not result.ok:
         raise RuntimeError(
             f"Could not prepare Linux import directory {linux_import}: "
-            f"{stderr_data.strip() or stdout_data.strip()}"
+            f"{result.stderr.strip() or result.stdout.strip()}"
         )
 
 
@@ -438,126 +379,108 @@ def _copy_backup_files_via_sftp(
     results: list[CopyBackupFileResult] = []
     _rid = f"restore_id={config.restore_id} " if config.restore_id else ""
 
-    with open_ssh_connection(config) as ssh:
-        _prepare_linux_base_import_dir(ssh, config)
-        with ssh.open_sftp() as sftp:
-            for source_file in selected_files:
-                relative_parts = source_file.relative_to(root).parts
-                target_posix = str(linux_import.joinpath(*relative_parts))
-                source_size = source_file.stat().st_size
-                # Inspect the FINAL destination (not just the temp/staging dir) so an
-                # already-imported backup of the same size is never re-transferred, and a
-                # changed one is replaced atomically rather than overwritten in place.
-                existing_size: int | None = None
-                try:
-                    existing_size = sftp.stat(target_posix).st_size
-                except FileNotFoundError:
-                    existing_size = None
-                except OSError:
-                    existing_size = None
-                if not force and existing_size is not None and existing_size == source_size:
-                    results.append(CopyBackupFileResult(
-                        source_file=source_file,
-                        target_file=Path(target_posix),
-                        status="SKIPPED_EXISTS",
-                        bytes=source_size,
-                    ))
-                    _log_progress(
-                        logger,
-                        (
-                            f"{_rid}copy-backup source_id={config.source_id} copy_skip_existing "
-                            f"file={source_file} target={target_posix} size_bytes={source_size} "
-                            f"reason=destination_same_size"
-                        ),
-                    )
-                    continue
-                is_replace = existing_size is not None
-                if is_replace:
-                    _log_progress(
-                        logger,
-                        (
-                            f"{_rid}copy-backup source_id={config.source_id} copy_replace_size_mismatch "
-                            f"file={source_file} target={target_posix} source_bytes={source_size} "
-                            f"destination_bytes={existing_size} action=copy_then_atomic_move"
-                        ),
-                    )
+    with open_ssh_connection(config) as remote:
+        _prepare_linux_base_import_dir(remote, config)
+        for source_file in selected_files:
+            relative_parts = source_file.relative_to(root).parts
+            target_posix = str(linux_import.joinpath(*relative_parts))
+            source_size = source_file.stat().st_size
+            # Inspect the FINAL destination (not just the temp/staging dir) so an
+            # already-imported backup of the same size is never re-transferred, and a
+            # changed one is replaced atomically rather than overwritten in place.
+            existing_size: int | None = None
+            try:
+                existing_size = remote.stat(target_posix).st_size
+            except FileNotFoundError:
+                existing_size = None
+            except OSError:
+                existing_size = None
+            if not force and existing_size is not None and existing_size == source_size:
+                results.append(CopyBackupFileResult(
+                    source_file=source_file,
+                    target_file=Path(target_posix),
+                    status="SKIPPED_EXISTS",
+                    bytes=source_size,
+                ))
                 _log_progress(
                     logger,
                     (
-                        f"{_rid}copy-backup source_id={config.source_id} copy_start "
+                        f"{_rid}copy-backup source_id={config.source_id} copy_skip_existing "
                         f"file={source_file} target={target_posix} size_bytes={source_size} "
-                        f"mode={'replace' if is_replace else 'new'}"
+                        f"reason=destination_same_size"
                     ),
                 )
-                parent = str(PurePosixPath(target_posix).parent)
-                _sftp_makedirs(sftp, parent)
-                started = time.monotonic()
-                try:
-                    src_mtime = source_file.stat().st_mtime
-                    if is_replace:
-                        # Stage to a temp name in the destination dir, then atomically
-                        # move over the old file so a valid backup is never left partial.
-                        staged_posix = f"{target_posix}.dbops_partial"
-                        sftp.put(str(source_file), staged_posix)
-                        try:
-                            sftp.utime(staged_posix, (src_mtime, src_mtime))
-                        except OSError:
-                            pass
-                        _sftp_atomic_replace(sftp, staged_posix, target_posix)
-                        status = "REPLACED"
-                    else:
-                        sftp.put(str(source_file), target_posix)
-                        # Preserve the source mtime so the restore's log-chain filter
-                        # (which compares log vs full backup file times) works on Linux.
-                        try:
-                            sftp.utime(target_posix, (src_mtime, src_mtime))
-                        except OSError:
-                            pass
-                        status = "COPIED"
-                    duration_seconds = time.monotonic() - started
-                    results.append(CopyBackupFileResult(
-                        source_file=source_file,
-                        target_file=Path(target_posix),
-                        status=status,
-                        bytes=source_size,
-                    ))
-                    _log_progress(
-                        logger,
-                        (
-                            f"{_rid}copy-backup source_id={config.source_id} copy_done "
-                            f"file={source_file} target={target_posix} size_bytes={source_size} "
-                            f"status={status} duration_seconds={duration_seconds:.3f}"
-                        ),
-                    )
-                except Exception as exc:
-                    results.append(CopyBackupFileResult(
-                        source_file=source_file,
-                        target_file=Path(target_posix),
-                        status="FAILED",
-                        bytes=source_size,
-                    ))
-                    _log_progress(
-                        logger,
-                        f"{_rid}copy-backup source_id={config.source_id} copy_failed file={source_file} error={_format_log_value(exc)}",
-                    )
+                continue
+            is_replace = existing_size is not None
+            if is_replace:
+                _log_progress(
+                    logger,
+                    (
+                        f"{_rid}copy-backup source_id={config.source_id} copy_replace_size_mismatch "
+                        f"file={source_file} target={target_posix} source_bytes={source_size} "
+                        f"destination_bytes={existing_size} action=copy_then_atomic_move"
+                    ),
+                )
+            _log_progress(
+                logger,
+                (
+                    f"{_rid}copy-backup source_id={config.source_id} copy_start "
+                    f"file={source_file} target={target_posix} size_bytes={source_size} "
+                    f"mode={'replace' if is_replace else 'new'}"
+                ),
+            )
+            parent = str(PurePosixPath(target_posix).parent)
+            remote.mkdirs(parent)
+            started = time.monotonic()
+            try:
+                src_mtime = source_file.stat().st_mtime
+                if is_replace:
+                    # Stage to a temp name in the destination dir, then atomically
+                    # move over the old file so a valid backup is never left partial.
+                    staged_posix = f"{target_posix}.dbops_partial"
+                    remote.put(source_file, staged_posix)
+                    try:
+                        remote.set_mtime(staged_posix, src_mtime)
+                    except OSError:
+                        pass
+                    remote.rename(staged_posix, target_posix)
+                    status = "REPLACED"
+                else:
+                    remote.put(source_file, target_posix)
+                    # Preserve the source mtime so the restore's log-chain filter
+                    # (which compares log vs full backup file times) works on Linux.
+                    try:
+                        remote.set_mtime(target_posix, src_mtime)
+                    except OSError:
+                        pass
+                    status = "COPIED"
+                duration_seconds = time.monotonic() - started
+                results.append(CopyBackupFileResult(
+                    source_file=source_file,
+                    target_file=Path(target_posix),
+                    status=status,
+                    bytes=source_size,
+                ))
+                _log_progress(
+                    logger,
+                    (
+                        f"{_rid}copy-backup source_id={config.source_id} copy_done "
+                        f"file={source_file} target={target_posix} size_bytes={source_size} "
+                        f"status={status} duration_seconds={duration_seconds:.3f}"
+                    ),
+                )
+            except Exception as exc:
+                results.append(CopyBackupFileResult(
+                    source_file=source_file,
+                    target_file=Path(target_posix),
+                    status="FAILED",
+                    bytes=source_size,
+                ))
+                _log_progress(
+                    logger,
+                    f"{_rid}copy-backup source_id={config.source_id} copy_failed file={source_file} error={_format_log_value(exc)}",
+                )
     return tuple(results)
-
-
-def _sftp_atomic_replace(sftp, staged_posix: str, target_posix: str) -> None:
-    """Atomically move ``staged_posix`` onto ``target_posix`` on the SFTP server.
-
-    Prefers the OpenSSH ``posix-rename`` extension (overwrites in one syscall); falls
-    back to remove+rename when the server lacks it."""
-    try:
-        sftp.posix_rename(staged_posix, target_posix)
-        return
-    except (IOError, OSError, AttributeError):
-        pass
-    try:
-        sftp.remove(target_posix)
-    except (IOError, OSError):
-        pass
-    sftp.rename(staged_posix, target_posix)
 
 
 def _format_log_value(value: object) -> str:
@@ -583,24 +506,6 @@ def _parse_unc_share(unc: Path) -> tuple[str, str, str]:
     return parts[0], parts[1], "/".join(parts[2:])
 
 
-def _smbclient_auth_file(config: BackupRestoreConfig) -> Path:
-    """Write an smbclient auth file so the password never appears in process args."""
-    username = config.prod_smb_username or ""
-    domain = ""
-    for separator in ("\\", "/"):
-        if separator in username:
-            domain, username = username.split(separator, 1)
-            break
-    password = resolve_password_ref(config.prod_smb_password_env) if config.prod_smb_password_env else ""
-    handle = tempfile.NamedTemporaryFile("w", suffix=".smbauth", delete=False, encoding="utf-8")
-    with handle:
-        handle.write(f"username = {username}\n")
-        handle.write(f"password = {password}\n")
-        if domain:
-            handle.write(f"domain = {domain}\n")
-    return Path(handle.name)
-
-
 # Timeout for an smbclient bulk download (staging recent backups). Generous because
 # a full-instance recurse can be many GB; bounded so a hung smbclient still fails.
 # (The short remote_command_timeout is for quick SSH commands, not this transfer.)
@@ -619,119 +524,42 @@ class _RemoteBackup:
     backup_timestamp: float | None
 
 
-def _run_smbclient_command(args: list[str], *, timeout_seconds: int) -> subprocess.CompletedProcess[str]:
-    start_new_session = os.name != "nt"
-    proc = subprocess.Popen(
-        args,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        start_new_session=start_new_session,
-    )
+def _share_login(config: BackupRestoreConfig) -> tuple[str, str]:
+    """The source share's login, the password resolved here - ``common`` reads no configuration."""
+    password = resolve_password_ref(config.prod_smb_password_env) if config.prod_smb_password_env else ""
+    return config.prod_smb_username or "", password
+
+
+def _list_remote_backups(config: BackupRestoreConfig, host: str, share_name: str,
+                         remote_dir: str) -> list[_RemoteBackup]:
+    """Every ``.bak`` / ``.trn`` under ``remote_dir`` on the share, relative to it (``smb-list``)."""
+    from db_ops.backup_restore import share
+
+    username, password = _share_login(config)
+    unc = _unc_of(host, share_name, remote_dir)
     try:
-        stdout, stderr = proc.communicate(timeout=timeout_seconds)
-    except subprocess.TimeoutExpired as exc:
-        if start_new_session:
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except OSError:
-                proc.kill()
-        else:
-            proc.kill()
-        stdout, stderr = proc.communicate()
-        raise subprocess.TimeoutExpired(
-            cmd=args,
-            timeout=timeout_seconds,
-            output=stdout,
-            stderr=stderr,
-        ) from exc
-    return subprocess.CompletedProcess(args, proc.returncode, stdout, stderr)
+        files = share.list_files(unc, username=username, password=password, recurse=True,
+                                 suffixes=(".bak", ".trn"), timeout_seconds=_SMB_LIST_TIMEOUT_SECONDS)
+    except share.ShareError as exc:
+        raise RuntimeError(f"smbclient list failed for //{host}/{share_name}/{remote_dir}: {exc}") from exc
+    return [_RemoteBackup(relative_path=str(item["path"]), size_bytes=int(item["size_bytes"]),
+                          backup_timestamp=_backup_time_from_name(str(item["name"])))
+            for item in files]
 
 
-def _smbclient_remote_backups(host: str, share: str, authfile: Path, remote_dir: str) -> dict[str, int]:
-    """Authoritative ``{relative_path: size_bytes}`` for ``.bak``/``.trn`` files under
-    ``remote_dir`` (recurse), via ``smbclient ls``. The relative path is backslash-separated
-    and relative to ``remote_dir`` (e.g. ``APPDB_STG\\FULL\\x.bak``), mirroring the staging
-    layout, so we can detect BOTH a truncated download (staged size < this) AND a file that
-    is missing entirely (the recurse+mget aborted on an earlier file). smbclient's recurse
-    exit code is unreliable, so completeness must be verified by listing, not the return code."""
-    commands = ["recurse ON", "prompt OFF"]
-    if remote_dir:
-        commands.append(f'cd "{remote_dir}"')
-    commands.append("ls")
-    args = ["smbclient", f"//{host}/{share}", "-A", str(authfile), "-c", "; ".join(commands)]
-    try:
-        proc = _run_smbclient_command(args, timeout_seconds=_SMB_LIST_TIMEOUT_SECONDS)
-    except (subprocess.SubprocessError, OSError):
-        return {}
-    return {item.relative_path: item.size_bytes for item in _parse_smbclient_ls(proc.stdout, remote_dir=remote_dir)}
+def _get_remote_backup(config: BackupRestoreConfig, host: str, share_name: str, remote_path: str,
+                       local_target: Path) -> None:
+    """One backup from the share to ``local_target`` (``smb-get``); its size is checked by the caller."""
+    from db_ops.backup_restore import share
+
+    username, password = _share_login(config)
+    share.get_file(_unc_of(host, share_name), remote_path, local_target, username=username,
+                   password=password, timeout_seconds=_SMB_DOWNLOAD_TIMEOUT_SECONDS)
 
 
-def _parse_smbclient_ls(output: str, *, remote_dir: str) -> list[_RemoteBackup]:
-    # `remote_dir` arrives POSIX-separated (`_parse_unc_share` returns `a/b/c`) while smbclient
-    # prints its directory headers with backslashes (`\a\b\c\<db>\FULL`). Normalizing is not
-    # cosmetic: the prefix below is what makes a path *relative*, and when it fails to match,
-    # every file keeps its full sub-path and stages several directories too deep — where the
-    # restore does not look, with no error anywhere.
-    #
-    # It went unnoticed because every share in use had a ONE-segment sub-path
-    # (`\\host\SQLBK\APPDB-DB$APPDB`), which has no separator to disagree about. The first
-    # multi-segment one (`\\host\D$\DBA\SqlBK\<instance>`, reaching a maintenance-plan tree that
-    # has no share of its own) staged `DBA\SqlBK\<instance>\<db>\LOG\...` instead of
-    # `<db>\LOG\...`.
-    normalized = str(remote_dir or "").replace("/", "\\").strip("\\")
-    prefix = f"\\{normalized}\\" if normalized else "\\"
-    current_rel = ""  # directory (relative to remote_dir, backslash-separated) of subsequent entries
-    backups: list[_RemoteBackup] = []
-    for line in output.splitlines():
-        if line.startswith("\\"):  # directory header, e.g. '\APPDB-DB$APPDB\APPDB_STG\FULL'
-            header = line.rstrip()
-            current_rel = header[len(prefix):] if header.startswith(prefix) else header.lstrip("\\")
-            continue
-        # entry: "  NAME            A   11121102848  Wed Jun 24 01:01:11 2026"
-        match = re.match(r"\s+(\S+)\s+([AHSRDN]+)\s+(\d+)\s+\w{3}\s+\w{3}\s+", line)
-        if not match:
-            continue
-        name, flags, size = match.group(1), match.group(2), int(match.group(3))
-        if "D" in flags or not name.lower().endswith((".bak", ".trn")):
-            continue
-        relative_path = f"{current_rel}\\{name}" if current_rel else name
-        backups.append(_RemoteBackup(
-            relative_path=relative_path,
-            size_bytes=size,
-            backup_timestamp=_backup_time_from_name(name),
-        ))
-    return backups
-
-
-def _pending_remote_backups(
-    local_dir: Path, remote_backups: dict[str, int], cutoff: float | None
-) -> list[tuple[str, int, int | None]]:
-    """Recent remote backups (filename time >= ``cutoff``) not yet fully staged in
-    ``local_dir`` — either missing entirely or truncated. Returns
-    ``(relative_path, expected_bytes, staged_bytes_or_None)``."""
-    pending: list[tuple[str, int, int | None]] = []
-    for rel, expected in remote_backups.items():
-        name = rel.rsplit("\\", 1)[-1]
-        backup_time = _backup_time_from_name(name)
-        if cutoff is not None and backup_time is not None and backup_time < cutoff:
-            continue
-        local = local_dir / Path(rel.replace("\\", "/"))
-        if not local.exists():
-            pending.append((rel, expected, None))
-        elif local.stat().st_size < expected:
-            pending.append((rel, expected, local.stat().st_size))
-    return pending
-
-
-def _smbclient_get_file(host: str, share: str, authfile: Path, remote_path: str,
-                        local_parent: Path, local_name: str) -> None:
-    """Re-download a single file with a targeted GET. ``remote_path`` is share-relative
-    and backslash-separated; the file is written as ``local_parent/local_name``."""
-    local_parent.mkdir(parents=True, exist_ok=True)
-    commands = ["prompt OFF", f"lcd {local_parent}", f'get "{remote_path}" "{local_name}"']
-    args = ["smbclient", f"//{host}/{share}", "-A", str(authfile), "-c", "; ".join(commands)]
-    _run_smbclient_command(args, timeout_seconds=_SMB_DOWNLOAD_TIMEOUT_SECONDS)
+def _unc_of(host: str, share_name: str, subpath: str = "") -> str:
+    """``\\\\host\\share[\\subpath]`` - how a share is named to ``smb-list`` / ``smb-get``."""
+    return "\\\\" + host + "\\" + share_name + ("\\" + subpath if subpath else "")
 
 
 def _remote_backup_matches_window(
@@ -790,106 +618,6 @@ def _format_copy_window(config: BackupRestoreConfig) -> str:
     return f"window_start_utc={start} window_end_utc={end}"
 
 
-def _smbclient_download_recent_to_staging(config: BackupRestoreConfig, *, logger: logging.Logger | None) -> Path:
-    """Linux source read: download recent backup files from the Windows SMB share
-    into a local staging dir via smbclient, preserving the per-database layout
-    (<db>/FULL, <db>/LOG) so the restore step finds them. When specific databases
-    are configured, only those subdirectories are fetched."""
-    raise RuntimeError("Legacy recursive smbclient staging is disabled; use selected-file staging.")
-    host, share, subpath = _parse_unc_share(config.prod_backup_share)
-    staging = Path(tempfile.mkdtemp(prefix=f"db_ops_smb_{config.source_id or 'src'}_"))
-    authfile = _smbclient_auth_file(config)
-    timeref = staging / ".timeref"
-    timeref.write_text("")
-    cutoff, _end_ts = _copy_window_timestamps(config)
-    if cutoff is not None:
-        os.utime(timeref, (cutoff, cutoff))
-    _rid = f"restore_id={config.restore_id} " if config.restore_id else ""
-    base = subpath.replace("/", "\\") if subpath else ""
-    db_names = [mapping.source_database for mapping in config.databases] if config.databases else [None]
-    try:
-        for db in db_names:
-            remote_dir = f"{base}\\{db}" if (base and db) else (db or base)
-            local_dir = (staging / db) if db else staging
-            local_dir.mkdir(parents=True, exist_ok=True)
-            commands = ["recurse ON", "prompt OFF", f"lcd {local_dir}"]
-            if remote_dir:
-                commands.append(f'cd "{remote_dir}"')
-            if cutoff is not None:
-                commands.append(f"newer {timeref}")
-            # Legacy bulk download disabled: with recurse ON, smbclient
-            # applies the mget mask to subdirectory names too, so a mask like
-            # *.bak never descends into FULL/LOG. We pull everything recent, then
-            # _scan_backup_files filters by copy_file_patterns locally.
-            commands.append("ls")
-            smb_args = ["smbclient", f"//{host}/{share}", "-A", str(authfile), "-c", "; ".join(commands)]
-            _log_progress(logger, f"{_rid}copy-backup source_id={config.source_id} smbclient_download remote={remote_dir or '/'} local={local_dir}")
-            # smbclient's exit code is unreliable with recurse+mget, so we validate
-            # by checking the downloaded files below rather than the return code.
-            # Bulk transfer: a full-instance recurse (databases=[]) can be many GB, so
-            # this must NOT use the short remote_command_timeout (meant for quick SSH
-            # commands) — that made restores time out at 60s.
-            subprocess.run(
-                smb_args, capture_output=True, text=True,
-                timeout=_SMB_DOWNLOAD_TIMEOUT_SECONDS,
-            )
-            # A recurse+mget can silently FAIL PART-WAY: it truncates a file still being
-            # written on the source (a FULL backup grabbed mid-write) AND, when it aborts on
-            # that file, never reaches later databases — so files are either truncated or
-            # missing entirely, and smbclient's exit code won't reveal it. Reconcile the
-            # staging dir against the share's authoritative listing: re-fetch every recent
-            # backup that is missing or short with a targeted GET, then drop any truncated
-            # leftover that still cannot be completed so a bad .bak is never restored.
-            remote_backups = _smbclient_remote_backups(host, share, authfile, remote_dir)
-            if remote_backups:
-                for attempt in range(1, _SMB_MAX_DOWNLOAD_ATTEMPTS + 1):
-                    pending = _pending_remote_backups(local_dir, remote_backups, cutoff)
-                    if not pending:
-                        break
-                    for rel, expected_bytes, staged_bytes in pending:
-                        remote_path = f"{remote_dir}\\{rel}" if remote_dir else rel
-                        local_target = local_dir / Path(rel.replace("\\", "/"))
-                        _log_progress(
-                            logger,
-                            f"{_rid}copy-backup source_id={config.source_id} smbclient_refetch "
-                            f"file={rel} staged_bytes={'missing' if staged_bytes is None else staged_bytes} "
-                            f"expected_bytes={expected_bytes} attempt={attempt}",
-                        )
-                        _smbclient_get_file(host, share, authfile, remote_path, local_target.parent, local_target.name)
-                for rel, expected_bytes, staged_bytes in _pending_remote_backups(local_dir, remote_backups, cutoff):
-                    message = (
-                        f"{_rid}copy-backup source_id={config.source_id} smbclient_incomplete "
-                        f"file={rel} staged_bytes={'missing' if staged_bytes is None else staged_bytes} "
-                        f"expected_bytes={expected_bytes} reason=download_unrecoverable"
-                    )
-                    if logger:
-                        log_event(logger, level="critical", message=message)
-                    print(message, flush=True)
-                    local_target = local_dir / Path(rel.replace("\\", "/"))
-                    if local_target.exists():  # truncated leftover — never restore a partial .bak
-                        local_target.unlink(missing_ok=True)
-    finally:
-        try:
-            authfile.unlink()
-        except OSError:
-            pass
-        timeref.unlink(missing_ok=True)
-    # smbclient does not preserve mtime, but the restore log-chain filter selects
-    # logs by file time relative to the full backup. Recover each backup's real
-    # time from its filename so that filter still excludes pre-full logs.
-    for path in staging.rglob("*"):
-        if path.is_file():
-            mtime = _backup_time_from_name(path.name)
-            if mtime is not None:
-                os.utime(path, (mtime, mtime))
-    if not any(path.is_file() for path in staging.rglob("*")):
-        raise RuntimeError(
-            f"smbclient download from //{host}/{share} returned no files "
-            "(check source credentials, path, and copy_recent_hours)."
-        )
-    return staging
-
-
 def _remote_destination_sizes(config: BackupRestoreConfig, *, logger: logging.Logger | None) -> dict[str, int]:
     """Return ``{relative_posix_path_lower: size_bytes}`` for files already present in the
     final import destination (``config.vm_import_unc``) on the Linux target, fetched once
@@ -901,10 +629,10 @@ def _remote_destination_sizes(config: BackupRestoreConfig, *, logger: logging.Lo
     sizes: dict[str, int] = {}
     try:
         with open_ssh_connection(config) as ssh:
-            _, stdout, _ = ssh.exec_command(
+            answer = ssh.run(
                 f'find {shlex.quote(dest_root)} -type f -printf "%s %p\\n" 2>/dev/null || true'
             )
-            lines = stdout.read().decode("utf-8", errors="replace").splitlines()
+            lines = answer.stdout.splitlines()
     except Exception as exc:  # noqa: BLE001 - missing destination must not abort the copy.
         _log_progress(
             logger,
@@ -942,7 +670,6 @@ def _smbclient_download_selected_to_staging(
     is the count of files matching the copy window (skipped or not)."""
     host, share, subpath = _parse_unc_share(config.prod_backup_share)
     staging = Path(tempfile.mkdtemp(prefix=f"db_ops_smb_{config.source_id or 'src'}_"))
-    authfile = _smbclient_auth_file(config)
     cutoff, end_ts = _copy_window_timestamps(config)
     _rid = f"restore_id={config.restore_id} " if config.restore_id else ""
     base = subpath.replace("/", "\\") if subpath else ""
@@ -956,11 +683,6 @@ def _smbclient_download_selected_to_staging(
             remote_dir = f"{base}\\{db}" if (base and db) else (db or base)
             local_dir = (staging / db) if db else staging
             local_dir.mkdir(parents=True, exist_ok=True)
-            commands = ["recurse ON", "prompt OFF"]
-            if remote_dir:
-                commands.append(f'cd "{remote_dir}"')
-            commands.append("ls")
-            args = ["smbclient", f"//{host}/{share}", "-A", str(authfile), "-c", "; ".join(commands)]
             _log_progress(
                 logger,
                 (
@@ -968,13 +690,7 @@ def _smbclient_download_selected_to_staging(
                     f"remote={remote_dir or '/'} timeout_seconds={_SMB_LIST_TIMEOUT_SECONDS} {_format_copy_window(config)}"
                 ),
             )
-            proc = _run_smbclient_command(args, timeout_seconds=_SMB_LIST_TIMEOUT_SECONDS)
-            if proc.returncode != 0:
-                raise RuntimeError(
-                    f"smbclient list failed for //{host}/{share}/{remote_dir}: "
-                    f"{proc.stderr.strip() or proc.stdout.strip() or f'exit_code={proc.returncode}'}"
-                )
-            remote_backups = _parse_smbclient_ls(proc.stdout, remote_dir=remote_dir)
+            remote_backups = _list_remote_backups(config, host, share, remote_dir)
             selected, skipped = _selected_remote_backups(
                 remote_backups,
                 cutoff=cutoff,
@@ -1040,11 +756,7 @@ def _smbclient_download_selected_to_staging(
                 )
                 started = time.monotonic()
                 try:
-                    _smbclient_get_file(host, share, authfile, remote_path, local_target.parent, local_target.name)
-                except subprocess.TimeoutExpired as exc:
-                    raise RuntimeError(
-                        f"smbclient download timed out after {_SMB_DOWNLOAD_TIMEOUT_SECONDS}s file={backup.relative_path}"
-                    ) from exc
+                    _get_remote_backup(config, host, share, remote_path, local_target)
                 except Exception as exc:
                     raise RuntimeError(f"smbclient download failed file={backup.relative_path}: {exc}") from exc
                 actual_size = local_target.stat().st_size if local_target.exists() else -1
@@ -1064,11 +776,11 @@ def _smbclient_download_selected_to_staging(
                         f"duration_seconds={time.monotonic() - started:.3f}"
                     ),
                 )
-    finally:
-        try:
-            authfile.unlink()
-        except OSError:
-            pass
+    except Exception:
+        # A failed staging leaves nothing behind: it used to leave the staging folder AND the
+        # login file, which now lives and dies inside common.cli smb-list / smb-get.
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
     if total_selected == 0:
         raise RuntimeError(
             f"smbclient source scan selected no files from //{host}/{share} "
@@ -1118,19 +830,18 @@ def run_copy_backup(
                 f"{_format_copy_window(restore_config)}"
             ),
         )
-        credential_commands = build_copy_cmdkey_commands(restore_config)
-        _log_progress(logger, f"{_rid}copy-backup source_id={restore_config.source_id} smb_credential_commands={len(credential_commands)}")
-        # cmdkey is Windows-only. On Linux, SMB auth is handled by smbclient (-A
-        # authfile) and the target copy by SSH/sftp, so skip the cmdkey setup.
+        credential_requests = copy_share_login_requests(restore_config)
+        _log_progress(logger, f"{_rid}copy-backup source_id={restore_config.source_id} smb_credential_commands={len(credential_requests)}")
+        # A stored login is Windows-only. On Linux every smb-list / smb-get carries the login
+        # itself (smbclient), and the target copy goes over SSH, so there is nothing to store.
         if not _running_on_linux():
-            for credential_cmd in credential_commands:
-                subprocess.run(credential_cmd, check=True, text=True)
+            store_share_logins(credential_requests)
 
         copy_engine = (
             "smbclient"
             if restore_config.is_linux and _running_on_linux() and _is_unc_share(restore_config.prod_backup_share)
             else "sftp" if restore_config.is_linux
-            else "powershell" if should_use_powershell_unc_copy(restore_config)
+            else "share" if should_list_the_share(restore_config)
             else "python"
         )
         _log_progress(logger, f"{_rid}copy-backup source_id={restore_config.source_id} scanning engine={copy_engine}")
@@ -1174,8 +885,8 @@ def run_copy_backup(
             file_results_list = list(_copy_backup_files_via_sftp(restore_config, selected_files, logger=logger, force=force))
         else:
             selected_files = (
-                list_recent_backup_files_with_powershell(restore_config)
-                if copy_engine == "powershell"
+                list_recent_backup_files_on_share(restore_config)
+                if copy_engine == "share"
                 else list_recent_backup_files(restore_config)
             )
             found_count = len(selected_files)

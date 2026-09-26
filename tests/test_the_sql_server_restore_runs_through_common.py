@@ -153,7 +153,7 @@ def test_a_request_that_cannot_run_is_refused_by_name(request_, message):
 
 def test_the_app_reads_a_timeout_answer_as_a_started_command(monkeypatch):
     from db_ops.backup_restore import restore_database
-    from db_ops.lib import common_cli
+    from db_ops.transport import common_cli
 
     monkeypatch.setattr(common_cli, "run_allowing_failure",
                         lambda *a, **k: (True, {"timed_out": True, "exit_code": None}, ""))
@@ -165,7 +165,7 @@ def test_the_app_reads_a_timeout_answer_as_a_started_command(monkeypatch):
 
 def test_the_app_reads_a_command_that_could_not_run_as_an_error(monkeypatch):
     from db_ops.backup_restore import restore_database
-    from db_ops.lib import common_cli
+    from db_ops.transport import common_cli
 
     monkeypatch.setattr(common_cli, "run_allowing_failure",
                         lambda *a, **k: (False, {}, "could not connect to tuser@198.51.100.31"))
@@ -176,7 +176,7 @@ def test_the_app_reads_a_command_that_could_not_run_as_an_error(monkeypatch):
 
 def test_a_completed_run_comes_back_as_the_process_it_was(monkeypatch):
     from db_ops.backup_restore import restore_database
-    from db_ops.lib import common_cli
+    from db_ops.transport import common_cli
 
     monkeypatch.setattr(common_cli, "run_allowing_failure", lambda *a, **k: (
         True, {"timed_out": False, "exit_code": 1, "stdout": "Msg 3013", "stderr": ""}, ""))

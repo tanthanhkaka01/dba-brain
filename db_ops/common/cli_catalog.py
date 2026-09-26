@@ -21,6 +21,18 @@ from typing import Any, Callable
 from db_ops.lib import response
 
 
+#: The login every command here takes, stated in full. ``common.cli`` reads no configuration
+#: (rules R09): a server_id alone names nothing it can open, so the app that calls finishes the
+#: request first - one wording, shared by every usage below and by the other SQL commands.
+STATED_CONNECTION = (
+    "  connection      (required) the SQL login, complete: db_type, host, port, username,\n"
+    "                  password - and database, instance_name, sql_access where they apply.\n"
+    "                  common.cli reads no configuration: an app fills it from a server_id\n"
+    "                  (lib.data_sources.request_fill). It carries a password, so send the\n"
+    "                  request on stdin (-) or as @file, never inline.\n"
+    "  target          a label for the answer - the server_id; the login is connection\n"
+)
+
 LIST_DATABASES_USAGE = (
     "usage: python -m db_ops.common.cli list-databases '<json>'|@<file>|-\n"
     "\n"
@@ -30,13 +42,12 @@ LIST_DATABASES_USAGE = (
     "\n"
     '  {"target": "ACME-192-0-2-248"}\n'
     '  {"target": "CLOUD-203-0-113-188-ORA-1521", "include_system": true}\n'
+    "  // each request above also carries \"connection\" - see Fields\n"
     "\n"
     "Fields:\n"
-    "  target          (required) server_id, or \"<db_type> <ip> [port]\"\n"
-    "  credential_name which login to connect as (default: the instance's)\n"
+    + STATED_CONNECTION +
     "  include_system  show system databases too (default: false)\n"
     "  timeout_seconds connect/statement timeout\n"
-    "  data_dir        folder holding db_instances.json (default: data/)\n"
 )
 
 LIST_SCHEMAS_USAGE = (
@@ -46,14 +57,13 @@ LIST_SCHEMAS_USAGE = (
     "live inside one, and without it the answer would describe the login's default instead.\n"
     "\n"
     '  {"target": "ACME-192-0-2-248", "database": "APPDB"}\n'
+    "  // each request above also carries \"connection\" - see Fields\n"
     "\n"
     "Fields:\n"
-    "  target          (required) server_id, or \"<db_type> <ip> [port]\"\n"
+    + STATED_CONNECTION +
     "  database        (required on sqlserver/postgresql) which database to look inside\n"
-    "  credential_name which login to connect as (default: the instance's)\n"
     "  include_system  show system schemas too (default: false)\n"
     "  timeout_seconds connect/statement timeout\n"
-    "  data_dir        folder holding db_instances.json (default: data/)\n"
 )
 
 LIST_JOBS_USAGE = (
@@ -66,13 +76,12 @@ LIST_JOBS_USAGE = (
     '\n'
     '  {"target": "ACME-192-0-2-115"}\n'
     '  {"target": "ACME-192-0-2-115", "enabled_only": true}\n'
+    '  // each request above also carries "connection" - see Fields\n'
     '\n'
     'Fields:\n'
-    '  target          (required) server_id, or "<db_type> <ip> [port]"\n'
+    + STATED_CONNECTION +
     '  enabled_only    only the switched-on jobs (default: false)\n'
-    "  credential_name which login to connect as (default: the instance's)\n"
     '  timeout_seconds connect/statement timeout\n'
-    '  data_dir        folder holding db_instances.json (default: data/)\n'
 )
 
 CREATE_TABLE_USAGE = (
@@ -88,9 +97,10 @@ CREATE_TABLE_USAGE = (
     "\n"
     '  {"target": "ACME-192-0-2-248", "database": "Staging", "schema": "dbo",\n'
     '   "file_base64": "UEsDBBQ..."}\n'
+    "  // the request also carries \"connection\" - see Fields\n"
     "\n"
     "Fields:\n"
-    "  target        (required) server_id, or \"<db_type> <ip> [port]\"\n"
+    + STATED_CONNECTION +
     "  file_base64   (required) the file, base64-encoded  [or file_path for a local file]\n"
     "                also accepted as xlsx_base64 / xlsx_path, the original names\n"
     "  delimiter     text files only; blank = guessed from the header line\n"
@@ -101,7 +111,7 @@ CREATE_TABLE_USAGE = (
     "  load_rows     false to create the structure only (default: true)\n"
     "  text_length   column width (default: 4000)\n"
     "  max_rows      cap on rows read from the sheet (default: 100000)\n"
-    "  credential_name / timeout_seconds / data_dir  as for run-sql\n"
+    "  timeout_seconds  connect/statement timeout\n"
 )
 
 _USAGE = {

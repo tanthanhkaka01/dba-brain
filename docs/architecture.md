@@ -1,6 +1,7 @@
 # Architecture
 
-Fourteen components on two shared layers, with four rules about who may call whom. Every rule has
+Fifteen components - ten apps and five shared layers - with the rules about who may call whom numbered in
+[`rules.md`](./rules.md). Every rule has
 a test beside it, which is the only reason a stated architecture is worth reading — a diagram
 describes what someone intended, a guard test describes what is true this morning.
 
@@ -11,8 +12,9 @@ describes what someone intended, a guard test describes what is true this mornin
 
 ## 1. The components
 
-Twelve apps and two shared layers. Each app is one directory under `db_ops/` with its own `cli.py`,
-and each has exactly one reference page under `docs/`.
+Ten apps (ORD 03-12) and five shared layers (`db` 01, `logging_ops` 02, `common` 13, `lib` 14,
+`transport` 15) - the kinds are listed in [`rules.md`](./rules.md#the-components). Each app is one
+directory under `db_ops/` with its own `cli.py`; every component has exactly one reference page under `docs/`.
 
 | ORD | Component | Package | What it is |
 | :---: | --- | --- | --- |
@@ -30,12 +32,18 @@ and each has exactly one reference page under `docs/`.
 | [12](./12_webhost_app.md) | Web host | `db_ops/webhost` | Serves the rendered reports over HTTP and hosts the console. |
 | [13](./13_common.md) | **Common** — shared operations | `db_ops/common` | Reaching a host, running SQL, moving a file, handling a secret. Invoked as a CLI, never imported. |
 | [14](./14_lib.md) | **Lib** — shared rules | `db_ops/lib` | Values and rules that are pure functions of their arguments. Imported everywhere, runs nothing. |
+| [15](./15_transport.md) | **Transport** — the one client | `db_ops/transport` | Starts `common.cli` and `db.cli` for every component: `lib` builds the command and reads the answer, this runs the process between them. Imports only `lib`. |
 
-Plus three root modules that belong to no component: `db_ops/config.py` (configuration parsing),
-`db_ops/levels.py` (the severity vocabulary), and `db_ops/cli.py` (the composition root for the one
-command that spans two apps).
+The root package `db_ops` is **not** a component and holds nothing of its own (R41): `db_ops/cli.py`
+is the `db-ops` / `dbabrain` entry point and only dispatches - `db-ops <component> ...` to that
+component's CLI, and `init`, `guide`, `encrypt-secret`, `export-data`, `import-data` to the
+`common.cli` commands of those names; `db_ops/config.py` is an alias of `lib/config.py`;
+`db_ops/__init__.py` re-exports the version from `lib/version.py`. The last command the root
+answered itself, `check-credentials`, is a `common.cli` command since 0.24.0 - the target loader and
+the Telegram resolver it asks moved to `lib.data_sources` - and `db-ops check-credentials` is an
+alias of it.
 
-**The list is closed.** Anything new is one of the fourteen or it is a fifteenth ORD with its own
+**The list is closed.** Anything new is one of the fifteen or it is a sixteenth ORD with its own
 directory, its own CLI and its own doc. There is no component that quietly is neither.
 
 > **Every component has a doc, and every doc has a component** — both directions, enforced by
@@ -48,10 +56,23 @@ directory, its own CLI and its own doc. There is no component that quietly is ne
 
 ---
 
-## 2. The two shared layers are opposites
+## 2. The shared layers: `common` does, `lib` decides, `transport` connects
 
 > **`common` (ORD 13) may not be imported — it is only ever run as a CLI.**
 > **`lib` (ORD 14) may not run a CLI — it is only ever imported.**
+> **`transport` (ORD 15) starts `common.cli` and `db.cli` — and nothing else starts them.**
+
+```
+  app ──import──▶ transport ──import──▶ lib ◀──import── common
+   │                  │ starts                            ▲
+   │                  └──── python -m db_ops.common.cli ──┘   (JSON on stdin, envelope back)
+   └──import──▶ lib, db
+```
+
+`lib` builds the command and reads the answer; `transport` starts the process between them
+([`15_transport.md`](./15_transport.md)). The launch had to live somewhere every app can import that
+is neither `lib` (which is imported everywhere and starts nothing) nor `common` (which apps may not
+import, and which never starts a process) - so it is a layer of its own, the smallest in the tree.
 
 The split is by what a thing **is**, not by who calls it.
 
@@ -70,12 +91,18 @@ from a subprocess.
 
 ## 3. The rules, and the test for each
 
+**The complete, numbered list is [`rules.md`](./rules.md)** - every rule, its guard and the
+exceptions that exist today. This section explains why the layering rules (R01-R11 there) are
+shaped as they are.
+
 ### An app never imports another app
 
 `tests/test_import_boundaries.py::test_an_app_never_imports_another_app`
 
-Apps talk across a process boundary — the module CLIs — or through `common`. An app that needs
-another app's *configuration* asks that app's CLI for it; it never reads the other app's files.
+Nor does it run another app's CLI (R42, empty since 0.24.0): what two apps share is a rule in
+`lib` - reading a piece of configuration included - or an operation in `common`, reached through
+`transport`. An app never reads another app's files by hand; it reads them through the `lib`
+function that owns their shape.
 
 ### A shared layer never imports an app
 
@@ -101,7 +128,7 @@ list can only get smaller.
 
 Three exceptions are named at the guard rather than left to be discovered:
 
-- **`common.data_sources`** — the single reader of the `data/` folder. Routing a configuration read
+- **`lib.data_sources`** — the single reader of the `data/` folder. Routing a configuration read
   through a subprocess would buy nothing and cost every caller a process; one reader of the data
   folder is worth more than one fewer exception.
 - **`control`** — the deploy tool. It builds the image and the bundle, so it necessarily knows the
@@ -232,7 +259,7 @@ shell caller pass the same request through untranslated, and it is what makes a 
 run reproducible by hand: the request is a value you can copy.
 
 ```
-app  → telegram.cli route <level>                    # another app's config, via that app's CLI
+app  → lib.telegram_route.telegram_route(level)      # the route, read from config in-process
 app  → db.cli queue-telegram-message -           # complete request, on stdin
          {"store": {...}, "chat_id": ..., "text": ..., "level": ..., "phase": ...}
            → the store CLI connects with what it was handed, and inserts

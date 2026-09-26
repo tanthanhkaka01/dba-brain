@@ -8,6 +8,7 @@ from db_ops.lib.text_format import format_message_time
 from db_ops.lib.time_window import MANUAL_ONLY, TimeWindow
 from db_ops.db import DbOpsStore
 from db_ops.sql_tasks import runner
+from db_ops.lib import sql_task_catalog
 
 
 class RecordingSqlRunStore:
@@ -458,15 +459,15 @@ def test_a_target_must_say_what_it_does_with_its_rows():
     nothing stopped being delivered. "Nothing in the config would show why" was the real
     complaint, and the config shows it now."""
     with pytest.raises(RuntimeError, match="'output' is required"):
-        runner._target_output({"sql_id": 16})
+        sql_task_catalog._target_output({"sql_id": 16})
 
-    assert runner._target_output({"output": {"format": "none"}})["output_format"] == "none"
+    assert sql_task_catalog._target_output({"output": {"format": "none"}})["output_format"] == "none"
     for file_format in ("xlsx", "csv", "txt", "xml"):
-        assert runner._target_output(
+        assert sql_task_catalog._target_output(
             {"output": {"format": file_format}})["output_format"] == file_format
 
     with pytest.raises(RuntimeError, match="output.format must be one of"):
-        runner._target_output({"sql_id": 9, "output": {"format": "pdf"}})
+        sql_task_catalog._target_output({"sql_id": 9, "output": {"format": "pdf"}})
 
 
 def test_the_workbook_is_queued_as_its_own_document_message(tmp_path):
@@ -537,12 +538,12 @@ def test_a_targets_row_request_cannot_exceed_the_flood_ceiling():
 
 def test_a_max_rows_the_transport_cannot_deliver_is_refused_at_load_rather_than_clamped():
     """Silently reducing 20000 to 5000 would look like it worked until somebody counted rows."""
-    assert runner._target_output({"output": {"format": "plain", "max_rows": "250"}}
+    assert sql_task_catalog._target_output({"output": {"format": "plain", "max_rows": "250"}}
                                  )["output_max_rows"] == 250
-    assert runner._target_output({"output": {"format": "plain"}})["output_max_rows"] == 0
+    assert sql_task_catalog._target_output({"output": {"format": "plain"}})["output_max_rows"] == 0
     for bad in ("0", "-5", "20000", "lots"):
         with pytest.raises(RuntimeError, match="output.max_rows"):
-            runner._target_output({"sql_id": 9, "output": {"format": "plain", "max_rows": bad}})
+            sql_task_catalog._target_output({"sql_id": 9, "output": {"format": "plain", "max_rows": bad}})
 
 
 def test_showing_more_rows_in_chat_does_not_enlarge_every_stored_run_row():

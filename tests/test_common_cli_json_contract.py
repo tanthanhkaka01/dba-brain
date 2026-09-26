@@ -35,6 +35,8 @@ ALL_COMMANDS = [
     # before argparse ever sees the name. A parametrization that passes for a command that does not
     # exist is worse than no coverage: it reports a contract being kept by nothing.
     "add-sql", "metric-toggle", "list-targets",
+    # 0.24.0: the tool root's own commands, moved from the root package (rules R41).
+    "init", "guide", "encrypt-secret", "export-data", "import-data",
     "run-sql", "run-cmd", "rotate-password",
     "check-secret", "check-identifiers", "check-secret-literals",
     "lift-example", "build-showcase", "instance-add",
@@ -49,8 +51,8 @@ ALL_COMMANDS = [
     # 2026-09-22. The first command that edits an app command. `set` and not `add`: the nine records
     # correspond to code that exists, so it changes a schedule and refuses to invent a tenth.
     "app-command-set",
-    "probe-host", "self-status", "timezone", "metric-severity", "trace-session",
-    "inventory-summary", "restore-database", "list-backup-files",
+    "probe-host", "self-status", "metric-severity", "trace-session",
+    "inventory-summary", "list-backup-files",
     "pack-backup", "pull-file", "push-file",
     "restore-full", "restore-diff", "restore-log", "restore-key", "restore-metadata",
     "verify-restore",
@@ -59,6 +61,8 @@ ALL_COMMANDS = [
     "shrink-log", "kill-spid", "start-job", "disable-job",
     # The gate without an operation attached, for a caller whose work is not in `common`.
     "authorize",
+    # 0.24.0: one question on the terminal, for an app that may not import `confirm` (rules R03).
+    "ask",
     "sqlserver-precheck", "sqlserver-apply-cu", "sqlserver-verify-build",
     # Uncovered until the drift guard below learned to read `argv[0] in {...}`: these three and the
     # two delete commands were dispatched in that form and checked by nothing.
@@ -71,9 +75,10 @@ ALL_COMMANDS = [
     "describe-object", "due-check", "check-objects", "check-references",
     # 2026-09-23. Stage C of one name per concept: move data/*.json to the standard field names.
     "standardize-field-names", "upgrade-config",
+    # 0.24.0: back from the root package (rules R41) - its two resolvers are lib's now.
+    "check-credentials",
     # Left this file on 2026-08-15 and covered elsewhere now, for the same reason in each case —
     # they were not shared-layer work:
-    #   check-credentials    -> db_ops/cli.py  (needs two apps' resolvers)
     #   queue-telegram-message, ops-status, restore-drill-status
     #                        -> db_ops/db/cli.py, see tests/test_db_cli_json_contract.py
     #                           (they open the runtime store, which ORD 01 owns)
@@ -92,6 +97,8 @@ STDIN_ONLY_COMMANDS = [
     # by the caller, travel in the request.
     "create-db-docker",
     "move-db-docker",
+    # 0.24.0: the metrics app's execution for one target - its password and the secrets it names.
+    "metric-batch",
     # 0.23.0 (1.38): the SMB restore's sqlcmd batches - a SQL password and a host password.
     "run-sqlcmd",
     # 0.23.0 (1.48): a restore's copy and staging cleanup, split out of the app - SSH passwords
@@ -99,6 +106,12 @@ STDIN_ONLY_COMMANDS = [
     "backup-chain",
     "copy-backup-dir",
     "prune-staged-backups",
+    # 0.24.0: a Windows share, reached through common.cli rather than by the backup app (R10) -
+    # every request carries the share's password.
+    "smb-list",
+    "smb-get",
+    "smb-delete",
+    "smb-credential",
 ]
 
 

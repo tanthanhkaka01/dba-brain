@@ -37,7 +37,7 @@ import json
 from typing import Any
 
 from db_ops.backup_restore.events import announce
-from db_ops.lib import common_cli
+from db_ops.transport import common_cli
 from db_ops.lib import instance_bundle
 from db_ops.lib import response
 
@@ -71,12 +71,6 @@ def _host_block(job: Any, *, data_dir: Any, load_secrets: Any = None) -> dict[st
     """
     from db_ops.backup_restore.backup import resolve_ssh_target
 
-    if isinstance(job, _EngineJob):
-        # The engine entry names its target by ip and login directly; there is no server_id to
-        # resolve, which is exactly why it needed adapting rather than a lookup.
-        return {"runtime": "linux", "host": job._host, "port": 22,
-                "username": job._username, "sudo": True}
-
     target = resolve_ssh_target(
         job.target_server_id or job.server_id, label=job.label,
         data_dir=data_dir, require_container=False,
@@ -89,7 +83,7 @@ def _host_block(job: Any, *, data_dir: Any, load_secrets: Any = None) -> dict[st
         "sudo": True,
     }
     if target.key_file:
-        from db_ops.common.data_sources import resolve_ssh_key
+        from db_ops.lib.data_sources import resolve_ssh_key
 
         block["key_file"] = str(resolve_ssh_key(target.key_file, data_dir))
     elif target.password_ref and load_secrets is not None:
@@ -99,41 +93,6 @@ def _host_block(job: Any, *, data_dir: Any, load_secrets: Any = None) -> dict[st
     if job.target_container:
         block["container"] = job.target_container
     return block
-
-
-class _EngineJob:
-    """An engine-path entry wearing the fields the planners read.
-
-    The engine config states its target as an ip and an import directory; a script entry states a
-    host and a container. Only the strings differ, so they are translated here once instead of
-    every planner learning both shapes.
-    """
-
-    def __init__(self, config: Any) -> None:
-        self.restore_id = config.restore_id
-        self.db_type = "sqlserver"
-        self.label = f"{config.restore_id} (sqlserver)"
-        self.server_id = config.source_id
-        self.target_server_id = config.target_id
-        self.target_container = ""
-        self.target_backup_dir = str(config.vm_import_unc)
-        self.target_visible_dir = str(config.vm_import_unc)
-        self.backup_dir = str(config.prod_backup_share)
-        self.is_remote = False          # the staging is done by the engine's own copy step
-        self.env = {"MSSQL_USER": config.restore_sql_username or "sa"}
-        self.env_secrets = {"MSSQL_PASSWORD": config.restore_sql_password_env}
-        self._host = config.vm_credential_target
-        self._username = config.vm_username
-        self._password_env = config.vm_password_env
-
-
-def _engine_entry_as_job(restore_id: str, config_path: Any) -> Any:
-    from db_ops.backup_restore.config import load_restore_configs
-
-    found = [c for c in load_restore_configs(config_path) if c.restore_id == restore_id]
-    if not found:
-        raise RestoreByIdError(f"No backup_restore entry found with restore_id={restore_id}.")
-    return _EngineJob(found[0])
 
 
 def _visible_dir(job: Any) -> str:
@@ -180,7 +139,7 @@ def _sqlserver_port(job: Any, *, data_dir: Any) -> int:
     own inventory record says which port it listens on; ``env.MSSQL_PORT`` overrides it for a
     target named by a host record, which carries no port.
     """
-    from db_ops.common import data_sources
+    from db_ops.lib import data_sources
 
     override = str((job.env or {}).get("MSSQL_PORT") or "").strip()
     if override:
@@ -397,7 +356,7 @@ def _execute(op: str, request: dict[str, Any]) -> dict[str, Any]:
 
     The step names *are* the CLI command names — that was already true when these ran in-process,
     and since 2026-08-15 it is also how they are invoked. See
-    :mod:`db_ops.lib.common_cli` for why the transport lives app-side and why a failed
+    :mod:`db_ops.transport.common_cli` for why the transport lives app-side and why a failed
     step raises instead of coming back as data.
     """
     if op not in _STEP_COMMANDS:
@@ -494,12 +453,17 @@ def restore_by_id(request: dict[str, Any], *, data_dir: Any = None,
 
     jobs = [j for j in load_script_restores(config_path) if j.restore_id == restore_id]
     if not jobs:
-        # An engine-path entry (SMB share + sqlcmd) describes the same restore in a different
-        # shape. Adapted rather than given its own planner: the work is identical once the paths
-        # and the login are known, and two planners for one engine would drift.
-        job = _engine_entry_as_job(restore_id, config_path)
-    else:
-        job = jobs[0]
+        # An SMB entry (no `script`) had a second route here until 0.24.0 - adapted onto these
+        # primitives, beside restore-workflow's. One route per entry (rules R43): it is
+        # restore-workflow's, which composes its steps through the same common commands.
+        from db_ops.backup_restore.config import load_restore_configs
+
+        if any(c.restore_id == restore_id for c in load_restore_configs(config_path)):
+            raise RestoreByIdError(
+                f"{restore_id} is an SMB entry (it declares no `script`): restore-workflow "
+                f"--restore-id {restore_id} restores it - latest, or --point-in-time.")
+        raise RestoreByIdError(f"No backup_restore entry found with restore_id={restore_id}.")
+    job = jobs[0]
     engine = str(job.db_type or "").strip().lower()
     planner = _PLANNERS.get(engine)
     if planner is None:

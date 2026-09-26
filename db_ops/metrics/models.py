@@ -11,6 +11,9 @@ from db_ops.lib.time_window import TimeWindow
 from db_ops.db.metric_results import MetricResult
 
 
+from db_ops.lib.metric_target import MetricTarget  # noqa: E402,F401 - moved to lib (0.24.0)
+
+
 @dataclass(frozen=True)
 class MetricVariant:
     name: str
@@ -96,33 +99,6 @@ class MetricDefinition:
     @property
     def sql_variants(self) -> list[MetricVariant]:
         return self.variants
-
-
-@dataclass(frozen=True)
-class MetricTarget:
-    target_id: str
-    server_id: str
-    ip: str
-    db_type: str
-    db_name: str
-    credential_name: str
-    port: int | None = None
-    platform: str = ""
-    cmd_access: dict[str, Any] = field(default_factory=dict)
-    cmd_credential: dict[str, Any] | None = None
-    # Per-target transport override for SQL-collector metrics: {"method": "direct"|"api", ...}.
-    # "direct" connects to the DB; "api" runs the SQL through the legacy Oracle bridge.
-    sql_access: dict[str, Any] = field(default_factory=lambda: {"method": "direct"})
-    service_name: str = ""
-    instance_name: str = ""
-    database_names: list[str] = field(default_factory=list)
-    # Name of the Docker container backing this target (a DB-in-Docker instance). Set for
-    # docker-collector metrics; empty for non-containerized targets (they skip docker metrics).
-    container_name: str = ""
-    connection_info: dict[str, Any] = field(default_factory=dict)
-    credential: dict[str, Any] | None = None
-    metrics_config: dict[str, Any] = field(default_factory=dict)
-    report_policy: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

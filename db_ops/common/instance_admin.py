@@ -27,7 +27,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from db_ops.common import data_sources
+from db_ops.lib import data_sources
 from db_ops.lib import field_names
 from db_ops.lib import secret_text as _secret_text
 from db_ops.lib import sql_access as _sql_access

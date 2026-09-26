@@ -30,7 +30,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from db_ops.common import data_sources
+from db_ops.lib import data_sources
 from db_ops.common.instance_admin import InstanceAdminError, _read, _store_secret, _write
 from db_ops.lib.cmd_access import SUPPORTED_CMD_ACCESS_METHODS, SUPPORTED_PLATFORMS
 

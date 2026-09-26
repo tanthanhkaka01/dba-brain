@@ -20,7 +20,7 @@ why `init` now writes it and why `sync-config` names every catalogued file a nod
 
 from __future__ import annotations
 
-from db_ops.common import data_sources
+from db_ops.lib import data_sources
 from db_ops.lib import backup_policy
 from db_ops.reports.inventory_report import _build_backup, build_triage
 
@@ -178,7 +178,7 @@ def test_init_actually_writes_a_backup_policy_into_a_fresh_root(tmp_path):
     So this reads the FILE ON DISK after an init, and the assertion below reads every shipped
     default the same way - one list, checked by using it.
     """
-    from db_ops import scaffold
+    from db_ops.common import scaffold
 
     scaffold.initialise(tmp_path, app_name="dbabrain")
 

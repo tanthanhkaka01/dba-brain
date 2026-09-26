@@ -3,8 +3,8 @@
 An HTTP API, a vendor export, a device that speaks only its own protocol. Until 2026-09-14 the
 answer was a script outside db_ops that opened its own connection, held its own copy of the
 credential and was scheduled by something else — the shape this tool exists to replace. Asked for
-on 2026-09-14: *"sql task gọi python code chạy, rồi python code lại return json về, rồi sql lấy
-json đó push vào sql"*.
+on 2026-09-14 (translated): *"the SQL task calls Python code, the Python code returns JSON, then
+SQL takes that JSON and pushes it into SQL"*.
 
 So a task gained a second axis. `script_type` goes on saying what the SQL half is — single, array
 or folder, unchanged — and `input_type` says where the rows come from. The two were briefly one

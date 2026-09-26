@@ -19,7 +19,7 @@ the one supported way to say the opposite.
 import json
 
 from db_ops.common import instance_admin
-from db_ops.common.data_sources.metric_targets import load_config_metric_targets
+from db_ops.lib.data_sources.metric_targets import load_config_metric_targets
 from db_ops.lib.inventory_render import adopt_new_servers, reportable_servers, seed_inventory
 from db_ops.lib.target_flags import is_alerts_enabled, is_metrics_enabled, is_reports_enabled
 

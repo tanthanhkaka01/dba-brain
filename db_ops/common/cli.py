@@ -4,7 +4,7 @@ Every db_ops app has a CLI entrypoint; this is the one for the shared layer. It 
 thin facade — all logic stays in the common modules it fronts:
 
 * ``add-sql`` / ``metric-toggle``  -> :mod:`db_ops.common.config_admin` (atomic config writes)
-* ``list-targets``                 -> :mod:`db_ops.common.data_sources` (the same listing
+* ``list-targets``                 -> :mod:`db_ops.lib.data_sources` (the same listing
                                       the Telegram ``/spbot_list_server_id`` command replies with)
 * ``run-sql``                      -> :mod:`db_ops.common.sql_run` (run SQL on one database
                                       target from a JSON request object)
@@ -37,7 +37,7 @@ Usage::
     python -m db_ops.common.cli add-sql '{"db_type": "sqlserver", "server_id": "...", "display_name": "...", "sql_file": "..."}'
     python -m db_ops.common.cli metric-toggle '{"server_id": "...", "state": "off", "scope": "collector:cmd"}'
     python -m db_ops.common.cli list-targets
-    python -m db_ops.common.cli run-sql '{"target": "ACME-192-0-2-115", "database": "SALESDB", "sql": "SELECT 1 AS x"}'
+    python -m db_ops.common.cli run-sql @request.json    # {"connection": {...}, "sql": "SELECT 1 AS x"}
 """
 
 from __future__ import annotations
@@ -48,14 +48,43 @@ from pathlib import Path
 from typing import Any
 
 from db_ops.common import config_admin
+from db_ops.common.cli_catalog import STATED_CONNECTION
 from db_ops.lib.json_io import looks_like_json_request
+
+#: The host login a host command takes, stated in full - the counterpart of STATED_CONNECTION.
+STATED_ACCESS = (
+    "  access     (required) the host login, complete: an inline cmd_access - method (ssh|winrm),\n"
+    "             host, port, username, auth_type, and a password or an absolute key_file.\n"
+    "             common.cli reads no configuration: an app fills it from a server_id\n"
+    "             (lib.data_sources.request_fill). Send the request on stdin (-) or as @file.\n"
+    "  target     a label for the evidence and the confirmation - the server_id\n"
+)
+
+#: The timing a host maintenance operation reads - run-cmd and the file transfers take none.
+STATED_POLICY = (
+    "  policy     the maintenance policy that times the operation (data/maintenance_policy.json's\n"
+    "             defaults with this server's values over them, stated by the app); {} = built-in\n"
+)
+
+#: What an operation costs, stated by the app - shared by every command behind the gate.
+STATED_RULES = (
+    "  rules      what the operation costs to confirm: {level, confirmations, challenge, effects},\n"
+    "             the node's own data/emergency_operations.json entry, stated by the app. Absent,\n"
+    "             the ladder the package ships prices it; an unlisted operation costs the most.\n"
+)
 
 USAGE = (
     "usage: python -m db_ops.common.cli <command> ...\n"
     "commands:\n"
+    "  init            Create a tool root here: config, a SQLite store, an empty inventory (db-ops init)\n"
+    "  guide           The operating guide for this build; write it as AGENTS.md (db-ops guide)\n"
+    "  encrypt-secret  Encrypt secrets/secret_text.json into the store the tool reads\n"
+    "  export-data     Write this machine's whole configuration to one bundle file\n"
+    "  import-data     Apply such a bundle, so this machine runs the same estate\n"
     "  add-sql         Register + enable a new SQL task (see --help)\n"
     "  metric-toggle   Enable/disable metrics for one server_id (see --help)\n"
     "  list-targets    List the database targets (server_id, db_type, ip:port)\n"
+    "  check-credentials  Does every configured target resolve to a real login (see --help)\n"
     "  list-databases  What databases a server has and their state; oracle: CDB/PDB (see --help)\n"
     "  list-schemas    What schemas one database has (see --help)\n"
     "  list-jobs       What scheduled jobs a target has, and which are enabled (see --help)\n"
@@ -68,6 +97,7 @@ USAGE = (
     "  start-job       EMERGENCY: start one SQL Server Agent job by name (see --help)\n"
     "  disable-job     EMERGENCY: stop one job running on its schedule; mssql/oracle/pg (see --help)\n"
     "  authorize       Confirm one named operation for a caller that performs it itself (see --help)\n"
+    "  ask             Ask one question on this terminal, for a caller that cannot (see --help)\n"
     "  rotate-password  Change database login passwords on the server AND in the store (see --help)\n"
     "  check-secret     Try to authenticate with each secret and say why any cannot be (see --help)\n"
     "  check-identifiers  Which of this estate's real names appear in files that ship (see --help)\n"
@@ -84,7 +114,6 @@ USAGE = (
     "  metric-severity  Remap one metric's statuses for one server_id, e.g. WARNING -> LOGGING (see --help)\n"
     "  trace-session    Who is holding an open transaction — the app user behind a SPID (see --help)\n"
     "  inventory-summary  Merge a health overlay and render the inventory summary (see --help)\n"
-    "  restore-database  Run one configured restore: any target shape, PITR where supported (see --help)\n"
     "  list-backup-files  List an engine's backups as full/diff/log (oracle|postgresql|sqlserver)\n"
     "  backup-database  Run ONE backup from a self-contained spec: script + host + env (see --help)\n"
     "  prune-backup-files  Delete backups older than the retention window (default 14 days)\n"
@@ -105,7 +134,12 @@ USAGE = (
     "  pack-files       Pack named files (or a folder) into one archive + sha256 (see --help)\n"
     "  relay-file       Copy one file from one host straight to another, hash-verified\n"
     "  create-db-docker  Build one lab database Docker instance, here or over SSH (stdin only)\n"
+    "  metric-batch     Run one target's metric items, one answer each (stdin only)\n"
     "  run-sqlcmd       Run one sqlcmd batch where the SQL Server is: here, ssh, winrm (stdin only)\n"
+    "  smb-list         List the files under a folder of a Windows share (stdin only)\n"
+    "  smb-get          Fetch one file from a Windows share to here (stdin only)\n"
+    "  smb-delete       Delete named files on a Windows share (stdin only)\n"
+    "  smb-credential   Store a share login for Windows (cmdkey) (stdin only)\n"
     "  backup-chain     Which parts of a backup directory a restore needs (stdin only)\n"
     "  copy-backup-dir  Copy a backup directory host to host, one tar stream, mirrored (stdin only)\n"
     "  prune-staged-backups  Delete a restore's staged backups past retention (stdin only)\n"
@@ -118,7 +152,6 @@ USAGE = (
     "  check-references  Which config pointer lands nowhere: server_id, credential_name (see --help)\n"
     "  upgrade-config   After upgrading dbabrain: move data/*.json to this version's shapes (see --help)\n"
     "  standardize-field-names  Move data/*.json to the standard field names; plan first (see --help)\n"
-    "  timezone         Which clock this node shows, and record it in the store (see --help)\n"
     "  host-service     Start/stop/restart services on a host and wait for the end state (see --help)\n"
     "  host-restart     Restart a host and prove it came back (see --help)\n"
     "  sqlserver-precheck    Is this SQL Server instance safe to patch right now (see --help)\n"
@@ -149,8 +182,13 @@ SQLSERVER_INSTANCE_USAGE = (
     "  verify : compare a target against a bundle; the headline number is orphaned users.\n"
     '  {"target": "NEW-HOST", "bundle_dir": "runtime/instance_bundles/2-115"}\n'
     "\n"
+    "Each request above also carries \"connection\" (and export/replay a \"policy\") - see Fields.\n"
+    "\n"
     "Fields:\n"
-    "  target       (required) server_id, ip, or '<db_type> <ip> [port]'\n"
+    + STATED_CONNECTION +
+    "  policy       (export/replay, required) the content of sqlserver_instance_policy.json -\n"
+    "               which server settings are portable. Stated by the app, never read here\n"
+    "  secrets      (replay) {ref: value} for the refs the bundle's manifest lists\n"
     "  bundle_dir   (replay/verify, required) the folder export wrote\n"
     "  output_dir   (export) default runtime/instance_bundles/<server_id>\n"
     "  include      (export) artifact subset; default every artifact the policy declares\n"
@@ -162,7 +200,7 @@ SQLSERVER_INSTANCE_USAGE = (
     "  on_unsupported (replay) skip (default) | fail\n"
     "\n"
     "Secrets SQL Server will not hand over (credential, linked-server, proxy, Database Mail)\n"
-    "are exported as placeholders and resolved at replay from the encrypted secret store.\n"
+    "are exported as placeholders and resolved at replay from the request's \"secrets\".\n"
     "Replay fails closed, listing every unresolved reference, before executing anything.\n"
     "\n"
     "Prints the gate report as JSON. Exit 0 unless a blocking gate failed.\n"
@@ -172,14 +210,13 @@ HOST_FACTS_USAGE = (
     "usage: python -m db_ops.common.cli host-facts <json>|@<file>|- "
     "[--config ...] [--key ... | --key-base64 ...]\n"
     "\n"
-    "Reads one host's state over its configured cmd_access - Windows or Linux, same output\n"
+    "Reads one host's state over the access its request states - Windows or Linux, same output\n"
     "shape - and gates the things an operator would otherwise have to eyeball. Read-only.\n"
     "\n"
-    '  {"target": "ACME-192-0-2-250", "services": ["MSSQL$APPDB"]}\n'
+    '  {"target": "ACME-192-0-2-250", "services": ["MSSQL$APPDB"], "access": {...}, "policy": {}}\n'
     "\n"
     "Fields:\n"
-    "  target     (required unless 'access' is given) server_id, ip, or '<db_type> <ip> [port]'\n"
-    "  access     an inline cmd_access object, for a host that is not in db_instances.json\n"
+    + STATED_ACCESS + STATED_POLICY +
     "  services   Windows service names or systemd units to report on\n"
     "  evidence   false to skip the JSON evidence file (default: runtime/evidence/facts/)\n"
     "\n"
@@ -197,7 +234,8 @@ HOST_SERVICE_USAGE = (
     '   "confirm": true}\n'
     "\n"
     "Fields:\n"
-    "  target/access  as for host-facts\n"
+    "  target/access/policy  as for host-facts\n"
+    + STATED_RULES +
     "  services       (required) service names / systemd units\n"
     "  action         status (default, read-only) | start | stop | restart\n"
     "  confirm        (required for anything but status) true = the payload means it\n"
@@ -219,7 +257,8 @@ HOST_RESTART_USAGE = (
     '   "reason": "clear PendingFileRenameOperations before CU26", "confirm": true}\n'
     "\n"
     "Fields:\n"
-    "  target/access   as for host-facts\n"
+    "  target/access/policy  as for host-facts\n"
+    + STATED_RULES +
     "  services        services that must be up again before the restart counts as finished\n"
     "  reason          recorded in the host's shutdown event log and in the evidence file\n"
     "  confirm         (required) true = the payload means it\n"
@@ -227,7 +266,7 @@ HOST_RESTART_USAGE = (
     "  assume_yes      true = unattended automation; nobody is prompted (see below)\n"
     "  window          {\"start\": \"2026-08-03 19:00\", \"end\": \"2026-08-03 21:00\"}, or any\n"
     "                  time_window block; ignore_window: true records the breach and proceeds\n"
-    "  wait            per-run timeout overrides (see data/maintenance_policy.json)\n"
+    "  wait            per-run timeout overrides, laid over the request's policy\n"
     "\n"
     "TWO LOCKS, because they answer different questions. \"confirm\": true is INTENT - this payload\n"
     "means to change a machine. Typing \"yes\" at the prompt is PRESENCE - a human is reading THIS\n"
@@ -245,8 +284,9 @@ SQLSERVER_PATCH_USAGE = (
     "usage: python -m db_ops.common.cli sqlserver-precheck|sqlserver-apply-cu|sqlserver-verify-build\n"
     "       <json>|@<file>|- [--config ...] [--key ... | --key-base64 ...]\n"
     "\n"
-    "The three SQL Server cumulative-update capabilities. One server_id resolves BOTH halves of\n"
-    "the target: the host (cmd_access) and the instance (the SQL login).\n"
+    "The three SQL Server cumulative-update capabilities. The request states BOTH halves of the\n"
+    "target: the host (\"access\", as for host-facts) and the instance (\"connection\", the SQL\n"
+    "login). An app fills both from one server_id; common.cli reads no configuration.\n"
     "\n"
     "  sqlserver-precheck      read-only: is this instance safe to patch right now\n"
     "  sqlserver-apply-cu      runs every precheck gate again, then the unattended patch\n"
@@ -257,12 +297,12 @@ SQLSERVER_PATCH_USAGE = (
     '   "expected_build": "16.0.4265.3", "installer_sha256": "A0FA...",\n'
     '   "kb": "KB5093420", "window": {"start": "...", "end": "..."}, "confirm": true}\n'
     "\n"
-    "Fields (beyond the host fields above):\n"
+    "Fields (beyond access/policy, as for host-facts):\n"
+    + STATED_CONNECTION + STATED_RULES +
     "  installer        full path of the staged CU .exe ON THE TARGET (required for apply-cu)\n"
     "  expected_build   the build the instance must report afterwards (e.g. 16.0.4265.3)\n"
     "  installer_sha256 expected hash of the staged file; skip_hash: true skips the check\n"
     "  instance_name    default: read from the instance itself (SERVERPROPERTY)\n"
-    "  credential_name  SQL login to check with; default = the instance's own\n"
     "  setup_account    Windows login setup runs as; gated as a sysadmin when given\n"
     "  overrides        [\"allow-stale-backup\", \"allow-pending-reboot\", \"allow-ha\",\n"
     "                    \"ignore-window\"] - accept a named blocking gate deliberately\n"
@@ -730,15 +770,15 @@ DB_STATUS_USAGE = (
     "  {\"target\": \"ACME-192-0-2-248\", \"depth\": \"schema\",\n"
     "   \"database\": \"APPDB\", \"schemas\": [\"sales\"]}\n"
     "\n"
+    "Each request above also carries \"connection\" - see Fields.\n"
+    "\n"
     "Fields:\n"
-    "  target          (required) server_id, or \"<db_type> <ip> [port]\"\n"
+    + STATED_CONNECTION +
     "  depth           instance (default) | database | schema\n"
     "  databases       names to check at depth database; default every database\n"
     "  database        (required at depth schema on sqlserver/postgresql) which one to look in\n"
     "  schemas         names to check at depth schema; default every schema\n"
-    "  credential_name which login to connect as (default: the instance's)\n"
     "  timeout_seconds connect/statement timeout\n"
-    "  data_dir        folder holding db_instances.json (default: data/)\n"
     "\n"
     "PostgreSQL and Oracle restore at the level of the INSTANCE, so for a restore the instance\n"
     "depth is the whole answer there. SQL Server restores one database at a time, so each can\n"
@@ -780,14 +820,15 @@ CHECK_SECRET_USAGE = (
 )
 
 PROBE_HOST_USAGE = (
-    "usage: python -m db_ops.common.cli probe-host <json>|@<file>|- [--config ...]\n"
+    "usage: python -m db_ops.common.cli probe-host <json>|@<file>|-\n"
     "\n"
     "What a host is listening on, and what db_ops can therefore do with it. The question three\n"
     "throwaway socket loops have each answered differently; this is the one answer.\n"
     "\n"
-    "The request is a JSON object:\n"
-    '  {\"target\": \"ACME-192-0-2-236\",   // server_id / ip - the inventory supplies ip and os\n'
-    '   \"host\": \"192.0.2.236\",        // OR the machine outright; then NOTHING is read\n'
+    "The request is a JSON object. Nothing is read: the address is the request's, and an app\n"
+    "holding only a server_id fills it (lib.data_sources.request_fill).\n"
+    '  {\"host\": \"192.0.2.236\",         // (required) the machine\n'
+    '   \"target\": \"ACME-192-0-2-236\",  // the label the answer carries (the server_id)\n'
     '   \"os\": \"Windows Server 2003\",    // optional, and it changes the verdict (see below)\n'
     '   \"ports\": [22, 5985, 3389],       // default: ssh, msrpc, smb, the 4 DB ports, rdp, winrm\n'
     '   \"timeout_seconds\": 3}\n'
@@ -852,11 +893,32 @@ AUTHORIZE_USAGE = (
     '             "confirm": "yes", "reason": "asked over telegram",\n'
     '             "authorized_by": {"channel": "telegram"}}\n'
     '\n'
-    'How much it costs is per operation in data/emergency_operations.json, exactly as for the\n'
-    'commands above: an operation the file does not list costs the most, not the least. The answer\n'
+    'How much it costs is the request\'s "rules" - the node\'s own data/emergency_operations.json\n'
+    'entry, stated by the app, since common.cli reads no configuration; without it the ladder the\n'
+    'package ships prices it, and an operation no ladder lists costs the most, not the least. The answer\n'
     'may be typed at the prompt, carried in the request ("confirm": "yes", how a chat command\n'
     'passes the reply it collected), or waived by "assume_yes": true for genuinely unattended\n'
     'automation. Exit 0 means authorized; the gate report is the JSON on stdout.\n'
+)
+
+ASK_USAGE = (
+    'usage: python -m db_ops.common.cli ask <json>|@<file>|-\n'
+    '\n'
+    'One question on the controlling terminal, for a caller that reaches this CLI through a pipe\n'
+    'and so cannot ask it itself - the deploy\'s config-drift gate asks "adopt / keep / abort".\n'
+    'The same terminal, deadline and "silence is no answer" as the confirmation gate.\n'
+    '\n'
+    '  ask {"prompt": "  adopt / keep / abort ? "}\n'
+    '  ask {"prompt": "Continue? ", "choices": ["yes", "no"], "tries": 3}\n'
+    '  ask {"prompt": "Continue? ", "choices": ["yes", "no"], "answer": "no"}   // collected already\n'
+    '\n'
+    'choices           the accepted answers (lower case); none means any line is the answer\n'
+    'tries             how often a person is asked again after an answer not in choices (1)\n'
+    'deadline_seconds  how long to wait for a line (default 120); nothing by then is ""\n'
+    'answer            a reply the caller already has, held to choices like a typed one\n'
+    '\n'
+    'data: {"interactive", "answer", "source"} - interactive false and answer "" when there is no\n'
+    'terminal to ask on; an empty answer is never a choice made for the person.\n'
 )
 
 
@@ -878,8 +940,12 @@ EMERGENCY_USAGE = (
     "an Oracle DBMS_SCHEDULER or DBMS_JOB entry, or a pg_cron row, dispatching on what list-jobs\n"
     "says owns the name. It stops future runs only - a run already in progress keeps going.\n"
     "\n"
-    "How much it costs to authorize is per operation in data/emergency_operations.json, not a\n"
-    "flag: level 100 (takes something down) needs two answers, level 50 needs one.\n"
+    "Each request above also carries \"connection\" (the SQL login) and \"rules\" - see below.\n"
+    "\n"
+    "How much it costs to authorize is per operation, not a flag: level 100 (takes something\n"
+    "down) needs two answers, level 50 needs one. The request's \"rules\" state it - the node's\n"
+    "own data/emergency_operations.json entry, sent by the app; without them the ladder the\n"
+    "package ships prices it. common.cli reads no configuration.\n"
     "\n"
     "  \"confirm\": true      intent. Required by every one of them. The answers are then typed\n"
     "                       at the terminal.\n"
@@ -890,20 +956,23 @@ EMERGENCY_USAGE = (
     "  \"assume_yes\": true   unattended automation. Recorded as such: no human was asked.\n"
     "  \"dry_run\": true      run the pre-checks and print what would happen. Never prompts.\n"
     "\n"
-    "Other fields: reason (shown in the banner and stored), credential_name, timeout_seconds.\n"
+    "Other fields: reason (shown in the banner and stored), timeout_seconds, and\n"
+    + STATED_CONNECTION + STATED_RULES +
     "Exit 0 unless a blocking gate failed. Progress goes to stderr, the JSON report to stdout.\n"
 )
 
 RUN_SQL_USAGE = (
-    "usage: python -m db_ops.common.cli run-sql <json>|@<file>|- [--key ... | --key-base64 ...]\n"
+    "usage: python -m db_ops.common.cli run-sql @<file>|-\n"
     "\n"
     "Runs SQL against ONE database target and prints the first result set.\n"
-    "The request is a JSON object, given inline, as @path/to/request.json, or on stdin (-):\n"
-    '  {"target": "ACME-192-0-2-115",   // server_id, or "<db_type> <ip> [port]"\n'
+    "The request is a JSON object, as @path/to/request.json or on stdin (-) - it carries a\n"
+    "password, so never inline:\n"
+    '  {"connection": {...},              // (required) the login - see Fields below\n'
+    '   "target": "ACME-192-0-2-115",     // the label the answer carries (the server_id)\n'
     '   "sql": "SELECT TOP 10 * FROM sys.objects",   // or "sql_file": "query.sql"\n'
-    '   "database": "SALESDB",               // optional; default = the instance database\n'
-    '   "credential_name": "...",         // optional; default = the instance\'s\n'
-    "                                     // default_credential_name (alias: user_ref)\n"
+    '   "database": "SALESDB",            // optional; SQL Server default is master\n'
+    '   "secrets": {"<ref>": "..."},      // optional; the refs an 8i bridge\'s sql_access\n'
+    "                                     // names (its signing secret) - no store is opened\n"
     '   "max_rows": 50000,                // optional; result is truncated past this\n'
     '   "timeout_seconds": 30,            // optional; connect timeout\n'
     '   "commit": false,                  // optional; default false = always rolled back\n'
@@ -919,15 +988,20 @@ RUN_SQL_USAGE = (
     "                                     // a T-SQL variable does not survive a GO. Build it\n"
     "                                     // with lib.sql_text.build_parameter_prelude, which\n"
     "                                     // validates each name and type first.\n"
+    '   "named_params": {"job_no": "AA1"},  // optional; Oracle / PostgreSQL only. BOUND where\n'
+    "                                     // the SQL says :job_no, in the driver's own style;\n"
+    "                                     // not with params/prelude. A name no statement\n"
+    "                                     // says is refused before connecting.\n"
     '   "capture": "first",               // optional; first (default) | all. Default keeps the\n'
     "                                     // first result set and drains the rest without\n"
     "                                     // fetching their rows; all keeps them.\n"
     '   "max_result_sets": 20}            // optional; capture:all only. 0 = no cap.\n'
     "\n"
+    "Fields:\n"
+    + STATED_CONNECTION +
     "\n"
     "WHICH TOOL RUNS IT. The request states the facts; the answer says what they selected.\n"
-    "Every field below is optional and empty means 'use what db_instances.json says', so a\n"
-    "request that states nothing behaves exactly as it always has:\n"
+    "Every field below is optional and empty means 'use what the connection states':\n"
     '   \"major_version\": 8,               // engine major version. THE field that decides a\n'
     "                                     // driver: python-oracledb speaks 12.1+ only, so an\n"
     "                                     // Oracle below that is refused here with the fix in\n"
@@ -1005,8 +1079,9 @@ def _run_sql_command(argv: list[str]) -> int:
         return 0 if argv else 2
 
     source = argv[0]
-    # The credential password lives in the encrypted secret file, so the run needs the key the
-    # same way every other db_ops CLI takes it: --key / --key-base64, else DB_OPS_SECRET_KEY.
+    # Since 0.24.0 the request states its login (rules R09) and no secret store is opened, so the
+    # key changes nothing here. It is still accepted: a 0.23.0 command line that passes it should
+    # run, not fail on a flag that became redundant.
     rest = argv[1:]
     key = key_base64 = None
     while rest:
@@ -1040,6 +1115,8 @@ def _run_sql_command(argv: list[str]) -> int:
         result = sql_run.run_sql(request)
     except sql_run.SqlRunError as exc:
         return response.emit(response.fail("run-sql", str(exc)))
+    except Exception as exc:  # noqa: BLE001 - an answer, never a traceback (rules R15, §1.60)
+        return response.emit(response.fail("run-sql", f"{type(exc).__name__}: {exc}"))
 
     from db_ops.lib import result_format
 
@@ -1080,14 +1157,14 @@ def _run_sql_command(argv: list[str]) -> int:
 
 
 RUN_CMD_USAGE = (
-    "usage: python -m db_ops.common.cli run-cmd <json>|@<file>|- [--config ...] [--key-base64 ...]\n"
+    "usage: python -m db_ops.common.cli run-cmd @<file>|-\n"
     "\n"
-    "Run ONE shell command on a host, over the access it already has in db_instances.json.\n"
-    "The command-line counterpart of run-sql: same JSON-object contract, same target resolution.\n"
+    "Run ONE shell command on a host, over the login the request states.\n"
+    "The command-line counterpart of run-sql: same JSON-object contract.\n"
     "\n"
-    "The request is a JSON object, given inline, as @path/to/request.json, or on stdin (-):\n"
-    '  {\"target\": \"CLOUD-203-0-113-188-ORA-1521\",  // server_id or ip from db_instances.json\n'
-    '   \"access\": {...},          // OR an inline cmd_access block, for a host not in config\n'
+    "The request is a JSON object, as @path/to/request.json or on stdin (-):\n"
+    '  {\"access\": {...},          // (required) the host login - see Fields below\n'
+    '   \"target\": \"CLOUD-203-0-113-188-ORA-1521\",  // the label (the server_id)\n'
     '   \"command\": \"df -h /\",     // OR \"script\": \"multi-line text run as a script\"\n'
     '   \"timeout_seconds\": 60,\n'
     '   \"confirm\": true,          // REQUIRED: this runs arbitrary code on a real host\n'
@@ -1097,7 +1174,10 @@ RUN_CMD_USAGE = (
     "\"confirm\" is required because nothing here can tell `df -h` from `rm -rf /`. host-facts and\n"
     "host-service already work this way; this command cannot classify itself, so it always asks.\n"
     "\n"
-    "WHAT THE HOST IS. Optional, and empty means 'use db_instances.json'. These decide which\n"
+    "Fields:\n"
+    + STATED_ACCESS +
+    "\n"
+    "WHAT THE HOST IS. Optional, and empty means 'what access states'. These decide which\n"
     "shell dialect a script builder may use — platform alone cannot, because Get-CimInstance and\n"
     "ConvertTo-Json are PowerShell 3.0 (Windows Server 2012+) and older hosts need Get-WmiObject:\n"
     '   \"platform\": \"windows\",          // windows | linux\n'
@@ -1106,7 +1186,7 @@ RUN_CMD_USAGE = (
     '   \"runtime\": \"docker\",            // host (default) | docker | k8s\n'
     '   \"profile\": {...}                // the same keys as one block\n'
     "\n"
-    "The json answer carries \"host_profile\" (with a \"sources\" map: request or config per field)\n"
+    "The json answer carries \"host_profile\" (with a \"sources\" map naming who stated each field)\n"
     "and \"shell_dialect\" ({tool: cim|wmi, chosen_by, reason}) alongside the command's output.\n"
     "\n"
     "format raw prints stdout verbatim and nothing else, so it pipes. xml/xlsx are not offered:\n"
@@ -1181,20 +1261,16 @@ def _run_cmd_command(argv: list[str]) -> int:
             "run-cmd", "run-cmd supports json, txt or raw; a command's stdout is not a result "
                        "set. Use run-sql for xml/xlsx."))
 
-    from db_ops.config import load_config
-
-    try:
-        data_dir = getattr(load_config(config_path), "data_dir", None)
-    except Exception:  # noqa: BLE001 - fall back to the package default data dir.
-        data_dir = None
-
+    # The host and its login are the request's "access" (rules R09): a bare server_id is refused
+    # rather than looked up. `--config` is still accepted so an older command line keeps parsing.
+    _ = config_path
     from db_ops.common.evidence import GateReport
 
     # Gate lines go to stderr so the JSON (or raw stdout) stays machine-readable — the same
     # split every other gate command here uses.
     report = GateReport("run-cmd", echo=lambda line: print(line, file=sys.stderr))
     try:
-        target = host_ops.resolve_host(request, data_dir=data_dir)
+        target = host_ops.resolve_stated_host(request, what="run-cmd")
         # Same two locks as host-service / host-restart: "confirm": true is the payload declaring
         # intent, typing yes at a terminal is a human confirming they are looking at THIS host.
         allowed = confirm.require_confirmation(
@@ -1210,7 +1286,7 @@ def _run_cmd_command(argv: list[str]) -> int:
                 'not confirmed; run-cmd needs "confirm": true and a typed yes '
                 '(or "assume_yes": true when unattended).',
                 data={"gates": report.to_dict().get("gates")}))
-        session = host_ops.open_host_session(target, data_dir=data_dir)
+        session = host_ops.open_host_session(target)
     except Exception as exc:  # noqa: BLE001 - report as a response like every other command.
         return response.emit(response.fail("run-cmd", str(exc)))
 
@@ -1292,11 +1368,10 @@ def _run_cmd_command(argv: list[str]) -> int:
 
 
 FILE_TRANSFER_USAGE = (
-    "usage: python -m db_ops.common.cli fetch-file|send-file|pack-files|relay-file "
-    "<json>|@<file>|- [--config ...] [--key-base64 ...]\n"
+    "usage: python -m db_ops.common.cli fetch-file|send-file|pack-files|relay-file @<file>|-\n"
     "\n"
-    "Move ONE named file between this host and a remote one, over the SSH access the target\n"
-    "already has in db_instances.json. fetch-file pulls it here; send-file pushes it there.\n"
+    "Move ONE named file between this host and a remote one, over the SSH login the request\n"
+    "states in \"access\". fetch-file pulls it here; send-file pushes it there.\n"
     "\n"
     "For a file you can name - a backup piece to inspect, a script to place, a log to collect.\n"
     "NOT for staging a backup set: per-file SFTP across two internet hops measured 10 KB/s here,\n"
@@ -1306,12 +1381,12 @@ FILE_TRANSFER_USAGE = (
     "then fetch-file moves it. The result carries the archive's sha256 and size, so what landed\n"
     "can be proven identical to what was packed - size alone catches a truncated copy, not a\n"
     "corrupted one.\n"
-    '  {\"target\": \"...\", \"folder\": \"/opt/oracle/backup/dbops\", \"include\": \"*.bkp\",\n'
+    '  {\"access\": {...}, \"folder\": \"/opt/oracle/backup/dbops\", \"include\": \"*.bkp\",\n'
     '   \"archive_path\": \"/tmp/pieces.tar\", \"format\": \"tar\"}   // or \"files\": [...]\n'
     "\n"
-    "The request is a JSON object, given inline, as @path/to/request.json, or on stdin (-):\n"
-    '  {"target": "CLOUD-203-0-113-188-ORA-1521",  // server_id or ip from db_instances.json\n'
-    '   "access": {...},            // OR an inline cmd_access block, for a host not in config\n'
+    "The request is a JSON object, as @path/to/request.json or on stdin (-):\n"
+    '  {"access": {...},            // (required) the host login - see Fields below\n'
+    '   "target": "CLOUD-203-0-113-188-ORA-1521",  // the label (the server_id)\n'
     '   "remote_path": "/opt/oracle/backup/dbops/FREE_L0_20260802_f32div12_3555_1_1.bkp",\n'
     '   "local_path": "runtime/incoming/FREE_L0_20260802_f32div12_3555_1_1.bkp",\n'
     '   "overwrite": false,         // default false; a same-size destination is skipped either way\n'
@@ -1323,10 +1398,14 @@ FILE_TRANSFER_USAGE = (
     "relay-file moves a file from one host STRAIGHT to another, streaming through here\n"
     "without staging it on this disk, and comparing the sha256 taken at both ends of the\n"
     "whole trip. Linux/SSH on both sides. Two commands would stage the bytes here and\n"
-    "verify each hop separately, which names the wrong hop when the hashes differ:\n"
-    '  {"source": {"target": "ACME-192-0-2-249-HOST", "path": "/tmp/bundle.tar.gz"},\n'
-    '   "destination": {"target": "ACME-192-0-2-11-LABSQL-1433", "path": "/tmp/b.tar.gz"},\n'
+    "verify each hop separately, which names the wrong hop when the hashes differ.\n"
+    "Each side states its own login:\n"
+    '  {"source": {"access": {...}, "target": "ACME-192-0-2-249-HOST", "path": "/tmp/bundle.tar.gz"},\n'
+    '   "destination": {"access": {...}, "target": "ACME-192-0-2-11-LABSQL-1433", "path": "/tmp/b.tar.gz"},\n'
     '   "overwrite": false, "make_dirs": true}\n'
+    "\n"
+    "Fields:\n"
+    + STATED_ACCESS
 )
 
 
@@ -1366,8 +1445,8 @@ def _file_transfer_command(argv: list[str], direction: str) -> int:
         print(FILE_TRANSFER_USAGE, file=sys.stderr)
         return 2
     try:
-        # Reaching the host needs its OS credential out of the encrypted store, exactly as
-        # host-facts does.
+        # The login is in the request (rules R09); the key is still taken so a 0.23.0 command line
+        # parses, and a password_ref it names may be exported in the environment.
         set_key_env(key, key_base64)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
@@ -1376,13 +1455,9 @@ def _file_transfer_command(argv: list[str], direction: str) -> int:
     request, code = _read_json_request(source, FILE_TRANSFER_USAGE)
     if request is None:
         return code
-
-    from db_ops.config import load_config
-
-    try:
-        data_dir = getattr(load_config(config_path), "data_dir", None)
-    except Exception:  # noqa: BLE001 - fall back to the package default data dir.
-        data_dir = None
+    # The host and its login are the request's "access" (rules R09), so no configuration is read:
+    # `--config` is still accepted so an older command line keeps parsing.
+    _ = config_path
 
     from db_ops.common import file_transfer
 
@@ -1397,7 +1472,7 @@ def _file_transfer_command(argv: list[str], direction: str) -> int:
     command = {"fetch": "fetch-file", "send": "send-file", "pack": "pack-files",
                "relay": "relay-file"}[direction]
     try:
-        result = runner(request, data_dir=data_dir)
+        result = runner(request)
     except Exception as exc:  # noqa: BLE001 - report as a response like every other command.
         return response.emit(response.fail(command, str(exc)))
     # `status` is the fact worth reading first — COPIED / REPLACED / SKIPPED_EXISTS are three
@@ -1445,16 +1520,6 @@ def _optional_json_request(argv: list[str], usage: str) -> tuple[dict | None, in
     return None, 0
 
 
-def _restore_database_command(argv: list[str]) -> int:
-    """``restore-database`` - delegated to :mod:`db_ops.common.cli_restore`.
-
-    A one-line dispatch on purpose: this file routes commands, it does not house them.
-    """
-    from db_ops.common import cli_restore
-
-    return cli_restore.run(argv, read_request=_read_json_request)
-
-
 TRACE_SESSION_USAGE = (
     "usage: python -m db_ops.common.cli trace-session '<json>'|@<file>|-\n"
     "\n"
@@ -1466,13 +1531,15 @@ TRACE_SESSION_USAGE = (
     '  {\"target\": \"ACME-192-0-2-115\", \"database\": \"SALESDB\", \"session_id\": 505}\n'
     '  {\"target\": \"ACME-192-0-2-115\", \"database\": \"SALESDB\", \"blocking_only\": true}\n'
     "\n"
+    "Each request above also carries \"connection\" - see Fields.\n"
+    "\n"
     "Fields:\n"
-    "  target           (required) server_id, or '<db_type> <ip> [port]'\n"
+    + STATED_CONNECTION +
     "  database         database whose transaction log usage is reported (default: login's)\n"
     "  session_id       trace exactly one SPID instead of scanning\n"
     "  min_tran_seconds ignore transactions younger than this (default 60)\n"
     "  blocking_only    only sessions that are blocking someone\n"
-    "  credential_name / data_dir / timeout_seconds — as run-sql\n"
+    "  timeout_seconds  connect/statement timeout\n"
     "\n"
     "Read-only: it runs through run-sql, which always rolls back.\n"
 )
@@ -1665,7 +1732,7 @@ def _rotate_password_command(argv: list[str]) -> int:
     if request is None:
         return code
 
-    from db_ops.config import load_config
+    from db_ops.lib.config import load_config
 
     try:
         config = load_config(config_path)
@@ -1707,11 +1774,10 @@ def _rotate_password_command(argv: list[str]) -> int:
 def _probe_host_command(argv: list[str]) -> int:
     """``probe-host`` — the CLI face of :mod:`db_ops.common.host_probe`.
 
-    **The target lookup lives here, not in the module below.** ``host_probe`` decides what open
-    ports mean and reads nothing; resolving ``ACME-192-0-2-236`` to an ip and an OS caption is a
-    question about this machine's ``data/`` folder, and the composition root is the layer allowed
-    to ask it (``docs/13_common.md`` rule 3, ``tests/test_common_layers.py``). A request that
-    states ``host`` skips this entirely and the whole command touches no file.
+    Nothing is looked up, here or below (rules R09): ``host_probe`` decides what open ports mean,
+    and the address it probes is the request's. Until 0.24.0 this function resolved a bare
+    server_id to an ip and an OS caption from ``data/``; the app that holds the server_id does that
+    now (``lib.data_sources.request_fill``), so the command runs the same on an empty node.
     """
     from db_ops.common import host_probe
     from db_ops.lib import response
@@ -1736,23 +1802,17 @@ def _probe_host_command(argv: list[str]) -> int:
     if request is None:
         return code
 
-    instance = None
-    target = str(request.get("target") or "").strip()
-    if target and not str(request.get("host") or "").strip():
-        from db_ops.common import data_sources
-        from db_ops.config import load_config
-
-        try:
-            data_dir = getattr(load_config(config_path), "data_dir", None)
-        except Exception:  # noqa: BLE001 - fall back to the package default data dir.
-            data_dir = None
-        try:
-            instance = data_sources.resolve_target_instance(target, data_dir=data_dir)
-        except Exception as exc:  # noqa: BLE001 - an unknown target is an operator message.
-            return response.emit(response.fail("probe-host", str(exc)))
+    # The address is the request's (rules R09): a server_id alone is refused, never looked up in
+    # db_instances.json. `--config` is still accepted so an older command line keeps parsing.
+    _ = config_path
+    if not str(request.get("host") or "").strip():
+        return response.emit(response.fail(
+            "probe-host", 'needs "host" (and "port" or "ports") - common.cli reads no configuration '
+                          "(rules R09), so a server_id is only the label; the caller states the "
+                          "address (db_ops.lib.data_sources.request_fill does it from data/)."))
 
     try:
-        outcome = host_probe.probe(request, instance=instance)
+        outcome = host_probe.probe(request)
     except host_probe.HostProbeError as exc:
         return response.emit(response.fail("probe-host", str(exc)))
     except Exception as exc:  # noqa: BLE001 - report as a response like every other command.
@@ -1805,7 +1865,7 @@ def _check_secret_literals_command(argv: list[str]) -> int:
     if request is None:
         return code
 
-    from db_ops.config import load_config
+    from db_ops.lib.config import load_config
     from db_ops.common import secret_literals as _sl  # noqa: F401 - imported above, kept explicit
 
     try:
@@ -1871,7 +1931,7 @@ def _check_identifiers_command(argv: list[str]) -> int:
     if request is None:
         return code
 
-    from db_ops.config import load_config
+    from db_ops.lib.config import load_config
     from db_ops.lib import response
 
     try:
@@ -1881,6 +1941,11 @@ def _check_identifiers_command(argv: list[str]) -> int:
 
     try:
         outcome = identifier_scan.scan(request, data_dir=data_dir)
+    except identifier_scan.IdentifierScanError as exc:
+        # Refused, not broken: nothing to search for, or nothing to read - a scan that would report
+        # every tree clean. The export tells the two apart by `refused` (it says SKIPPED for this
+        # one, and stops for anything else), which a message's wording cannot carry.
+        return response.emit(response.fail("check-identifiers", str(exc), data={"refused": True}))
     except Exception as exc:  # noqa: BLE001 - report as a response like every other command.
         return response.emit(response.fail("check-identifiers", str(exc)))
 
@@ -1945,7 +2010,7 @@ def _check_secret_command(argv: list[str]) -> int:
     if request is None:
         return code
 
-    from db_ops.config import load_config
+    from db_ops.lib.config import load_config
 
     try:
         data_dir = getattr(load_config(config_path), "data_dir", None)
@@ -2028,12 +2093,11 @@ def _gate_command(argv: list[str], usage: str, runner_name: str) -> int:
     if request is None:
         return code
 
-    from db_ops.config import load_config
-
-    try:
-        data_dir = getattr(load_config(config_path), "data_dir", None)
-    except Exception:  # noqa: BLE001 - fall back to the package default data dir.
-        data_dir = None
+    # Nothing here reads the configuration, so there is no data folder to find (rules R09): the
+    # request states the host, the login, the policy and the rules. `--config` is still accepted
+    # so a command line written before 0.24.0 keeps parsing.
+    _ = config_path
+    data_dir = None
 
     from db_ops.common import (confirm as confirm_gate, host_ops, job_control,
                                sqlserver_emergency, sqlserver_instance, sqlserver_patch)
@@ -2088,6 +2152,38 @@ def _gate_command(argv: list[str], usage: str, runner_name: str) -> int:
         data=outcome, metrics=metrics))
 
 
+def _ask_command(argv: list[str]) -> int:
+    """``ask`` - the CLI face of :func:`db_ops.common.confirm.ask_request`. Reads nothing."""
+    from db_ops.common import confirm
+    from db_ops.lib import response
+
+    source = ""
+    rest = list(argv)
+    while rest:
+        token = rest.pop(0)
+        if token in {"-h", "--help"}:
+            print(ASK_USAGE)
+            return 0
+        if not source:
+            source = token
+        else:
+            print(f"Unexpected argument: {token}\n\n{ASK_USAGE}", file=sys.stderr)
+            return 2
+
+    request, code = _read_json_request(source or "{}", ASK_USAGE)
+    if request is None:
+        return code
+    try:
+        data = confirm.ask_request(request)
+    except Exception as exc:  # noqa: BLE001 - report as a response like every other command.
+        return response.emit(response.fail("ask", str(exc)))
+    if data["answer"]:
+        said = f"answered {data['answer']!r}"
+    else:
+        said = "no terminal to ask on" if not data["interactive"] else "no answer"
+    return response.emit(response.ok("ask", message=f"{said}.", data=data))
+
+
 def _inventory_summary_command(argv: list[str]) -> int:
     """``inventory-summary`` — the CLI face of :mod:`db_ops.lib.inventory_render`.
 
@@ -2116,6 +2212,13 @@ def _inventory_summary_command(argv: list[str]) -> int:
         return code
 
     inventory = str(request.get("inventory") or inventory_render.DEFAULT_INVENTORY)
+    if not Path(inventory).is_file():
+        # Said, not raised as `[Errno 2]`: on a new install there is no inventory yet, and the
+        # request can name one (rules R09).
+        return response.emit(response.fail(
+            "inventory-summary",
+            f"no inventory at {inventory}: pass \"inventory\" (a database-inventory.json), or build "
+            "one first with the inventory workflow."))
     try:
         overlay = request.get("overlay")
         if overlay:
@@ -2147,10 +2250,14 @@ SELF_STATUS_USAGE = (
     "What THIS installation is and how much room it has left: version, host name and ip,\n"
     "node role, cpu, memory and disk, and the app commands it schedules. Reads itself - no\n"
     "SSH, no store - so it still answers when the store is unreachable. Each app command's\n"
-    "last run needs the store: `python -m db_ops.db.cli self-status` adds it.\n"
+    "last run is in the store, which this command does not open: the caller states it\n"
+    "(/spbot_self_status does, from its node's store).\n"
     "\n"
     "The request is a JSON object, given inline, as @path/to/request.json, or on stdin (-):\n"
-    '  {"format": "txt"}      // optional; txt for the chat listing, json (default) for the envelope\n'
+    '  {"format": "txt",      // optional; txt for the chat listing, json (default) for the envelope\n'
+    '   "last_runs": {"APP-X": {"status": "done", "started_at": "2026-09-26T01:00:00Z"}},\n'
+    '                         // optional; the newest run of each app command in the last day\n'
+    '   "store_error": "..."} // optional; why the caller could not read them\n'
 )
 
 
@@ -2224,17 +2331,25 @@ def read_app_commands(data_dir: str | Path | None = None) -> list[dict[str, Any]
     return [item for item in (items or []) if isinstance(item, dict)]
 
 
-def collect_self_status(config_path: str | None = None) -> tuple[dict[str, Any], Any]:
+#: What the last-run column says when the caller stated none - named, so it is not read as
+#: "never ran".
+LAST_RUNS_NOT_STATED = ("not stated - the store is not opened here; the caller states them "
+                        "(/spbot_self_status does)")
+
+
+def collect_self_status(config_path: str | None = None, *,
+                        last_runs: dict[str, Any] | None = None,
+                        store_error: str = "") -> tuple[dict[str, Any], Any]:
     """Everything ``self-status`` reports, as facts, and the config it was read with (or ``None``).
 
-    Public because there are two front doors to one report. ``common.cli self-status`` answers
-    without a store and lists the app commands from config alone; ``db_ops.db.cli self-status``
-    calls this, then adds each command's last run from ``job_runs`` - the one part of the report
-    that needs the store, and therefore the one part ``common`` is not allowed to fetch.
+    One command since 0.24.0 (rules R43; ``db.cli self-status`` was a second door to this report and
+    went, the operator's choice). Each app command's last run is in ``job_runs``, which ``common``
+    may not open - so ``last_runs`` is the caller's to state (rules R09): the bot reads it from its
+    node's store before it asks. ``None`` is "not stated", which the column says in words.
     """
     from db_ops.common import self_status
 
-    import db_ops
+    from db_ops.lib.version import __version__
     from db_ops.lib.paths import TOOL_ROOT
 
     public_version = None
@@ -2253,7 +2368,7 @@ def collect_self_status(config_path: str | None = None) -> tuple[dict[str, Any],
     runtime_dir = None
     config = None
     try:
-        from db_ops.config import load_config, resolve_config_path
+        from db_ops.lib.config import load_config, resolve_config_path
 
         config = load_config(resolve_config_path("common", config_path))
         runtime_dir = getattr(config, "runtime_dir", None)
@@ -2281,7 +2396,7 @@ def collect_self_status(config_path: str | None = None) -> tuple[dict[str, Any],
     # Resolved here rather than inside self_status: this is the composition root, and everything
     # else that module reports comes from the machine rather than from data/.
     try:
-        from db_ops.common.data_sources import webhost_endpoints
+        from db_ops.lib.data_sources import webhost_endpoints
 
         web_facts = webhost_endpoints(
             host=self_status.host_addresses().get("ip") or "",
@@ -2293,17 +2408,16 @@ def collect_self_status(config_path: str | None = None) -> tuple[dict[str, Any],
         web_facts = {"served_here": False, "error": str(exc)}
 
     facts = self_status.collect(
-        tool_root=Path(TOOL_ROOT), version=db_ops.__version__,
+        tool_root=Path(TOOL_ROOT), version=__version__,
         public_version=public_version, store=store_text,
         runtime_dir=runtime_dir, web=web_facts)
 
-    # What this node schedules, from config. The last-run column is filled by db.cli's front door;
-    # here it is named as not read rather than left looking like "never ran".
+    # What this node schedules, from config; when each last ran, as the caller stated it.
     try:
         commands = read_app_commands()
         facts["apps"] = self_status.summarize_apps(
-            commands, node_role=str(facts.get("node_role") or ""), last_runs=None,
-            store_error="read by `db_ops.db.cli self-status`, which /spbot_self_status calls")
+            commands, node_role=str(facts.get("node_role") or ""), last_runs=last_runs,
+            store_error=store_error or ("" if last_runs is not None else LAST_RUNS_NOT_STATED))
     except Exception as exc:  # noqa: BLE001 - an unreadable file is a line, not a lost report.
         facts["apps"] = {"configured": 0, "state": "not configured", "items": [],
                          "error": f"app_commands.json cannot be read: {exc}"}
@@ -2311,7 +2425,7 @@ def collect_self_status(config_path: str | None = None) -> tuple[dict[str, Any],
 
 
 def emit_self_status(facts: dict[str, Any], request: dict[str, Any]) -> int:
-    """Print the report the way the request asked, from either front door, with one render."""
+    """Print the report the way the request asked."""
     from db_ops.common import self_status
     from db_ops.lib import response
 
@@ -2348,6 +2462,10 @@ def _self_status_command(argv: list[str]) -> int:
             return 0
         if token == "--config":
             config_path = rest.pop(0) if rest else None
+        elif token in {"--key", "--key-base64", "--key_base64"}:
+            # Taken and unused: a command line `upgrade-config` pointed here from `db.cli
+            # self-status` (0.24.0) may still carry the key that door wanted for the store.
+            rest.pop(0) if rest else None
         elif not source:
             source = token
         else:
@@ -2357,164 +2475,40 @@ def _self_status_command(argv: list[str]) -> int:
     request, code = _read_json_request(source or "{}", SELF_STATUS_USAGE)
     if request is None:
         return code
-    facts, _config = collect_self_status(config_path)
+    from db_ops.lib import response
+
+    last_runs = request.get("last_runs")
+    if last_runs is not None and not (isinstance(last_runs, dict)
+                                      and all(isinstance(v, dict) for v in last_runs.values())):
+        return response.emit(response.fail(
+            "self-status", 'last_runs must be an object: {"<app code>": {"status", "started_at"}}.'))
+    facts, _config = collect_self_status(config_path, last_runs=last_runs,
+                                         store_error=str(request.get("store_error") or ""))
     return emit_self_status(facts, request)
 
 
-TIMEZONE_USAGE = (
-    "usage: python -m db_ops.common.cli timezone <json>|@<file>|- [--config ...]\n"
-    "\n"
-    "Which clock this node SHOWS - the config.json 'timezone' field, resolved. Every rendered\n"
-    "time in db_ops carries this offset, and a time_window's from_hour/to_hour mean hours in\n"
-    "this zone. Stored timestamps stay UTC either way; this does not move them.\n"
-    "\n"
-    "This command reads nothing and writes nothing - it answers when the store is down, which is\n"
-    "one of the times somebody wants to know what clock they are on. To put the answer ON the\n"
-    "record, so a master and a worker sharing one store can be compared, use:\n"
-    "  python -m db_ops.db.cli timezone --record\n"
-    "\n"
-    "The request is a JSON object, given inline, as @path/to/request.json, or on stdin (-):\n"
-    '  {"format": "txt"}      // optional; txt for the chat listing, json (default) for the envelope\n'
-)
-
-
-def _timezone_command(argv: list[str]) -> int:
-    """``timezone`` - the node saying which clock it is on, and putting that on the record.
-
-    The rule (parse a declaration, resolve it, render an instant) is pure and lives in
-    :mod:`db_ops.lib.timezone`, imported by every app. This is the *operation* half: reading this
-    node's own config and saying what it resolved to.
-
-    **Recording it is `db.cli timezone --record`, not this.** `common` may not import `db` - the
-    shared tier is a stack, not a pair - and a store write belongs with every other store
-    operation. Splitting it there also leaves this command able to answer when the store is
-    unreachable, like ``self-status``: "which clock am I on" is exactly the question asked when
-    something is misconfigured.
-    """
-    import socket
-
-    import db_ops
-    from db_ops.lib import response
-    from db_ops.lib import timezone as timezone_lib
-
-    source = ""
-    config_path = None
-    rest = list(argv)
-    while rest:
-        token = rest.pop(0)
-        if token in {"-h", "--help"}:
-            print(TIMEZONE_USAGE)
-            return 0
-        if token == "--config":
-            config_path = rest.pop(0) if rest else None
-        elif not source:
-            source = token
-        else:
-            print(f"Unexpected argument: {token}\n\n{TIMEZONE_USAGE}", file=sys.stderr)
-            return 2
-
-    request, code = _read_json_request(source or "{}", TIMEZONE_USAGE)
-    if request is None:
-        return code
-
-    config = None
-    config_error = ""
-    try:
-        from db_ops.config import load_config, resolve_config_path
-
-        # Loading the config is what BINDS the display zone - see db_ops.config.parse_config. It
-        # has to happen before describe(), or this command would report UTC while recording the
-        # node's real zone.
-        config = load_config(resolve_config_path("common", config_path))
-    except Exception as exc:  # noqa: BLE001 - no config is a fact about the install, not an error.
-        config_error = str(exc)
-
-    facts = timezone_lib.describe()
-    node_id = timezone_node_id(config)
-    node_role = str(getattr(config, "node_role", "master") or "master") if config else "master"
-    hostname = socket.gethostname()
-    data = {
-        **facts,
-        "node_id": node_id,
-        "node_role": node_role,
-        "hostname": hostname,
-        "source": ("env" if timezone_lib.declaration_from_env()
-                   else ("config.json" if config else "default")),
-        "app_version": db_ops.__version__,
-    }
-    if config_error:
-        data["config_error"] = config_error
-
-    listing = timezone_listing(data)
-    if str(request.get("format") or "json").strip().lower() == "txt":
-        print(listing)
-        return 0
-    return response.emit(response.ok(
-        "timezone",
-        message=f"{data['timezone']} ({data['utc_offset']}) on {node_id}",
-        data={"listing": listing, **data},
-        metrics={"utc_offset_minutes": int(facts["utc_offset_minutes"])},
-    ))
-
-
-def timezone_node_id(config) -> str:
-    """This node's id: the cluster entry matching its role, else the hostname.
-
-    Public because ``db.cli timezone --record`` keys ``runtime_nodes`` by it and the two must agree
-    — a node reported under one id here and another there would be two rows for one machine.
-
-    Hostname is the fallback rather than a fixed literal because ``runtime_nodes`` is keyed by it.
-    Two nodes sharing a store and a default id would be one row overwriting itself, and the
-    disagreement the table exists to show would be exactly what it hid.
-    """
-    import socket
-
-    if config is not None:
-        role = str(getattr(config, "node_role", "") or "")
-        for node in (getattr(config, "worker" if role == "worker" else "master", ()) or ()):
-            node_id = str(getattr(node, "node_id", "") or "").strip()
-            if node_id:
-                return node_id
-    return socket.gethostname()
-
-
-def timezone_listing(data: dict) -> str:
-    """The chat/terminal listing, shared with ``db.cli timezone`` so both print the same block."""
-    lines = [
-        f"node          : {data['node_id']} ({data['node_role']}) on {data['hostname']}",
-        f"timezone      : {data['timezone']}  [{data['source']}]",
-        f"utc offset    : {data['utc_offset']} ({data['utc_offset_minutes']} min)"
-        + (f"  {data['tz_abbreviation']}" if data.get("tz_abbreviation") else ""),
-        f"now (display) : {data['now_display']}",
-        f"now (stored)  : {data['now_utc']}",
-        "",
-        "Stored timestamps are UTC and unaffected by this setting. It decides what is SHOWN, and",
-        "what a time_window's from_hour/to_hour mean.",
-    ]
-    if data.get("config_error"):
-        lines.append(f"config        : not read - {data['config_error']}")
-    if data.get("record_error"):
-        lines.append(f"store         : not recorded - {data['record_error']}")
-    elif data.get("recorded"):
-        lines.append("store         : recorded in runtime_nodes")
-    nodes = data.get("nodes") or []
-    if nodes:
-        lines.append("")
-        lines.append("nodes that have reported:")
-        for node in nodes:
-            lines.append(
-                f"  {node['node_id']:<24} {node['timezone']:<20} "
-                f"{node['utc_offset_minutes']:>5} min   seen {node['updated_at']}")
-    return "\n".join(lines)
 
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    try:
+        return _dispatch(argv)
+    except Exception as exc:  # noqa: BLE001 - every command answers in the envelope (rules R15).
+        # A command that raised instead of answering left a traceback on stderr as its only report,
+        # and a caller reading stdout could not tell a broken configuration from a crashed process.
+        # `list-targets`, `sql-command-add`, `sql-target-add` and `lift-example` all did, given a
+        # data folder holding one malformed file - found by the empty-configuration guard (R09).
+        from db_ops.lib import response
+
+        return response.emit(response.fail(argv[0] if argv else "", f"{type(exc).__name__}: {exc}"))
+
+
+def _dispatch(argv: list[str]) -> int:
     if not argv:
         print(USAGE, file=sys.stderr)
         return 2
     if argv[0] == "list-targets":
-        from db_ops.common import data_sources as target_resolve
+        from db_ops.lib import data_sources as target_resolve
         from db_ops.lib import response
 
         request, code = _optional_json_request(argv[1:], LIST_TARGETS_USAGE)
@@ -2574,10 +2568,6 @@ def main(argv: list[str] | None = None) -> int:
         return _db_status_command(argv[1:])
     if argv[0] == "self-status":
         return _self_status_command(argv[1:])
-    if argv[0] == "timezone":
-        return _timezone_command(argv[1:])
-    if argv[0] == "restore-database":
-        return _restore_database_command(argv[1:])
     if argv[0] in {"restore-full", "restore-diff", "restore-log",
                    "restore-key", "restore-metadata", "verify-restore"}:
         from db_ops.common import cli_restorestep
@@ -2613,10 +2603,20 @@ def main(argv: list[str] | None = None) -> int:
         from db_ops.common import cli_backup_copy
 
         return cli_backup_copy.run(argv[0], argv[1:], read_request=_read_json_request)
+    if argv[0] in {"smb-list", "smb-get", "smb-delete", "smb-credential"}:
+        # 0.24.0: a Windows share, reached here rather than by each app (rules R10).
+        from db_ops.common import cli_smb
+
+        return cli_smb.run(argv[0], argv[1:], read_request=_read_json_request)
     if argv[0] == "run-sqlcmd":
         from db_ops.common import cli_sqlcmd
 
         return cli_sqlcmd.run(argv[1:], read_request=_read_json_request)
+    if argv[0] == "metric-batch":
+        # 0.24.0: the metrics app's execution, one process per target (rules R03, R10).
+        from db_ops.common import cli_metric_batch
+
+        return cli_metric_batch.run(argv[1:], read_request=_read_json_request)
     if argv[0] in {"create-db-docker", "move-db-docker"}:
         from db_ops.common import cli_docker_db
 
@@ -2625,6 +2625,17 @@ def main(argv: list[str] | None = None) -> int:
         from db_ops.common import cli_backup
 
         return cli_backup.run(argv[1:], read_request=_read_json_request)
+    if argv[0] == "check-credentials":
+        # 0.24.0, from the root package (rules R41): its two resolvers are lib's now.
+        from db_ops.common import cli_check_credentials
+
+        return cli_check_credentials.run(argv[1:])
+    if argv[0] in {"init", "guide", "encrypt-secret", "export-data", "import-data"}:
+        # The tool root's own commands, moved here from the root package in 0.24.0 (rules R41).
+        from db_ops.common import cli_tool_root
+
+        return cli_tool_root.run(argv[0], argv[1:], read_request=_read_json_request,
+                                 read_key_flags=_read_key_flags)
     if argv[0] == "inventory-summary":
         return _inventory_summary_command(argv[1:])
     if argv[0] == "fetch-file":
@@ -2641,6 +2652,8 @@ def main(argv: list[str] | None = None) -> int:
         return _gate_command(argv[1:], HOST_SERVICE_USAGE, "host-service")
     if argv[0] == "host-restart":
         return _gate_command(argv[1:], HOST_RESTART_USAGE, "host-restart")
+    if argv[0] == "ask":
+        return _ask_command(argv[1:])
     if argv[0] == "authorize":
         return _gate_command(argv[1:], AUTHORIZE_USAGE, "authorize")
     if argv[0] in {"shrink-log", "kill-spid", "start-job", "disable-job"}:
@@ -2654,7 +2667,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    # The answer leaves as UTF-8 when stdout is a pipe: lib.common_cli, this CLI's one client,
+    # The answer leaves as UTF-8 when stdout is a pipe: transport.common_cli, this CLI's one client,
     # decodes UTF-8, and a Windows pipe defaults to the ANSI code page - so every non-ASCII
     # character in an answer arrived as U+FFFD, the em dash of an "already exists" refusal among
     # them (found testing create-db-docker on the labs, 2026-09-25). A console keeps its own.

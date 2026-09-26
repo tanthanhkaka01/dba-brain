@@ -1,22 +1,20 @@
 """Local (worker-side) inventory workflow for the reports app.
 
-This is the store-local counterpart of the master-side ``control inventory-workflow``:
-it never SSHes anywhere and never re-collects metrics. It just reuses the metrics
-already in SQLite to
+The one inventory workflow (rules R43: ``control inventory-workflow``, its master-side twin over
+SSH, went in 0.24.0 on the operator's choice). It never SSHes anywhere and never re-collects
+metrics. It just reuses the metrics already in the store to
 
 1. build the dated ``<YYYYMMDD_HHMMSS>_database-inventory.json`` health overlay
    (via the reports app's :func:`build_inventory_health`),
 2. merge that overlay into the canonical ``architecture/database-inventory.json``, and
 3. render the dated ``*-summary.md`` from the freshly merged canonical JSON.
 
-The merge/render code below is intentionally a self-contained copy of the master-side
-logic in ``db_ops/control/inventory.py`` so the reports app stays independent of the
-control app (no cross-app imports). The master command is kept as-is for now and will be
-cleared later.
+The merge and render code is ``db_ops.lib.inventory_render``, shared with ``common.cli
+inventory-summary`` and the master's ``control inventory-health`` merge.
 """
 
 from __future__ import annotations
-from db_ops.common.data_sources import inventory_exclude_ip_prefixes, load_inventory
+from db_ops.lib.data_sources import inventory_exclude_ip_prefixes, load_inventory
 from db_ops.lib.inventory_render import (  # moved to common: shared with control
     DBTYPE_LABEL,
     DEFAULT_INVENTORY,

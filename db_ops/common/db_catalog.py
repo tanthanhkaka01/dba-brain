@@ -223,13 +223,15 @@ def _parsed_request(request: Any) -> dict[str, Any]:
     """The common fields, validated once. Unknown keys are ignored, as everywhere in `common`."""
     if not isinstance(request, dict):
         raise DbCatalogError("request must be a JSON object.")
-    target = str(request.get("target") or "").strip()
-    if not target:
-        raise DbCatalogError('request needs a "target" (a server_id, or "<db_type> <ip> [port]").')
+    # The login is the request's own (rules R09): this process reads no configuration, and
+    # `target` is only what the answer calls the server.
+    try:
+        connection = sql_run.stated_connection(request, what="this catalog command")
+    except sql_run.SqlRunError as exc:
+        raise DbCatalogError(str(exc)) from exc
     return {
-        "target": target,
-        "credential_name": str(request.get("credential_name")
-                               or request.get("user_ref") or "").strip(),
+        "target": str(request.get("target") or connection.get("server_id") or connection.get("host") or ""),
+        "connection": connection,
         "database": str(request.get("database_name") or request.get("database") or "").strip(),
         "include_system": bool(request.get("include_system", False)),
         # list-jobs only. Parsed here rather than read off the raw request in `list_jobs` because
@@ -237,21 +239,16 @@ def _parsed_request(request: Any) -> dict[str, Any]:
         # read around it is a field the next reader will not find.
         "enabled_only": request.get("enabled_only", False),
         "timeout_seconds": request.get("timeout_seconds"),
-        "data_dir": request.get("data_dir"),
         "sql_access": request.get("sql_access"),
     }
 
 
 def _resolve(parsed: dict[str, Any]) -> dict[str, Any]:
-    """Target + credential, through the one resolver every SQL caller uses."""
+    """The stated connection, resolved the way every SQL caller resolves one."""
     try:
-        return sql_run.resolve_sqlserver_target(
-            parsed["target"],
-            data_dir=parsed["data_dir"] or None,
-            database=parsed["database"],
-            credential_name=parsed["credential_name"],
-            sql_access=parsed["sql_access"],
-        )
+        return sql_run.resolve_stated_connection(
+            {"connection": parsed["connection"], "sql_access": parsed["sql_access"] or {}},
+            database=parsed["database"], what="this catalog command")
     except sql_run.SqlRunError as exc:
         raise DbCatalogError(str(exc)) from exc
 
@@ -260,9 +257,8 @@ def _query(parsed: dict[str, Any], sql: str, *, database: str = "") -> list[dict
     """Run one catalog query through `sql_run` and return its rows as dicts."""
     request: dict[str, Any] = {
         "target": parsed["target"],
+        "connection": parsed["connection"],
         "sql": sql,
-        "credential_name": parsed["credential_name"],
-        "data_dir": parsed["data_dir"],
         "sql_access": parsed["sql_access"],
     }
     if database:

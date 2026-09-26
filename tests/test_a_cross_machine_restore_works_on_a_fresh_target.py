@@ -117,7 +117,7 @@ def plan(monkeypatch):
                 "newest_finished_at": "2026-09-24T10:00:00"}
 
     monkeypatch.setattr(restore_by_id, "_list_backup_files", listing_)
-    import db_ops.common.data_sources as data_sources
+    import db_ops.lib.data_sources as data_sources
     monkeypatch.setattr(data_sources, "load_db_instances", lambda _d=None: [
         {"server_id": "TGT-11433", "db_type": "sqlserver", "port": 11433}])
     secrets = {"SA_REF": "pw", "ENC_REF": "enc"}

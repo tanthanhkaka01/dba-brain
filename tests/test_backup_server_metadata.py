@@ -20,6 +20,16 @@ from conftest import write_sqlserver_instance_policy
 
 from db_ops.backup_restore import server_metadata as sm
 
+
+@pytest.fixture(autouse=True)
+def _the_request_is_sent_as_the_app_finished_it(monkeypatch):
+    """The app finishes a `common.cli` request from its node's data/ before it sends it (rules
+    R09). These tests are about what it does with the answer, so the fill hands the request back
+    unchanged; `request_fill` has tests of its own."""
+    from db_ops.lib.data_sources import request_fill
+
+    monkeypatch.setattr(request_fill, "fill_request", lambda command, request, **_kwargs: dict(request))
+
 @pytest.fixture(autouse=True)
 def _instance_policy(estate):
     """Every test here reads the instance-portability policy; give it one of its own."""
@@ -315,7 +325,7 @@ def test_an_escaped_quote_pair_leaves_the_literal_state_alone():
 
 def test_the_gate_report_is_unwrapped_from_the_envelope(monkeypatch):
     from db_ops.backup_restore import instance_metadata
-    from db_ops.lib import common_cli
+    from db_ops.transport import common_cli
 
     monkeypatch.setattr(common_cli, "run_allowing_failure", lambda command, request, **_kw: (
         True,
@@ -336,7 +346,7 @@ def test_a_failed_gate_keeps_its_reason_and_its_blockers(monkeypatch):
     """`summarize()` writes `error` and `blockers` into `job_runs.metadata_json`; losing either in
     the unwrap would leave a restore reporting that metadata failed without saying what failed."""
     from db_ops.backup_restore import instance_metadata, server_metadata
-    from db_ops.lib import common_cli
+    from db_ops.transport import common_cli
 
     monkeypatch.setattr(common_cli, "run_allowing_failure", lambda command, request, **_kw: (
         False,
@@ -358,7 +368,7 @@ def test_a_command_that_could_not_run_at_all_is_passed_through(monkeypatch):
     metadata step never fails the restore beside it, so the raise is caught and shaped like a
     failed report — one failure shape for the caller, not two."""
     from db_ops.backup_restore import instance_metadata
-    from db_ops.lib import common_cli
+    from db_ops.transport import common_cli
 
     def boom(command, request, **_kw):
         raise common_cli.CommonCliError(f"{command} could not run: boom")

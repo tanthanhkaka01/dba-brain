@@ -88,8 +88,8 @@ def _linux_free_bytes(config: BackupRestoreConfig) -> int | None:
     client = None
     try:
         client = open_ssh_connection(config)
-        _stdin, stdout, _stderr = client.exec_command(f"df -Pk {_posix_quote(target)}")
-        lines = [line for line in stdout.read().decode("utf-8", errors="replace").splitlines() if line.strip()]
+        answer = client.run(f"df -Pk {_posix_quote(target)}")
+        lines = [line for line in answer.stdout.splitlines() if line.strip()]
     except Exception:  # noqa: BLE001 - any failure to reach the target is "could not measure".
         return None
     finally:

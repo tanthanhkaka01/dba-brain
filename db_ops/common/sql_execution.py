@@ -11,9 +11,13 @@ from typing import Any
 
 # Re-exported: five modules already import load_json_file from here, and the function is
 # not SQL-specific. It now lives in common/json_io.py as the tool's single JSON reader.
+from db_ops.lib.inventory_file import (  # noqa: F401 - moved to lib in 0.24.0
+    load_database_inventory, load_database_inventory_without_yaml, parse_yaml_scalar)
 from db_ops.lib.driver_warnings import read_next_set
 from db_ops.lib.packaging import install_hint
 from db_ops.lib.json_io import load_json_file  # noqa: F401 - re-exported for compatibility
+from db_ops.lib.credential_files import (  # noqa: F401 - re-exported for compatibility
+    load_credentials_file, load_remote_credentials_file)
 # Re-exported: the SQL text vocabulary — limits, the DECLARE prelude, parameter types and the
 # password lookup — moved to db_ops/lib/sql_text.py so apps can use it without importing `common`.
 # Executing the SQL stayed here, because that is an operation.
@@ -653,127 +657,7 @@ def load_secret_text(path: Path) -> dict[str, str]:
 
 
 
-def load_credentials_file(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    data = load_json_file(path)
-    return list(data.get("database_credentials", []))
 
 
-def load_remote_credentials_file(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    data = load_json_file(path)
-    if isinstance(data.get("remote_credentials"), list):
-        return list(data.get("remote_credentials", []))
-    legacy = data.get("remote_users")
-    if not isinstance(legacy, list):
-        return []
-    groups: dict[tuple[str, str], dict[str, Any]] = {}
-    for item in legacy:
-        if not isinstance(item, dict):
-            continue
-        host = str(item.get("server_ip") or item.get("host") or "").strip()
-        if not host:
-            continue
-        server_id = str(item.get("server_id") or f"{str(item.get('company_code') or 'REMOTE')}-{host.replace('.', '-')}").strip()
-        key = (server_id, host)
-        group = groups.setdefault(
-            key,
-            {
-                "server_id": server_id,
-                "host": host,
-                "credentials": [],
-            },
-        )
-        credential_name = str(item.get("credential_name") or item.get("name") or "").strip()
-        if not credential_name:
-            continue
-        group["credentials"].append(
-            {
-                "credential_name": credential_name,
-                "username": str(item.get("username") or item.get("login_name") or ""),
-                "password_ref": str(item.get("password_ref") or item.get("authentication_info_ref") or ""),
-                "role": str(item.get("role") or "REMOTE"),
-                "note": str(item.get("note") or ""),
-            }
-        )
-    return list(groups.values())
 
 
-def load_database_inventory(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    if path.suffix.lower() == ".json":
-        with path.open("r", encoding="utf-8-sig") as file:
-            data = json.load(file) or {}
-        if not isinstance(data, dict):
-            return []
-        return list(data.get("servers", []))
-
-    try:
-        import yaml  # type: ignore[import-untyped]
-    except ImportError:
-        return load_database_inventory_without_yaml(path)
-
-    with path.open("r", encoding="utf-8-sig") as file:
-        data = yaml.safe_load(file) or {}
-    if not isinstance(data, dict):
-        return []
-    return list(data.get("servers", []))
-
-
-def load_database_inventory_without_yaml(path: Path) -> list[dict[str, Any]]:
-    servers: list[dict[str, Any]] = []
-    current_server: dict[str, Any] | None = None
-    current_database: dict[str, Any] | None = None
-    current_list: list[Any] | None = None
-    for raw_line in path.read_text(encoding="utf-8-sig").splitlines():
-        if not raw_line.strip() or raw_line.lstrip().startswith("#"):
-            continue
-        indent = len(raw_line) - len(raw_line.lstrip(" "))
-        line = raw_line.strip()
-        if indent == 2 and line.startswith("- server_id:"):
-            current_server = {"server_id": parse_yaml_scalar(line.split(":", 1)[1]), "databases": []}
-            current_database = None
-            current_list = None
-            servers.append(current_server)
-            continue
-        if current_server is None:
-            continue
-        if indent == 4 and not line.startswith("- ") and ":" in line:
-            key, value = line.split(":", 1)
-            current_list = None
-            if value.strip():
-                current_server[key.strip()] = parse_yaml_scalar(value)
-            continue
-        if indent == 6 and line.startswith("- db_type:"):
-            current_database = {"db_type": parse_yaml_scalar(line.split(":", 1)[1])}
-            current_server.setdefault("databases", []).append(current_database)
-            current_list = None
-            continue
-        if current_database is None:
-            continue
-        if indent == 8 and not line.startswith("- ") and ":" in line:
-            key, value = line.split(":", 1)
-            key = key.strip()
-            current_list = None
-            if value.strip():
-                current_database[key] = parse_yaml_scalar(value)
-            else:
-                current_database[key] = []
-                current_list = current_database[key]
-            continue
-        if indent == 10 and line.startswith("- ") and current_list is not None:
-            current_list.append(parse_yaml_scalar(line[2:]))
-    return servers
-
-
-def parse_yaml_scalar(value: str) -> str | int:
-    text = value.strip().strip("'\"")
-    if text == "<not-provided>":
-        return ""
-    try:
-        return int(text)
-    except ValueError:
-        return text

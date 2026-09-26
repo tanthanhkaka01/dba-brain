@@ -4,29 +4,19 @@
   worker container, copy the dated overlay back, and merge its health blocks into the
   canonical ``architecture/database-inventory.json`` (servers without metrics — e.g. lab
   VMs — are left untouched).
-- ``build_inventory_summary``: render the dated ``*-summary.md`` from the canonical JSON.
 
-Ported from the standalone update_inventory_health.py / build_inventory_summary.py.
+Rendering the summary is ``common.cli inventory-summary``, and the whole overlay-merge-render
+workflow is the worker's ``reports.cli inventory-workflow``: this module's ``build_inventory_summary``
+re-export and ``run_inventory_workflow`` did the same jobs a second time and went in 0.24.0
+(rules R43, the operator's choice).
 """
 
 from __future__ import annotations
-from db_ops.common.data_sources import inventory_exclude_ip_prefixes
-from db_ops.lib.inventory_render import (  # moved to common: shared with reports
-    DBTYPE_LABEL,
+from db_ops.lib.inventory_render import (  # shared with reports: one merge, one allowlist
     DEFAULT_INVENTORY,
-    DISK_WARN_PCT,
     HEALTH_BLOCKS,
-    _backup_evidence,
-    _baseline_lines,
-    _findings,
-    _g,
     _merge_overlay,
-    _platform,
-    _primary_db,
-    _remote_user_text,
-    _render_markdown,
     _write_inventory,
-    build_inventory_summary,
 )
 
 import datetime
@@ -98,30 +88,3 @@ def run_inventory_health(*, host: str, user: str, password: str | None, port: in
     print(f"Merged health into {updated} server(s); {untouched} left untouched. Updated {inv_path}", flush=True)
     return {"overlay": str(local_overlay), "merged": updated, "untouched": untouched}
 
-
-def run_inventory_workflow(*, host: str, user: str, password: str | None, port: int = 22,
-                           container: str = DEFAULT_CONTAINER, days: int = 2, date: str | None = None,
-                           container_runtime: str = DEFAULT_CONTAINER_RUNTIME,
-                           host_runtime: str = DEFAULT_HOST_RUNTIME,
-                           inventory: str | Path = DEFAULT_INVENTORY,
-                           snapshot_dir: str | Path = DEFAULT_SNAPSHOT_DIR,
-                           output_dir: str | Path = DEFAULT_SNAPSHOT_DIR,
-                           dry_run: bool = False) -> dict:
-    """inventory-health then inventory-summary in one shot. The health step builds + merges
-    the overlay; the summary step renders the markdown from the freshly merged canonical JSON.
-    A shared ``date`` stamp keeps both files' ``YYYYMMDD_HHMMSS`` prefix identical."""
-    stamp = date or file_stamp()
-    print("=== inventory-health ===", flush=True)
-    health = run_inventory_health(host=host, user=user, password=password, port=port,
-                                  container=container, days=days, date=stamp,
-                                  container_runtime=container_runtime, host_runtime=host_runtime,
-                                  inventory=inventory, snapshot_dir=snapshot_dir, dry_run=dry_run)
-    print("\n=== inventory-summary ===", flush=True)
-    summary = build_inventory_summary(inventory=inventory, output_dir=output_dir, date=stamp,
-                                      exclude_ip_prefixes=inventory_exclude_ip_prefixes())
-    return {"stamp": stamp, "health": health, "summary": summary}
-
-
-# --------------------------------------------------------------------------- #
-# inventory-summary: render *-summary.md from the canonical JSON
-# --------------------------------------------------------------------------- #

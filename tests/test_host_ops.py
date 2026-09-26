@@ -85,6 +85,14 @@ def _windows_facts(services=(), pending=0):
     )
 
 
+def _filled(command, request, data_dir):
+    """The request as the app sends it: common.cli reads no configuration (rules R09), so the
+    caller states the host's login, policy and rules - here from the fixture's data folder."""
+    from db_ops.lib.data_sources import request_fill
+
+    return request_fill.fill_request(command, request, data_dir=data_dir, secrets={"PW_REF": "hunter2"})
+
+
 @pytest.fixture()
 def data_dir(tmp_path):
     """A minimal data/ folder: one Windows instance reachable over SSH with a named credential."""
@@ -277,10 +285,11 @@ def test_waiting_for_a_port_distinguishes_down_from_up(monkeypatch):
 # ---------------------------------------------------------------------------
 # Target resolution and policy
 # ---------------------------------------------------------------------------
-def test_a_host_resolves_by_server_id_or_by_ip(data_dir):
-    """An operator holding a runbook has the ip; a scheduled task has the server_id."""
-    by_id = host_ops.resolve_host("TEST-10-0-0-5", data_dir=data_dir)
-    by_ip = host_ops.resolve_host("10.0.0.5", data_dir=data_dir)
+def test_the_app_finds_a_host_by_server_id_or_by_ip_and_common_takes_what_it_states(data_dir):
+    """An operator holding a runbook has the ip; a scheduled task has the server_id. Either is the
+    app's to turn into a login (rules R09) - common resolves only the access block it is sent."""
+    by_id = host_ops.resolve_host(_filled("host-facts", {"target": "TEST-10-0-0-5"}, data_dir))
+    by_ip = host_ops.resolve_host(_filled("host-facts", {"target": "10.0.0.5"}, data_dir))
 
     assert by_id.host == by_ip.host == "10.0.0.5"
     assert by_id.platform == "windows"
@@ -289,16 +298,22 @@ def test_a_host_resolves_by_server_id_or_by_ip(data_dir):
 
 
 def test_a_host_without_cmd_access_says_so_instead_of_failing_later(data_dir):
-    with pytest.raises(host_ops.HostOpsError) as excinfo:
-        host_ops.resolve_host("TEST-NO-ACCESS", data_dir=data_dir)
+    from db_ops.lib.data_sources import request_fill
+
+    with pytest.raises(request_fill.RequestFillError) as excinfo:
+        _filled("host-facts", {"target": "TEST-NO-ACCESS"}, data_dir)
 
     assert "no usable cmd_access" in str(excinfo.value)
+
+
+def test_a_bare_server_id_is_refused_by_common_rather_than_looked_up():
+    with pytest.raises(host_ops.HostOpsError, match='"access"'):
+        host_ops.resolve_host("TEST-10-0-0-5")
 
 
 def test_the_access_object_is_redacted_before_it_reaches_evidence(data_dir):
     target = host_ops.resolve_host(
         "10.0.0.5",
-        data_dir=data_dir,
         access={"method": "ssh", "host": "10.0.0.5", "username": "admin", "password": "hunter2"},
     )
 
@@ -319,8 +334,12 @@ def test_policy_layers_request_over_file_over_builtin(data_dir):
         encoding="utf-8",
     )
 
-    policy = host_ops.load_maintenance_policy(
-        data_dir, server_id="TEST-10-0-0-5", overrides={"poll_seconds": 30}
+    from db_ops.lib.data_sources import request_fill
+
+    # The file's layers are the app's to read; the command layers the request over its defaults.
+    policy = host_ops.maintenance_policy(
+        request_fill.maintenance_policy("TEST-10-0-0-5", data_dir=data_dir),
+        overrides={"poll_seconds": 30},
     )
 
     assert policy["services_timeout_seconds"] == 900     # file default
@@ -389,7 +408,7 @@ def test_a_restart_is_refused_without_confirmation(data_dir, monkeypatch):
     monkeypatch.setattr(host_ops, "open_host_session", lambda *a, **k: session)
 
     result = host_ops.restart_host(
-        {"target": "TEST-10-0-0-5", "evidence": False}, data_dir=data_dir
+        _filled("host-restart", {"target": "TEST-10-0-0-5", "evidence": False}, data_dir), data_dir=data_dir
     )
 
     assert result["ok"] is False
@@ -416,8 +435,8 @@ def test_a_restart_asks_a_human_before_it_reboots_anything(data_dir, monkeypatch
                         lambda prompt, stream=None: asked.append(prompt) or next(answers))
 
     result = host_ops.restart_host(
-        {"target": "TEST-10-0-0-5", "services": ["MSSQL$APPDB"], "confirm": True,
-         "reason": "clear pending file renames", "evidence": False},
+        _filled("host-restart", {"target": "TEST-10-0-0-5", "services": ["MSSQL$APPDB"], "confirm": True,
+         "reason": "clear pending file renames", "evidence": False}, data_dir),
         data_dir=data_dir,
     )
 
@@ -437,7 +456,7 @@ def test_a_restart_is_refused_when_the_second_answer_is_another_yes(data_dir, mo
     monkeypatch.setattr(host_ops.confirm, "read_answer", lambda prompt, stream=None: "yes")
 
     result = host_ops.restart_host(
-        {"target": "TEST-10-0-0-5", "confirm": True, "evidence": False}, data_dir=data_dir,
+        _filled("host-restart", {"target": "TEST-10-0-0-5", "confirm": True, "evidence": False}, data_dir), data_dir=data_dir,
     )
 
     assert result["ok"] is False
@@ -451,7 +470,7 @@ def test_answering_anything_but_yes_leaves_the_host_alone(data_dir, monkeypatch)
     monkeypatch.setattr(host_ops.confirm, "read_answer", lambda prompt, stream=None: "y")
 
     result = host_ops.restart_host(
-        {"target": "TEST-10-0-0-5", "confirm": True, "evidence": False}, data_dir=data_dir
+        _filled("host-restart", {"target": "TEST-10-0-0-5", "confirm": True, "evidence": False}, data_dir), data_dir=data_dir
     )
 
     assert result["ok"] is False
@@ -468,10 +487,10 @@ def test_an_unattended_restart_must_say_that_nobody_is_watching(data_dir, monkey
     monkeypatch.setattr(host_ops.confirm, "is_interactive", lambda: False)
 
     refused = host_ops.restart_host(
-        {"target": "TEST-10-0-0-5", "confirm": True, "evidence": False}, data_dir=data_dir
+        _filled("host-restart", {"target": "TEST-10-0-0-5", "confirm": True, "evidence": False}, data_dir), data_dir=data_dir
     )
     allowed = host_ops.restart_host(
-        {"target": "TEST-10-0-0-5", "confirm": True, "assume_yes": True, "evidence": False},
+        _filled("host-restart", {"target": "TEST-10-0-0-5", "confirm": True, "assume_yes": True, "evidence": False}, data_dir),
         data_dir=data_dir,
     )
 
@@ -491,7 +510,7 @@ def test_a_dry_run_is_never_asked_to_confirm(data_dir, monkeypatch):
                         lambda prompt, stream=None: asked.append(prompt) or "yes")
 
     result = host_ops.restart_host(
-        {"target": "TEST-10-0-0-5", "confirm": True, "dry_run": True, "evidence": False},
+        _filled("host-restart", {"target": "TEST-10-0-0-5", "confirm": True, "dry_run": True, "evidence": False}, data_dir),
         data_dir=data_dir,
     )
 
@@ -504,7 +523,7 @@ def test_a_dry_run_proves_the_target_without_restarting_it(data_dir, monkeypatch
     monkeypatch.setattr(host_ops, "open_host_session", lambda *a, **k: session)
 
     result = host_ops.restart_host(
-        {"target": "TEST-10-0-0-5", "confirm": True, "dry_run": True, "evidence": False},
+        _filled("host-restart", {"target": "TEST-10-0-0-5", "confirm": True, "dry_run": True, "evidence": False}, data_dir),
         data_dir=data_dir,
     )
 
@@ -523,7 +542,7 @@ def test_stopping_a_service_needs_the_same_confirmation_as_a_restart(data_dir, m
     monkeypatch.setattr(host_ops, "open_host_session", lambda *a, **k: session)
 
     result = host_ops.service_control(
-        {"target": "TEST-10-0-0-5", "services": ["MSSQL$APPDB"], "action": "stop", "evidence": False},
+        _filled("host-service", {"target": "TEST-10-0-0-5", "services": ["MSSQL$APPDB"], "action": "stop", "evidence": False}, data_dir),
         data_dir=data_dir,
     )
 
@@ -538,7 +557,7 @@ def test_reading_service_status_needs_no_confirmation(data_dir, monkeypatch):
     monkeypatch.setattr(host_ops, "open_host_session", lambda *a, **k: session)
 
     result = host_ops.service_control(
-        {"target": "TEST-10-0-0-5", "services": ["MSSQL$APPDB"], "evidence": False},
+        _filled("host-service", {"target": "TEST-10-0-0-5", "services": ["MSSQL$APPDB"], "evidence": False}, data_dir),
         data_dir=data_dir,
     )
 
@@ -561,7 +580,7 @@ def test_host_facts_reports_but_never_blocks(data_dir, monkeypatch):
     session = FakeSession([_windows_facts(pending=307)])
     monkeypatch.setattr(host_ops, "open_host_session", lambda *a, **k: session)
 
-    result = host_ops.host_facts({"target": "TEST-10-0-0-5", "evidence": False}, data_dir=data_dir)
+    result = host_ops.host_facts(_filled("host-facts", {"target": "TEST-10-0-0-5", "evidence": False}, data_dir), data_dir=data_dir)
 
     assert result["ok"] is True
     pending_gate = next(gate for gate in result["gates"] if gate["name"] == "host.reboot_pending")
@@ -574,7 +593,7 @@ def test_evidence_is_written_next_to_the_run_when_asked(data_dir, monkeypatch, t
     monkeypatch.setattr(host_ops, "open_host_session", lambda *a, **k: session)
 
     result = host_ops.host_facts(
-        {"target": "TEST-10-0-0-5", "evidence": str(tmp_path / "evidence")}, data_dir=data_dir
+        _filled("host-facts", {"target": "TEST-10-0-0-5", "evidence": str(tmp_path / "evidence")}, data_dir), data_dir=data_dir
     )
 
     written = json.loads((tmp_path / "evidence" / "facts" / f"{result['run_id']}.json").read_text(encoding="utf-8"))

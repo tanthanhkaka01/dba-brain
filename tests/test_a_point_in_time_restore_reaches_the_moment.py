@@ -39,7 +39,8 @@ def _statements(result):
 def test_stopat_carries_no_offset_and_is_in_the_servers_clock():
     last = _statements(_mssql_log("2026-09-25 07:13:40 +08:00"))[-1]
 
-    assert "STOPAT = N'2026-09-24 23:13:40'" in last
+    # The ISO form (0.24.0): SQL Server reads it the same under every login language.
+    assert "STOPAT = N'2026-09-24T23:13:40'" in last
     assert "+08" not in last and "+00" not in last
 
 

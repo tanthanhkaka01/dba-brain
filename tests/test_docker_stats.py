@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import answer_metric_items
 from db_ops.metrics import collector
 from db_ops.metrics.models import MetricDefinition, MetricTarget
 
@@ -16,7 +17,8 @@ def _docker_metric():
         metric_code="DOCKER_CONTAINER_STATS", db_type="multi", category="container",
         default_importance=2, active=True, collector_type="docker",
         file="docker/009_docker_container_stats.sh", default_timeout=20,
-        path=Path("sql/metrics/docker/009_docker_container_stats.sh"),
+        # The shipped script: a remote item carries its text, so it has to be a file that exists.
+        path=Path(collector.__file__).parent / "collectors" / "docker" / "009_docker_container_stats.sh",
     )
 
 
@@ -35,65 +37,51 @@ def _ok_execution():
                                       raw_stdout="[]", raw_stderr="", exit_code=0, execution_time=0.1)
 
 
+def _ok_answer(_item):
+    return {"exit_code": 0, "stdout": '[{"metric_item": "c:status", "metric_value": "running", "metric_unit": null, "status": "OK", "message": "ok"}]', "stderr": "", "duration_seconds": 0.1}
+
+
 def test_run_docker_metric_passes_container_env(monkeypatch):
-    captured = {}
-
-    def fake_execute_local(path, *, timeout_seconds, collector_env=None):
-        captured["path"] = str(path)
-        captured["env"] = collector_env
-        captured["timeout"] = timeout_seconds
-        return _ok_execution()
-
-    monkeypatch.setattr(collector, "execute_local", fake_execute_local)
+    sent = answer_metric_items(monkeypatch, _ok_answer)
     result = collector._run_docker_metric(
         metric=_docker_metric(), target=_target("MSSQL_LAB_HA_01-primary"), secrets={})
 
+    [item] = sent
+    assert item["kind"] == "local"
     # DB_OPS_TARGET_HOST rides along on every cmd collector; with no cmd_access it falls back to
     # the target's ip, which for a local docker host is the host the containers run on.
-    assert captured["env"] == {"DB_OPS_TARGET_HOST": "10.0.0.1",
-                               "DOCKER_CONTAINER": "MSSQL_LAB_HA_01-primary"}
-    assert captured["path"].endswith("009_docker_container_stats.sh")
-    assert captured["timeout"] == 20
+    assert item["env"] == {"DB_OPS_TARGET_HOST": "10.0.0.1",
+                           "DOCKER_CONTAINER": "MSSQL_LAB_HA_01-primary"}
+    assert item["path"].endswith("009_docker_container_stats.sh")
+    assert item["timeout_seconds"] == 20
+    # A docker host is not a `cmd_access: local` host: nothing to refuse on its name.
+    assert item["require_local_host"] is False
     assert result.rows[0]["status"] == "OK"
 
 
 def test_run_docker_metric_ships_over_ssh_when_cmd_access_ssh(monkeypatch):
     """A remote docker host (ssh cmd_access) runs the inspect script on the host, not locally."""
-    captured = {}
-
-    def fake_execute_ssh(path, *, target, secrets, timeout_seconds, collector_env=None):
-        captured["path"] = str(path)
-        captured["env"] = collector_env
-        captured["host"] = (target.cmd_access or {}).get("host")
-        return _ok_execution()
-
-    def fail_local(*a, **k):  # pragma: no cover - must not be called for a remote docker host
-        raise AssertionError("execute_local must not be called for an ssh docker host")
-
-    monkeypatch.setattr(collector, "execute_ssh", fake_execute_ssh)
-    monkeypatch.setattr(collector, "execute_local", fail_local)
+    sent = answer_metric_items(monkeypatch, _ok_answer)
     ssh = {"enabled": True, "method": "ssh", "host": "203.0.113.188", "port": 22, "shell": "bash"}
     result = collector._run_docker_metric(
         metric=_docker_metric(), target=_target("pg_ha-primary", cmd_access=ssh), secrets={})
 
+    [item] = sent
+    assert item["kind"] == "script", "a remote docker host runs the script there, not locally"
     # cmd_access.host wins over ip: it is the address already proven reachable.
-    assert captured["env"] == {"DB_OPS_TARGET_HOST": "203.0.113.188",
-                               "DOCKER_CONTAINER": "pg_ha-primary"}
-    assert captured["host"] == "203.0.113.188"
+    assert item["env"] == {"DB_OPS_TARGET_HOST": "203.0.113.188",
+                           "DOCKER_CONTAINER": "pg_ha-primary"}
+    assert item["access"]["host"] == "203.0.113.188"
     assert result.rows[0]["status"] == "OK"
 
 
 def test_run_docker_metric_stays_local_when_cmd_access_disabled(monkeypatch):
     """A disabled cmd_access (or none) falls back to the local mounted socket — old behavior."""
-    used = {}
-    monkeypatch.setattr(collector, "execute_local",
-                        lambda *a, **k: used.setdefault("local", True) or _ok_execution())
-    monkeypatch.setattr(collector, "execute_ssh",
-                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("must stay local")))
+    sent = answer_metric_items(monkeypatch, _ok_answer)
     disabled = {"enabled": False, "method": "ssh", "host": "x"}
     collector._run_docker_metric(
         metric=_docker_metric(), target=_target("pg_ha_01-primary", cmd_access=disabled), secrets={})
-    assert used.get("local") is True
+    assert [item["kind"] for item in sent] == ["local"]
 
 
 def test_run_docker_metric_requires_container_name():

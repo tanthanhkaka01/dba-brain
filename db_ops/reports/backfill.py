@@ -28,7 +28,7 @@ import datetime
 import json
 from pathlib import Path
 from typing import Any
-from db_ops.common.data_sources import inventory_exclude_ip_prefixes
+from db_ops.lib.data_sources import inventory_exclude_ip_prefixes
 from db_ops.lib.timezone import display_zone, format_stored
 
 

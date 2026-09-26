@@ -61,7 +61,12 @@ def _wire(monkeypatch, *, targets, definitions, collect_one, max_parallel):
     monkeypatch.setattr("db_ops.metrics.collector.load_metric_targets", lambda **_: targets)
     monkeypatch.setattr("db_ops.metrics.collector.data_sources.load_secret_text", lambda *_, **__: {})
     monkeypatch.setattr("db_ops.metrics.collector.load_max_parallel_servers", lambda *_, **__: max_parallel)
-    monkeypatch.setattr("db_ops.metrics.collector._collect_one_metric", collect_one)
+    # Since 0.24.0 a target's due metrics run as one `metric-batch`; the fake still sees them one
+    # metric at a time, in order, on the worker the target was handed to.
+    monkeypatch.setattr(
+        "db_ops.metrics.collector._collect_metric_batch",
+        lambda *, target, planned, secrets: [collect_one(target=target, metric=metric)
+                                             for metric, _importance in planned])
 
 
 def test_two_metrics_of_one_server_are_never_in_flight_at_the_same_time(tmp_path, monkeypatch):

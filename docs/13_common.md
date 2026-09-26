@@ -14,7 +14,7 @@ boundary is what forces the request to be a complete, inspectable JSON object an
 a response envelope — which is what lets the same call serve a scheduled run, a chat command and a
 one-off recovery against a machine that is in no inventory at all.
 
-**One named exception**: `common.data_sources` is imported, because it is the single reader of the
+**One named exception**: `lib.data_sources` is imported, because it is the single reader of the
 `data/` folder and routing a configuration read through a subprocess would cost every caller a
 process and buy nothing.
 
@@ -29,7 +29,7 @@ windows, severity classification, notify routing, formatting or any other pure r
 
 **Most of `db_ops/common/` is a library: built and shipped on its own, it runs anywhere with
 nothing beside it — no `data/`, no `config.json`, no repo layout.** That is the goal everything
-below serves, and it is true of 72 of the 86 modules. The other 14 are the resolver tier described
+below serves, and it is true of 81 of the 90 modules. The other 9 are the resolver tier described
 below; they are the exception, they are listed by name, and a new module is not one of them by
 default.
 
@@ -40,9 +40,9 @@ then calls `common` — passing a **JSON object** that already contains every an
 ```
 app (front end)                    common (library)
   reads restore_config.json
-  resolves the host from            python -m db_ops.common.cli restore-database '<json>'
-  db_instances.json          ──►      { "db_type": "sqlserver",
-  decrypts the password                 "source": { "path": "...", ... },
+  resolves the host from            python -m db_ops.common.cli restore-full -
+  db_instances.json          ──►      { "db_type": "sqlserver", "database_name": "...",
+  decrypts the password                 "backup_path": "...", "with_recovery": false,
                                         "target": { "host": "...", "port": 1433,
                                                     "username": "...", "password": "..." } }
 ```
@@ -171,19 +171,87 @@ without anyone noticing. It is two tiers:
 
 | Tier | Size | What it may read | Where it is pinned |
 | --- | --- | --- | --- |
-| **Library** — input in, result out | 72 of 86 modules | nothing | `tests/test_common_layers.py` |
-| **Resolver** — answers "which host is `ACME-192-0-2-248`", "what is that credential's password" | 14 modules, listed by name with a reason each | `config.json`, `data/*.json`, the store | `READS_LOCAL_CONFIG` in the same file |
+| **Library** — input in, result out | 81 of 90 modules | nothing | `tests/test_common_layers.py` |
+| **Resolver** — answers "which host is `ACME-192-0-2-248`", "what is that credential's password" | 9 modules, listed by name with a reason each: the CLI's composition root, 5 registrars and 3 commands whose job is the store or the estate's names | `config.json`, `data/*.json`, the store | `READS_LOCAL_CONFIG` in the same file |
 
-The library tier is the **default**: a new module belongs there unless it cannot answer its
-question without reading the machine it is installed on. The resolver tier is `common` rather than
-app code because every app asks those same questions, and seven apps resolving a `server_id` seven
-ways is the failure `common` exists to prevent.
+The library tier is the **default**: a new module belongs there unless its job is the
+configuration itself. Since 0.24.0 that is all the resolver tier holds - the commands R09 allows to
+read (they register, store or audit what the node configured) and `cli.py`, which routes them.
+Resolving a `server_id` for an *operation* is the calling app's job
+(`lib.data_sources.request_fill`), never `common`'s: seven apps resolving it seven ways was the
+failure `common` was made to prevent, and one reader in `lib` prevents it without `common` reading.
 
 Watch the form the boundary is actually crossed in — not a module announcing that it needs config,
-but a **default argument**. `data_sources/ssh_auth.py`, `sql_run.py` and six others take the fact as a parameter and
-fall back to `data_sources` when the caller passes nothing. Pass everything and it is a pure
-function; pass nothing and it silently reads *this repo's* `data/`. Same code, and only one of the
-two survives being packaged elsewhere. So keep passing the fact even when the default would work.
+but a **default argument**, or a read **one import away**. `sql_run.py`, `remote_exec.py` and
+`ssh.py` took the fact as a parameter and fell back to `data/` when the caller passed nothing - a
+bare key name under `data/ssh_keys/`, a `password_ref` read from the store through
+`lib.secret_value` - until 0.24.0. Pass everything and it was a pure function; pass nothing and it
+silently read *this repo's* `data/`. `tests/test_common_layers.py` now follows a `lib` import to
+see whether that module reads, so the read cannot be moved out of sight.
+
+### The rules, numbered, in one place
+
+`common`'s rules are R03-R05, R09 and R13-R16 in [`rules.md`](./rules.md), the one list, with
+their guards and the exceptions left. Since 2026-09-25 the operator holds four of them absolute:
+**an app never imports `common`** (R03), **`common` imports nothing but `lib`** (R04), **a
+`common.cli` command works from its request alone** (R09), and **every `common.cli` request and
+answer is described in the reference** (R16).
+
+R09 in the operator's words: a command takes a JSON request, does its work entirely from it and
+answers in JSON, **so that it can be run by hand on a node whose configuration is completely empty**.
+It is not a ban on writing - a command whose subject is the configuration (`sql-command-add`,
+`instance-add`, `secret-set`, `check-objects` ...) reads and writes it, and it too runs on an empty
+one. `tests/test_a_common_command_works_from_its_request_alone.py` holds it by running the real CLI
+against an empty root and a poisoned one. The exceptions this page describes below - the resolver
+tier - are the measured debt of those rules, to be removed, and no new one may be added.
+
+**The app finishes the request (0.24.0).** Until 0.24.0, 22 commands took a bare `server_id` and
+looked the rest up here. Now none does: the app that calls reads its own `data/` through
+`db_ops.lib.data_sources.request_fill` and states what the command needs -
+
+| Field | What it is | Commands |
+| --- | --- | --- |
+| `connection` | the SQL login, complete: db_type, host, port, username, password (and database, instance_name, sql_access) | `run-sql`, the emergency four, the three listings, `db-status`, `create-table-from-xlsx`, `trace-session`, `copy-schema` (per side), the patch three, the instance three |
+| `access` | the host login: an inline `cmd_access` with its password or an absolute key file | `run-cmd`, `fetch-file` / `send-file` / `pack-files`, `relay-file` (per side), `host-facts`, `host-service`, `host-restart`, the patch three |
+| `host` | the address to probe, with the OS facts that change the verdict | `probe-host` |
+| `policy` | the maintenance policy (defaults, then the server's own), or the instance policy | the host three and the patch three; the instance export and replay |
+| `rules` | what the operation costs to confirm - the node's own ladder entry | every command behind the confirmation gate, and `authorize` |
+| `secrets` | the refs a replayed bundle lists, or an 8i bridge's `sql_access` names, with their values | `sqlserver-replay-instance`, `run-sql` |
+
+A request without the field it needs is refused with a message naming it - never a lookup. The
+finished request carries a password, so it goes on stdin (`db_ops.transport` does, and the bot
+hands it to a detached command's stdin). `rules` absent means the ladder the package ships -
+`common` never reads the node's `data/emergency_operations.json`; both sides read a ladder through
+`db_ops.lib.confirmation_ladder`, so it means the same thing whoever read it. The last four doors
+closed in 0.24.0 too: `run-sql`, `run-cmd`, `probe-host` and the file-transfer commands resolved a
+bare `server_id` for a caller that sent nothing more, and now refuse it. A person at a shell writes
+the complete request to a file and passes `@file`.
+
+### `check-credentials` - does every configured target resolve to a real login (0.24.0)
+
+Back in `common` - the audit is `secret_check.check_credentials`, beside the ref audit it is the
+sibling of, and `cli_check_credentials.py` the request and the answer - from the root package that answered it until 0.24.0
+(rules R41). It asks what the apps ask at runtime - the metrics target loader, a SQL task target's
+credential, a Telegram `sql_execute` command's credential - and all three are `lib.data_sources`'
+now (`collection_targets`, `find_database_credential`, `find_command_credential`), so the shared
+layer can ask them without importing an app. A checker of the configuration, so it reads it (R09),
+and on an empty one it checks nothing and says so. `db-ops check-credentials` is an alias. The
+request is `input_config_check` (`data_dir`, `format`), shared with `check-objects` and
+`check-references`; the answer `output_check_credentials`. A bare folder, the form the root took, is
+refused with the request it became.
+
+### The tool root's own commands - `init`, `guide`, `encrypt-secret`, `export-data`, `import-data` (0.24.0)
+
+They were the root entry point's until 0.24.0 (`db_ops/cli.py`, outside every layer rule - R41). Each
+is an operation whose subject is the configuration itself, so each is a `common.cli` command now
+(`common/cli_tool_root.py`, with `common/scaffold.py` and the guide `common/agents_guide.md`): one
+JSON object in, the envelope out (`format: "txt"` for the lines a person reads). `db-ops init` and
+the others still work as typed - the entry point forwards them - and `init` / `guide` with no request
+answer in text, so a first run reads what it always read. An option is a key: `db-ops init '{"force":
+true}'`, `db-ops import-data '{"bundle": "x-bundle.json", "plan_only": true}'`; the old flags are
+refused by name, with the key each became. `encrypt-secret` never takes the passphrase in the request
+(R14): `DB_OPS_SECRET_KEY`, or `--key` / `--key-base64` after the JSON. Input and output are
+`input_init` ... `output_import_data` in the reference.
 
 ### The rule for `common.cli`, and how far it is held (0.23.0)
 
@@ -197,7 +265,7 @@ baseline where it is not:
 | imports no app | `test_a_shared_layer_never_imports_an_app` | none |
 | imports only `lib` (and `common`) | `test_common_imports_only_common_and_lib` | `cli.py`: `db_ops.config` and the root package's `__version__` - `COMMON_OUTSIDE_IMPORTS`, which may only shrink |
 | launches no CLI | `test_common_never_launches_a_db_ops_cli` (a literal `db_ops.x.cli`) and `test_common_launches_no_python_module_by_any_spelling` (`sys.executable`, a bare `-m`, `-m db_ops.…` in a string, a module name built into an f-string, `lib.common_cli`, `runpy`) | usage text naming a command for a reader |
-| reads no config | **by name, without exception**, for every module behind backup, restore and `create-db-docker`/`move-db-docker` (`CONFIG_FREE_BY_NAME`): no config, store or data-folder read, no import of the resolver tier, and a transport handed values - never `data_dir`/`secrets`/`credential`, and `open_session` with `resolve_key=False` | the 18 resolver-tier modules, frozen as `RESOLVER_TIER_AT_0_23_0` - it may only shrink; they move out in 0.24 |
+| reads no config | **by name, without exception**, for every module behind backup, restore and `create-db-docker`/`move-db-docker` (`CONFIG_FREE_BY_NAME`): no config, store or data-folder read - directly or through a `lib` module that reads - and no import of the resolver tier. The transports (`ssh`, `remote_exec`) read nothing since 0.24.0, so they are held like any other module | the 9 resolver-tier modules left, of 18 frozen as `RESOLVER_TIER_AT_0_23_0` - every one a command whose job is the configuration (R09) |
 
 All of them live in `tests/test_import_boundaries.py` and `tests/test_common_layers.py`, and each
 was checked against a module written to break it. The named guard found one read on its first run:
@@ -218,49 +286,49 @@ now (below), and the app exports the metadata the way it always had, through
    resolver tier exists for the cases where the lookup itself is the shared operation — it does
    not license the tier below it to look things up.
 4. **Never import an app.** Enforced by `tests/test_import_boundaries.py`.
-5. **`common/cli.py` routes; commands live in their own module** (`cli_restore.py`).
+5. **`common/cli.py` routes; commands live in their own module** (`cli_restorestep.py`).
 6. **One response shape.** Every command returns `{success, operation, message, error, data,
    metrics}` — see above. Built with `response.ok()` / `response.fail()`.
 7. **Keep it plain.** No plugin registries, no indirection added for a second case that does not
-   exist yet. `restore/__init__.py` picks the engine with an `if` because there is one engine.
+   exist yet. `restorestep/__init__.py` picks the engine with an `if` per engine.
 
-### Worked example: `common/restore/`
+### Worked example: one SQL Server RESTORE, written once (`restorestep/sqlserver.py`)
 
-| Module | Owns |
+Until 0.24.0 three modules wrote a SQL Server RESTORE: the nightly SMB restore in the
+`backup_restore` app, `restorestep/sqlserver.py` for the drills, and `restore/sqlserver/` behind a
+`restore-database` command nothing called. One job, one command (rules R43, the operator's choice):
+`statement()` in `restorestep/sqlserver.py` writes every one, and the rest went - `restore-database`
+and its package, the app's own builders, its hidden `restore-full/-diff/-log` commands and
+`restore-by-id`'s second route for an SMB entry.
+
+| Asked for | Written |
 | --- | --- |
-| `spec.py` | What a restore is, as data. Parsing, validation, redaction of passwords. |
-| `pitr.py` | A point-in-time request is refused, never downgraded to "the newest chain". |
-| `plan.py` | What a spec would do, decided without touching anything. |
-| `sqlserver/chain.py` | Which backups to restore and in what order — from LSNs, not file names. |
-| `sqlserver/sql.py` | The RESTORE statements, with `STOPAT` on the one log that carries it. |
-| `lib/restore/moment.py` | Reading the moment; `STOPAT` is in the server's clock (moved to `lib` in 0.23.0: every engine's restore step and the listing window use it). |
-| `sqlserver/runner.py` | The I/O: connect, ask the instance what is on disk, run the statements. |
+| a full with `move` (logical name -> path) | `RESTORE DATABASE ... WITH ... REPLACE, MOVE ...` - the drills |
+| a full with `move_files` (`data`, `log`) | the nightly's batch: `SINGLE_USER` first, the logical names read with `RESTORE FILELISTONLY`, the RESTORE through `sp_executesql`, `MULTI_USER` after a recovering one |
+| a diff or a log | `USE master; RESTORE DATABASE|LOG [db] FROM DISK = N'...' WITH NORECOVERY, CHECKSUM, STATS = 10;` |
+| the last log of a point in time | the same `WITH RECOVERY ... STOPAT = N'YYYY-MM-DDTHH:MM:SS'` |
 
-It reads no file at all, pinned by `tests/test_common_restore_is_pure.py` — which walks the
-package recursively and fails on an import that reaches config or an app, on a hand-rolled
-`open()`, or if the package cannot be imported from an empty directory.
+**The nightly's text did not move.** `tests/fixtures/nightly_restore_sql.json` is what its own
+builders emitted on 0.23.0 for a Windows and a Linux target, captured before they went, and
+`tests/test_one_sqlserver_restore_statement.py` holds the composer to it byte for byte. The one
+difference is a correction: a value inside the `EXEC` string and inside `@restoreSql` is two literals
+deep, and the old batch doubled its quote once - a `'` in a name or a path could not have run.
 
-Three things in there are worth knowing because getting them wrong is **silent** — the restore
-succeeds and the data is wrong:
+**`STOPAT` is ISO with the `T`.** The drills wrote `YYYY-MM-DD HH:MM:SS`, which SQL Server reads
+year-day-month under a British or French login language; the nightly's `T` form reads the same under
+every one, so it is the one form. It is in the target's clock (UTC unless stated) and never carries
+an offset (Msg 3217).
 
-- **The chain comes from LSNs.** A differential whose base full was superseded still sorts last by
-  name and restores cleanly onto the wrong base. A full taken *after* the target moment sorts
-  newest and already contains changes past it.
-- **A moment past the end of the logs raises**, rather than rounding down to a restore that
-  succeeds hours short of what was asked for.
-- **`STOPAT` goes only on the final log.** SQL Server accepts it on a full or a differential and
-  silently ignores it there, which reads as a point-in-time restore that never happened.
+**Two ways to run it.** `target` - a driver connection from this machine, as the drills do. Or
+`sqlcmd` - the block `run-sqlcmd` takes, less its SQL - run where the SQL Server is, which is how the
+nightly reaches files only the server sees. Through `sqlcmd` a call applies **one file** and answers
+as `run-sqlcmd` does (`exit_code`, `stdout`, `stderr`, `timed_out`), because the caller decides
+after each file: a log too recent to apply (Msg 4305) is skipped, a connection lost after the
+command went out is inspected rather than retried.
 
-`runner.py` asks the *instance* for the file listing (`sys.dm_os_enumerate_filesystem`), not the
-local filesystem: on a container target the backup path does not exist on the machine running the
-code. It also sets `statement_timeout_seconds=0` explicitly — the connection layer reads `None` as
-"reuse the connect timeout", so leaving it unset capped every statement at 30s and the first real
-restore died mid-chain with `HYT00`, leaving the database RESTORING.
-
-**Proven end to end** on 2026-08-06 against the `mssql2025` container on 192.0.2.249, through
-`python -m db_ops.common.cli restore-database -`: seven databases restored to latest, then
-`SALESDB_STG` restored to `2026-08-06 01:40:00` — which applied the 01:15/01:30/01:45 logs and stopped
-before the 02:00 one. All ended `ONLINE`.
+**Which files, in which order, stays with the caller**: `restore-latest` from its staged share
+(latest, or every log up to the moment), `restore-by-id` through `list-backup-files` (the headers the
+instance reads). `restore-database`'s LSN-based chain went with it; nothing had called it.
 
 ### `list-backup-files` — one question, three engines that disagree
 
@@ -541,13 +609,13 @@ sessions and nothing else, so `move-db-docker` streams through the same code wit
 already holds instead of launching this command.
 
 ```json
-{"source":      {"target": "ACME-192-0-2-249-HOST", "path": "/tmp/bundle.tar.gz"},
- "destination": {"target": "ACME-192-0-2-11-LABSQL-1433", "path": "/tmp/bundle.tar.gz"},
+{"source":      {"access": {...}, "target": "ACME-192-0-2-249-HOST", "path": "/tmp/bundle.tar.gz"},
+ "destination": {"access": {...}, "target": "ACME-192-0-2-11-LABSQL-1433", "path": "/tmp/bundle.tar.gz"},
  "overwrite": false, "make_dirs": true}
 ```
 
-Each side resolves like every other target here — a `server_id`/ip from `db_instances.json`, or
-an inline `access` block — so no password appears in the request.
+Each side states its own login in an inline `access` block, like every other host command here
+(rules R09), so the request carries passwords and goes on stdin.
 
 **Linux/SSH on both ends, and a Windows end is refused** rather than half-supported: the stream is
 `cat`/`sha256sum` and the PowerShell equivalents do not compose into a pipe the same way. Use
@@ -581,7 +649,7 @@ is that caller - it stores and resolves, calls, and writes the record (`docs/10_
 request, and inline they would be on the command line, in a file plaintext on disk. **Progress on
 stderr** - and for the length of the work file descriptor 1 *is* stderr, because a local
 `docker compose up` writes to fd 1 directly and a Python `redirect_stdout` does not reach it.
-`lib.common_cli.run(..., stream_stderr=True)` lets the caller show that progress as it happens.
+`transport.common_cli.run(..., stream_stderr=True)` lets the caller show that progress as it happens.
 Every command's answer leaves as **UTF-8 when stdout is a pipe** (set once, in `cli.py`'s entry
 point): its one client decodes UTF-8, and a Windows pipe defaults to the ANSI code page - every
 non-ASCII character in an answer arrived as U+FFFD until the labs showed it (0.23.0).
@@ -612,6 +680,31 @@ the final drain; a run past `timeout_seconds` comes back `timed_out: true` with 
 because a RESTORE LOG cut off mid-way must be inspected rather than retried. The fields are
 `input_run_sqlcmd` / `output_run_sqlcmd`.
 
+### `smb-list`, `smb-get`, `smb-delete`, `smb-credential` — a Windows share (0.24.0)
+
+The SQL Server restore reached its backup shares itself until 0.24.0 - `smbclient` on a Linux worker,
+PowerShell `Get-ChildItem` / `Remove-Item` over a UNC path on a Windows master, `cmdkey` to store the
+login first: three ways in one app, and the next app to meet a share would have grown a fourth
+(rules R10; the operator, 2026-09-26: *every app reaches a host one way*). `common/smb.py` is the one
+way now, and the app keeps what is its own - which files, which window, what is obsolete.
+
+| Command | What it does |
+| --- | --- |
+| `smb-list` | every file under a folder of the share, recursively unless `recurse` is false; `suffixes` keeps only some. `data.files`: `{path, name, size_bytes, modified_epoch}`, `path` relative to the folder listed and backslash-separated |
+| `smb-get` | one file to `local_path`; `bytes` is what arrived. A non-zero `exit_code` is an answer - with a file still being written the code says nothing reliable, so the caller compares `bytes` with the listing |
+| `smb-delete` | exactly the `paths` named - never a pattern, never a folder. Each is `DELETED` or `FAILED` in `results`; the command fails when any did |
+| `smb-credential` | stores the login Windows uses for a host's UNC paths (`cmdkey`). Off Windows it answers `registered: false` - `smbclient` takes the login with every call - and that is not a failure |
+
+**One answer shape, two ways in.** `backend` is `unc` on Windows (the share's own path, after the
+login in the request is stored) and `smbclient` elsewhere; either may be named. The listing parser
+makes every path relative to the folder listed whatever its separators - a multi-segment sub-path
+compared unnormalized once staged a whole tree several folders too deep, silently.
+
+**All four are stdin only**: every request carries the share's password. It never reaches a command
+line - `smbclient` reads it from an auth file this module writes 0600 and deletes after the call -
+except `cmdkey`'s `/pass:`, the only form Windows offers, as it was when the app ran it. The fields
+are `input_smb` and `output_smb_list` / `_get` / `_delete` / `_credential`.
+
 ### `backup-chain`, `copy-backup-dir`, `prune-staged-backups` — a restore's copy, step by step
 
 A cross-machine restore stages its backups on the target, and those two steps are commands of
@@ -635,11 +728,41 @@ All three new ones are **stdin only**: their requests carry SSH passwords. A log
 `db_ops/common/backup_copy.py`, which was `backup_restore/transfer.py` until 0.23.0. The fields are
 `input_`/`output_backup_chain`, `_copy_backup_dir` and `_prune_staged_backups`.
 
+### `metric-batch` — one target's metrics, run one after another (0.24.0)
+
+The metrics app's execution. `metrics` decides what is due, which file fits the target, the
+environment a script gets, the password and the argv of a local script; this runs the items, in
+order, and answers for each - and `metrics` grades the answers (the JSON-rows contract, severity,
+overrides, the stored row). It was `metrics/executor.py` and the transports of
+`metrics/collector.py`, importing four `common` modules under a measured exemption (rules R03);
+now it is `db_ops/common/metric_batch.py`.
+
+**One process per target, not per metric.** A pass runs ~390 executions (peak ~1,370); a process
+each would spend 43-138 s starting interpreters, longer than the interval between passes. So a
+target's due metrics go out together, except that a windowed metric - CHECKDB, an index scan, a
+restore validation - runs in a batch of its own and never holds the quick ones back from the store.
+
+Three item kinds: `sql` (the driver connect - SQL Server to `master`, the metric does its own
+`USE` - the PostgreSQL per-database walk, or the legacy-Oracle bridge), `script` (shipped over SSH
+or WinRM with its environment prepended) and `local` (run on this machine with the argv the request
+states). **A failure is data, never a stop**: an item answers with `error` - its message, the phase
+the raiser declared (`connect`/`execute`, empty when it could not tell) and whatever output there
+was - and the batch still succeeds. **Stdin only**: the request carries the target's password and
+the secret refs its configuration names (never the whole store). The fields are
+`input_metric_batch` / `output_metric_batch`.
+
+That the move changed nothing is held by `tests/test_metric_outcomes_survive_the_batch.py`, written
+against the in-process code first: 23 scenarios - rows, empty, connect and execute failures, a
+missing credential, a per-database cluster with one database refused, ssh rows, a non-zero exit,
+non-JSON stdout, auth rejected, a command and a connect timeout, env secrets, a local script and
+its timeout, a docker container, the 8i bridge up and down - store the same rows through the batch.
+
 ### Where the layer does not meet this yet
 
 Stated plainly so packaging is not a surprise. These still resolve against `data/` today:
-`sql_run.resolve_sqlserver_target` and `target_resolve` (read `db_instances.json`), `data_sources`
-(*is* the data-folder loader), and `secret_text` (reads the encrypted store). Each moves the same
+`sql_run.resolve_sqlserver_target` (reads `db_instances.json`; only `rotate-password` and
+`check-secret` call it since `run-sql` stopped, 0.24.0), `lib.data_sources` (*is* the data-folder
+loader), and `secret_text` (reads the encrypted store). Each moves the same
 way the restore one did: take the resolved values as parameters, and let the app do the lookup.
 New code takes parameters; existing code moves when it is next touched.
 `sqlserver_instance.load_policy` was on this list and came off it on 2026-08-15 — the read is
@@ -655,7 +778,7 @@ into this module's error type.
 | `shell.py` | Resolve the PowerShell executable at runtime so the same code runs on Windows and inside the Linux container. Prefers cross-platform `pwsh`, then `powershell.exe`. | `powershell_executable()`, `is_powershell_executable(name)`; env override `DB_OPS_POWERSHELL` |
 | `secret_text.py` | Encrypt/decrypt the secret file at rest. PBKDF2-HMAC-SHA256 → 32-byte key, sealed with Fernet (AES-128-CBC + HMAC), random per-file salt. The passphrase is supplied at runtime; never stored. | `encrypt_secret_text`, `decrypt_secret_text`, `resolve_key`, `resolve_cli_key`, `decode_key_base64`, `set_key_env`; env `DB_OPS_SECRET_KEY` |
 | `sql_execution.py` | SQL Server connection + execution helpers: driver selection (ODBC 18/17/…), TLS-error fallback, output converters for types pyodbc cannot decode (`datetimeoffset`), batch splitting/execution, JSON-safe row coercion, and credential/secret loading. | `connect_sqlserver`, `build_sqlserver_conn_str`, `choose_sqlserver_driver`, `sqlserver_driver_candidates`, `register_output_converters`, `decode_timestampoffset`, `execute_cursor_batches`, `split_sql_batches`, `resolve_password`, `load_credentials_file`, `load_secret_text`; `MAX_RESULT_ROWS`, `SQL_SS_TIMESTAMPOFFSET` |
-| `sql_run.py` | **Single source of truth** for *running SQL against one database target*, on **any** engine (sqlserver / postgresql / mysql / oracle): resolve the target (`server_id` or `<db_type> <ip> [port]`), connect (via `db_connect`; **SQL Server always lands in `master`** unless the request names a database — scripts `USE` themselves), run the batches, capture the first result set with a row cap, and roll back unless `commit` is asked for. **Input is a JSON object** — the same shape a config file, a Telegram command, or the CLI passes through untranslated. See [the section below](#running-sql-on-one-database-sql_run). | `run_sql`, `SqlRunRequest.from_json`, `json_safe_result`, `resolve_sqlserver_target`, `connect_target`, `execute_capture_first`; `SqlRunError`; `DEFAULT_MAX_ROWS`, `DEFAULT_TIMEOUT_SECONDS` |
+| `sql_run.py` | **Single source of truth** for *running SQL against one database target*, on **any** engine (sqlserver / postgresql / mysql / oracle): take the login the request states (`connection`, required since 0.24.0 - nothing is looked up), connect (via `db_connect`; **SQL Server always lands in `master`** unless the request names a database — scripts `USE` themselves), run the batches, capture the first result set with a row cap, and roll back unless `commit` is asked for. **Input is a JSON object** — the same shape a config file, a Telegram command, or the CLI passes through untranslated. See [the section below](#running-sql-on-one-database-sql_run). | `run_sql`, `SqlRunRequest.from_json`, `json_safe_result`, `resolve_sqlserver_target`, `connect_target`, `execute_capture_first`; `SqlRunError`; `DEFAULT_MAX_ROWS`, `DEFAULT_TIMEOUT_SECONDS` |
 | `data_sources.py` | **Single entry point** for loading connection inputs from `data/` (`users.json` = `database_credentials` + `remote_credentials` + `monitor_users`, plus `db_instances.json` and the encrypted secret file), **and for choosing which credential a target runs as** — required, never inferred (see [Credentials](#which-login-a-target-runs-as-credentials)). Apps import loaders here instead of reaching to the repo root. | `load_secret_text`, `load_credentials(db_type)`, `load_all_credentials`, `load_remote_credentials`, `load_db_instances`, `group_credentials_by_type`, `find_database_credential`; `CredentialNotFound`; path helpers `users_path` / `db_instances_path` / `secret_text_path` |
 | `db_connect.py` | **Single source of truth** for *opening a connection to one database*, on every engine db_ops supports (sqlserver / postgresql / mysql / oracle) — what `remote_exec` is for reaching a VM. Owns driver import (lazy, per engine), default port and database per engine, and the in-server statement timeout each engine spells differently (`statement_timeout` / `call_timeout` / `read_timeout` / `command_timeout`). This code used to live inside the metrics app, so `sql_run` could not reuse it and supported SQL Server only — which is why `/spbot_sql_to_xlsx` refused a PostgreSQL target. Running the SQL is separate and already shared (`sql_execution.execute_cursor_batches`). | `connect_engine`, `normalize_db_type`, `default_database`, `parameter_style`; `DbConnectError`; `SUPPORTED_DB_TYPES` |
 | `ssh.py` | **Single source of truth** for the SSH *connection*: opening a paramiko client (key or password, no silent agent/interactive fallback unless asked). Connect failures are classified where the paramiko exception type is still available, so callers never pattern-match a message to tell "wrong password" from "host unreachable". Auth **resolution** left on 2026-08-15 — `resolve_ssh_key` (a bare name resolves inside **`data/ssh_keys/`**) and `resolve_ssh_password` (value > env var > encrypted-secret ref) are `data_sources.ssh_auth`, and the four exception names are `lib.ssh_errors`, because four app modules were importing this transport for a key path or one word. All of it is re-exported here. | `open_ssh_client`; re-exported: `resolve_ssh_password`, `resolve_ssh_key`, `ssh_keys_dir`, `SSH_KEYS_DIRNAME`, `SshError` + `SshAuthError` / `SshConnectError` / `SshTimeoutError` |
@@ -809,11 +932,11 @@ Rules worth knowing:
 | Caller | Face used |
 | --- | --- |
 | `metrics.collector` (`execute_ssh` / `execute_winrm`) | `run_script` — the metric contract (JSON stdout → rows) stays in the collector |
-| `common.docker_db.remote_host.RemoteUbuntuHost` | `SshSession` for run + SFTP, opened from a resolved login with `resolve_key=False`; the class adds the `CompletedProcess` shape the provisioner expects |
-| `backup_restore.copy_backup.open_ssh_connection` | `open_session(...).client` — a raw paramiko client, because the restore paths use SFTP and incremental channel reads directly |
-| `backup_restore.preflight` (remote SMB share) | `run_script` over WinRM |
+| `common.docker_db.remote_host.RemoteUbuntuHost` | `SshSession` for run + SFTP, opened from a resolved login (an absolute key path - `remote_exec` looks no name up); the class adds the `CompletedProcess` shape the provisioner expects |
+| `backup_restore.copy_backup.open_ssh_connection` | none since 0.24.0 - it hands out a `lib.remote_host.RemoteHost`, whose every call is `common.cli run-cmd` / `push-file` / `pull-file` (rules R03) |
+| `backup_restore.preflight` (remote SMB share) | `common.cli run-cmd` over WinRM, since 0.24.0 |
 | `backup_restore.restore_database` / `certificate` | `build_invoke_command_argv` — they compose the remote script and run it through their own runner (retry, progress logging, target-context guards) |
-| `control._support.ssh_connect` | `common.ssh.open_ssh_client` directly: `ssh_run` streams output live off the channel, which the request/response sessions do not do |
+| `control._support.ssh_connect` | none since 0.24.0 - a `lib.remote_host.RemoteHost` as well; the deploy's output now arrives when a command ends, not as it streams |
 
 ---
 
@@ -904,8 +1027,25 @@ not: which targets, which task, whether it is inactive. Exit 0 means authorized,
 report is the JSON on stdout; the caller then performs the work itself.
 
 One detail the caller does not see: the prompt is written to the controlling terminal rather than
-to stderr, because `db_ops.lib.common_cli` captures both streams. A question written into a
+to stderr, because `db_ops.transport.common_cli` captures both streams. A question written into a
 captured pipe is invisible until after the answer was due, which is indistinguishable from a hang.
+
+### `ask` — one question, for a caller that cannot ask it (0.24.0)
+
+The deploy's config-drift gate asks *adopt / keep / abort* - not a yes that authorizes an
+operation, so not `authorize`, but the same terminal, the same two-minute deadline and the same
+rule that silence is no answer. It called `read_answer` itself until `control` came under rules
+R03; now it runs this.
+
+```json
+{"prompt": "  adopt / keep / abort ? ", "choices": ["adopt", "keep", "abort"], "tries": 3}
+```
+
+`data` is `{"interactive", "answer", "source"}`. No terminal is `interactive: false` and an empty
+`answer` - the caller decides what nobody-to-ask means (the drift gate aborts). An answer not in
+`choices` is asked again up to `tries`; an empty or late one ends the asking with `""`, never with a
+choice made for the person. `answer` in the request is a reply the caller already collected, held
+to `choices` exactly like a typed one - which is also how the command runs unattended.
 
 ---
 
@@ -1028,35 +1168,38 @@ would have grown a second one.
 
 ```jsonc
 {
-  "target": "ACME-192-0-2-115",   // server_id, or "<db_type> <ip> [port]"
+  "connection": {"db_type": "sqlserver", "host": "192.0.2.115", "port": 1433,
+                 "username": "...", "password": "..."},   // required since 0.24.0 - the login
+  "target": "ACME-192-0-2-115",   // the label the answer carries; nothing is looked up by it
   "sql_text": "SELECT TOP 10 * FROM sys.objects",   // or "sql_file": "assets/tasks/query.sql"
-  "database_name": "SALESDB",          // optional; default = the instance's database
-  "credential_name": "sqlserver_2.115_..._readonly",  // optional; alias "user_ref";
-                                    // default = the instance's default_credential_name
+  "database_name": "SALESDB",          // optional; SQL Server default is master
   "max_rows": 50000,                // optional; the result is truncated past this
   "timeout_seconds": 30,            // optional; connect timeout
   "commit": false,                  // optional; default false = the batch is rolled back
   "autocommit": false,              // optional; true = no transaction at all
   "params": [505, "SALESDB"],          // optional; BOUND to the placeholders in the SQL
   "prelude": "DECLARE @spid int = ?;",   // optional; prepended to EVERY batch
+  "named_params": {"job_no": "AA1"},  // optional; Oracle / PostgreSQL: bound where the SQL says :job_no
   "capture": "first",               // optional; first (default) | all
   "max_result_sets": 20,            // optional; capture:all only, 0 = no cap
   "define": {"JOB_NO": "AA2503/00818"},  // optional; SQL*Plus &substitutions
   "sql_access": {"method": "api", "bridge_url": "..."},  // optional transport override
-  "data_dir": null                  // optional data/ folder override (tests)
+  "secrets": {"<ref>": "..."}       // optional; the refs that sql_access names (an 8i bridge)
 }
 ```
 
 Rules worth knowing:
 
-- **The request decides *which login*, and a login must be named.** With no `credential_name`,
-  the run uses the instance's `default_credential_name` from `db_instances.json`, resolved in
-  that server's `database_credentials` group in `users.json` (password from the encrypted secret
-  via `password_ref`) — see [Credentials](#which-login-a-target-runs-as-credentials). If neither
-  names one, the run is **refused**; nothing is inferred. That default is frequently a **DBA**
-  account — `ACME-192-0-2-115` defaults to `dba_user` (role DBA) — so a read-only caller
-  should name a least-privilege credential instead of inheriting it. The resolved
-  `credential_name`/`username` come back in the result, so a log line can record who connected.
+- **The request states the login, complete** (`connection`, required since 0.24.0 - rules R09).
+  `run-sql` opens no inventory, no `users.json` and no secret store: until 0.24.0 a bare
+  `server_id` was resolved here, and that door is closed. The app that holds the `server_id`
+  finishes the request from its own `data/` - `lib.data_sources.request_fill` picks the login the
+  way it always was picked (the named `credential_name`, else the instance's
+  `default_credential_name` - see [Credentials](#which-login-a-target-runs-as-credentials)) and
+  puts its password in the block, so the request goes on stdin. That default is frequently a
+  **DBA** account, so a read-only caller should name a least-privilege credential. The
+  `credential_name`/`username` the block carries come back in the result, so a log line can
+  record who connected. An 8i bridge's signing secret travels the same way, in `secrets`.
 - **Values are bound, never pasted** (`params`, added 2026-08-15). The list goes to
   `cursor.execute` as a sequence, so the placeholders in the SQL must be the ones that target's
   driver reads — `?` for pyodbc, `%s` for pg8000 and pymssql. An **object is refused by name**:
@@ -1070,6 +1213,21 @@ Rules worth knowing:
   which binds nothing — such a request is refused rather than run with the values dropped.
   This is what let the Telegram `sql_execute` commands, which write to production rows with
   arguments typed into a chat, stop opening their own connection.
+- **Values by name on Oracle and PostgreSQL** (`named_params`, 0.24.0). Their SQL names a value
+  `:name` and reads no `DECLARE`, so the prelude cannot serve them: an Oracle SQL task with
+  parameters failed at its first run on a direct connection, and a PostgreSQL task could declare
+  none (0.23.0 §1.55). `run-sql` finds each `:name` outside a string or a comment - not a `::int`
+  cast, not PL/SQL's `:=`, not `'HH24:MI'` - and writes it as a positional placeholder:
+  Oracle's `:1`, `:2` one per occurrence (the same meaning in SQL and in PL/SQL, where oracledb
+  counts a repeated name differently), PostgreSQL's own `$1` one per *name*, so the server types
+  `:d IS NULL OR day = :d` from `day = $1`. pg8000 passes `$n` through in either of the styles
+  its module global takes here (`db_connect.parameter_style`). The caller writes one shape; the
+  driver-specific spelling that made named binding unportable stays inside `run-sql`
+  (`lib.sql_text.bind_named_values`). Values are bound statement by statement, so a
+  PostgreSQL script is still split. Refused, before connecting: a name no statement says, another
+  engine, the legacy bridge, and `named_params` together with `params` / `prelude`. On pg8000's
+  `qmark` style a statement with a `?` of its own (a jsonb operator) cannot also take named values,
+  and says so - pg8000 has no escape for it.
 - **One result set by default, all of them on request** (`capture`, added 2026-08-16). The
   default keeps the first and **drains** the rest — their rows are never fetched, only their
   rowcounts counted into `affected_rows` — because an export has one sheet and fetching a set
@@ -1141,14 +1299,15 @@ Rules worth knowing:
 ```python
 from db_ops.common import sql_run
 
-result = sql_run.run_sql({"target": "ACME-192-0-2-115", "database_name": "SALESDB",
+result = sql_run.run_sql({"connection": connection, "target": "ACME-192-0-2-115",
+                          "database_name": "SALESDB",
                           "sql_text": "SELECT query_id, last_execution_time FROM sys.query_store_query"})
 result["columns"], result["rows"], result["row_count"], result["truncated"]
 ```
 
 ```bash
-python -m db_ops.common.cli run-sql '{"target": "ACME-192-0-2-115", "sql_text": "SELECT 1 AS x"}'
 python -m db_ops.common.cli run-sql @request.json     # or - to read the object from stdin
+# request.json: {"connection": {...}, "target": "ACME-192-0-2-115", "sql_text": "SELECT 1 AS x"}
 ```
 
 The CLI prints the JSON result and exits 0; a failure prints `{"ok": false, "error": ...}`
@@ -1163,9 +1322,9 @@ reports a failure the collector would never have hit, which sends the reader aft
 Nothing is rolled back in this mode, so use it for read-only SQL:
 
 ```bash
-python -m db_ops.common.cli run-sql '{"target": "ACME-192-0-2-245",
-  "sql_file": "db_ops/metrics/collectors/sqlserver/legacy_2008r2/069_sqlserver_linked_server_status.sql",
-  "timeout_seconds": 240, "autocommit": true}'
+python -m db_ops.common.cli run-sql @request.json
+# {"connection": {...}, "target": "ACME-192-0-2-245", "autocommit": true, "timeout_seconds": 240,
+#  "sql_file": "db_ops/metrics/collectors/sqlserver/legacy_2008r2/069_sqlserver_linked_server_status.sql"}
 ```
 
 ### Which tool runs it, and who chose it
@@ -1175,8 +1334,8 @@ tell an Oracle 8.1.7 instance from a 23c one: it handed both to python-oracledb,
 and newer, and an 8i target failed with `DPY-3010`. The rule now lives in
 [`lib/target_profile.py`](./14_lib.md) and both `run-sql` and `run-cmd` read it.
 
-**The request states the facts.** Every field is optional and empty means *use `db_instances.json`*,
-so a request that states nothing behaves exactly as it always has:
+**The request states the facts.** Every field is optional and empty means *what the connection
+states*:
 
 | Field | For | Effect |
 | --- | --- | --- |
@@ -1240,9 +1399,9 @@ trip, and `engine.version_drift` appears when it disagrees with the config. Unti
 
 ### A request that reads nothing at all
 
-`target` names a server and the inventory answers — the right default for a runbook or a scheduled
-task. A **`connection` block** replaces it and then no inventory file is opened
-([`lib/connection_spec.py`](./14_lib.md)):
+Since 0.24.0 that is every request (rules R09). Until then `target` named a server and the inventory
+answered; a **`connection` block** replaced it and no inventory file was opened
+([`lib/connection_spec.py`](./14_lib.md)). Now the block is required, and `target` is only a label:
 
 ```bash
 python -m db_ops.common.cli run-sql '{"connection": {"db_type": "sqlserver", "host": "192.0.2.5",
@@ -1250,11 +1409,15 @@ python -m db_ops.common.cli run-sql '{"connection": {"db_type": "sqlserver", "ho
   "sql_text": "SELECT 1"}'
 ```
 
-`run-cmd` has the same door and always half-had it: an inline `access` block skipped the inventory
-but still needed `users.json` for the credential. A block carrying its own `username` plus
-`password`/`password_ref` is now answered from itself, and the credentials file is not even loaded.
-A named `credential_name` still wins when both are present — naming an entry is asking for *that*
-entry.
+`run-cmd` and the file transfers (`fetch-file`, `send-file`, `pack-files`, `relay-file` per side)
+take the host the same way: an inline **`access`** block, required since 0.24.0 - a `username` with
+a `password`, or a key login (`method: ssh`, `auth_type` other than `password`, and an absolute
+`key_file` or none, for the agent's keys). Every way the block could still send the command to the
+data folder is refused rather than followed: a `credential_name` without a `username` (a
+`users.json` entry), a `password_ref` the environment does not hold (the secret store), a
+`key_file` given as a name (`data/ssh_keys`). The R09 guard runs each of them on a root whose every
+file is unreadable. `probe-host` takes its `host` the same way, with the OS facts that change the
+verdict.
 
 **`runtime`: `host` (default) | `docker` | `k8s`.** `run-cmd` can now put the command *inside* a
 container, which only `backup-database` could do before. It wraps only when the **request** states
@@ -1267,8 +1430,8 @@ host still wants `sh`. Implemented and not verified live: no Windows container h
 so the guarantee is the command text.
 
 ```bash
-run-cmd '{"target": "ACME-192-0-2-249-PGLAB-5433", "runtime": "docker",
-          "command": "psql --version", "confirm": true, "assume_yes": true}'
+run-cmd @request.json   # {"access": {...}, "target": "ACME-192-0-2-249-PGLAB-5433", "runtime": "docker",
+                        #  "command": "psql --version", "confirm": true, "assume_yes": true}
 #   -> psql (PostgreSQL) 18.4          … stated runtime: inside the container
 # without "runtime": bash: psql: command not found   … the host, unchanged
 ```
@@ -1296,7 +1459,8 @@ NT 6.2 and answers **Windows Server 2016 10.0.14393**.
 ### `probe-host` — what a machine listens on, and what that rules out
 
 ```bash
-python -m db_ops.common.cli probe-host '{"target": "ACME-192-0-2-236"}'
+python -m db_ops.common.cli probe-host '{"host": "192.0.2.236", "target": "ACME-192-0-2-236",
+  "os": "Windows Server 2003"}'
 # interactive_only - answers on RDP 3389 and no management port, and none is possible:
 # Windows Server 2003 ships no WinRM and cannot run the OpenSSH server.
 ```
@@ -1393,7 +1557,7 @@ Telegram command and `sql_run` raise.
 Verify the config satisfies this before a deploy:
 
 ```bash
-python -m db_ops.cli check-credentials          # exit 1 lists every target with no login
+python -m db_ops.common.cli check-credentials   # exit 1 lists every target with no login
 ```
 
 It checks a legacy-Oracle target too, and by what that target actually needs: the credential its
@@ -1418,10 +1582,12 @@ connection it opens, so no caller has to know the type code. A driver without
 ## Which clock this node is on (`timezone`)
 
 `self-status` says what this installation *is*; `timezone` says what hour it thinks it is, and puts
-that on the record.
+that on the record. **It is `db.cli`'s since 0.24.0** - `common.cli timezone` reported the same
+answer and went (rules R43, the operator's choice); `upgrade-config` points an old command line at
+`db.cli`, which takes the same JSON request.
 
 ```bash
-python -m db_ops.common.cli timezone '{"format":"txt"}'
+python -m db_ops.db.cli --config config.json timezone --format txt
 ```
 
 ```
@@ -1432,11 +1598,11 @@ now (display) : 2026-09-07 08:55:31 +07
 now (stored)  : 2026-09-07T01:55:31Z
 ```
 
-**It reads nothing and writes nothing.** Like `self-status`, it still answers when the store is
-down — "which clock am I on" is exactly the question asked when something is misconfigured, and it
-answers with no config at all.
+**Asked nothing more, it opens no store.** Like `self-status`, it still answers when the store is
+down — "which clock am I on" is exactly the question asked when something is misconfigured — and
+with no readable config at all, which it says.
 
-**Putting the answer on the record is `db.cli`, not this**, because `common` may not import `db`:
+**Putting the answer on the record** is the same command with `--record`:
 
 ```bash
 python -m db_ops.db.cli --config config.json timezone --record --list
@@ -1545,8 +1711,7 @@ odd one out among the status answers, and the distinction is the whole reason it
 | `db.cli ops-status` | whether the **apps** ran on schedule | the store |
 | `common.cli host-facts` | a **monitored host** | that host, over its `cmd_access` |
 | `control.cli worker-status` | the **worker**, from the master | SSH |
-| `common.cli self-status` | **this installation and this machine** | nothing |
-| `db.cli self-status` | the same, **plus each app command's last run** | the store, and only for that column |
+| `common.cli self-status` | **this installation and this machine**, and each app command's last run as its caller states it | nothing |
 
 Reaching nothing is the point: it still answers when the store is unreachable, which is one of the
 times somebody most wants to know what version they are talking to.
@@ -1554,7 +1719,7 @@ times somebody most wants to know what version they are talking to.
 ```bash
 python -m db_ops.common.cli self-status '{}'              # JSON envelope
 python -m db_ops.common.cli self-status '{"format":"txt"}' # the chat listing
-python -m db_ops.db.cli self-status '{"format":"txt"}'     # + last run per app command (/spbot_self_status)
+python -m db_ops.common.cli self-status @req.json          # {"format":"txt","last_runs":{...}} - stated
 ```
 
 **What this node schedules (0.22.0).** The listing ends with one line per app command from
@@ -1564,12 +1729,15 @@ weekdays. Whether a command runs here is decided by `db_ops.lib.node_role.runs_o
 the daemon uses, so the report cannot disagree with the scheduler. Asked for on 2026-09-23, when two
 schedulers ran disjoint sets on two schemas and nothing a phone could reach said which was which.
 
-The **last run** needs `job_runs`, and `common` may not import `db` — so there are two front doors
-to one report: `collect_self_status` and `emit_self_status` build and print it once, and
-`db.cli self-status` adds the column through `ops_status.latest_runs` (one query for every code).
-That column is the only part allowed to fail: a store that cannot be read prints
-`(last run unknown: <why>)` and the rest of the report stands. `/spbot_self_status` calls the `db`
-front door.
+The **last run** is in `job_runs`, which `common` may not open (R04) - so it is the request's
+(`last_runs`, `{code: {status, started_at}}`, R09). Until 0.24.0 `db.cli self-status` was a second
+door to this report that added the column itself; one command per job (rules R43, the operator's
+choice) made it `common`'s alone, and `/spbot_self_status` states the column: the bot finishes the
+request from its node's store (`telegram.command_processor.with_last_runs`, through
+`ops_status.latest_runs`, one query for every code) before it runs `common.cli self-status`. The
+column is the only part allowed to fail: a store the bot cannot read arrives as `store_error` and
+prints `(last run unknown: <why>)`; a request that states nothing prints *not stated* - never
+"never ran" - and the rest of the report stands.
 
 Three things it takes care to get right rather than merely report:
 
@@ -1687,9 +1855,11 @@ The shared **JSON config objects** these parsers read (`time_window`, `notify`, 
   `tests/test_common_cli_json_contract.py` holds them to it — a new command that invents its own
   flag vocabulary fails there rather than shipping. Parsing is shared: `_read_json_request` in
   `db_ops/common/cli.py` is the only reader, so every command accepts the same three input forms
-  and reports a bad payload identically. Six commands (`add-sql`, `metric-toggle`, `list-targets`,
-  `check-credentials`) predate the rule and still accept their
-  original flag/word form as compatibility; `_optional_json_request` tells the two apart.
+  and reports a bad payload identically. Three commands (`add-sql`, `metric-toggle`, `list-targets`)
+  predate the rule and still accept their original flag/word form as compatibility;
+  `_optional_json_request` tells the two apart. `check-credentials` did too while the root package
+  answered it; as a `common.cli` command (0.24.0) its bare folder is refused with the
+  `{"data_dir": ...}` it became.
 - **One convention per concern.** `time_window` is the only scheduling authority;
   `data_sources` is the only data-folder loader; `secret_text` is the only crypto path;
   `remote_exec` (over `ssh`) is the only way to reach another machine; `confirm` is the only
@@ -1713,7 +1883,10 @@ python -m db_ops.common.cli check-identifiers '{"extra_terms": ["CLOUD"]}'
 
 Finding something is the **answer**, not a failure: the command exits 0 and the count is in
 `data.hits`. It exits non-zero only when it could not run — the same distinction `check-secret`
-makes between "the estate is like this" and "db_ops could not look".
+makes between "the estate is like this" and "db_ops could not look". A **refusal** - no identifiers
+to search for, or no file to read, either of which would report every tree clean - answers
+`data.refused: true`, so a caller can tell "could not look" from "broke" without reading the
+message: the export says SKIPPED for the first and stops for the second.
 
 ### It reads your inventory instead of maintaining a map
 
@@ -2392,7 +2565,7 @@ python -m db_ops.telegram.cli route <level>       # {enabled, alert, chat_id} fo
 python -m db_ops.common.cli run-sql '<json>'        # sql_run: run SQL on one database target
 python -m db_ops.common.cli run-cmd '<json>'        # host_ops: one shell command on a configured host
 python -m db_ops.common.cli probe-host '<json>'     # host_probe: what a host listens on, and what that allows
-python -m db_ops.cli check-credentials       # data_sources: every target resolves a login
+python -m db_ops.common.cli check-credentials   # data_sources: every target resolves a login
 python -m db_ops.db.cli queue-telegram-message '<json>'  # telegram_queue: queue one outgoing message
 python -m db_ops.db.cli restore-drill-status '<json>'    # restore_drill: was a restore actually proven
 python -m db_ops.db.cli sql-run-history '<json>'         # sql_run_history: what the SQL tasks did
@@ -2404,6 +2577,10 @@ python -m db_ops.common.cli relay-file '<json>'     # file_transfer: copy one fi
 <request> | python -m db_ops.common.cli create-db-docker -  # docker_db: build a lab database instance
 <request> | python -m db_ops.common.cli move-db-docker -    # docker_db: move one, data included
 <request> | python -m db_ops.common.cli run-sqlcmd -        # sqlcmd_run: one batch, local / ssh / winrm
+<request> | python -m db_ops.common.cli smb-list -          # smb: the files under a folder of a Windows share
+<request> | python -m db_ops.common.cli smb-get -           # smb: one file from a share to here
+<request> | python -m db_ops.common.cli smb-delete -        # smb: exactly the files named, on a share
+<request> | python -m db_ops.common.cli smb-credential -    # smb: store a share login for Windows (cmdkey)
 <request> | python -m db_ops.common.cli backup-chain -      # backup_copy: which files a restore needs
 <request> | python -m db_ops.common.cli copy-backup-dir -   # backup_copy: host to host, one tar stream, mirrored
 <request> | python -m db_ops.common.cli prune-staged-backups -  # backup_copy: a restore's staging past retention
@@ -2452,7 +2629,7 @@ Two different clocks are in play; do not mix them up.
 **The display clock is `timezone` in `config.json`** — an IANA name (`Asia/Ho_Chi_Minh`) or a fixed
 offset (`+07:00`), mandatory, defaulting to `UTC`. `DB_OPS_TIMEZONE` overrides it per node. It is
 resolved once by `db_ops.config.parse_config` and read through `db_ops/lib/timezone.py`; no app
-parses it. `python -m db_ops.common.cli timezone '{"format":"txt"}'` says what a node resolved.
+parses it. `python -m db_ops.db.cli timezone --format txt` says what a node resolved.
 
 - **`time_window` bounds (`from_*`/`to_*`) are hours in the configured timezone**
   (`db_ops.lib.timezone.display_now()`), on every node, whatever clock the host keeps. So
@@ -2775,7 +2952,7 @@ way, neither looked here.
 | `password_rotation` | the `rotate-password` CLI (operator-driven; no app calls it on a schedule) |
 | `secret_check` | the `check-secret` CLI, and any audit of the secret store |
 | `metric_store` | metrics (collector, cli), reports (inventory_health, server_report), jobs (status), sla |
-| `inventory_render` | control (`inventory-workflow`), reports (`build-inventory-workflow`), the `inventory-summary` CLI |
+| `inventory_render` | reports (`inventory-workflow`), the `inventory-summary` CLI, control (`inventory-health`'s merge only) |
 | `confirm` | `host_ops` (restart, service stop/restart), `sqlserver_patch` (apply-cu) — and every dangerous operation added later |
 | `evidence` | `host_ops`, `sqlserver_patch` — and any future operation that changes a production host |
 | `host_ops` | the `host-facts` / `host-service` / `host-restart` CLIs, `sqlserver_patch`. Metrics reads the `cmd_access` resolution from `lib.cmd_access` directly |
@@ -3155,10 +3332,9 @@ For a one-off outside the schedule, the three CLI commands (`sqlserver-export-in
 
 ### Both restore paths call the same replay
 
-There are two SQL Server restore paths and they share no execution machinery — the engine path
-(`restore_database.py`, SMB share + `sqlcmd`, PITR with `STOPAT`) selects its chain in Python; the
-script path (`mssql_restore.sh`) selects its chain in bash. They cannot be merged, and merging them
-is not the goal.
+There are two SQL Server restore paths - the engine path (`restore_database.py`, SMB share +
+`sqlcmd`, PITR with `STOPAT`) and the script path (container drills). Each selects its own chain;
+since 0.24.0 both apply it through the same steps, `common.cli restore-full` / `-diff` / `-log`.
 
 What they *do* share is the decision around the restore — same bundle, same two phases, same
 ordering rule, same failure policy — and that is one function, `server_metadata.replay_phase`. Both

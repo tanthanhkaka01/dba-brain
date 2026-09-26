@@ -34,9 +34,10 @@ def test_every_app_directory_is_reachable_by_name() -> None:
         for path in (Path(__file__).resolve().parents[1] / "db_ops").iterdir()
         if path.is_dir() and not path.name.startswith("__") and (path / "__init__.py").exists()
     }
-    # `lib` is imported, never run — it has no CLI by rule (ORD 14), and `logging_ops` is a
-    # library too. Everything else answers to a name.
-    expected = {name for name in packages if name not in {"lib", "logging_ops"}}
+    # `lib` is imported, never run — it has no CLI by rule (ORD 14), `logging_ops` is a library too,
+    # and `transport` is the client every component reaches `common` through (ORD 15), with nothing
+    # of its own to run. Everything else answers to a name.
+    expected = {name for name in packages if name not in {"lib", "logging_ops", "transport"}}
     reachable = {module.split(".")[1] for module in cli.APPS.values()}
 
     assert expected <= reachable, f"not reachable by name: {sorted(expected - reachable)}"

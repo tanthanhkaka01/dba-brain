@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import json
 
-from db_ops import scaffold
+from db_ops.common import scaffold
 from db_ops.webhost import pages
 
 

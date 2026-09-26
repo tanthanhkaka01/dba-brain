@@ -3,14 +3,12 @@ from __future__ import annotations
 import dataclasses
 import os
 import socket
-import subprocess
 import time
 from pathlib import Path
 
 from db_ops.backup_restore.config import BackupRestoreConfig
-from db_ops.backup_restore.copy_backup import build_cmdkey_command, resolve_password_ref
+from db_ops.backup_restore.copy_backup import resolve_password_ref, share_login_request, store_share_logins
 from db_ops.backup_restore.space import RestoreSpaceRefused, check_free_space
-from db_ops.common import remote_exec
 from db_ops.lib.shell import POWERSHELL_NOT_FOUND_HINT, powershell_executable
 
 
@@ -171,13 +169,13 @@ def _setup_smb_credentials(
     if not config.vm_credential_target or not config.vm_username or not config.vm_password_env:
         return
     try:
-        cmd = build_cmdkey_command(
+        request = share_login_request(
             credential_target=config.vm_credential_target,
             username=config.vm_username,
             password_env=config.vm_password_env,
         )
-        if cmd:
-            subprocess.run(cmd, check=True, capture_output=True, text=True)
+        if request:
+            store_share_logins([request])
             _log(logger, f"preflight restore_id={config.restore_id} smb_credentials=ok target={host}")
     except Exception as exc:
         raise PreflightError(
@@ -219,38 +217,39 @@ def _try_create_windows_share_via_remote_ps(
         f"{{ New-SmbShare -Name $s -Path $d -FullAccess 'Everyone' | Out-Null }}; "
         f"Write-Output 'OK'"
     )
-    # Transport, credential handling and the Invoke-Command wrapper are shared —
-    # db_ops.common.remote_exec. Preflight only owns the script above and the verdict below.
+    # Transport, credential handling and the Invoke-Command wrapper are shared: `common.cli run-cmd`
+    # over WinRM (this app runs `common`, it does not import it - rules R03). Preflight only owns
+    # the script above and the verdict below.
+    from db_ops.transport import common_cli
+
+    request = {
+        "access": {"method": "winrm", "platform": "windows", "host": host,
+                   "username": config.vm_username, "password": password, "timeout_seconds": 60},
+        "script": remote_script, "timeout_seconds": 60, "confirm": True, "assume_yes": True,
+    }
     try:
-        result = remote_exec.run_script(
-            {
-                "method": "winrm",
-                "host": host,
-                "username": config.vm_username,
-                "password": password,
-                "timeout_seconds": 60,
-            },
-            remote_script,
-        )
-    except remote_exec.RemoteTimeoutError:
-        return False, f"PowerShell Invoke-Command timed out after 60 s (WinRM may be unavailable on {host})"
-    except remote_exec.RemoteExecError as exc:
-        detail = str(exc)
-        if POWERSHELL_NOT_FOUND_HINT in detail:
-            return False, POWERSHELL_NOT_FOUND_HINT
-        return False, detail[:300]
+        _success, answer, error = common_cli.run_allowing_failure("run-cmd", request, timeout_seconds=180)
     except Exception as exc:  # noqa: BLE001 - preflight reports, it never aborts the restore.
         return False, f"unexpected error: {exc}"
+    if "exit_code" not in answer:
+        # The command never ran: no session, or no answer in time. The error says which.
+        if "timed out" in error.lower():
+            return False, f"PowerShell Invoke-Command timed out after 60 s (WinRM may be unavailable on {host})"
+        if POWERSHELL_NOT_FOUND_HINT in error:
+            return False, POWERSHELL_NOT_FOUND_HINT
+        return False, error[:300]
 
-    if result.ok and "OK" in result.stdout:
+    stdout, stderr = str(answer.get("stdout") or ""), str(answer.get("stderr") or "")
+    exit_code = int(answer.get("exit_code") or 0)
+    if exit_code == 0 and "OK" in stdout:
         return True, "created via PowerShell Invoke-Command (WinRM)"
-    detail = (result.stderr or result.stdout or "non-zero exit without output").strip()
+    detail = (stderr or stdout or "non-zero exit without output").strip()
     if "WinRM" in detail or "5985" in detail or "WSMan" in detail or "Access is denied" in detail:
         return False, (
             f"WinRM not reachable or Access Denied — enable WinRM on {host}: 'winrm quickconfig'. "
             f"Detail: {detail[:200]}"
         )
-    return False, f"exit {result.exit_code}: {detail[:300]}"
+    return False, f"exit {exit_code}: {detail[:300]}"
 
 
 def _try_admin_share_fallback(

@@ -95,8 +95,9 @@ def _require(request: dict[str, Any], field: str) -> str:
 
 
 def _open(request: dict[str, Any], *, data_dir, secrets):
-    target = host_ops.resolve_host(request, data_dir=data_dir)
-    return target, host_ops.open_host_session(target, data_dir=data_dir, secrets=secrets)
+    # The host and its login are the request's "access" (rules R09) - never looked up by server_id.
+    target = host_ops.resolve_stated_host(request, what="a file transfer")
+    return target, host_ops.open_host_session(target, secrets=secrets)
 
 
 def _result(*, target, status, local_path: Path, remote_path: str, size: int, started: float,

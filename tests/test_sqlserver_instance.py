@@ -62,7 +62,11 @@ class _FakeCursor:
 
 
 def _policy():
-    return si.load_policy()
+    """This estate's policy, read the way the app reads it before it calls - common.cli takes it in
+    the request (rules R09)."""
+    from db_ops.lib import data_sources
+
+    return data_sources.load_sqlserver_instance_policy()
 
 
 _INFO = {"build": "16.0.4235.1", "edition": "Developer Edition (64-bit)", "engine_edition": "3",
@@ -329,11 +333,17 @@ def test_a_failing_batch_does_not_abort_the_rest_of_the_file():
 # Policy file
 # --------------------------------------------------------------------------- #
 
-def test_a_missing_policy_file_is_refused_rather_than_defaulted(tmp_path):
+def test_a_missing_policy_is_refused_rather_than_defaulted(tmp_path):
     """Every judgement about what is portable comes from that file. Falling back to a built-in
-    list would give two different answers depending on whether anyone noticed it was gone."""
-    with pytest.raises(si.SqlServerInstanceError, match="not found"):
-        si.load_policy(tmp_path)
+    list would give two different answers depending on whether anyone noticed it was gone. The
+    command takes the policy in its request (rules R09) and refuses one without it; the app that
+    reads the node's file refuses a node that has none."""
+    from db_ops.lib.data_sources import request_fill
+
+    with pytest.raises(si.SqlServerInstanceError, match='needs "policy"'):
+        si.load_policy({"connection": {}})
+    with pytest.raises(request_fill.RequestFillError, match="not found"):
+        request_fill.instance_policy(data_dir=tmp_path)
 
 
 def test_every_artifact_in_the_policy_has_an_exporter():

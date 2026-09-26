@@ -134,7 +134,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
     force_parser = subparsers.add_parser(
         "force-hourly-report",
-        help="Manual workflow: collect metrics for one target IP, create a metrics report, then queue report alerts.",
+        help="Manual workflow: report one target from its stored metric results, then queue report alerts. Collects nothing - metrics does, on its schedule.",
     )
     force_parser.add_argument("--server-id", dest="server_id", default=None,
                               help="Unique server_id to resolve the target (preferred; no db_type/port needed).")
@@ -151,7 +151,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default=300,
         help="Do not queue the same metrics report level again within this many seconds.",
     )
-    force_parser.add_argument("--include-windowed", action="store_true", help="Also collect the metrics whose time_window confines them to certain hours (DBCC CHECKDB, index fragmentation, restore validation ...). Off by default: --force means 'never mind the interval', not 'never mind the window', and those metrics are windowed precisely to keep them off a production instance in the daytime.")
+    # Kept only so a bot catalogue from before 0.24.0 is answered with why, not argparse's
+    # "unrecognized arguments": the report collects nothing, so there is no window to include.
+    force_parser.add_argument("--include-windowed", action="store_true", help=argparse.SUPPRESS)
     force_parser.set_defaults(report_function=force_hourly_report)
 
     history_parser = subparsers.add_parser(
@@ -255,7 +257,7 @@ def _this_node_address() -> tuple[str, str]:
     already carries both fields in its ``data``. Only ``--this-node`` needs them, so the
     subprocess is paid for by the one form that has a use for it.
     """
-    from db_ops.lib import common_cli
+    from db_ops.transport import common_cli
 
     try:
         facts = common_cli.run("self-status", {})

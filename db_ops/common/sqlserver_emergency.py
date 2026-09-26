@@ -65,21 +65,16 @@ def _require_name(value: Any, field: str) -> str:
 
 
 def _connect(request: dict[str, Any], *, data_dir: str | Path | None, database: str = ""):
-    """Resolve the target and open one connection, reusing the ``run-sql`` path.
+    """Open one connection to the database the request states, reusing the ``run-sql`` path.
 
-    Target resolution, credential lookup and the driver rules belong to ``sql_run``/``db_connect``
-    — this module adds an operation, not a second way to reach a database.
+    The login is the request's ``connection`` block - this process reads no configuration (rules
+    R09); ``target`` is only the label the evidence calls it by. The driver rules belong to
+    ``sql_run``/``db_connect`` — this module adds an operation, not a second way to reach a
+    database.
     """
-    spec = str(request.get("target") or request.get("server_id") or "").strip()
-    if not spec:
-        raise EmergencyError('target is required (a server_id, e.g. "ACME-192-0-2-115").')
     try:
-        resolved = sql_run.resolve_sqlserver_target(
-            spec,
-            data_dir=data_dir,
-            database=database,
-            credential_name=str(request.get("credential_name") or request.get("user_ref") or ""),
-        )
+        resolved = sql_run.resolve_stated_connection(request, database=database,
+                                                     what="this emergency command")
     except sql_run.SqlRunError as exc:
         raise EmergencyError(str(exc)) from exc
     timeout = max(1, int(request.get("timeout_seconds") or 60))

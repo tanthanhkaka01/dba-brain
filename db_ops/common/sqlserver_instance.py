@@ -42,7 +42,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from db_ops.common import data_sources, host_ops, sql_run
+from db_ops.common import host_ops, sql_run
+
 from db_ops.common.evidence import FAIL, OK, SKIP, WARN, GateReport
 from db_ops.lib.json_io import load_json_file
 from db_ops.lib.instance_bundle import (  # noqa: F401 - one definition, see that module
@@ -54,7 +55,6 @@ from db_ops.lib.instance_bundle import (  # noqa: F401 - one definition, see tha
 )
 from db_ops.lib.paths import TOOL_ROOT  # noqa: F401 - one definition, see that module
 
-POLICY_FILENAME = data_sources.SQLSERVER_INSTANCE_POLICY_FILENAME
 
 
 class SqlServerInstanceError(RuntimeError):
@@ -65,18 +65,21 @@ class SqlServerInstanceError(RuntimeError):
 # Policy
 # --------------------------------------------------------------------------- #
 
-def load_policy(data_dir: str | Path | None = None) -> dict[str, Any]:
-    """``sqlserver_instance_policy.json``, as this module's error type.
+def load_policy(request: dict[str, Any]) -> dict[str, Any]:
+    """The instance policy the request states - which server settings travel between instances.
 
-    The read itself is ``data_sources.load_sqlserver_instance_policy`` — the data folder has one
-    reader, and ``backup_restore`` calls it directly while validating a config block. All this
-    adds is the translation, so a caller of *this* module still catches
-    :class:`SqlServerInstanceError` for everything it can refuse.
+    ``sqlserver_instance_policy.json`` has no built-in answer on purpose (defaulting it would mean
+    a replay silently carrying a different set of logins and Agent jobs), and this process reads no
+    configuration (rules R09). So the app reads the node's file and sends it as ``"policy"``
+    (``db_ops.lib.data_sources.request_fill.instance_policy``), and a request without one is refused.
     """
-    try:
-        return data_sources.load_sqlserver_instance_policy(data_dir=data_dir)
-    except FileNotFoundError as exc:
-        raise SqlServerInstanceError(str(exc)) from exc
+    policy = request.get("policy") if isinstance(request, dict) else None
+    if not isinstance(policy, dict) or not policy:
+        raise SqlServerInstanceError(
+            'needs "policy" - the content of sqlserver_instance_policy.json, which declares which '
+            "server settings are portable. common.cli reads no configuration (rules R09): the app "
+            "that calls it sends the node's policy.")
+    return policy
 
 
 # --------------------------------------------------------------------------- #
@@ -85,20 +88,17 @@ def load_policy(data_dir: str | Path | None = None) -> dict[str, Any]:
 
 def _connect(request: dict[str, Any], *, data_dir: str | Path | None, timeout_seconds: int = 30,
              autocommit: bool = False):
-    """Connect to the instance's ``master`` as the login the request (or the inventory) names.
+    """Connect to the instance's ``master`` as the login the request states in ``connection``.
 
     ``master`` deliberately: every catalog this module reads is server-level, and a target's
-    ``db_name`` is a service label rather than a database (see ``metrics/executor.py``).
+    ``db_name`` is a service label rather than a database (rules R24). The login is the request's
+    own - this process reads no configuration (rules R09).
     """
     if not isinstance(request, dict):
         raise SqlServerInstanceError("request must be a JSON object.")
     try:
-        resolved = sql_run.resolve_sqlserver_target(
-            str(request.get("target") or ""),
-            data_dir=data_dir,
-            database="master",
-            credential_name=str(request.get("credential_name") or ""),
-        )
+        resolved = sql_run.resolve_stated_connection(request, database="master",
+                                                     what="this instance-metadata command")
     except sql_run.SqlRunError as exc:
         raise SqlServerInstanceError(str(exc)) from exc
     if str(resolved.get("db_type")) != "sqlserver":
@@ -995,7 +995,7 @@ def export_instance(
          "include": ["logins", "agent_jobs"],      # default: everything the policy declares
          "secret_prefix": "MSSQL_2_115"}
     """
-    policy = load_policy(data_dir)
+    policy = load_policy(request)
     report = GateReport("sqlserver-export-instance", target=str(request.get("target") or ""), echo=echo)
 
     connection, resolved = _connect(request, data_dir=data_dir)
@@ -1170,7 +1170,7 @@ def replay_instance(
     their users are never orphaned; ``post-database`` must run **after**, because Agent job steps
     name databases that have to exist.
     """
-    policy = load_policy(data_dir)
+    policy = load_policy(request)
     root, manifest = read_bundle(request.get("bundle_dir") or "")
     phase = str(request.get("phase") or "all").strip().lower()
     if phase not in {PRE_DATABASE, POST_DATABASE, "all"}:
@@ -1239,7 +1239,7 @@ def replay_instance(
                 return host_ops._finish(report, request, [])  # noqa: SLF001
 
         agent = _has_agent(info)
-        secrets = _load_secrets(request, data_dir=data_dir)
+        secrets = _load_secrets(request)
         names = artifacts_in_order(policy, phase="" if phase == "all" else phase)
         results: list[dict[str, Any]] = []
         missing_all: set[str] = set()
@@ -1316,18 +1316,17 @@ def replay_instance(
     return host_ops._finish(report, request, list(request.get("overrides") or []))  # noqa: SLF001
 
 
-def _load_secrets(request: dict[str, Any], *, data_dir: str | Path | None = None) -> dict[str, str]:
-    """Secret values for the placeholders, from the encrypted store — never from the request.
+def _load_secrets(request: dict[str, Any]) -> dict[str, str]:
+    """Secret values for the placeholders - the ones the request carries, and only those.
 
-    A request field would put the plaintext in a command line, a log and a shell history, which
-    is the thing the placeholder scheme exists to avoid.
+    The app that calls reads the bundle's manifest (``secret_refs``) and sends the value of each
+    ref it names, on stdin through ``db_ops.transport`` - never on a command line, a log or a
+    shell history, which is what the placeholder scheme exists to keep them out of. This process
+    reads no secret store (rules R09). A ref without a value is "missing", which is the
+    fail-closed path the replay already takes.
     """
-    from db_ops.common import data_sources
-
-    try:
-        return dict(data_sources.load_secret_text(data_dir))
-    except Exception:  # noqa: BLE001 - an unreadable store is reported as "every ref missing",
-        return {}      # which is the fail-closed path rather than a crash.
+    raw = request.get("secrets") if isinstance(request, dict) else None
+    return {str(ref): str(value) for ref, value in (raw or {}).items() if value not in (None, "")}
 
 
 def _split_batches(text: str) -> list[str]:

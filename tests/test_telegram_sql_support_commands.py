@@ -23,8 +23,8 @@ from __future__ import annotations
 
 import pytest
 
-from db_ops.lib import common_cli
-from db_ops.common import data_sources
+from db_ops.transport import common_cli
+from db_ops.lib import data_sources
 from db_ops.telegram import sql_commands
 
 
@@ -49,7 +49,13 @@ def _config(**overrides):
 
 @pytest.fixture
 def stub(monkeypatch, tmp_path):
-    """A resolvable target, a real .sql file, and a recorded `run-sql` call."""
+    """A resolvable target, a real .sql file, and a recorded `run-sql` call.
+
+    The login is filled from this node's data/ before the call (rules R09) - that filler has its own
+    tests (``test_an_app_finishes_a_common_request_before_it_calls.py``), so here it passes the
+    request through and what is checked is what this command composes.
+    """
+    monkeypatch.setattr(sql_commands, "_finished", lambda request, *, data_dir=None: dict(request))
     sql_file = tmp_path / "update_flag.sql"
     sql_file.write_text("UPDATE Ticket SET AllowReInspect = 1 WHERE Id = ?;", encoding="utf-8")
     monkeypatch.setattr(sql_commands, "resolve_telegram_sql_file", lambda name: sql_file)

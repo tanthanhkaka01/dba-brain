@@ -26,6 +26,16 @@ from db_ops.telegram import command_processor
 from conftest import shipped_config
 
 
+@pytest.fixture(autouse=True)
+def _the_request_is_sent_as_the_app_finished_it(monkeypatch):
+    """The app finishes a `common.cli` request from its node's data/ before it sends it (rules
+    R09). These tests are about what it does with the answer, so the fill hands the request back
+    unchanged; `request_fill` has tests of its own."""
+    from db_ops.lib.data_sources import request_fill
+
+    monkeypatch.setattr(request_fill, "fill_request", lambda command, request, **_kwargs: dict(request))
+
+
 def _command(action_config=None):
     return command_processor.SupportCommand(
         command_id=28,
@@ -60,7 +70,7 @@ def test_the_four_prompted_answers_become_the_json_request(monkeypatch):
     # Stubbed at the CLI boundary since 2026-08-15: the load runs in
     # `db_ops.common.cli create-table-from-xlsx`, so patching the in-process function would patch
     # something this path no longer calls. The request it receives is asserted unchanged.
-    from db_ops.lib import common_cli
+    from db_ops.transport import common_cli
     monkeypatch.setattr(common_cli, "run", lambda command, request: fake_create(request))
 
     result = command_processor.execute_create_table_from_xlsx_command(
@@ -89,7 +99,7 @@ def test_the_reply_actually_renders_every_field_it_promises(monkeypatch):
     even true. Asserting the handler's keys is not enough; the template and the renderer have
     to agree, so this drives the real renderer with the real shipped template.
     """
-    from db_ops.lib import common_cli
+    from db_ops.transport import common_cli
     monkeypatch.setattr(common_cli, "run", lambda command, request: {
         "server_id": "ACME-192-0-2-248", "db_type": "sqlserver", "database_name": "Globex_Prod",
         "schema": "guest", "table_name": "temp_e24623de",
@@ -122,7 +132,7 @@ def test_the_reply_actually_renders_every_field_it_promises(monkeypatch):
 def test_the_handler_returns_unprefixed_keys_because_the_renderer_adds_the_prefix(monkeypatch):
     """The mechanism behind the test above, stated directly: `render_reply_text` exposes each
     scalar as `{result_<key>}`. A handler that prefixes its own keys double-prefixes them."""
-    from db_ops.lib import common_cli
+    from db_ops.transport import common_cli
     monkeypatch.setattr(common_cli, "run", lambda command, request: {
         "server_id": "s", "database_name": "d", "schema": "sc", "table_name": "t",
         "qualified_name": "[sc].[t]", "column_count": 1, "rows_inserted": 0,
@@ -138,7 +148,7 @@ def test_the_handler_returns_unprefixed_keys_because_the_renderer_adds_the_prefi
 def test_the_generated_table_name_comes_back_because_nothing_else_names_it(monkeypatch):
     """The operator did not choose it, so the reply is the only place they can find it. A blank
     table_name in the request is what asks for one."""
-    from db_ops.lib import common_cli
+    from db_ops.transport import common_cli
     monkeypatch.setattr(common_cli, "run", lambda command, request: {
         "server_id": "ACME-1", "database_name": "d", "schema": "s", "table_name": "temp_deadbeef",
         "qualified_name": "[s].[temp_deadbeef]", "column_count": 1, "rows_inserted": 0,
@@ -152,7 +162,7 @@ def test_the_generated_table_name_comes_back_because_nothing_else_names_it(monke
 
 def test_a_fifth_word_names_the_table_instead_of_generating_one(monkeypatch):
     seen = {}
-    from db_ops.lib import common_cli
+    from db_ops.transport import common_cli
     monkeypatch.setattr(common_cli, "run",
                         lambda command, request: seen.update(request) or {
                             "server_id": "ACME-1", "database_name": "d", "schema": "s",
@@ -178,7 +188,7 @@ def test_a_load_failure_is_reported_to_the_user_not_raised_as_a_crash(monkeypatc
     # The CLI reports the failure as `success: false`; the client turns that into
     # CommonCliError, and the handler must still turn *that* into a message the operator reads
     # rather than a traceback.
-    from db_ops.lib import common_cli
+    from db_ops.transport import common_cli
 
     def boom(command, request):
         raise common_cli.CommonCliError("[dbo].[t] already exists on ACME-1.")
@@ -210,7 +220,7 @@ def test_the_shipped_command_does_not_let_a_telegram_user_drop_a_table():
 def test_a_deployment_may_still_pin_the_options_in_its_own_config(monkeypatch):
     """The config is the one place that decides; the handler does not hardcode the policy."""
     seen = {}
-    from db_ops.lib import common_cli
+    from db_ops.transport import common_cli
     monkeypatch.setattr(common_cli, "run",
                         lambda command, request: seen.update(request) or {
                             "server_id": "ACME-1", "database_name": "d", "schema": "s",

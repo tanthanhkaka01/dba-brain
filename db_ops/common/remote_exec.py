@@ -23,8 +23,8 @@ the API with no per-app translation::
         "port": 22,                 # defaults: ssh 22, winrm 5985 (5986 with ssl)
         "username": "ubuntu",       # may instead come from the credential object
         "auth_type": "key",         # ssh: key | password
-        "key_file": "worker.key",   # bare name -> data/ssh_keys/, or an absolute path
-        "password_ref": "vm_pw",    # secret-store ref (or password_env / password)
+        "key_file": "/keys/worker.key",   # an absolute path - no name is looked up
+        "password_ref": "vm_pw",    # a ref in `secrets` or the environment (or password)
         "shell": "bash",            # bash | powershell | cmd
         "timeout_seconds": 30,
     }
@@ -34,8 +34,15 @@ the API with no per-app translation::
 
 :class:`RemoteResult` is JSON-shaped on the way out too (``result.to_dict()``), and
 :meth:`RemoteAccess.to_dict` redacts the password so an access object is always safe to
-log. Auth rules and the ``data/ssh_keys/`` location stay in ``common.ssh`` — this module
-is the session/execution layer on top of it, never a second copy of it.
+log. Auth rules stay in ``common.ssh`` — this module is the session/execution layer on top of
+it, never a second copy of it.
+
+**Nothing is looked up here** (rules R09, 0.24.0). Until then a bare key name was found under
+``data/ssh_keys/`` and a ``password_ref`` nobody had handed over was read from the encrypted store
+on disk - so every module that reached a host through this one was a reader of ``data/`` without
+importing anything that said so. The caller states the login: a key file by its absolute path, a
+password, or a ref in ``secrets`` / the environment. An app turns a configured block into that
+with ``lib.data_sources.ssh_login`` / ``request_fill``.
 """
 
 from __future__ import annotations
@@ -51,6 +58,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from typing import Any, Sequence
 
+from db_ops.lib.cmd_access import is_key_name
 from db_ops.lib.coerce import as_text
 from db_ops.lib.coerce import as_bool as _as_bool, as_int as _as_int
 from db_ops.lib.powershell import (  # noqa: F401 - one definition, see that module
@@ -59,14 +67,14 @@ from db_ops.lib.powershell import (  # noqa: F401 - one definition, see that mod
     encode_powershell_command,
     quote_powershell,
 )
-from db_ops.lib.shell import POWERSHELL_NOT_FOUND_HINT, powershell_executable
+from db_ops.lib.shell import (  # noqa: F401 - SHELL_* one definition, see that module
+    POWERSHELL_NOT_FOUND_HINT, SHELL_BASH, SHELL_CMD, SHELL_POWERSHELL, powershell_executable)
 from db_ops.common.ssh import (
     SshAuthError,
     SshConnectError,
     SshError,
     SshTimeoutError,
     open_ssh_client,
-    resolve_ssh_key,
 )
 
 __all__ = [
@@ -101,9 +109,6 @@ METHOD_SSH = "ssh"
 METHOD_WINRM = "winrm"
 SUPPORTED_METHODS = frozenset({METHOD_LOCAL, METHOD_SSH, METHOD_WINRM})
 
-SHELL_BASH = "bash"
-SHELL_POWERSHELL = "powershell"
-SHELL_CMD = "cmd"
 SUPPORTED_SHELLS = frozenset({SHELL_BASH, SHELL_POWERSHELL, SHELL_CMD})
 
 DEFAULT_SSH_PORT = 22
@@ -219,47 +224,22 @@ def resolve_secret_value(
     values: dict[str, Any],
     *,
     secrets: dict[str, str] | None = None,
-    data_dir: str | Path | None = None,
     value_key: str = "password",
     env_key: str = "password_env",
     ref_key: str = "password_ref",
 ) -> str:
-    """Resolve a secret from a JSON object: explicit value > env var > secret-store ref.
+    """:func:`db_ops.lib.secret_value.resolve_secret_value`, failing as a :class:`RemoteExecError`.
 
-    ``<ref_key>`` is looked up in ``secrets`` first (an already-decrypted store the caller
-    passed in), then in the environment (refs double as env var names across db_ops), then
-    in the encrypted store on disk. Returns "" when the object names no secret at all —
-    key-based SSH auth is a valid no-password case, so an empty result is not an error here.
+    The rule is ``lib``'s since 0.24.0 so an app can resolve the same fields without importing
+    ``common``; the words of a failure are the same either way.
     """
-    explicit = str(values.get(value_key) or "")
-    if explicit:
-        return explicit
-    env_name = str(values.get(env_key) or "").strip()
-    if env_name:
-        env_value = os.environ.get(env_name, "").strip()
-        if env_value:
-            return env_value
-    ref = str(values.get(ref_key) or "").strip()
-    if not ref:
-        return ""
-    if secrets and ref in secrets:
-        return str(secrets[ref])
-    env_value = os.environ.get(ref, "").strip()
-    if env_value:
-        return env_value
-    # Last resort: the encrypted store on disk (needs DB_OPS_SECRET_KEY in the env).
-    from db_ops.common import data_sources
+    from db_ops.lib.secret_value import SecretValueError, resolve_secret_value as _resolve
 
     try:
-        stored = data_sources.load_secret_text(data_dir)
-    except Exception as exc:  # noqa: BLE001 - missing key/corrupt store; report the ref.
-        raise RemoteExecError(f"Password ref '{ref}' could not be resolved: {exc}") from exc
-    value = str(stored.get(ref) or "").strip()
-    if not value:
-        raise RemoteExecError(
-            f"Password ref not found in environment or the secret store: {ref}"
-        )
-    return value
+        return _resolve(values, secrets=secrets, value_key=value_key,
+                        env_key=env_key, ref_key=ref_key)
+    except SecretValueError as exc:
+        raise RemoteExecError(str(exc)) from exc
 
 
 @dataclass(frozen=True)
@@ -297,18 +277,16 @@ class RemoteAccess:
         *,
         credential: dict[str, Any] | None = None,
         secrets: dict[str, str] | None = None,
-        data_dir: str | Path | None = None,
         default_host: str = "",
         default_method: str = "",
         default_timeout_seconds: int = DEFAULT_SESSION_TIMEOUT_SECONDS,
-        resolve_key: bool = True,
     ) -> "RemoteAccess":
         """Normalize a ``cmd_access``-shaped JSON object into a :class:`RemoteAccess`.
 
         ``credential`` is an optional second JSON object (a ``remote_credentials`` entry:
         ``username`` + ``password``/``password_ref``/``password_env``); its values fill in
-        anything the access object does not carry itself. ``secrets`` is a decrypted secret
-        store used to resolve a ``password_ref`` without touching disk.
+        anything the access object does not carry itself. ``secrets`` holds the values of the refs
+        the objects name - a ``password_ref`` is found there or in the environment, never on disk.
         """
         if isinstance(access, RemoteAccess):
             return access
@@ -358,22 +336,20 @@ class RemoteAccess:
         username = str(merged.get("username") or "").strip()
 
         key_file = str(values.get("key_file") or "").strip() or None
-        if key_file and method == METHOD_SSH and auth_type != "password" and resolve_key:
-            # A bare file name resolves inside data/ssh_keys/; an absolute path is used as-is.
-            # Resolved here (not at config load) so a missing key fails only this call.
-            try:
-                key_file = resolve_ssh_key(key_file, data_dir)
-            except SshError as exc:
-                raise RemoteExecError(str(exc)) from exc
+        if key_file and method == METHOD_SSH and auth_type != "password" and is_key_name(key_file):
+            # A name would be looked up under data/ssh_keys/, which this layer does not read.
+            raise RemoteExecError(
+                f"key_file {key_file!r} is a name, which would be looked up under data/ssh_keys/; "
+                "state the key's full path (rules R09 - lib.data_sources.ssh_login resolves one).")
 
         password = ""
         if method == METHOD_WINRM or (method == METHOD_SSH and auth_type == "password"):
-            password = resolve_secret_value(merged, secrets=secrets, data_dir=data_dir)
+            password = resolve_secret_value(merged, secrets=secrets)
         elif method == METHOD_SSH and key_file:
             # Key auth: any password present is the key's passphrase, and it is optional —
             # never fail on a ref that does not resolve, the key alone is usually enough.
             try:
-                password = resolve_secret_value(merged, secrets=secrets, data_dir=data_dir)
+                password = resolve_secret_value(merged, secrets=secrets)
             except RemoteExecError:
                 password = ""
 
@@ -1148,7 +1124,6 @@ def open_session(
     *,
     credential: dict[str, Any] | None = None,
     secrets: dict[str, str] | None = None,
-    data_dir: str | Path | None = None,
     **normalize_kwargs: Any,
 ) -> RemoteSession:
     """Open a session to the machine described by the ``access`` JSON object.
@@ -1157,7 +1132,7 @@ def open_session(
     share one connection. For a single command, :func:`run_command` is the one-liner.
     """
     resolved = RemoteAccess.from_json(
-        access, credential=credential, secrets=secrets, data_dir=data_dir, **normalize_kwargs
+        access, credential=credential, secrets=secrets, **normalize_kwargs
     )
     if resolved.method == METHOD_SSH:
         return SshSession(resolved)
@@ -1211,7 +1186,6 @@ def run_command(
     *,
     credential: dict[str, Any] | None = None,
     secrets: dict[str, str] | None = None,
-    data_dir: str | Path | None = None,
     timeout_seconds: int | None = None,
     env: dict[str, str] | None = None,
     cwd: str | None = None,
@@ -1220,7 +1194,7 @@ def run_command(
 ) -> RemoteResult:
     """Run one command on the machine described by ``access`` and close the connection."""
     with open_session(
-        access, credential=credential, secrets=secrets, data_dir=data_dir, **normalize_kwargs
+        access, credential=credential, secrets=secrets, **normalize_kwargs
     ) as session:
         return session.run(command, timeout_seconds=timeout_seconds, env=env, cwd=cwd, check=check)
 
@@ -1231,7 +1205,6 @@ def run_script(
     *,
     credential: dict[str, Any] | None = None,
     secrets: dict[str, str] | None = None,
-    data_dir: str | Path | None = None,
     shell: str | None = None,
     timeout_seconds: int | None = None,
     env: dict[str, str] | None = None,
@@ -1240,7 +1213,7 @@ def run_script(
 ) -> RemoteResult:
     """Ship a script (text or a local file) to the machine described by ``access`` and run it."""
     with open_session(
-        access, credential=credential, secrets=secrets, data_dir=data_dir, **normalize_kwargs
+        access, credential=credential, secrets=secrets, **normalize_kwargs
     ) as session:
         return session.run_script(
             script, shell=shell, timeout_seconds=timeout_seconds, env=env, check=check

@@ -24,22 +24,18 @@ from db_ops.backup_restore.shell_quoting import _BACKUP_TIMESTAMP_RE, backup_tim
 
 import dataclasses
 import datetime as dt
-import json
 import logging
 import os
 import shlex
 import stat
-import subprocess
 import sys
-import tempfile
 import time
 import re
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from db_ops.backup_restore.config import BackupRestoreConfig, load_restore_config, validate_restore_target_is_not_source
-from db_ops.backup_restore.copy_backup import build_cmdkey_command, open_ssh_connection
-from db_ops.lib.shell import powershell_executable
+from db_ops.backup_restore.copy_backup import open_ssh_connection, share_login_request, store_share_logins
 from db_ops.logging_ops import log_event
 
 
@@ -211,131 +207,51 @@ def delete_target_backup_file(target_file: Path, *, target_root: Path) -> Delete
     return DeleteBackupFileResult(target_file=target_file, status="DELETED", bytes=file_size)
 
 
-def _powershell_scan(config: BackupRestoreConfig, cutoff_iso: str) -> list[str]:
-    """The age-selected paths under a UNC root, without deleting anything.
-
-    Its own pass so the obsolete verdict is made in Python for all three engines. Two PowerShell
-    invocations instead of one is the price of the three of them applying one rule.
-    """
-    script = r"""
-param([string] $TargetRoot, [string] $CutoffIso)
-$ErrorActionPreference = 'Stop'
-$cutoff = $null
-if ($CutoffIso) { $cutoff = [DateTimeOffset]::Parse($CutoffIso).UtcDateTime }
-$files = Get-ChildItem -LiteralPath $TargetRoot -Recurse -File -Include '*.bak','*.trn'
-foreach ($file in @($files | Sort-Object LastWriteTimeUtc, FullName)) {
-    if ($cutoff -ne $null -and $file.LastWriteTimeUtc -gt $cutoff) { continue }
-    $file.FullName
-}
-""".strip()
-    script_path = _write_temp_powershell_script(script)
-    cmd = [powershell_executable(), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-           str(script_path), str(config.vm_import_unc), cutoff_iso]
-    try:
-        result = subprocess.run(cmd, capture_output=True, check=False, text=True)
-    finally:
-        script_path.unlink(missing_ok=True)
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"PowerShell target backup scan failed with exit code {result.returncode}: "
-            f"{(result.stderr or result.stdout).strip()[:500]}"
-        )
-    return [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
-
-
-def delete_old_target_backup_files_with_powershell(
+def delete_old_target_backup_files_on_share(
     config: BackupRestoreConfig,
     dry_run: bool = False,
     *,
     now: float | None = None,
 ) -> tuple[DeleteBackupFileResult, ...]:
-    cutoff = _cutoff_timestamp(config.cleanup_retention, now=now)
-    cutoff_iso = "" if cutoff is None else dt.datetime.fromtimestamp(cutoff, tz=dt.timezone.utc).isoformat()
-    script = r"""
-param(
-    [string] $TargetRoot,
-    [string] $CutoffIso,
-    [string] $AllowedFile
-)
-$ErrorActionPreference = 'Stop'
-$cutoff = $null
-if ($CutoffIso) {
-    $cutoff = [DateTimeOffset]::Parse($CutoffIso).UtcDateTime
-}
-# The obsolete verdict is decided in Python and arrives as an explicit allow-list, so this engine
-# applies exactly the same two conditions as the other two. Passed in a file rather than on the
-# command line: a staging directory can hold thousands of paths and a command line cannot.
-$allowed = $null
-if ($AllowedFile) {
-    $allowed = New-Object 'System.Collections.Generic.HashSet[string]'
-    foreach ($line in [System.IO.File]::ReadAllLines($AllowedFile)) {
-        if ($line) { $allowed.Add($line) | Out-Null }
-    }
-}
-$results = New-Object System.Collections.Generic.List[object]
-$files = Get-ChildItem -LiteralPath $TargetRoot -Recurse -File -Include '*.bak','*.trn'
-foreach ($file in @($files | Sort-Object LastWriteTimeUtc, FullName)) {
-    if ($cutoff -ne $null -and $file.LastWriteTimeUtc -gt $cutoff) {
-        continue
-    }
-    if ($allowed -ne $null -and -not $allowed.Contains($file.FullName)) {
-        continue
-    }
-    $length = $file.Length
-    Remove-Item -LiteralPath $file.FullName -Force
-    $results.Add([pscustomobject]@{
-        target_file = $file.FullName
-        status = 'DELETED'
-        bytes = $length
-    }) | Out-Null
-}
-$results | ConvertTo-Json -Depth 4 -Compress
-""".strip()
-    # Scanned first so the obsolete verdict is computed here, next to the other two engines'.
-    # Deciding inside the PowerShell would be a third copy of a rule that must be one rule.
-    aged = _powershell_scan(config, cutoff_iso)
-    keep_paths, _held = _split_by_obsolete([Path(item) for item in aged],
-                                           root=config.vm_import_unc)
-    allowed_file = Path(tempfile.mkstemp(prefix="db_ops_allowed_", suffix=".txt")[1])
-    allowed_file.write_text("\n".join(str(path) for path in keep_paths), encoding="utf-8")
+    """Clean a Windows target's import share through ``common.cli`` (``smb-list``, ``smb-delete``).
 
-    script_path = _write_temp_powershell_script(script)
-    cmd = [
-        powershell_executable(),
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        str(script_path),
-        str(config.vm_import_unc),
-        cutoff_iso,
-        str(allowed_file),
+    The two conditions the other engines apply, decided here: aged past the retention (by last
+    write, as the PowerShell scan read it until 0.24.0) and obsolete by the chain. ``common``
+    deletes exactly the files named, never a pattern. ``dry_run`` deletes nothing - the PowerShell
+    engine took the flag and deleted anyway.
+    """
+    from db_ops.backup_restore import share
+    from db_ops.backup_restore.copy_backup import resolve_password_ref
+
+    cutoff = _cutoff_timestamp(config.cleanup_retention, now=now)
+    password = resolve_password_ref(config.vm_password_env) if config.vm_password_env else ""
+    root = str(config.vm_import_unc).replace("/", "\\").rstrip("\\")
+    aged: list[tuple[float, Path]] = []
+    for item in share.list_files(config.vm_import_unc, username=config.vm_username or "",
+                                 password=password, suffixes=(".bak", ".trn")):
+        modified = item.get("modified_epoch")
+        if modified is None or (cutoff is not None and float(modified) > cutoff):
+            continue
+        aged.append((float(modified), Path(root + "\\" + str(item["path"]))))
+    aged_paths = [path for _, path in sorted(aged, key=lambda item: (item[0], str(item[1]).lower()))]
+    deletable, held_back = _split_by_obsolete(aged_paths, root=config.vm_import_unc)
+    results: list[DeleteBackupFileResult] = [
+        DeleteBackupFileResult(target_file=path, status="SKIPPED", bytes=0, reason="still_needed")
+        for path in held_back
     ]
-    try:
-        result = subprocess.run(cmd, capture_output=True, check=False, text=True)
-    finally:
-        script_path.unlink(missing_ok=True)
-        allowed_file.unlink(missing_ok=True)
-    if result.returncode != 0:
-        details = [f"PowerShell target backup delete failed with exit code {result.returncode}."]
-        if result.stdout.strip():
-            details.append(f"stdout:\n{result.stdout.strip()}")
-        if result.stderr.strip():
-            details.append(f"stderr:\n{result.stderr.strip()}")
-        raise RuntimeError("\n".join(details))
-    raw_output = result.stdout.strip()
-    if not raw_output:
-        return ()
-    payload = json.loads(raw_output)
-    rows = payload if isinstance(payload, list) else [payload]
-    return tuple(
-        DeleteBackupFileResult(
-            target_file=Path(str(item["target_file"])),
-            status=str(item["status"]),
-            bytes=int(item["bytes"]),
-        )
-        for item in rows
-    )
+    if dry_run:
+        return tuple(results + [DeleteBackupFileResult(target_file=path, status="DRY_RUN", bytes=0,
+                                                       reason="would be deleted") for path in deletable])
+    if not deletable:
+        return tuple(results)
+    answer = share.delete_files(
+        config.vm_import_unc, [share.share_relative(config.vm_import_unc, path) for path in deletable],
+        username=config.vm_username or "", password=password)
+    for path, outcome in zip(deletable, answer.get("results") or []):
+        results.append(DeleteBackupFileResult(
+            target_file=path, status=str(outcome.get("status") or "FAILED"),
+            bytes=int(outcome.get("bytes") or 0), reason=str(outcome.get("error") or "")))
+    return tuple(results)
 
 
 def delete_old_target_backup_files_via_ssh(
@@ -352,11 +268,11 @@ def delete_old_target_backup_files_via_ssh(
 
     with open_ssh_connection(config) as ssh:
         # List all .bak/.trn files with mtime and size; filter by cutoff in Python.
-        _, stdout, _ = ssh.exec_command(
+        answer = ssh.run(
             f'find {shlex.quote(linux_import)} -type f \\( -name "*.bak" -o -name "*.trn" \\) '
             f'-printf "%T@ %s %p\\n" 2>/dev/null || true'
         )
-        lines = stdout.read().decode("utf-8", errors="replace").splitlines()
+        lines = answer.stdout.splitlines()
         files_to_delete = []
         scanned: list[tuple[str, float, int]] = []
         _log_progress(
@@ -428,8 +344,7 @@ def delete_old_target_backup_files_via_ssh(
                 _log_progress(logger, f"{_rid}delete-backup source_id={config.source_id} "
                                       f"cleanup_would_delete file={fpath} size_bytes={size}")
                 continue
-            _, _, stderr = ssh.exec_command(f"rm -f -- {shlex.quote(fpath)}")
-            err = stderr.read().decode("utf-8", errors="replace").strip()
+            err = ssh.run(f"rm -f -- {shlex.quote(fpath)}").stderr.strip()
             if err:
                 results.append(DeleteBackupFileResult(target_file=Path(fpath), status="FAILED", bytes=size, reason=err))
                 _log_progress(logger, f"{_rid}delete-backup source_id={config.source_id} cleanup_delete_failed file={fpath} reason={err}")
@@ -440,17 +355,19 @@ def delete_old_target_backup_files_via_ssh(
     return tuple(results)
 
 
-def build_target_cmdkey_command(config: BackupRestoreConfig) -> list[str] | None:
+def target_share_login_request(config: BackupRestoreConfig) -> dict[str, str] | None:
+    """The Windows target's share login, for ``smb-credential``; ``None`` on a Linux target."""
     if config.is_linux:
         return None
-    return build_cmdkey_command(
+    return share_login_request(
         credential_target=config.vm_credential_target,
         username=config.vm_username,
         password_env=config.vm_password_env,
     )
 
 
-def should_use_powershell_unc_delete(config: BackupRestoreConfig) -> bool:
+def should_clean_through_the_share(config: BackupRestoreConfig) -> bool:
+    """A Windows node cleaning a UNC import folder goes through ``smb-list`` / ``smb-delete``."""
     return os.name == "nt" and str(config.vm_import_unc).startswith("\\\\")
 
 
@@ -480,15 +397,15 @@ def run_delete_backup(
         ),
     )
 
-    credential_cmd = build_target_cmdkey_command(restore_config)
-    _log_progress(logger, f"{_rid}delete-backup source_id={restore_config.source_id} target_smb_credential_commands={1 if credential_cmd else 0}")
-    if credential_cmd:
-        subprocess.run(credential_cmd, check=True, text=True)
+    credential_request = target_share_login_request(restore_config)
+    _log_progress(logger, f"{_rid}delete-backup source_id={restore_config.source_id} target_smb_credential_commands={1 if credential_request else 0}")
+    if credential_request:
+        store_share_logins([credential_request])
 
     if restore_config.is_linux:
         delete_engine = "ssh"
-    elif should_use_powershell_unc_delete(restore_config):
-        delete_engine = "powershell"
+    elif should_clean_through_the_share(restore_config):
+        delete_engine = "share"
     else:
         delete_engine = "python"
 
@@ -496,8 +413,8 @@ def run_delete_backup(
     if delete_engine == "ssh":
         file_results = delete_old_target_backup_files_via_ssh(
             restore_config, logger=logger, dry_run=dry_run)
-    elif delete_engine == "powershell":
-        file_results = delete_old_target_backup_files_with_powershell(
+    elif delete_engine == "share":
+        file_results = delete_old_target_backup_files_on_share(
             restore_config, dry_run=dry_run)
     else:
         aged_files = list_old_target_backup_files(restore_config)

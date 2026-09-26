@@ -279,7 +279,7 @@ def test_a_packaged_copy_is_the_one_init_writes_the_file_from(reference):
     """`packaged` is the fallback for a file that ships no example. A site naming a copy other than
     the one `init` writes from would check a document no node ever receives - so the two are pinned
     to each other, and every site whose file ships no example must name one."""
-    from db_ops import scaffold
+    from db_ops.common import scaffold
 
     for item in reference:
         for site in item.get("used_in") or []:
@@ -291,7 +291,7 @@ def test_a_packaged_copy_is_the_one_init_writes_the_file_from(reference):
                 raise AssertionError(f"{file_name} ships no example; its site must name `packaged`")
             if site.get("packaged"):
                 assert scaffold.PACKAGED_DEFAULTS.get(f"data/{file_name}") == site["packaged"], file_name
-                assert (Path(scaffold.__file__).parent / site["packaged"]).is_file(), file_name
+                assert (scaffold.PACKAGE_ROOT / site["packaged"]).is_file(), file_name
 
 
 def test_the_shipped_examples_obey_it_too():
@@ -306,7 +306,7 @@ def test_a_root_init_just_wrote_obeys_it(tmp_path):
     thing a new operator's `check-objects` reads. The 0.22.0 soak node's fresh root reported three
     violations: `schema_version` undescribed on the two Telegram files, and the bot's empty token
     ref, which is the "not configured" state `init` means to write, called an error."""
-    from db_ops import scaffold
+    from db_ops.common import scaffold
 
     scaffold.initialise(tmp_path / "root")
     result = shared_objects.check_data_dir(tmp_path / "root" / "data")

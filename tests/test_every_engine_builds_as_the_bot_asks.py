@@ -132,7 +132,7 @@ def config(tmp_path):
 
 
 def _create(config, monkeypatch, *, run, stored):
-    from db_ops.lib import common_cli
+    from db_ops.transport import common_cli
     from db_ops.sre import cli as sre_cli
 
     monkeypatch.setattr(common_cli, "run", run)
@@ -144,7 +144,7 @@ def _create(config, monkeypatch, *, run, stored):
 
 
 def test_a_failed_build_stores_no_password(config, monkeypatch):
-    from db_ops.lib import common_cli
+    from db_ops.transport import common_cli
 
     def run(*a, **k):
         raise common_cli.CommonCliError("create-db-docker failed: Image not found: postgres:99")

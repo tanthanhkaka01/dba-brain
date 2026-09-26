@@ -2,7 +2,7 @@ r"""Registering one backup entry or one restore entry, as a single operation.
 
 Asked for in the same words that produced ``instance-add``:
 
-    *"phải có cli thêm backup restore giống cli thêm instance nhé"* — 2026-09-13
+    *"there has to be a CLI that adds a backup and a restore, like the one that adds an instance"* (translated) — 2026-09-13
 
 Registering a backup was a hand-edit of ``data/restore_config.json``: a nested object, an array of
 jobs inside it, a ``time_window`` and a ``cleanup_retention`` per job, and one field —
@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from db_ops.lib import field_names
-from db_ops.common import data_sources
+from db_ops.lib import data_sources
 from db_ops.lib import secret_text
 from db_ops.lib.json_io import atomic_write_text
 

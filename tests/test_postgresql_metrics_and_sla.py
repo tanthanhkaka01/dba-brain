@@ -84,16 +84,15 @@ def test_postgresql_statement_timeout_is_set(monkeypatch):
     package = types.ModuleType("pg8000")
     package.dbapi = dbapi
     monkeypatch.setitem(sys.modules, "pg8000", package)
-    monkeypatch.setattr("db_ops.metrics.executor.execute_cursor_batches", lambda *_args, **_kwargs: {"result_sets": []})
-    from db_ops.metrics import executor
+    monkeypatch.setattr("db_ops.common.metric_batch.execute_cursor_batches", lambda *_args, **_kwargs: {"result_sets": []})
+    from db_ops.common import metric_batch
 
     # The per-engine connect moved to db_ops.common.db_connect, so the metrics app has one
-    # execution path instead of four. The statement_timeout guarantee has to survive that move:
-    # it is what bounds a catalog query when the socket stays healthy but a relation is locked.
-    target = _target(0)
-    object.__setattr__(target, "credential", {"username": "monitor"})
-    executor._execute(target=target, sql_text="select 1", password="not-logged",
-                      sql_timeout_seconds=7)
+    # execution path instead of four - and since 0.24.0 it runs in `metric-batch`. The
+    # statement_timeout guarantee has to survive both moves: it is what bounds a catalog query
+    # when the socket stays healthy but a relation is locked.
+    metric_batch._execute({"db_type": "postgresql", "host": "127.0.0.1", "username": "monitor",
+                           "password": "not-logged"}, "postgres", "select 1", timeout=7, max_rows=0)
     # Inlined, not bound. pg8000's paramstyle is a module-level global with no per-connection
     # override, and the runtime store pins it to 'qmark' for its own '?' placeholders - so a '%s'
     # here failed with `syntax error at or near "%"` on every PostgreSQL target once the store and

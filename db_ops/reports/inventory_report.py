@@ -20,7 +20,7 @@ xp_cmdshell, un-collected hosts), not hand-written.
 
 from __future__ import annotations
 from db_ops.lib.coerce import as_float
-from db_ops.common.data_sources import inventory_exclude_ip_prefixes
+from db_ops.lib.data_sources import inventory_exclude_ip_prefixes
 from db_ops.lib.inventory_render import DEFAULT_INVENTORY, DISK_CRIT_PCT, DISK_WARN_PCT, EXCLUDE_IP_PREFIXES, _primary_db  # noqa: F401 - one definition
 
 import datetime

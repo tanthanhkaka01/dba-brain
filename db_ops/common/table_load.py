@@ -262,9 +262,13 @@ def read_source(payload: Any, *, max_rows: Any = None, delimiter: Any = "") -> d
 def _parse_request(request: Any) -> dict[str, Any]:
     if not isinstance(request, dict):
         raise TableLoadError("request must be a JSON object.")
-    target = str(request.get("target") or "").strip()
-    if not target:
-        raise TableLoadError('request needs a "target" (a server_id, or "<db_type> <ip> [port]").')
+    # The login is the request's own (rules R09): this process reads no configuration, and
+    # `target` is only what the answer calls the server.
+    try:
+        connection = sql_run.stated_connection(request, what="create-table-from-xlsx")
+    except sql_run.SqlRunError as exc:
+        raise TableLoadError(str(exc)) from exc
+    target = str(request.get("target") or connection.get("server_id") or connection.get("host") or "")
 
     # `xlsx_*` are the original names and stay: they are what `data/telegram_support_commands.json`
     # declares as the awaited parameter, and renaming the key would have broken every stored
@@ -293,6 +297,7 @@ def _parse_request(request: Any) -> dict[str, Any]:
 
     return {
         "target": target,
+        "connection": connection,
         "database": str(request.get("database_name") or request.get("database") or "").strip(),
         "schema": str(request.get("schema") or "").strip(),
         "table_name": str(request.get("table_name") or "").strip(),
@@ -302,10 +307,7 @@ def _parse_request(request: Any) -> dict[str, Any]:
         "text_length": text_length,
         "max_rows": request.get("max_rows"),
         "delimiter": request.get("delimiter") or "",
-        "credential_name": str(request.get("credential_name")
-                               or request.get("user_ref") or "").strip(),
         "timeout_seconds": request.get("timeout_seconds"),
-        "data_dir": request.get("data_dir"),
         "sql_access": request.get("sql_access"),
     }
 
@@ -341,13 +343,9 @@ def create_table_from_xlsx(request: Any) -> dict[str, Any]:
         raise TableLoadError("The file has no columns to build a table from.")
 
     try:
-        resolved = sql_run.resolve_sqlserver_target(
-            parsed["target"],
-            data_dir=parsed["data_dir"] or None,
-            database=parsed["database"],
-            credential_name=parsed["credential_name"],
-            sql_access=parsed["sql_access"],
-        )
+        resolved = sql_run.resolve_stated_connection(
+            {"connection": parsed["connection"], "sql_access": parsed["sql_access"] or {}},
+            database=parsed["database"], what="create-table-from-xlsx")
     except sql_run.SqlRunError as exc:
         raise TableLoadError(str(exc)) from exc
 

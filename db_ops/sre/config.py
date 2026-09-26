@@ -112,7 +112,7 @@ def resolve_password_fields(
     The ref and env keys are dropped from the result, so a payload built from it carries the
     password and not the name of where the password is kept.
     """
-    from db_ops.common.remote_exec import resolve_secret_value
+    from db_ops.lib.data_sources import resolve_secret_value
 
     if not section:
         return {}

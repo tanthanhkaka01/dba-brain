@@ -121,16 +121,22 @@ prefer `@file`: a single-quoted JSON argument does not survive the shell.
   `APP-BACKUP-RESTORE` runs, and that app runs every `app_commands.json` `repeat_interval`. With the
   app at 300 s, a log backup declared at 900 s waited up to 300 s more for the app's next pass and
   ran every ~1,200 s (measured 2026-09-19). Keep the app's interval short against the shortest job:
-  **the shipped default is 30 s since 2026-09-21**, down from 300. It shipped at 300 for two
-  releases after this estate had already corrected it on one node — a fix that reached the node and
-  not the catalogue, which is the drift a shipped default hides. The app exits at once when nothing
-  is due, so a short interval costs a process start, not a backup, and it is safe at 30 s only
-  because `run_mode: async` is paired with the claim (`ux_job_runs_claim`, one `running` row per
-  backup job). It is the same rule as the SQL task app ([05](05_sql_task_runner.md), *The three
-  clocks*).
+  **the shipped default is 1 s since 0.24.0**, as `APP-SQL_TASKS` - down from 30 (2026-09-21) and 300
+  before that. It shipped at 300 for two releases after this estate had already corrected it on one
+  node — a fix that reached the node and not the catalogue, which is the drift a shipped default
+  hides. The app exits at once when nothing is due, so a short interval costs a process start, not a
+  backup, and it is safe only because `run_mode: async` is paired with the claim
+  (`ux_job_runs_claim`, one `running` row per backup job). It is the same rule as the SQL task app
+  ([05](05_sql_task_runner.md), *The three clocks*). A node made before 0.24.0 keeps what it has;
+  `common.cli app-command-set '{"app_code": "APP-BACKUP-RESTORE", "time_window": {"repeat_interval": 1}}'`
+  moves it.
 * **What "at the same time" means.** One run works through its due list **in order**: all due
-  backups, then all due restores. Overlap comes from the next async run, 30 s later, which takes
-  what is due and not yet started. Measured on the labs on 2026-09-25, with three single-instance
+  backups, then all due restores. Overlap comes from the next async run, which takes what is due and
+  not yet started - **so the interval decides how many due jobs run at once.** At 30 s the second
+  run started 30 s after the first, and three restores due together reached two at once on the
+  0.23.0 soak (1.58); at 1 s the next run starts a second later and takes the next job, up to
+  `max_parallel` (4). The option weighed and not taken: running one run's jobs in parallel - more
+  code in the path every backup takes, for what the interval already gives. Measured on the labs on 2026-09-25, with three single-instance
   full backups due at 13:40 +08 and their restores to the second VM at 13:43:
   - the backups ran one after another inside one run (SQL Server 3 s, PostgreSQL 2 s, Oracle
     32 s), and the next run found nothing left;
@@ -326,8 +332,11 @@ python -m db_ops.backup_restore.cli restore-workflow --config config.json --rest
 # Point-in-time restore (PITR) — requires FULL + LOG backups covering the target time
 python -m db_ops.backup_restore.cli restore-workflow --config config.json --restore-id ACME_TO_SQLSERVER_192_168_18_31 --point-in-time "2026-06-13 21:00:00 +07:00"
 
-# Verify restored database with DBCC CHECKDB
-python -m db_ops.backup_restore.cli verify-restore --config config.json
+# Verify the restored databases open - common's check, the one the workflow's last phase runs
+# (the app's own `verify-restore` went in 0.24.0, rules R43). The request carries a password: @file.
+python -m db_ops.common.cli verify-restore @verify.json
+#   {"db_type": "sqlserver", "database_names": ["APPDB_Prod_DR"],
+#    "target": {"host": "...", "port": 1453, "username": "...", "password": "..."}}
 ```
 
 ## CLI as the cross-app boundary
@@ -485,28 +494,52 @@ The workflow uses a different transport mechanism depending on `vm_platform` in 
 
 | Step | Windows target (`vm_platform: "windows"`) | Linux target (`vm_platform: "linux"`) |
 |---|---|---|
-| **Import dir creation** | Preflight checks UNC share root; creates local dir + SMB share via PowerShell remoting (WinRM) if missing | `_prepare_linux_base_import_dir` runs `sudo mkdir -p` over SSH on first SFTP call |
-| **Backup file copy** | PowerShell `Get-ChildItem` scan source + `shutil.copy2` to UNC target | Python scan source + paramiko SFTP `put` to Linux target |
+| **Import dir creation** | Preflight checks UNC share root; creates local dir + SMB share via PowerShell remoting (WinRM) if missing | `_prepare_linux_base_import_dir` runs `mkdir -p` over SSH, under `sudo` when the login cannot |
+| **Backup file copy** | `common.cli smb-list` scans the source share (since 0.24.0; a PowerShell `Get-ChildItem` before) + `shutil.copy2` to UNC target | Python scan source + `common.cli push-file` to the Linux target, hash-checked, mtime kept |
 | **Backup file selection** | `Path.rglob("*.bak")` over UNC mount | SSH `find ... -name "*.bak"` on remote Linux fs |
 | **Restore execution** | PowerShell `Invoke-Command -ComputerName` → sqlcmd on remote Windows | SSH `sqlcmd` executed on the remote Linux host |
 | **...run by** | `common.cli run-sqlcmd` (`via: winrm`), since 0.23.0 | `common.cli run-sqlcmd` (`via: ssh`), since 0.23.0 |
-| **Delete old files** | PowerShell `Get-ChildItem -Include *.bak,*.trn` + `Remove-Item` over UNC | SSH `find ... -name "*.bak" -o -name "*.trn"` + `rm` |
-| **Credentials** | `cmdkey /add:<host>` sets up Windows credential manager for SMB | the target's `username` + `password_ref` used for paramiko SSH auth |
+| **Delete old files** | `common.cli smb-list` + `smb-delete` of exactly the files this app chose (since 0.24.0; PowerShell `Get-ChildItem` + `Remove-Item` before, which ignored `--dry-run`) | SSH `find ... -name "*.bak" -o -name "*.trn"` + `rm` |
+| **Credentials** | `common.cli smb-credential` stores the login for SMB (`cmdkey`, run in `common` since 0.24.0) | the target's `username` + `password_ref`, resolved here and sent to `common.cli` on stdin |
 | **Log file** | `copy_sqlbk.log` written to `vm_log_unc` | Skipped (log not written for Linux targets) |
 | **Retention filter** | `*.bak` and `*.trn` only (no other files deleted) | `*.bak` and `*.trn` only |
 | **Cleanup timing** | After restore (copy → restore → delete) | After restore (copy → restore → delete) |
 
-**The restore's statements run through `common.cli` (0.23.0).** Every `sqlcmd` batch of this path -
-each RESTORE, the recovery, the recovery model, CHECKDB, the resume probe of an interrupted LOG
-chain - is handed to `common.cli run-sqlcmd` with every value resolved here: the instance, the SQL
-login, the host login, the timeouts. `common` reads no configuration and runs exactly the command
+**The restore's statements run through `common.cli` (0.23.0), and since 0.24.0 its RESTOREs are
+written there too.** Every restore of a file - the full, the differential, each log, the last log's
+`STOPAT` - is `common.cli restore-full` / `restore-diff` / `restore-log` with `sqlcmd` (the same
+block `run-sqlcmd` takes): this app says which file, as the target sees it, and where the data and
+log files go (`move_files` - the logical names are still read on the server with `RESTORE
+FILELISTONLY`), and `common/restorestep/sqlserver.py` writes the statement - the one place a SQL
+Server RESTORE is written, shared with the drills (rules R43, the operator's choice). The text is
+the text this app wrote before, byte for byte (`tests/test_one_sqlserver_restore_statement.py`,
+against what 0.23.0 emitted), except that a quote in a name or path is now escaped for the two
+literals it sits in. The recovery, the recovery model, CHECKDB and the resume probe of an
+interrupted LOG chain are `run-sqlcmd` batches as before. Every value is resolved here: the
+instance, the SQL login, the host login, the timeouts. `common` reads no configuration and runs exactly the command
 this app used to run itself: the same `Invoke-Command` wrapper for a Windows target, the same
 `export PATH=…; sqlcmd … -C -b` over SSH for a Linux one - held byte for byte by
 `tests/test_the_sql_server_restore_runs_through_common.py`, because the Windows path cannot be
 proven from the Linux labs. What the app still owns is every decision: which files, which
 statements, what exit code 0 with *Msg 3013* in it means, when a lost connection is safe to retry
-and when a RESTORE LOG's state has to be inspected first. Staging the files - the SMB copy and
-the SFTP put above - stays in the app, like the tar stream of the script-driven restores.
+and when a RESTORE LOG's state has to be inspected first.
+
+**The shares and the certificate go through `common.cli` too (0.24.0, rules R10).** The app starts
+no process to reach a host any more. A source or target share is read, fetched from and cleaned
+with `smb-list`, `smb-get` and `smb-delete` (`common.smb`: `smbclient` on a Linux node, the UNC path
+after `cmdkey` on Windows - one answer shape either way), and its login stored with
+`smb-credential`; the certificate import on a Windows target is its PowerShell run by `run-cmd`
+over WinRM, and on this machine a `run-sqlcmd`; CHECKDB (`verify-restore`) is a `run-sqlcmd` like
+every other statement. What stays here is every decision - which files, which window, what is
+obsolete - through `db_ops/backup_restore/share.py`, which only states each request. Two things
+changed on the way: a dry-run cleanup on a Windows target deletes nothing (the PowerShell engine
+took the flag and deleted anyway), and the certificate's password no longer rides on this
+machine's command line inside an `Invoke-Command` script.
+
+**How the app reaches the Linux target (0.24.0, rules R03).** `open_ssh_connection` returns a
+`lib.remote_host.RemoteHost`, not a paramiko client: every command is `common.cli run-cmd`, every
+file `push-file` / `pull-file`, each its own SSH session (about half a second). The app never
+imports `common`; the Windows preflight's SMB share is a `run-cmd` over WinRM for the same reason.
 
 Proven on the labs (2026-09-25): an encrypted LABTEST full backup restored under another name
 on the `.250` SQL Server container through this path, *NN percent processed* streamed as it
@@ -518,14 +551,17 @@ Windows and local ones did.
 
 The transport table above assumes db_ops runs on **Windows** and reads the backup
 source over a UNC path. When db_ops runs **on Linux** (the Docker image) it cannot
-read a Windows UNC share directly, so the copy step reads the source with
-`smbclient` (validated end-to-end against a containerized SQL Server 2025 target):
+read a Windows UNC share directly, so the copy step reads the source through
+`common.cli smb-list` / `smb-get`, which use `smbclient` there (validated end-to-end against a
+containerized SQL Server 2025 target):
 
-- It authenticates with an auth file (so a password containing `%` is not split by
-  `-U user%pass`), then recursively downloads recent files with `mget *`. A
-  `*.bak`/`*.trn` mask is **not** used: with `recurse ON`, smbclient applies the
-  mask to subdirectory names too and never descends into `FULL`/`LOG`. Pattern
-  filtering happens locally afterward (`copy_file_patterns`).
+- The login travels in the request and reaches `smbclient` in an auth file `common` writes 0600 and
+  deletes after the call (so a password containing `%` is not split by `-U user%pass`, and none is
+  left in the temp folder). The share is **listed first** (`smb-list`, recursive), the listing is
+  filtered here by `copy_file_patterns` and the copy window, and only the selected files are
+  fetched, one `smb-get` each, each size checked against the listing. A `*.bak`/`*.trn` mask is
+  **not** given to `smbclient`: with `recurse ON` it applies the mask to subdirectory names too and
+  never descends into `FULL`/`LOG`.
 - When `database_mappings[]` is configured, only those `<db>` subdirectories are fetched.
 - `smbclient` does not preserve file mtimes, so each backup's real time is
   recovered from its filename (`..._YYYYMMDD_HHMMSS[Z]`). A trailing `Z` (what db_ops' own
@@ -533,8 +569,8 @@ read a Windows UNC share directly, so the copy step reads the source with
   server write, is read in local time as before (`shell_quoting.backup_time_from_name`). The log-chain selection
   filters logs by time relative to the FULL backup; without this the restore would
   apply pre-FULL logs and fail with `Msg 4326` (the log "is too early to apply").
-- The staged files are then sent to the Linux SQL Server target over SFTP, which
-  also preserves the mtime.
+- The staged files are then sent to the Linux SQL Server target (`common.cli push-file`,
+  hash-checked at both ends), and the mtime is set to the source's.
 
 For this path the source `backup_share` must point at the **instance** level (for
 example `\\host\SQLBK\APPDB-DB$APPDB`) and `vm_import_linux_path` must **not** include
@@ -1231,7 +1267,7 @@ covers PostgreSQL, Oracle and container SQL Server, whether the scheduler, `/spb
 | --- | --- | --- |
 | `START` | the run | - |
 | `COPY_START` / `COPY_DONE` | the staging copy, remote restores only: pieces, bytes, already there, removed | `backup-chain`, `copy-backup-dir` |
-| `METADATA_*` | instance logins, roles and Agent jobs before the databases; an entry without `server_metadata` says why, once | `sqlserver-replay-instance` |
+| `METADATA_*` | instance logins, roles and Agent jobs before the databases; an entry without `server_metadata` says why, once. The app states the instance's `connection`, the instance `policy` and the bundle's `secrets` (`lib.data_sources.request_fill`) - `common.cli` reads no configuration | `sqlserver-replay-instance` |
 | `RESTORE_START` / `RESTORE_DONE` | what goes in (`base backup X + 2 incremental(s), then WAL replay`, `APPDB: full X + 4 log(s)`, `RMAN DUPLICATE of FREE from ...`) and to which point; how long it took | `restore-full` / `-diff` / `-log` |
 | `VERIFY_START` / `VERIFY_DONE` | whether the restored databases open: *N checked, M unusable* | `verify-restore` |
 | `METADATA_*` | the post-database phase, only after a restore that worked | `sqlserver-replay-instance` |
@@ -1437,7 +1473,8 @@ Two properties are deliberate:
 - No backup file found: check source path, file age filter, source ID, and database name mapping in `restore_config.json`.
 - Restore SQL is wrong: run `restore-latest --dry-run` first and inspect generated SQL/log output.
 - Certificate problem: run `import-certificate --dry-run` and verify certificate config.
-- Restore succeeded but verification failed: run `verify-restore` and inspect SQL Server CHECKDB output.
+- Restore succeeded but verification failed: the workflow's `verify-restore` phase names each
+  database that does not open; rerun `common.cli verify-restore` against it to see why.
 - *N database(s) restored and recovered, but the integrity check (DBCC CHECKDB) failed*: the data was
   restored; the `DBCC CHECKDB` run on each database afterwards failed, and the database is recorded
   `CHECK_FAILED` (not `FAILED`). It still fails the run and holds back retention cleanup. Msg 1823 /

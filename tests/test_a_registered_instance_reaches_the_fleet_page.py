@@ -9,8 +9,8 @@ fleet page does not mention it.
 Measured on 2026-09-12 on a node whose canonical file held **one** server and whose
 `db_instances.json` registered **43**. The seed had run on the afternoon the node was stood up,
 when one was all there was, and forty-two instances registered over the following day never
-appeared. The operator's words: *"list server ra rất nhiều, nhưng report inventory chỉ có 1, phải
-tự động thêm vào report khi add instance."*
+appeared. The operator's words (translated): *"the server list shows many, but the inventory report
+has only 1 - adding an instance has to add it to the report automatically."*
 """
 
 from __future__ import annotations

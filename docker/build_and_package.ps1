@@ -39,8 +39,8 @@ $toolDir = Split-Path -Parent $PSScriptRoot
 Set-Location $toolDir
 Write-Host "Working dir: $toolDir" -ForegroundColor Cyan
 
-# Version is the single source of truth in db_ops/__init__.py (__version__).
-$initPy = Join-Path $toolDir "db_ops\__init__.py"
+# Version is the single source of truth in db_ops/lib/version.py (__version__).
+$initPy = Join-Path $toolDir "db_ops\lib\version.py"
 $verMatch = Select-String -Path $initPy -Pattern '__version__\s*=\s*"([^"]+)"'
 if (-not $verMatch) { throw "Could not read __version__ from $initPy" }
 $version = $verMatch.Matches[0].Groups[1].Value

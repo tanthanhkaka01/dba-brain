@@ -35,7 +35,7 @@ from pathlib import Path
 
 import pytest
 
-from db_ops import scaffold
+from db_ops.common import scaffold
 from db_ops.jobs.daemon import use_this_interpreter
 
 REPO_ROOT = Path(__file__).resolve().parents[1]

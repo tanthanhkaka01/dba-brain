@@ -32,6 +32,7 @@ from typing import Any
 from db_ops.common import field_migration
 from db_ops.lib import config_references, shared_objects
 from db_ops.lib.json_io import atomic_write_text, indent_of
+from db_ops.lib.moved_commands import MOVED_COMMANDS
 from db_ops.lib.paths import PACKAGED_CATALOGUE
 
 USAGE = """\
@@ -60,6 +61,9 @@ Steps, in order (each one idempotent - a file already moved plans nothing):
                       reports_config.json, with this node's own active and time_window; its timeout
                       is added to APP-REPORTS-CREATE's, whose pass now builds it; the app command
                       and the console's reference to it are removed
+  moved-commands      a command line naming a command that moved to another CLI is pointed at it:
+                      "db_ops.common.cli", "self-status" -> "db_ops.db.cli", "self-status" (the
+                      last-run column is read from the store, which only db.cli opens)
 
 A record whose two spellings DISAGREE is a conflict: its file is not written, and the answer names
 the record. After a write, check-objects and check-references are run and their counts reported -
@@ -72,7 +76,8 @@ Exit code 1 when a conflict left a file unwritten.
 """
 
 STEPS = ("reference-files", "field-names", "restore-machine-ids", "telegram-active",
-         "inventory-into-reports")
+         "inventory-into-reports", "moved-commands")
+
 
 #: The app command that was a report (0.22.0), and the report it becomes.
 INVENTORY_APP = "APP-REPORTS-INVENTORY-WORKFLOW"
@@ -197,6 +202,61 @@ def _telegram_active(root: Path, *, dry_run: bool, before_write: Any) -> dict[st
             files.append({"file": name, "records_changed": len(changes), "changes": changes,
                           "conflicts": conflicts, "written": written})
     return {"files": files}
+
+def _moved_commands(root: Path, *, dry_run: bool, before_write: Any) -> dict[str, Any]:
+    """Point every command line that names a moved command at the CLI that has it now.
+
+    Only the argv form - ``["{python}", "-m", "db_ops.common.cli", "self-status", ...]`` - which is
+    how a bot command and an app command state what they run. The rewrite is on the file's own
+    text, so its layout survives, and it is trusted only when the result parses to exactly the
+    document the same rewrite gives structurally.
+    """
+    files: list[dict[str, Any]] = []
+    for path in sorted(root.glob("*.json")):
+        if path.name in REFERENCE_FILES:
+            continue
+        raw = path.read_bytes().decode("utf-8-sig")
+        if not any(f'"{module}"' in raw for module, _command in MOVED_COMMANDS):
+            continue
+        try:
+            document = json.loads(raw)
+        except ValueError:
+            continue
+        changes: list[dict[str, Any]] = []
+
+        def walk(value: Any, where: str) -> None:
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    walk(item, f"{where}.{key}" if where else str(key))
+            elif isinstance(value, list):
+                for index in range(len(value) - 1):
+                    new_module = (MOVED_COMMANDS.get((value[index], value[index + 1]))
+                                  if isinstance(value[index], str) and isinstance(value[index + 1], str)
+                                  else None)
+                    if new_module:
+                        changes.append({"where": f"{where}[{index}]", "command": value[index + 1],
+                                        "from": value[index], "to": new_module})
+                        value[index] = new_module
+                for index, item in enumerate(value):
+                    walk(item, f"{where}[{index}]")
+
+        walk(document, "")
+        written = bool(changes) and not dry_run
+        if written:
+            before_write(path)
+            text = raw
+            for (module, command), new_module in MOVED_COMMANDS.items():
+                text = re.sub(rf'"{re.escape(module)}"(\s*,\s*)"{re.escape(command)}"',
+                              lambda match, new=new_module, cmd=command: f'"{new}"{match.group(1)}"{cmd}"',
+                              text)
+            if json.loads(text) != document:
+                text = json.dumps(document, ensure_ascii=False, indent=indent_of(path, default=2)) + "\n"
+            atomic_write_text(path, text)
+        if changes:
+            files.append({"file": path.name, "records_changed": len(changes), "changes": changes,
+                          "conflicts": [], "written": written})
+    return {"files": files}
+
 
 #: The files this version ships as REFERENCE rather than configuration: nobody edits them, every node
 #: holds the same bytes, and the other steps are checked against them. They go first, because an
@@ -335,6 +395,8 @@ def upgrade(request: dict[str, Any]) -> tuple[str, dict[str, Any]]:
             files = _restore_machine_ids(root, dry_run=dry_run, before_write=before_write)["files"]
         elif step == "telegram-active":
             files = _telegram_active(root, dry_run=dry_run, before_write=before_write)["files"]
+        elif step == "moved-commands":
+            files = _moved_commands(root, dry_run=dry_run, before_write=before_write)["files"]
         else:
             files = _inventory_into_reports(root, dry_run=dry_run, before_write=before_write)["files"]
         results.append({

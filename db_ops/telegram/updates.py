@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from db_ops.common import data_sources
+from db_ops.lib import data_sources
 from db_ops.db import DbOpsStore
 from db_ops.telegram.api import get_updates
 from db_ops.lib.paths import DEFAULT_DATA_DIR  # noqa: F401 - one definition, see that module

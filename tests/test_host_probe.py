@@ -17,7 +17,7 @@ from db_ops.common import host_probe
 from db_ops.lib.target_profile import TargetProfile
 
 
-def _probe(monkeypatch, open_ports, states=None, request=None, instance=None):
+def _probe(monkeypatch, open_ports, states=None, request=None):
     """Run a probe with the sockets faked, so only the interpretation is under test."""
     states = states or {}
 
@@ -29,7 +29,7 @@ def _probe(monkeypatch, open_ports, states=None, request=None, instance=None):
     monkeypatch.setattr(host_probe, "probe_port", fake_probe_port)
     payload = {"host": "10.0.0.9"}
     payload.update(request or {})
-    return host_probe.probe(payload, instance=instance)
+    return host_probe.probe(payload)
 
 
 def test_an_ssh_or_winrm_answer_means_a_script_can_get_in(monkeypatch):
@@ -82,16 +82,15 @@ def test_nothing_answering_says_whether_the_host_is_at_least_up(monkeypatch):
     assert silent["verdict"] == "unreachable" and "host down" in silent["detail"]
 
 
-def test_the_inventory_supplies_the_ip_and_os_but_the_request_still_wins(monkeypatch):
-    """Same precedence as everywhere else: the caller is looking at the server, the record is a
-    file somebody typed. `sources` says which side answered, per field."""
-    instance = {"server_id": "ACME-192-0-2-236", "ip": "192.0.2.236",
-                "os": "Windows Server 2003", "db_type": "oracle"}
-    outcome = _probe(monkeypatch, [3389], request={"host": ""}, instance=instance)
+def test_the_address_and_os_are_the_requests_and_the_answer_says_so(monkeypatch):
+    """No inventory record is read to find them (rules R09): the app that holds the server_id
+    states them, and `sources` names the request as the side that answered, per field."""
+    outcome = _probe(monkeypatch, [3389], request={
+        "host": "192.0.2.236", "target": "ACME-192-0-2-236", "os": "Windows Server 2003"})
 
     assert outcome["host"] == "192.0.2.236"
     assert outcome["server_id"] == "ACME-192-0-2-236"
-    assert outcome["profile"]["sources"]["os_text"] == "config"
+    assert outcome["profile"]["sources"]["os_text"] == "request"
 
 
 def test_a_request_naming_no_host_at_all_is_refused():
@@ -122,7 +121,7 @@ def test_the_module_reads_no_file():
         for name in ([a.name for a in node.names] + ([node.module or ""] if isinstance(node, ast.ImportFrom) else []))
     }
     assert "data_sources" not in imported
-    assert not any(name.startswith("db_ops.common.data_sources") for name in imported)
+    assert not any(name.startswith("db_ops.lib.data_sources") for name in imported)
 
 
 def test_probe_port_tells_a_refusal_from_a_timeout():

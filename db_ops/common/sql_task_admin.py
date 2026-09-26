@@ -41,6 +41,7 @@ from db_ops.common.config_admin import (
     _dump_json,
     _notify_rule_dict,
     _read_json,
+    _read_json_or_empty,
     next_sql_id,
     next_target_no,
     normalize_time_window,
@@ -49,6 +50,7 @@ from db_ops.common.config_admin import (
 from db_ops.lib import field_names, shared_objects, task_output
 from db_ops.lib.notify import NotifyConfigError, parse_notify_config
 from db_ops.lib.sql_access import SQL_TASK_DB_TYPES
+from db_ops.lib.sql_text import NAMED_BIND_DB_TYPES, named_placeholders, sqlplus_substitution_names
 from db_ops.lib.sql_task_target import instance_matches, instance_not_found_message
 from db_ops.lib.task_input import TARGET_PLACEHOLDERS
 from db_ops.lib.task_output import TaskOutputError
@@ -252,6 +254,45 @@ def _write_script(root: Path, request: dict[str, Any], *, sql_id: int, sql_name:
     return relpath
 
 
+def _refuse_a_parameter_no_script_says(db_type: str, parameters: list[dict[str, Any]],
+                                       texts: list[str]) -> None:
+    """On Oracle and PostgreSQL, each declared parameter must be one the scripts say.
+
+    There the value reaches the SQL only where it says ``:name`` (or ``&name`` on Oracle, a SQL*Plus
+    substitution) - nothing declares it for the script, as the T-SQL prelude does on SQL Server. A
+    parameter no script says would take a value from the operator and bind it to nothing, so it is
+    refused here rather than at the task's first run. Until 0.24.0 a PostgreSQL task could declare
+    no parameters at all, and an Oracle one failed on a direct connection (0.23.0 section 1.55).
+    """
+    if db_type not in NAMED_BIND_DB_TYPES or not parameters:
+        return
+    said: set[str] = set()
+    for text in texts:
+        said |= named_placeholders(text, db_type)
+        if db_type == "oracle":
+            said |= sqlplus_substitution_names(text)
+    unsaid = [str(p.get("name") or "").strip() for p in parameters
+              if str(p.get("name") or "").strip().lower() not in said]
+    if unsaid:
+        forms = ":name, or &name as SQL*Plus writes it" if db_type == "oracle" else ":name"
+        raise SqlTaskAdminError(
+            f"parameter(s) {', '.join(unsaid)} are declared but no script of this task says them. "
+            f"A {db_type} script reads a parameter as {forms} - there is no DECLARE in front of it "
+            "as on sqlserver. Use it in the script, or leave it out of parameters.")
+
+
+def _script_texts(root: Path, entry: dict[str, Any]) -> list[str]:
+    """The text of every script a registered command runs, as the runner will find them."""
+    paths: list[Path] = []
+    if entry.get("script_type") == "folder":
+        paths.extend(sorted((root / entry["script_path"]).glob("*.sql")))
+    elif entry.get("script_path"):
+        paths.append(root / entry["script_path"])
+    paths.extend(root / p for p in entry.get("script_paths") or [])
+    paths.extend(root / p for p in entry.get("final_script_paths") or [])
+    return [path.read_text(encoding="utf-8-sig", errors="replace") for path in paths]
+
+
 def _refuse_unknown_keys(request: dict[str, Any], *, object_name: str,
                         options: frozenset[str], data_root: Path) -> None:
     """Refuse a request key that is neither a field of the record nor an option of the command."""
@@ -301,13 +342,9 @@ def add_sql_command(request: dict[str, Any], *, data_dir: str | Path | None = No
             f"db_type {db_type!r} is a valid engine for this estate, but a scheduled SQL task can "
             f"only be run on {SQL_TASK_DB_TYPES}. The task would register and then fail at its "
             f"first run with 'Unsupported db_type: {db_type}'.")
-    if db_type == "postgresql" and request.get("parameters"):
-        # A task's parameters are T-SQL `DECLARE @name` lines put in front of the script, which
-        # PostgreSQL cannot read. Refused here, by name, rather than at the task's first run.
-        raise SqlTaskAdminError(
-            "a postgresql task takes no parameters yet: they are declared as T-SQL `DECLARE @name` "
-            "lines, which PostgreSQL cannot read. Write the values into the script, or run it on "
-            "sqlserver.")
+    parameters = request.get("parameters") or []
+    if not isinstance(parameters, list) or any(not isinstance(p, dict) for p in parameters):
+        raise SqlTaskAdminError('parameters must be an array of {"name", "type"} objects.')
     sql_name = str(request.get("display_name") or "").strip()
     if not sql_name:
         raise SqlTaskAdminError("display_name is required - the sentence a person reads for this "
@@ -318,7 +355,7 @@ def add_sql_command(request: dict[str, Any], *, data_dir: str | Path | None = No
         raise SqlTaskAdminError(f"script_type must be one of {SCRIPT_TYPES}, got {script_type!r}.")
 
     commands_path = data_root / "sql_commands.json"
-    commands = _read_json(commands_path)
+    commands = _read_json_or_empty(commands_path)
     commands.setdefault("sql_commands", [])
 
     replace = bool(request.get("replace"))
@@ -359,6 +396,8 @@ def add_sql_command(request: dict[str, Any], *, data_dir: str | Path | None = No
         # to register anything the repo could.
         if script_type != "single":
             raise SqlTaskAdminError("sql_text writes one file, so it needs script_type=single.")
+        # Before the file is written: a refusal leaves nothing behind.
+        _refuse_a_parameter_no_script_says(db_type, parameters, [str(request["sql_text"])])
         written_script = _write_script(root, request, sql_id=sql_id, sql_name=sql_name,
                                        db_type=db_type, replace=replace)
         entry["script_path"] = written_script
@@ -374,13 +413,11 @@ def add_sql_command(request: dict[str, Any], *, data_dir: str | Path | None = No
             raise SqlTaskAdminError("final_script_paths must be an array of file paths.")
         entry["final_script_paths"] = [_require_file(root, p, field="final_script_paths[]")
                                        for p in final_paths]
+    if written_script is None:
+        _refuse_a_parameter_no_script_says(db_type, parameters, _script_texts(root, entry))
 
     entry["version_from"] = request.get("version_from")
     entry["version_to"] = request.get("version_to")
-
-    parameters = request.get("parameters") or []
-    if not isinstance(parameters, list) or any(not isinstance(p, dict) for p in parameters):
-        raise SqlTaskAdminError('parameters must be an array of {"name", "type"} objects.')
 
     input_type = str(request.get("input_type") or "none").strip().lower()
     if input_type not in INPUT_TYPES:
@@ -474,7 +511,7 @@ def add_sql_target(request: dict[str, Any], *,
     if not server_id:
         raise SqlTaskAdminError("server_id is required.")
 
-    commands = _read_json(data_root / "sql_commands.json")
+    commands = _read_json_or_empty(data_root / "sql_commands.json")
     command = next((c for c in commands.get("sql_commands", [])
                     if int(c.get("sql_id", -1)) == sql_id), None)
     if command is None:
@@ -487,7 +524,7 @@ def add_sql_target(request: dict[str, Any], *,
                                             data_root=data_root)
 
     targets_path = data_root / "sql_targets.json"
-    targets = _read_json(targets_path)
+    targets = _read_json_or_empty(targets_path)
     targets.setdefault("sql_targets", [])
 
     replace = bool(request.get("replace"))

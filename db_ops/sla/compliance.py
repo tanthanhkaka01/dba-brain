@@ -95,7 +95,7 @@ def _no_targets_configured(data_dir: str | Path | None = None) -> bool:
     Read rather than inferred from the results: "nothing is configured" and "everything stopped
     reporting" both produce a page of NO_DATA, and only one of them is an incident.
     """
-    from db_ops.common import data_sources
+    from db_ops.lib import data_sources
 
     try:
         instances = data_sources.load_db_instances(data_dir)
@@ -156,7 +156,7 @@ def _expected_scope(policy: SlaPolicy, *, data_dir: str | Path | None = None) ->
     ``server_id`` says which rows to read out of the store, ``target_id`` says which verdict each
     row belongs to (one machine can serve several databases).
 
-    Built with :func:`db_ops.common.data_sources.load_config_metric_targets`, which
+    Built with :func:`db_ops.lib.data_sources.load_config_metric_targets`, which
     composes ``<server_id>/<db_type>/<db_name>`` with the same formula the metrics collector uses
     — a second spelling here would invent NO_DATA rows for targets that do have data.
 
@@ -165,7 +165,7 @@ def _expected_scope(policy: SlaPolicy, *, data_dir: str | Path | None = None) ->
     would be a worse failure than the drift this replaces.
     """
     try:
-        from db_ops.common.data_sources import load_config_metric_targets
+        from db_ops.lib.data_sources import load_config_metric_targets
 
         targets = (
             load_config_metric_targets(data_dir=data_dir, require_metrics_enabled=True)

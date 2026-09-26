@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from db_ops.common.data_sources import inventory_exclude_ip_prefixes
+from db_ops.lib.data_sources import inventory_exclude_ip_prefixes
 from db_ops.lib.inventory_render import EXCLUDE_IP_PREFIXES, _render_markdown
 from db_ops.reports.inventory_report import build_models
 

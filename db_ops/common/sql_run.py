@@ -6,13 +6,13 @@ for a VM), **the input is a JSON object** — the shape below travels from a con
 Telegram command, or the CLI into the API untranslated, and the result is JSON-shaped too::
 
     {
-      "target": "ACME-192-0-2-115",   // server_id, or "<db_type> <ip> [port]"
+      "connection": {...},              // REQUIRED since 0.24.0: the login, complete - db_type,
+                                        // host, port, username, password (lib.connection_spec)
+      "target": "ACME-192-0-2-115",     // the label the answer carries; nothing is looked up
       "sql": "SELECT TOP 10 * FROM sys.objects",   // or "sql_file": "path/to/query.sql"
       "database": "SALESDB",               // optional. SQL Server: default is always `master`
                                         // (say USE, or name it here). Other engines: default is
-                                        // the instance's database.
-      "credential_name": "...",         // optional; default = the instance's
-                                        // default_credential_name (alias: "user_ref")
+                                        // the connection's database.
       "max_rows": 50000,
       "timeout_seconds": 30,             // the STATEMENT budget, and the connect unless the
                                         // next field overrides it
@@ -21,12 +21,21 @@ Telegram command, or the CLI into the API untranslated, and the result is JSON-s
       "autocommit": false,              // true = no transaction at all (see below)
       "params": [505, "SALESDB"],          // values BOUND to the placeholders in the SQL
       "prelude": "DECLARE @spid int = ?;",   // SQL prepended to every batch (see below)
+      "named_params": {"job_no": "AA2608/01902"},  // Oracle / PostgreSQL: bound where the SQL
+                                        // says :job_no (see below); not with params/prelude
       "capture": "first",               // first (default) | all — see below
       "max_result_sets": 20,            // capture: all only; 0 = no cap
       "define": {"JOB_NO": "AA2503/00818"},  // optional SQL*Plus &substitutions (see below)
       "sql_access": {...},              // optional transport override; see below
-      "data_dir": null                  // optional data/ folder override (tests)
+      "secrets": {"<ref>": "..."}       // optional; the refs that sql_access names (an 8i bridge)
     }
+
+**Nothing is looked up** (rules R09, 0.24.0). Until then a bare ``target`` was resolved here against
+``db_instances.json``, ``users.json`` and the secret store; now the app that holds the ``server_id``
+finishes the request from its own ``data/`` (``db_ops.lib.data_sources.request_fill``) and a request
+without ``connection`` is refused with :data:`NO_CONNECTION`. The lookup itself -
+``resolve_sqlserver_target`` - left with it: ``rotate-password`` and ``check-secret``, whose job is
+the store, fill their target the way the apps do and hand this module the stated connection.
 
 The connection runs with autocommit off and, unless ``commit`` is set, is **always rolled
 back** — so temp-table report shapes (``SELECT ... INTO #tmp`` then a final ``SELECT``) work
@@ -67,6 +76,15 @@ repeated in front of each batch with the same values bound again. The caller bui
 text. Nothing here parses it; a caller that already controls ``sql`` gains no reach it did not
 have.
 
+``named_params`` is the same promise for the two engines whose SQL names a value ``:name`` -
+Oracle (a bind variable) and PostgreSQL (a psql variable) - and which read no ``DECLARE``. Each
+``:name`` outside a string or a comment is rewritten, statement by statement, into the placeholder
+the driver in this process reads (:func:`db_ops.common.db_connect.parameter_style`), and the values
+are bound positionally in that order. So the one shape the caller writes is portable, and the
+driver-specific spelling that made named binding unportable stays here. A name no statement says
+is refused before anything runs, and so is the field on another engine (added in 0.24.0 for SQL
+tasks with parameters on those engines, 0.23.0 section 1.55).
+
 Neither is available through the **legacy Oracle bridge** (``sql_access.method`` = ``api`` /
 ``subprocess``): that tool takes one statement at a time and binds nothing, so a request carrying
 either is refused rather than run with the values silently dropped.
@@ -94,10 +112,10 @@ three sets; pg8000 does not, so the same request against PostgreSQL comes back a
 own reading of the statement, not a set this dropped. ``capture: "all"`` therefore means "keep
 every set the driver offers", which is all anyone can honestly promise across four engines.
 
-A target may declare that its SQL does **not** go over a database connection at all:
-``db_instances.json`` ``sql_access.method = "api"`` / ``"subprocess"`` routes the run through the
+A target may declare that its SQL does **not** go over a database connection at all: a
+``sql_access.method = "api"`` / ``"subprocess"`` in the connection routes the run through the
 legacy Oracle tool instead (:mod:`db_ops.common.oracle_bridge`), which is the only way to reach an
-Oracle 8i host. The request may carry its own ``sql_access`` block to override the instance's — the
+Oracle 8i host. The request may carry its own ``sql_access`` block to override the connection's — the
 same escape hatch ``run-cmd`` gives for ``cmd_access``, and what lets one run be pointed at a bridge
 on this machine without editing the deployed inventory. Everything else about the run is unchanged,
 including the result shape, so an export does not care which transport answered it.
@@ -110,11 +128,11 @@ overrides them, which is how the same archived script runs for a different job n
 edited.
 
 **Every engine db_ops knows** is supported — sqlserver, postgresql, mysql, oracle — chosen from
-the target's ``db_type`` in ``db_instances.json``. On **SQL Server the connection always lands in
+the connection's ``db_type``. On **SQL Server the connection always lands in
 master** unless the request names a database: the inventory's ``database`` field is a service
 label on most entries and pointing a login at one fails with ``Cannot open database ... (4060)``.
 A script that needs another database issues ``USE <db>``. The connection itself belongs to
-:mod:`db_ops.common.db_connect`; this module owns target/credential resolution, the row cap and
+:mod:`db_ops.common.db_connect`; this module owns the stated connection's resolution, the row cap and
 the rollback contract, all of which are engine-independent.
 """
 
@@ -128,21 +146,21 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
 
-from db_ops.common import data_sources
 from db_ops.common import db_connect
 from db_ops.common import oracle_bridge
 from db_ops.common import sql_execution
-from db_ops.common import data_sources as target_resolve
 from db_ops.lib.connection_spec import ConnectionSpec, ConnectionSpecError
 from db_ops.lib.driver_warnings import read_next_set
-from db_ops.lib.target_profile import SOURCE_CONFIG, SOURCE_REQUEST, TargetProfile, ToolChoice
+from db_ops.lib.target_profile import SOURCE_REQUEST, TargetProfile, ToolChoice
 # Re-exported: the row/timeout limits, the sqlplus DEFINE handling and SqlRunError moved to
 # db_ops/lib/sql_text.py so apps can prepare and validate a request without importing `common`.
 # Running the SQL stayed here.
 from db_ops.lib.sql_text import (  # noqa: F401 - re-exported for compatibility
     DEFAULT_MAX_ROWS, DEFAULT_TIMEOUT_SECONDS, SqlRunError, check_sqlplus_define_value,
     expand_sqlplus_defines)
-from db_ops.lib.sql_text import oracle_statement, split_postgresql_statements
+from db_ops.lib.sql_text import (NAMED_BIND_DB_TYPES, SqlParameterError, bind_named_values,
+                                 check_named_values, named_placeholders, oracle_statement,
+                                 split_postgresql_statements)
 
 
 
@@ -168,7 +186,6 @@ class SqlRunRequest:
     target: str
     sql: str
     database: str = ""
-    credential_name: str = ""
     max_rows: int = DEFAULT_MAX_ROWS
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS
     connect_timeout_seconds: int = 0
@@ -176,10 +193,14 @@ class SqlRunRequest:
     autocommit: bool = False
     params: list[Any] = field(default_factory=list)
     prelude: str = ""
+    #: Lower-case name -> value, bound where an Oracle or PostgreSQL statement says ``:name``.
+    named_params: dict[str, Any] = field(default_factory=dict)
     capture: str = CAPTURE_FIRST
     max_result_sets: int = DEFAULT_MAX_RESULT_SETS
-    data_dir: str = ""
     sql_access: dict[str, Any] = field(default_factory=dict)
+    #: ``{ref: value}`` for the secret refs an 8i bridge's ``sql_access`` names - its signing secret,
+    #: a whole connect string. Stated by the caller, like the password: this process opens no store.
+    secrets: dict[str, str] = field(default_factory=dict)
     #: What the request *states* about the target — engine, version, platform, runtime. Merged
     #: over the inventory's own facts, never under them, so a caller holding better information
     #: than `db_instances.json` can act on it without editing deployed config first.
@@ -188,9 +209,8 @@ class SqlRunRequest:
     #: (`sql_access`); the driver did not, and there was no reason for the asymmetry.
     driver: str = ""
     oracle_client_mode: str = ""
-    #: A complete connection stated in the request. When present, **no inventory file is read** —
-    #: see :mod:`db_ops.lib.connection_spec`. Mutually exclusive with `target` in meaning, not in
-    #: syntax: a `target` alongside it is kept only as the label in the answer.
+    #: The complete connection - required since 0.24.0 (rules R09): no inventory file is read, and
+    #: a `target` alongside it is only the label in the answer. See :mod:`db_ops.lib.connection_spec`.
     connection: ConnectionSpec | None = None
 
     @classmethod
@@ -199,8 +219,7 @@ class SqlRunRequest:
 
         ``sql_file`` is accepted in place of ``sql`` so a caller can point at a ``.sql`` file
         instead of inlining a long statement; the file is read with ``utf-8-sig`` (SSMS writes
-        a BOM). ``user_ref`` is an accepted alias for ``credential_name``. Unknown keys are
-        ignored, so a caller may pass a wider config block through.
+        a BOM). Unknown keys are ignored, so a caller may pass a wider config block through.
         """
         if isinstance(payload, SqlRunRequest):
             return payload
@@ -221,11 +240,10 @@ class SqlRunRequest:
                 raise SqlRunError(str(exc)) from exc
 
         target = str(payload.get("target") or "").strip()
-        if not target and connection is None:
-            raise SqlRunError(
-                "target is required (a server_id, or '<db_type> <ip> [port]') — or a "
-                '"connection" object stating the whole connection, which reads no inventory file.'
-            )
+        if connection is None:
+            # A server_id names a login only in some node's data/, which this process does not
+            # read (rules R09) - the caller states it (db_ops.lib.data_sources.request_fill).
+            raise SqlRunError(NO_CONNECTION.format(what="run-sql"))
 
         sql = str(payload.get("sql_text") or payload.get("sql") or "").strip()
         sql_file = str(payload.get("sql_file") or "").strip()
@@ -240,13 +258,21 @@ class SqlRunRequest:
             raise SqlRunError("sql is required.")
         sql = expand_sqlplus_defines(sql, payload.get("define") or payload.get("defines"))
 
+        params = _bind_params(payload.get("params"))
+        prelude = str(payload.get("prelude") or "")
+        try:
+            named_params = check_named_values(payload.get("named_params"))
+        except SqlParameterError as exc:
+            raise SqlRunError(str(exc)) from exc
+        if named_params and (params or prelude):
+            # Two numberings of one statement's placeholders cannot both be right.
+            raise SqlRunError("named_params binds :name placeholders; params and prelude bind "
+                              "positional ones. Pass one or the other.")
+
         return cls(
             target=target,
             sql=sql,
             database=str(payload.get("database_name") or payload.get("database") or "").strip(),
-            credential_name=str(
-                payload.get("credential_name") or payload.get("user_ref") or ""
-            ).strip(),
             max_rows=_positive_int(payload.get("max_rows"), DEFAULT_MAX_ROWS, "max_rows"),
             timeout_seconds=_positive_int(
                 payload.get("timeout_seconds"), DEFAULT_TIMEOUT_SECONDS, "timeout_seconds"
@@ -257,15 +283,16 @@ class SqlRunRequest:
             ),
             commit=bool(payload.get("commit", False)),
             autocommit=bool(payload.get("autocommit", False)),
-            params=_bind_params(payload.get("params")),
-            prelude=str(payload.get("prelude") or ""),
+            params=params,
+            prelude=prelude,
+            named_params=named_params,
             capture=_capture_mode(payload.get("capture")),
             max_result_sets=_positive_int(
                 payload.get("max_result_sets"), DEFAULT_MAX_RESULT_SETS, "max_result_sets",
                 allow_zero=True,
             ),
-            data_dir=str(payload.get("data_dir") or "").strip(),
             sql_access=dict(payload.get("sql_access") or {}),
+            secrets={str(key): str(value) for key, value in dict(payload.get("secrets") or {}).items()},
             # Two spellings, one meaning: a "profile" object for a caller passing a whole block,
             # and the bare keys (`major_version`, `platform`, `os`, `runtime`) for a human typing
             # one fact on the command line. The block wins, because stating both and meaning the
@@ -299,9 +326,9 @@ def _bind_params(raw: Any) -> list[Any]:
         return []
     if isinstance(raw, dict):
         raise SqlRunError(
-            'params must be a list of values bound positionally, not an object. Named binding is '
-            'not portable across the drivers this supports; put the names in "prelude" instead '
-            '(DECLARE @name ... = ?) and list the values here in that order.'
+            'params must be a list of values bound positionally, not an object. For values by name '
+            'use "named_params" on Oracle or PostgreSQL (the SQL says :name), or "prelude" on SQL '
+            'Server (DECLARE @name ... = ?) with the values listed here in that order.'
         )
     if isinstance(raw, (str, bytes)):
         raise SqlRunError('params must be a list of values; got a single string.')
@@ -326,9 +353,14 @@ def run_sql(request: Any) -> dict[str, Any]:
     with an operator-readable message for every known failure.
     """
     parsed = SqlRunRequest.from_json(request)
-    resolved = resolve_request_target(parsed)
+    resolved = resolve_connection_spec(
+        parsed.connection, database=parsed.database, sql_access=parsed.sql_access,
+        driver=parsed.driver, oracle_client_mode=parsed.oracle_client_mode, profile=parsed.profile)
     if oracle_bridge.is_legacy(resolved.get("sql_access")):
         return _run_legacy_oracle(parsed, resolved)
+    # Before connecting: a value meant for a :name the SQL never says is a request error, and a
+    # connection opened only to refuse it is a login the server's audit shows for nothing.
+    check_named_params(parsed.sql, str(resolved.get("db_type") or ""), parsed.named_params)
     conn = connect_target(resolved, timeout_seconds=parsed.timeout_seconds,
                           connect_timeout_seconds=parsed.connect_timeout_seconds,
                           autocommit=parsed.autocommit)
@@ -340,7 +372,7 @@ def run_sql(request: Any) -> dict[str, Any]:
         result_sets, affected_rows, sets_truncated = execute_capture(
             cursor, parsed.sql, max_rows=parsed.max_rows,
             db_type=str(resolved.get("db_type") or "sqlserver"),
-            prelude=parsed.prelude, params=parsed.params,
+            prelude=parsed.prelude, params=parsed.params, named_params=parsed.named_params,
             capture_all=parsed.capture == CAPTURE_ALL,
             max_result_sets=parsed.max_result_sets,
             warnings=warnings,
@@ -370,7 +402,13 @@ def run_sql(request: Any) -> dict[str, Any]:
                 conn.rollback()
             except Exception:  # noqa: BLE001 - some drivers auto-rollback on close; ignore.
                 pass
-        conn.close()
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001 - see below
+            # A target that dropped mid-statement has a dead socket, and pg8000 raises on closing
+            # it. Unguarded, that replaced the SqlRunError above and reached the caller as a
+            # traceback instead of an answer (0.24.0 §1.60, seen on the 0.23.0 soak).
+            pass
 
     # The *planned* choice plus what actually answered. They can differ, and the difference is the
     # whole point: on SQL Server the plan is "auto" and the connection knows whether Driver 18
@@ -445,7 +483,7 @@ def _run_legacy_oracle(parsed: SqlRunRequest, resolved: dict[str, Any]) -> dict[
     moot here: the tool runs one statement read-only and never commits. ``committed`` is reported
     False and ``affected_rows`` 0 for that reason — not because they were not measured.
     """
-    if parsed.params or parsed.prelude:
+    if parsed.params or parsed.prelude or parsed.named_params:
         # Refused rather than dropped. The tool inlines one statement with no binds, so running
         # the request without them would either fail on a stray `?` or - worse, for a prelude
         # whose DECLARE happens to parse - run the SQL with the values missing and report success.
@@ -455,10 +493,8 @@ def _run_legacy_oracle(parsed: SqlRunRequest, resolved: dict[str, Any]) -> dict[
             "SQL for that target, or use a target db_ops can connect to directly."
         )
     sql_access = resolved["sql_access"]
-    try:
-        secrets = data_sources.load_secret_text(parsed.data_dir or None)
-    except (RuntimeError, OSError, ValueError) as exc:
-        raise SqlRunError(str(exc)) from exc
+    # The bridge's own secrets are the request's (rules R09) - never the store's.
+    secrets = dict(parsed.secrets)
     try:
         result = oracle_bridge.run_query(
             sql=parsed.sql,
@@ -523,51 +559,85 @@ def _run_legacy_oracle(parsed: SqlRunRequest, resolved: dict[str, Any]) -> dict[
     }
 
 
-def resolve_request_target(parsed: SqlRunRequest) -> dict[str, Any]:
-    """The resolved target for a request, by whichever of the two doors it came in.
+#: What a command below says when its request states no database to reach. The fix is the
+#: caller's, and the message says whose: common.cli reads no configuration (rules R09).
+NO_CONNECTION = (
+    '{what} needs a "connection" object - db_type, host, port, username and password. common.cli '
+    "reads no configuration (rules R09): the app that holds a server_id states the login "
+    "(db_ops.lib.data_sources.request_fill does it from this node's data/)."
+)
 
-    **The whole difference between the doors is what gets read.** With a ``connection`` block,
-    nothing: the host, port, engine, version and login are all in the request, and the only thing
-    that can still touch a file is a ``password_ref`` — resolved from the environment first, and
-    from the encrypted store only if the environment does not have it. With a ``target``, the
-    inventory answers, which is the right default for a runbook or a scheduled task and stays it.
 
-    Both produce the same dict, so nothing downstream branches on which was used.
+def resolve_stated_connection(request: Any, *, database: str = "", what: str = "") -> dict[str, Any]:
+    """The database a request states in its ``connection`` block - the only way the operations in
+    ``common`` reach one since 0.24.0 (rules R09).
+
+    The same resolved dict ``run-sql`` works from, so nothing downstream changes. A request naming
+    only a ``server_id`` is refused with :data:`NO_CONNECTION`, and a ``password_ref`` is taken from
+    the environment or not at all: opening the secret store would be the lookup this replaces.
     """
-    spec = parsed.connection
-    if spec is None:
-        return resolve_sqlserver_target(
-            parsed.target,
-            data_dir=parsed.data_dir or None,
-            database=parsed.database,
-            credential_name=parsed.credential_name,
-            sql_access=parsed.sql_access,
-            profile=parsed.profile,
-            driver=parsed.driver,
-            oracle_client_mode=parsed.oracle_client_mode,
-        )
+    raw = request.get("connection") if isinstance(request, dict) else None
+    if not raw:
+        raise SqlRunError(NO_CONNECTION.format(what=what or "this command"))
+    try:
+        spec = ConnectionSpec.from_json(raw)
+    except ConnectionSpecError as exc:
+        raise SqlRunError(str(exc)) from exc
+    return resolve_connection_spec(
+        spec, database=database, sql_access=dict(request.get("sql_access") or {}),
+        driver=str(request.get("driver") or "").strip(),
+        oracle_client_mode=str(request.get("oracle_client_mode") or "").strip())
 
+
+def stated_connection(request: Any, *, what: str = "") -> dict[str, Any]:
+    """The request's ``connection`` block, checked as :func:`resolve_stated_connection` checks it -
+    for a parser that hands the block on to :func:`run_sql` rather than connecting itself, so a
+    refusal names the missing login before anything runs."""
+    resolve_stated_connection(request, what=what)
+    return dict(request["connection"])
+
+
+def resolve_connection_spec(
+    spec: ConnectionSpec,
+    *,
+    database: str = "",
+    sql_access: dict[str, Any] | None = None,
+    driver: str = "",
+    oracle_client_mode: str = "",
+    profile: TargetProfile | None = None,
+) -> dict[str, Any]:
+    """A stated connection, as the resolved dict every caller downstream reads.
+
+    A ``password_ref`` is taken from this process's environment or not at all: no secret store is
+    opened (rules R09, 0.24.0 - until then a ref the environment lacked was read from the store).
+
+    ``profile`` is what the request states about the target beside its connection - ``run-sql``'s
+    top-level ``major_version``, ``platform``, ``os``, ``runtime`` or ``profile`` block. It is laid
+    over the connection's own facts, never under them: it is the field that decides a driver, and
+    when every request came through this door it was parsed and then dropped, so an 8i target
+    stated as version 8 went to python-oracledb anyway.
+    """
     password = spec.password
     if spec.password_ref:
+        if not os.getenv(spec.password_ref, "").strip():
+            raise SqlRunError(
+                f"connection.password_ref {spec.password_ref!r} is not in this process's environment, "
+                'and no secret store is read here (rules R09): send "password" instead.')
         try:
-            # `resolve_password` reads the environment first, so a caller that exports the ref as
-            # an env var stays file-free even while naming one.
-            secrets = (
-                {} if os.getenv(spec.password_ref, "").strip()
-                else data_sources.load_secret_text(parsed.data_dir or None)
-            )
-            password = sql_execution.resolve_password(spec.credential(), secrets)
+            password = sql_execution.resolve_password(spec.credential(), {})
         except (RuntimeError, OSError, ValueError) as exc:
             raise SqlRunError(str(exc)) from exc
 
     resolved = spec.to_resolved(
         password=password,
-        database=parsed.database,
+        database=database,
         default_database=db_connect.default_database(spec.db_type),
     )
+    stated = (profile or TargetProfile()).merge(spec.profile).with_(db_type=spec.db_type)
+    resolved["profile"] = stated
     try:
         resolved["sql_access"] = oracle_bridge.normalize_sql_access(
-            parsed.sql_access or spec.sql_access, label=spec.server_id,
+            sql_access or spec.sql_access, label=spec.server_id,
         )
     except oracle_bridge.LegacyOracleError as exc:
         raise SqlRunError(str(exc)) from exc
@@ -580,159 +650,16 @@ def resolve_request_target(parsed: SqlRunRequest) -> dict[str, Any]:
     else:
         try:
             resolved["tool"] = db_connect.tool_for(
-                spec.profile.with_(db_type=spec.db_type),
-                requested_driver=parsed.driver,
+                stated,
+                requested_driver=driver,
                 sqlserver_driver=spec.sqlserver_driver,
-                oracle_client_mode=parsed.oracle_client_mode or spec.oracle_client_mode,
+                oracle_client_mode=oracle_client_mode or spec.oracle_client_mode,
             ).to_dict()
         except db_connect.DbConnectError as exc:
             raise SqlRunError(f"{spec.server_id}: {exc}") from exc
-    if parsed.driver:
-        resolved["sqlserver_driver"] = parsed.driver
+    if driver:
+        resolved["sqlserver_driver"] = driver
     return resolved
-
-
-def resolve_sqlserver_target(
-    target: str,
-    *,
-    data_dir: str | Path | None = None,
-    database: str = "",
-    credential_name: str = "",
-    sql_access: dict[str, Any] | None = None,
-    profile: TargetProfile | None = None,
-    driver: str = "",
-    oracle_client_mode: str = "",
-) -> dict[str, Any]:
-    """Resolve a SQL Server connection from a unified target spec.
-
-    ``target`` is either a ``server_id`` (e.g. ``ACME-192-0-2-248``) or a
-    ``<db_type> <ip> [port]`` spec (e.g. ``mssql 192.0.2.248 1433``) — see
-    :mod:`db_ops.common.data_sources`. The instance is looked up in ``db_instances.json``.
-    Only ``sqlserver`` instances are supported. ``database`` overrides the instance's database
-    for this run.
-
-    **Which login runs the SQL**: ``credential_name`` when the caller names one, else the
-    instance's ``default_credential_name``, resolved against that server's
-    ``database_credentials`` group in ``users.json``; the password comes from the encrypted
-    secret file via the credential's ``password_ref``. The instance default is often a DBA
-    login, so a caller that only needs to read should name a least-privilege credential rather
-    than inherit it. The resolved ``credential_name``/``username`` are returned so the caller
-    can log who it connected as. Raises :class:`SqlRunError` when the spec is unknown, is not
-    SQL Server, or has no usable credential.
-
-    **What decides the tool**: ``profile`` (what the caller states) merged *over* the instance
-    record's own ``db_type`` / ``major_version`` / ``platform`` / ``os``. The returned
-    ``profile`` carries a ``sources`` map saying which side supplied each field, and ``tool`` says
-    which driver that implies and who chose it — so an answer can be attributed without re-reading
-    the inventory. Neither is a lookup this function performs twice: the instance record is
-    already in hand.
-    """
-    try:
-        instance = target_resolve.resolve_target_instance(target, data_dir=data_dir)
-    except target_resolve.TargetResolveError as exc:
-        raise SqlRunError(str(exc)) from exc
-
-    server_id = str(instance.get("server_id") or "").strip()
-    try:
-        resolved_sql_access = oracle_bridge.normalize_sql_access(
-            sql_access or instance.get("sql_access"), label=server_id or target,
-        )
-    except oracle_bridge.LegacyOracleError as exc:
-        raise SqlRunError(str(exc)) from exc
-    db_type = db_connect.normalize_db_type(instance.get("db_type"))
-    if db_type not in db_connect.SUPPORTED_DB_TYPES:
-        raw = str(instance.get("db_type") or "").strip() or "unknown"
-        raise SqlRunError(
-            f"Target {server_id or target} is db_type={raw}; supported: "
-            f"{', '.join(db_connect.SUPPORTED_DB_TYPES)}."
-        )
-
-    credential = _find_sqlserver_credential(
-        instance, data_dir=data_dir, credential_name=credential_name, db_type=db_type
-    )
-    try:
-        # Missing decryption key / unreadable secret file is an operator condition, not a bug:
-        # report it like every other run failure instead of a traceback.
-        secrets = data_sources.load_secret_text(data_dir)
-        password = sql_execution.resolve_password(credential, secrets)
-    except (RuntimeError, OSError, ValueError) as exc:
-        raise SqlRunError(str(exc)) from exc
-
-    # What the caller states wins over what the inventory records — the caller is looking at the
-    # server, `db_instances.json` is a file somebody edited. `db_type` is the exception and stays
-    # the resolved one: it decides which credential group and which default database were already
-    # picked above, so letting a request override it here would describe a different target than
-    # the one that was resolved.
-    resolved_profile = (profile or TargetProfile()).merge(
-        TargetProfile.from_json(instance, source=SOURCE_CONFIG)
-    ).with_(db_type=db_type)
-    if oracle_bridge.is_legacy(resolved_sql_access):
-        # A legacy target's tool is the transport itself, and the driver rule must not be asked:
-        # it would refuse an 8i instance for being 8i, which is exactly the reason this target is
-        # configured to avoid the driver in the first place.
-        tool = ToolChoice(
-            str(resolved_sql_access.get("method") or "api"), SOURCE_CONFIG,
-            "sql_access routes this target through the legacy bridge, so no driver is opened",
-        )
-    else:
-        try:
-            tool = db_connect.tool_for(
-                resolved_profile,
-                requested_driver=str(driver or "").strip(),
-                sqlserver_driver=str(instance.get("sqlserver_driver") or "").strip(),
-                oracle_client_mode=oracle_client_mode,
-            )
-        except db_connect.DbConnectError as exc:
-            raise SqlRunError(f"{server_id or target}: {exc}") from exc
-
-    # Each engine has its own idea of the default database, and of what "database" even means
-    # (Oracle connects to a service). db_connect owns those defaults; resolving one here rather
-    # than passing "" keeps the result honest about *where the SQL ran* — which is the field an
-    # operator reads first when a query returns something they did not expect.
-    #
-    # SQL Server never inherits the instance's `database`: it connects to **master** unless the
-    # caller names a database in the request itself. The inventory field is unreliable for this
-    # engine — on most entries it is empty and on the rest it duplicates `master`, but nothing
-    # stops someone writing the service label there (`APPDB-PROD`, `SALESDB-PROD`), which is not a
-    # database that exists. Metric collection was doing exactly that and every SQL Server target
-    # failed at once with `Cannot open database "APPDB-PROD" ... (4060)`. Same class of bug, one
-    # layer up: `/spbot_sql_to_xlsx` and `run-sql` would refuse to connect at all. master is
-    # always openable, and a script that needs another database says `USE <db>` — or the caller
-    # passes "database" explicitly, which still wins below.
-    if db_type == "sqlserver":
-        database_name = str(database or "") or db_connect.default_database(db_type)
-    else:
-        database_name = (
-            str(database or instance.get("database") or "")
-            or db_connect.default_database(db_type)
-        )
-    return {
-        "server_id": server_id,
-        "db_type": db_type,
-        "ip": str(instance.get("ip") or ""),
-        "port": int(instance.get("port") or 0) or None,
-        "instance_name": str(instance.get("instance_name") or ""),
-        "service_name": str(instance.get("service_name") or ""),
-        "database_name": database_name,
-        "sqlserver_driver": str(driver or instance.get("sqlserver_driver") or "").strip(),
-        "oracle_client_mode": str(oracle_client_mode or "").strip(),
-        "profile": resolved_profile,
-        "tool": tool.to_dict(),
-        "credential_name": str(credential.get("credential_name") or ""),
-        "username": str(credential["username"]),
-        "password": password,
-        # SYSDBA is a property of the credential, not of the request: on 8i the DBA views live
-        # nowhere else, and the legacy transport needs to know before it connects.
-        "credential_role": str(credential.get("role") or ""),
-        # How this target's SQL is reached. The request's own block wins over the instance's, so
-        # one run can be pointed at a different bridge without touching the deployed inventory.
-        "sql_access": resolved_sql_access,
-    }
-
-
-# The resolver stopped being SQL-Server-only; the old name stays as an alias because it is
-# published API (docs/13_common.md) and used by tests and the Telegram command docs.
-resolve_target = resolve_sqlserver_target
 
 
 def connect_target(target: dict[str, Any], *, timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
@@ -799,9 +726,34 @@ def split_batches_for(sql_text: str, db_type: str = "sqlserver", *,
     return batches
 
 
+def check_named_params(sql_text: str, db_type: str, named_params: "dict[str, Any] | None") -> None:
+    """Refuse ``named_params`` this SQL cannot take: another engine's, or a name it never says.
+
+    Both are refusals rather than a value quietly unused: a task run with ``job_no=...`` against a
+    script that says ``:jobno`` would otherwise run with nothing bound where the operator meant a
+    value, and look like it worked.
+    """
+    if not named_params:
+        return
+    engine = db_connect.normalize_db_type(db_type)
+    if engine not in NAMED_BIND_DB_TYPES:
+        raise SqlRunError(
+            f"named_params are bound where the SQL says :name, on {' and '.join(NAMED_BIND_DB_TYPES)}; "
+            f"this target is {engine or 'of no known engine'}. On SQL Server the SQL says @name: pass "
+            '"prelude" (lib.sql_text.build_parameter_prelude) and "params".')
+    said = named_placeholders(sql_text, engine)
+    unread = sorted(set(named_params) - said)
+    if unread:
+        raise SqlRunError(
+            f"named_params {', '.join(unread)}: the SQL never says "
+            f"{', '.join(':' + name for name in unread)} outside a string or a comment, so the "
+            f"value would bind to nothing. It says: {', '.join(sorted(said)) or 'no :name at all'}.")
+
+
 def execute_capture(
     cursor: Any, sql_text: str, *, max_rows: int = DEFAULT_MAX_ROWS,
     db_type: str = "sqlserver", prelude: str = "", params: "Sequence[Any] | None" = None,
+    named_params: "dict[str, Any] | None" = None,
     capture_all: bool = False, max_result_sets: int = DEFAULT_MAX_RESULT_SETS,
     warnings: "list[str] | None" = None,
 ) -> tuple[list[dict[str, Any]], int, bool]:
@@ -830,7 +782,13 @@ def execute_capture(
 
     The values are passed as a **sequence**, not star-unpacked. pyodbc accepts either, but
     pg8000, pymssql and oracledb take a sequence only — and this function runs on all four.
+
+    ``named_params`` (Oracle, PostgreSQL) are bound **per statement**: each statement gets the
+    values of the ``:name`` placeholders it says, written in the driver's own style
+    (:func:`db_ops.lib.sql_text.bind_named_values`). So a PostgreSQL script is still split into
+    its statements, where positional ``params`` have to keep it whole.
     """
+    check_named_params(sql_text, db_type, named_params)
     max_rows = max(1, int(max_rows))
     # `None` is "no cap", which is what `max_result_sets: 0` asks for. Spelled as None rather than
     # as 0 because `len(kept) < 0` is false and would have kept nothing at all — the opposite.
@@ -857,12 +815,21 @@ def execute_capture(
             del rows[max_rows:]
         return {"columns": columns, "rows": rows, "row_count": len(rows), "truncated": truncated}
 
+    style = db_connect.parameter_style(db_type) if named_params else ""
     for batch in split_batches_for(sql_text, db_type, statements=not bound):
         if not batch.strip():
             continue
         statement = prelude + batch if prelude else batch
-        if bound:
-            cursor.execute(statement, bound)
+        values: "tuple[Any, ...]" = bound
+        if named_params:
+            try:
+                statement, by_name = bind_named_values(statement, named_params, db_type=db_type,
+                                                       style=style)
+            except SqlParameterError as exc:
+                raise SqlRunError(str(exc)) from exc
+            values = tuple(by_name)
+        if values:
+            cursor.execute(statement, values)
         else:
             cursor.execute(statement)
         while True:
@@ -898,31 +865,6 @@ def execute_capture_first(
     )
     first = result_sets[0] if result_sets else {"columns": [], "rows": [], "truncated": False}
     return first["columns"], first["rows"], affected_rows, first["truncated"]
-
-
-def _find_sqlserver_credential(
-    instance: dict[str, Any], *, data_dir: str | Path | None, credential_name: str = "",
-    db_type: str = "sqlserver",
-) -> dict[str, Any]:
-    """The requested ``credential_name``, else the instance's declared default — never a guess.
-
-    Selection itself belongs to :func:`db_ops.common.data_sources.find_database_credential`
-    (shared with metrics, sql_tasks and the Telegram commands); this only decides *which name*
-    to ask for and re-raises in this module's error type.
-
-    ``db_type`` picks which credential group to search: credentials are grouped per engine in
-    ``users.json``, so looking a PostgreSQL target up in the sqlserver group finds nothing and
-    reports "no credential" for a target that has one.
-    """
-    try:
-        return data_sources.find_database_credential(
-            data_sources.load_credentials(db_type, data_dir),
-            server_id=str(instance.get("server_id", "")).strip(),
-            credential_name=credential_name.strip()
-            or str(instance.get("default_credential_name") or "").strip(),
-        )
-    except data_sources.CredentialNotFound as exc:
-        raise SqlRunError(str(exc)) from exc
 
 
 def _positive_int(value: Any, default: int, name: str, *, allow_zero: bool = False) -> int:

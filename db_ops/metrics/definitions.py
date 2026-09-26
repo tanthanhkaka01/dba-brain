@@ -5,7 +5,7 @@ import warnings
 from pathlib import Path
 from typing import Any
 
-from db_ops.common import data_sources
+from db_ops.lib import data_sources
 from db_ops.lib.json_io import load_json_file
 from db_ops.lib.time_window import parse_time_window_config
 from db_ops.metrics.models import MetricDefinition, MetricVariant

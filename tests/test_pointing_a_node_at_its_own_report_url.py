@@ -159,7 +159,7 @@ def test_the_command_runs_through_its_own_cli(tmp_path, monkeypatch, capsys):
 def test_the_command_reaches_this_node_through_the_common_cli(monkeypatch):
     """An app hands `common` a JSON object and reads one back. `self-status` is the command that
     answers what this installation is, so `--this-node` asks it rather than importing it."""
-    from db_ops.lib import common_cli
+    from db_ops.transport import common_cli
 
     asked = []
 
@@ -176,7 +176,7 @@ def test_the_command_reaches_this_node_through_the_common_cli(monkeypatch):
 def test_the_command_refuses_this_node_when_self_status_cannot_answer(monkeypatch):
     """Guessing the address writes links to a machine nobody can reach - the failure the whole
     command exists to stop. It has to refuse instead."""
-    from db_ops.lib import common_cli
+    from db_ops.transport import common_cli
 
     def fake_run(command, request, **kwargs):
         raise common_cli.CommonCliError("self-status failed: no reason given")
@@ -190,7 +190,7 @@ def test_the_command_refuses_this_node_when_self_status_cannot_answer(monkeypatc
 def test_a_url_needs_no_address_at_all(monkeypatch, tmp_path):
     """Only `--this-node` has a use for the subprocess, so the other two forms must not pay for
     one - and must keep working on a node whose `self-status` is broken."""
-    from db_ops.lib import common_cli
+    from db_ops.transport import common_cli
 
     def refuse(*_a, **_kw):
         raise AssertionError("use-base-url asked self-status for an address it does not need")

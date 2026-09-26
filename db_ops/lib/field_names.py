@@ -43,8 +43,8 @@ RENAMES: dict[str, dict[str, str]] = {
     "app_command": {"app_ord": "sort_order"},
     "telegram_support_command": {"menu_order": "sort_order"},
     # `databases` held {source_database, target_database} MAPPINGS here, and a plain list of
-    # database NAMES in every restore request and spec built from it (`restore-database`,
-    # `verify-restore`, the engine spec). The record takes the name that says what it holds.
+    # database NAMES in every restore request built from it (`verify-restore`, the restore
+    # steps). The record takes the name that says what it holds.
     "restore_entry": {"databases": "database_mappings"},
     # The sentence a person reads for a SQL task. `display_name` is what app commands already call
     # the same thing, and `sql_name` read as the name OF some SQL - a script, an object - which it

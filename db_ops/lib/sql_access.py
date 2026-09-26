@@ -56,8 +56,8 @@ KNOWN_DB_TYPES = ("sqlserver", "mysql", "postgresql", "oracle")
 #:
 #: PostgreSQL joined on 2026-09-25: its tasks run through ``run-sql`` like the others, which now
 #: runs a PostgreSQL script one statement at a time (``lib.sql_text.split_postgresql_statements``).
-#: Task parameters are T-SQL ``DECLARE`` lines, so a PostgreSQL task takes none yet - refused at
-#: registration by ``sql-command-add``.
+#: Its parameters are bound where the script says ``:name`` (0.24.0), as on a direct Oracle
+#: connection - not T-SQL ``DECLARE`` lines, which it cannot read.
 SQL_TASK_DB_TYPES = ("sqlserver", "oracle", "postgresql")
 
 #: The ``db_type`` of a machine with **no database on it** - an application server, a hypervisor,

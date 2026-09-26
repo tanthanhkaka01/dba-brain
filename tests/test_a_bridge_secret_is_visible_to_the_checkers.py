@@ -148,7 +148,7 @@ def test_check_credentials_no_longer_skips_a_target_it_cannot_prove(tmp_path, ca
 
     _write_config(tmp_path, instance=dict(INSTANCE, default_credential_name=""))
 
-    assert cli.main(["check-credentials", str(tmp_path)]) == 1
+    assert cli.main(["check-credentials", json.dumps({"data_dir": str(tmp_path)})]) == 1
     problems = json.loads(capsys.readouterr().out)["data"]["problems"]
     assert any("no credential" in problem for problem in problems)
 
@@ -159,7 +159,7 @@ def test_an_api_target_that_names_no_token_secret_is_reported(tmp_path, capsys):
     access = {"method": "api", "bridge_url": "http://198.51.100.9:8900/run"}
     _write_config(tmp_path, instance=dict(INSTANCE, sql_access=access))
 
-    assert cli.main(["check-credentials", str(tmp_path)]) == 1
+    assert cli.main(["check-credentials", json.dumps({"data_dir": str(tmp_path)})]) == 1
     problems = json.loads(capsys.readouterr().out)["data"]["problems"]
     assert any("names no secret_ref" in problem for problem in problems)
 
@@ -168,14 +168,14 @@ def test_a_ref_that_is_named_but_not_in_the_store_is_reported(tmp_path, capsys, 
     """The shape the estate actually met: the secret existed on the master and not on the node
     running the collection. A ref that is named and absent fails exactly like one never named."""
     from db_ops import cli
-    from db_ops.common import data_sources
+    from db_ops.lib import data_sources
 
     _write_config(tmp_path, instance=INSTANCE)
     (tmp_path / "encrypted_secret_text.json").write_text("{}", encoding="utf-8")
     monkeypatch.setattr(data_sources, "load_secret_text",
                         lambda *a, **k: {"ORACLE_198_51_100_7_DBA_USER": "pw"})
 
-    assert cli.main(["check-credentials", str(tmp_path)]) == 1
+    assert cli.main(["check-credentials", json.dumps({"data_dir": str(tmp_path)})]) == 1
     problems = json.loads(capsys.readouterr().out)["data"]["problems"]
     assert any(BRIDGE_REF in problem and "not in the secret store" in problem for problem in problems)
 
@@ -187,7 +187,7 @@ def test_a_node_that_cannot_open_the_store_keeps_the_config_level_answer(tmp_pat
 
     _write_config(tmp_path, instance=INSTANCE)
 
-    assert cli.main(["check-credentials", str(tmp_path)]) == 0
+    assert cli.main(["check-credentials", json.dumps({"data_dir": str(tmp_path)})]) == 0
     assert json.loads(capsys.readouterr().out)["data"]["problems"] == []
 
 

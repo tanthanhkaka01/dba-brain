@@ -1912,8 +1912,8 @@
                         "nullable": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "Arguments the script reads as ordinary variables (@session_id).",
-                    "rule": "The runner writes the DECLARE and binds the value, so what arrives from a Telegram message is never interpolated into SQL. input.parameter must be one of these"
+                    "purpose": "Arguments the script reads: @session_id on SQL Server, :session_id on Oracle and PostgreSQL (or &session_id on Oracle, as SQL*Plus writes it).",
+                    "rule": "On SQL Server the runner writes the DECLARE and binds the value; on Oracle and PostgreSQL it binds :name by name (an Oracle &name is a checked SQL*Plus substitution). What arrives from a Telegram message is never interpolated into SQL. On Oracle and PostgreSQL each one must appear in the script. input.parameter must be one of these"
                 },
                 {
                     "field": "autocommit",
@@ -2255,8 +2255,8 @@
             "kind": "field",
             "required": true,
             "one_line": "One machine or database instance in the inventory: how to reach it, what it is, and what runs against it.",
-            "parsed_in": "db_ops/common/data_sources/__init__.py",
-            "shared_entry_point": "db_ops.common.data_sources.load_db_instances",
+            "parsed_in": "db_ops/lib/data_sources/__init__.py",
+            "shared_entry_point": "db_ops.lib.data_sources.load_db_instances",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "whole_record_note": "whole_record: every key on the record is this entry's business, so a key it does not describe is reported as unknown instead of being dropped as another schema's. Keys starting with '_' are the estate's own comments and are never reported.",
@@ -3827,8 +3827,8 @@
             "kind": "field",
             "required": true,
             "one_line": "Which logins one database instance has: the server it belongs to and its list of credentials.",
-            "parsed_in": "db_ops/common/data_sources/__init__.py",
-            "shared_entry_point": "db_ops.common.data_sources.find_database_credential",
+            "parsed_in": "db_ops/lib/data_sources/__init__.py",
+            "shared_entry_point": "db_ops.lib.data_sources.find_database_credential",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "whole_record_note": "whole_record: every key on the record is this entry's business, so a key it does not describe is reported as unknown. Keys starting with '_' are the estate's own comments and are never reported.",
@@ -3944,8 +3944,8 @@
             "kind": "field",
             "required": true,
             "one_line": "One database login: its name, the user, and the REF of its password in the encrypted store.",
-            "parsed_in": "db_ops/common/data_sources/__init__.py",
-            "shared_entry_point": "db_ops.common.data_sources.find_database_credential",
+            "parsed_in": "db_ops/lib/data_sources/__init__.py",
+            "shared_entry_point": "db_ops.lib.data_sources.find_database_credential",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "whole_record_note": "whole_record: every key on the record is this entry's business, so a key it does not describe is reported as unknown. Keys starting with '_' are the estate's own comments and are never reported.",
@@ -4042,8 +4042,8 @@
             "kind": "field",
             "required": true,
             "one_line": "Which OS logins one machine has: the server, the address to reach it, and its credentials.",
-            "parsed_in": "db_ops/common/data_sources/__init__.py",
-            "shared_entry_point": "db_ops.common.data_sources.load_remote_credentials",
+            "parsed_in": "db_ops/lib/data_sources/__init__.py",
+            "shared_entry_point": "db_ops.lib.data_sources.load_remote_credentials",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "whole_record_note": "whole_record: every key on the record is this entry's business, so a key it does not describe is reported as unknown. Keys starting with '_' are the estate's own comments and are never reported.",
@@ -4229,7 +4229,7 @@
             "required": true,
             "one_line": "One Telegram chat: which alert level is routed to it and how much it may command the node.",
             "parsed_in": "db_ops/telegram/command_processor.py",
-            "shared_entry_point": "db_ops.common.data_sources.load_telegram_groups",
+            "shared_entry_point": "db_ops.lib.data_sources.load_telegram_groups",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "whole_record_note": "whole_record: every key on the record is this entry's business, so a key it does not describe is reported as unknown. Keys starting with '_' are the estate's own comments and are never reported.",
@@ -4375,7 +4375,7 @@
             "required": true,
             "one_line": "One person on Telegram and the command level they have in a private chat.",
             "parsed_in": "db_ops/telegram/command_processor.py",
-            "shared_entry_point": "db_ops.common.data_sources.load_telegram_users",
+            "shared_entry_point": "db_ops.lib.data_sources.load_telegram_users",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "whole_record_note": "whole_record: every key on the record is this entry's business, so a key it does not describe is reported as unknown. Keys starting with '_' are the estate's own comments and are never reported.",
@@ -5156,8 +5156,8 @@
             "kind": "field",
             "required": true,
             "one_line": "One database container the SRE provisioner created, and how to reach it.",
-            "parsed_in": "db_ops/sre/docker_db/register_config.py",
-            "shared_entry_point": "db_ops.sre.docker_db.register_config",
+            "parsed_in": "db_ops/lib/docker_db_registry.py",
+            "shared_entry_point": "db_ops.lib.docker_db_registry",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "used_in": [
@@ -5979,7 +5979,7 @@
             "required": true,
             "one_line": "How old each type of backup may be before it is a finding, by default and per server.",
             "parsed_in": "db_ops/lib/backup_policy.py",
-            "shared_entry_point": "db_ops.common.data_sources.load_backup_policy",
+            "shared_entry_point": "db_ops.lib.data_sources.load_backup_policy",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "used_in": [
@@ -7590,7 +7590,7 @@
             "required": true,
             "one_line": "What an instance-metadata export or replay carries, and how each part is handled.",
             "parsed_in": "db_ops/common/sqlserver_instance.py",
-            "shared_entry_point": "db_ops.common.data_sources.load_sqlserver_instance_policy",
+            "shared_entry_point": "db_ops.lib.data_sources.load_sqlserver_instance_policy",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "used_in": [
@@ -8300,6 +8300,67 @@
                     "purpose": "sqlserver-apply-cu: how long the installer ran."
                 }
             ]
+        },
+        {
+            "object": "output_ask",
+            "kind": "output",
+            "required": false,
+            "one_line": "What the terminal answered, or that there was nobody to ask.",
+            "parsed_in": "db_ops/common/confirm.py",
+            "produced_in": [
+                "db_ops/common/confirm.py"
+            ],
+            "commands": [
+                "ask"
+            ],
+            "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
+            "used_in": [],
+            "legacy_fields": {},
+            "fields": [
+                {
+                    "field": "interactive",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Whether a terminal was there to ask on."
+                },
+                {
+                    "field": "answer",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The answer; empty when none came - never a choice made for the person."
+                },
+                {
+                    "field": "source",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Where it came from: terminal, request, or none."
+                }
+            ],
+            "field_count": 3,
+            "required_field_count": 0
         },
         {
             "object": "output_gate",
@@ -9060,7 +9121,7 @@
             "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 3,
+            "field_count": 4,
             "required_field_count": 0,
             "fields": [
                 {
@@ -9103,6 +9164,19 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "The newest file's finish time."
+                },
+                {
+                    "field": "unreadable",
+                    "type": "array",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Files named like backups that the engine could not read as one (SQL Server only)."
                 }
             ]
         },
@@ -10575,9 +10649,23 @@
             "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 5,
+            "field_count": 6,
             "required_field_count": 0,
             "fields": [
+                {
+                    "field": "data_dir",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The data root that was checked - the default one, or the `data_dir` the request named."
+                },
                 {
                     "field": "pointers_checked",
                     "type": "integer",
@@ -10813,7 +10901,8 @@
             "produced_in": [
                 "db_ops/common/restorestep/sqlserver.py",
                 "db_ops/common/restorestep/oracle.py",
-                "db_ops/common/restorestep/postgresql.py"
+                "db_ops/common/restorestep/postgresql.py",
+                "db_ops/common/sqlcmd_run.py"
             ],
             "commands": [
                 "restore-full",
@@ -10823,7 +10912,7 @@
             "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 21,
+            "field_count": 28,
             "required_field_count": 0,
             "fields": [
                 {
@@ -10867,6 +10956,103 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "What was applied."
+                },
+                {
+                    "field": "ran",
+                    "type": "array",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Through sqlcmd: the file the step ran - whether it applied is the caller's to read from exit_code and stdout, as with run-sqlcmd."
+                },
+                {
+                    "field": "via",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Through sqlcmd: local | ssh | winrm."
+                },
+                {
+                    "field": "exit_code",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "any exit code",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": -2147483648,
+                        "max": 2147483647
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Through sqlcmd: sqlcmd's exit code."
+                },
+                {
+                    "field": "stdout",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Through sqlcmd: what sqlcmd printed (progress included)."
+                },
+                {
+                    "field": "stderr",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Through sqlcmd: its error stream."
+                },
+                {
+                    "field": "timed_out",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "true or false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Through sqlcmd: the run was cut off - a RESTORE LOG cut off is inspected, never retried blindly."
+                },
+                {
+                    "field": "duration_ms",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 or more",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Through sqlcmd: how long it ran."
                 },
                 {
                     "field": "dry_run",
@@ -11357,110 +11543,6 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "Databases not usable."
-                }
-            ]
-        },
-        {
-            "object": "output_restore_database",
-            "kind": "output",
-            "required": false,
-            "one_line": "A whole restore to latest, or its plan.",
-            "parsed_in": "db_ops/common/cli_restore.py",
-            "produced_in": [
-                "db_ops/common/cli_restore.py",
-                "db_ops/common/restore/sqlserver/runner.py",
-                "db_ops/lib/restore/plan.py"
-            ],
-            "commands": [
-                "restore-database"
-            ],
-            "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
-            "used_in": [],
-            "legacy_fields": {},
-            "field_count": 6,
-            "required_field_count": 0,
-            "fields": [
-                {
-                    "field": "target",
-                    "type": "object",
-                    "required": false,
-                    "default": "absent when it does not apply",
-                    "range_text": "an object",
-                    "constraint": {
-                        "kind": "object",
-                        "nullable": true,
-                        "free_form": true
-                    },
-                    "measured_against": "not a time value",
-                    "purpose": "Where it restored."
-                },
-                {
-                    "field": "databases",
-                    "type": "array",
-                    "required": false,
-                    "default": "absent when it does not apply",
-                    "range_text": "a list",
-                    "constraint": {
-                        "kind": "array",
-                        "nullable": true
-                    },
-                    "measured_against": "not a time value",
-                    "purpose": "One result OBJECT per database."
-                },
-                {
-                    "field": "database_names",
-                    "type": "array",
-                    "required": false,
-                    "default": "absent when it does not apply",
-                    "range_text": "a list",
-                    "constraint": {
-                        "kind": "array",
-                        "nullable": true
-                    },
-                    "measured_against": "not a time value",
-                    "purpose": "Dry run: the databases the plan names.",
-                    "rule": "Was `databases` until 0.22.0"
-                },
-                {
-                    "field": "method",
-                    "type": "string",
-                    "required": false,
-                    "default": "absent when it does not apply",
-                    "range_text": "text",
-                    "constraint": {
-                        "kind": "string",
-                        "nullable": true,
-                        "allow_empty": true
-                    },
-                    "measured_against": "not a time value",
-                    "purpose": "How it restored."
-                },
-                {
-                    "field": "restore_mode",
-                    "type": "string",
-                    "required": false,
-                    "default": "absent when it does not apply",
-                    "range_text": "text",
-                    "constraint": {
-                        "kind": "string",
-                        "nullable": true,
-                        "allow_empty": true
-                    },
-                    "measured_against": "not a time value",
-                    "purpose": "What it restored to."
-                },
-                {
-                    "field": "dry_run",
-                    "type": "boolean",
-                    "required": false,
-                    "default": "absent when it does not apply",
-                    "range_text": "true | false",
-                    "constraint": {
-                        "kind": "boolean",
-                        "nullable": true
-                    },
-                    "measured_against": "not a time value",
-                    "purpose": "True when nothing was changed - the answer is the plan."
                 }
             ]
         },
@@ -12065,6 +12147,164 @@
                     "purpose": "The lines a person reads afterwards."
                 }
             ]
+        },
+        {
+            "object": "input_metric_batch",
+            "kind": "input",
+            "required": false,
+            "one_line": "One target's metric items, run one after another - the metrics app's execution.",
+            "parsed_in": "db_ops/common/metric_batch.py",
+            "parsers": [
+                "db_ops/common/metric_batch.py"
+            ],
+            "commands": [
+                "metric-batch"
+            ],
+            "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
+            "used_in": [],
+            "legacy_fields": {},
+            "fields": [
+                {
+                    "field": "target",
+                    "type": "object",
+                    "required": true,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The target's connection facts, resolved: target_id, db_type, host, port, database (\"\" = the engine's default, master on SQL Server), service_name, sqlserver_driver, username and password; or the legacy-Oracle sql_access block and the credential the bridge builds its connect string from."
+                },
+                {
+                    "field": "secrets",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "{ref: value} for exactly the secret refs this target's configuration names (a remote login's password_ref, the bridge's secret_ref) - never the whole store."
+                },
+                {
+                    "field": "items",
+                    "type": "array",
+                    "required": true,
+                    "default": "none - optional",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true,
+                        "item_kind": "object"
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "One per metric, run in order: {id, kind: sql, sql, timeout_seconds, max_rows, per_database, max_databases} | {id, kind: script, script, shell, access, credential, env, timeout_seconds} | {id, kind: local, path, env, timeout_seconds, require_local_host, host}."
+                }
+            ],
+            "field_count": 3,
+            "required_field_count": 2
+        },
+        {
+            "object": "output_metric_batch",
+            "kind": "output",
+            "required": false,
+            "one_line": "What each metric item returned - rows, a script's streams, or its error.",
+            "parsed_in": "db_ops/common/metric_batch.py",
+            "produced_in": [
+                "db_ops/common/metric_batch.py"
+            ],
+            "commands": [
+                "metric-batch"
+            ],
+            "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
+            "used_in": [],
+            "legacy_fields": {},
+            "fields": [
+                {
+                    "field": "target_id",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The target the batch ran for."
+                },
+                {
+                    "field": "items",
+                    "type": "array",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true,
+                        "item_kind": "object"
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "In request order: {id, kind, started_at (epoch seconds), and rows | databases + database_count + skipped | exit_code + stdout + stderr + duration_seconds, truncated, or error: {message, failure_phase (connect | execute | \"\"), kind, stdout, stderr, exit_code, duration_seconds}}. A failed item answers with error; the batch still succeeds."
+                }
+            ],
+            "field_count": 2,
+            "required_field_count": 0
+        },
+        {
+            "object": "output_check_credentials",
+            "kind": "output",
+            "required": false,
+            "one_line": "How many targets were checked, and each one that does not resolve to a login.",
+            "parsed_in": "db_ops/common/cli_check_credentials.py",
+            "produced_in": [
+                "db_ops/common/cli_check_credentials.py"
+            ],
+            "commands": [
+                "check-credentials"
+            ],
+            "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
+            "used_in": [],
+            "legacy_fields": {},
+            "fields": [
+                {
+                    "field": "checked",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "a whole number, 0 or more",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Targets checked: metrics targets (host-only records skipped), active SQL task targets, and Telegram sql_execute commands."
+                },
+                {
+                    "field": "problems",
+                    "type": "array",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true,
+                        "item_kind": "string"
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "One line per target that cannot resolve its login, or names a secret the store does not hold; empty when all resolve. The exit code is 1 while any are listed."
+                }
+            ],
+            "field_count": 2,
+            "required_field_count": 0
         },
         {
             "object": "output_run_sqlcmd",
@@ -14522,196 +14762,6 @@
             ]
         },
         {
-            "object": "output_timezone",
-            "kind": "output",
-            "required": false,
-            "one_line": "Which clock this node shows.",
-            "parsed_in": "db_ops/common/cli.py",
-            "produced_in": [
-                "db_ops/common/cli.py",
-                "db_ops/lib/timezone.py"
-            ],
-            "commands": [
-                "timezone"
-            ],
-            "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
-            "used_in": [],
-            "legacy_fields": {},
-            "field_count": 12,
-            "required_field_count": 0,
-            "fields": [
-                {
-                    "field": "listing",
-                    "type": "string",
-                    "required": false,
-                    "default": "absent when it does not apply",
-                    "range_text": "text",
-                    "constraint": {
-                        "kind": "string",
-                        "nullable": true,
-                        "allow_empty": true
-                    },
-                    "measured_against": "not a time value",
-                    "purpose": "The answer as text."
-                },
-                {
-                    "field": "timezone",
-                    "type": "string",
-                    "required": false,
-                    "default": "absent when it does not apply",
-                    "range_text": "text",
-                    "constraint": {
-                        "kind": "string",
-                        "nullable": true,
-                        "allow_empty": true
-                    },
-                    "measured_against": "not a time value",
-                    "purpose": "The declaration."
-                },
-                {
-                    "field": "utc_offset_minutes",
-                    "type": "integer",
-                    "required": false,
-                    "default": "absent when it does not apply",
-                    "range_text": "-840 to 840",
-                    "constraint": {
-                        "kind": "integer",
-                        "nullable": true,
-                        "min": -840,
-                        "max": 840
-                    },
-                    "measured_against": "minutes east of UTC",
-                    "purpose": "The offset now."
-                },
-                {
-                    "field": "utc_offset",
-                    "type": "string",
-                    "required": false,
-                    "default": "absent when it does not apply",
-                    "range_text": "text",
-                    "constraint": {
-                        "kind": "string",
-                        "nullable": true,
-                        "allow_empty": true
-                    },
-                    "measured_against": "not a time value",
-                    "purpose": "The offset as text."
-                },
-                {
-                    "field": "tz_abbreviation",
-                    "type": "string",
-                    "required": false,
-                    "default": "absent when it does not apply",
-                    "range_text": "text",
-                    "constraint": {
-                        "kind": "string",
-                        "nullable": true,
-                        "allow_empty": true
-                    },
-                    "measured_against": "not a time value",
-                    "purpose": "The abbreviation."
-                },
-                {
-                    "field": "now_display",
-                    "type": "string",
-                    "required": false,
-                    "default": "absent when it does not apply",
-                    "range_text": "text",
-                    "constraint": {
-                        "kind": "string",
-                        "nullable": true,
-                        "allow_empty": true
-                    },
-                    "measured_against": "not a time value",
-                    "purpose": "Now, in that zone."
-                },
-                {
-                    "field": "now_utc",
-                    "type": "string",
-                    "required": false,
-                    "default": "absent when it does not apply",
-                    "range_text": "text",
-                    "constraint": {
-                        "kind": "string",
-                        "nullable": true,
-                        "allow_empty": true
-                    },
-                    "measured_against": "not a time value",
-                    "purpose": "Now, in UTC."
-                },
-                {
-                    "field": "node_id",
-                    "type": "string",
-                    "required": false,
-                    "default": "absent when it does not apply",
-                    "range_text": "text",
-                    "constraint": {
-                        "kind": "string",
-                        "nullable": true,
-                        "allow_empty": true
-                    },
-                    "measured_against": "not a time value",
-                    "purpose": "This node."
-                },
-                {
-                    "field": "node_role",
-                    "type": "string",
-                    "required": false,
-                    "default": "absent when it does not apply",
-                    "range_text": "text",
-                    "constraint": {
-                        "kind": "string",
-                        "nullable": true,
-                        "allow_empty": true
-                    },
-                    "measured_against": "not a time value",
-                    "purpose": "Its role."
-                },
-                {
-                    "field": "hostname",
-                    "type": "string",
-                    "required": false,
-                    "default": "absent when it does not apply",
-                    "range_text": "text",
-                    "constraint": {
-                        "kind": "string",
-                        "nullable": true,
-                        "allow_empty": true
-                    },
-                    "measured_against": "not a time value",
-                    "purpose": "Its host name."
-                },
-                {
-                    "field": "source",
-                    "type": "string",
-                    "required": false,
-                    "default": "absent when it does not apply",
-                    "range_text": "text",
-                    "constraint": {
-                        "kind": "string",
-                        "nullable": true,
-                        "allow_empty": true
-                    },
-                    "measured_against": "not a time value",
-                    "purpose": "Where the declaration came from."
-                },
-                {
-                    "field": "app_version",
-                    "type": "string",
-                    "required": false,
-                    "default": "absent when it does not apply",
-                    "range_text": "text",
-                    "constraint": {
-                        "kind": "string",
-                        "nullable": true,
-                        "allow_empty": true
-                    },
-                    "measured_against": "not a time value",
-                    "purpose": "The installed version."
-                }
-            ]
-        },
-        {
             "object": "output_secret_check",
             "kind": "output",
             "required": false,
@@ -14793,7 +14843,8 @@
             "one_line": "Where estate identifiers or secret literals appear in a tree.",
             "parsed_in": "db_ops/common/identifier_scan.py",
             "produced_in": [
-                "db_ops/common/identifier_scan.py"
+                "db_ops/common/identifier_scan.py",
+                "db_ops/common/cli.py"
             ],
             "commands": [
                 "check-identifiers",
@@ -14802,7 +14853,7 @@
             "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 14,
+            "field_count": 15,
             "required_field_count": 0,
             "fields": [
                 {
@@ -14992,6 +15043,19 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "Per file, its hits."
+                },
+                {
+                    "field": "refused",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Set on a failed answer when the scan refused rather than broke: nothing to search for, or nothing to read. A caller says SKIPPED for this and stops for anything else."
                 }
             ]
         },
@@ -15437,7 +15501,7 @@
             "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 8,
+            "field_count": 9,
             "required_field_count": 1,
             "fields": [
                 {
@@ -15548,8 +15612,111 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "Why, for the evidence."
+                },
+                {
+                    "field": "rules",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "What the operation costs to confirm: {level, confirmations, challenge, effects} - the node's own emergency_operations.json entry for it. Absent, the ladder the package ships prices it; malformed, it is refused rather than read as none. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
                 }
             ]
+        },
+        {
+            "object": "input_ask",
+            "kind": "input",
+            "required": false,
+            "one_line": "One question for the controlling terminal, and the answers it takes.",
+            "parsed_in": "db_ops/common/confirm.py",
+            "parsers": [
+                "db_ops/common/confirm.py"
+            ],
+            "commands": [
+                "ask"
+            ],
+            "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
+            "used_in": [],
+            "legacy_fields": {},
+            "fields": [
+                {
+                    "field": "prompt",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The question, shown as written."
+                },
+                {
+                    "field": "choices",
+                    "type": "array",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The accepted answers, lower case; none means any line is the answer."
+                },
+                {
+                    "field": "tries",
+                    "type": "integer",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "1 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 1
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "How often a person is asked again after an answer not in choices."
+                },
+                {
+                    "field": "deadline_seconds",
+                    "type": "number",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "number",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "seconds",
+                    "purpose": "How long to wait for a line; nothing by then is no answer."
+                },
+                {
+                    "field": "answer",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "A reply the caller already collected, held to choices like a typed one."
+                }
+            ],
+            "field_count": 5,
+            "required_field_count": 1
         },
         {
             "object": "input_host_operation",
@@ -15569,7 +15736,7 @@
             "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 16,
+            "field_count": 18,
             "required_field_count": 0,
             "fields": [
                 {
@@ -15787,6 +15954,34 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "Why, for the evidence."
+                },
+                {
+                    "field": "policy",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The maintenance policy that times this host operation: the node's maintenance_policy.json defaults with this server's own values over them. {} means the built-in defaults. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
+                },
+                {
+                    "field": "rules",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "What the operation costs to confirm: {level, confirmations, challenge, effects} - the node's own emergency_operations.json entry for it. Absent, the ladder the package ships prices it; malformed, it is refused rather than read as none. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
                 }
             ]
         },
@@ -15813,7 +16008,7 @@
                 "database": "database_name",
                 "job": "job_name"
             },
-            "field_count": 18,
+            "field_count": 17,
             "required_field_count": 0,
             "fields": [
                 {
@@ -15843,34 +16038,6 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "The instance, when not in target."
-                },
-                {
-                    "field": "credential_name",
-                    "type": "string",
-                    "required": false,
-                    "default": "none - optional",
-                    "range_text": "text",
-                    "constraint": {
-                        "kind": "string",
-                        "nullable": true,
-                        "allow_empty": true
-                    },
-                    "measured_against": "not a time value",
-                    "purpose": "Which login in users.json; default: the instance's own."
-                },
-                {
-                    "field": "user_ref",
-                    "type": "string",
-                    "required": false,
-                    "default": "none - optional",
-                    "range_text": "text",
-                    "constraint": {
-                        "kind": "string",
-                        "nullable": true,
-                        "allow_empty": true
-                    },
-                    "measured_against": "not a time value",
-                    "purpose": "A secret ref holding the login, for a target outside the inventory."
                 },
                 {
                     "field": "sql_access",
@@ -15983,20 +16150,6 @@
                     "purpose": "How long to wait."
                 },
                 {
-                    "field": "data_dir",
-                    "type": "string",
-                    "required": false,
-                    "default": "none - optional",
-                    "range_text": "text",
-                    "constraint": {
-                        "kind": "string",
-                        "nullable": true,
-                        "allow_empty": true
-                    },
-                    "measured_against": "not a time value",
-                    "purpose": "Another data/ folder to read."
-                },
-                {
                     "field": "dry_run",
                     "type": "boolean",
                     "required": false,
@@ -16062,6 +16215,34 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "Why, for the evidence."
+                },
+                {
+                    "field": "connection",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
+                },
+                {
+                    "field": "rules",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "What the operation costs to confirm: {level, confirmations, challenge, effects} - the node's own emergency_operations.json entry for it. Absent, the ladder the package ships prices it; malformed, it is refused rather than read as none. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
                 }
             ]
         },
@@ -16073,7 +16254,9 @@
             "parsed_in": "db_ops/common/sqlserver_patch.py",
             "parsers": [
                 "db_ops/common/sqlserver_patch.py",
-                "db_ops/common/confirm.py"
+                "db_ops/common/confirm.py",
+                "db_ops/common/sql_run.py",
+                "db_ops/common/host_ops.py"
             ],
             "commands": [
                 "sqlserver-precheck",
@@ -16083,7 +16266,7 @@
             "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 17,
+            "field_count": 21,
             "required_field_count": 0,
             "fields": [
                 {
@@ -16318,6 +16501,62 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "Why, for the evidence."
+                },
+                {
+                    "field": "connection",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
+                },
+                {
+                    "field": "access",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The host login, complete: an inline cmd_access - method (ssh|winrm), host, port, username, auth_type, key_file or password - with the machine's platform and runtime facts. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
+                },
+                {
+                    "field": "policy",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The maintenance policy that times this host operation: the node's maintenance_policy.json defaults with this server's own values over them. {} means the built-in defaults. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
+                },
+                {
+                    "field": "rules",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "What the operation costs to confirm: {level, confirmations, challenge, effects} - the node's own emergency_operations.json entry for it. Absent, the ladder the package ships prices it; malformed, it is refused rather than read as none. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
                 }
             ]
         },
@@ -16329,7 +16568,8 @@
             "parsed_in": "db_ops/common/sqlserver_instance.py",
             "parsers": [
                 "db_ops/common/sqlserver_instance.py",
-                "db_ops/common/confirm.py"
+                "db_ops/common/confirm.py",
+                "db_ops/common/sql_run.py"
             ],
             "commands": [
                 "sqlserver-export-instance",
@@ -16339,7 +16579,7 @@
             "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 15,
+            "field_count": 19,
             "required_field_count": 0,
             "fields": [
                 {
@@ -16547,6 +16787,62 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "Why, for the evidence."
+                },
+                {
+                    "field": "connection",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
+                },
+                {
+                    "field": "policy",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The content of sqlserver_instance_policy.json - which server settings are portable between instances. Required: an export or a replay with no policy is refused. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
+                },
+                {
+                    "field": "secrets",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "{ref: value} for exactly the secret refs the bundle's manifest lists (secret_refs). A ref missing here is reported and the replay fails closed. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
+                },
+                {
+                    "field": "rules",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "What the operation costs to confirm: {level, confirmations, challenge, effects} - the node's own emergency_operations.json entry for it. Absent, the ladder the package ships prices it; malformed, it is refused rather than read as none. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
                 }
             ]
         },
@@ -16584,7 +16880,7 @@
                         "allow_empty": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The machine or instance: a server_id, or `<db_type> <ip>[:port]`."
+                    "purpose": "A label for the answer - the server_id. Nothing is looked up by it: common.cli reads no configuration (rules R09)."
                 },
                 {
                     "field": "server_id",
@@ -16598,7 +16894,7 @@
                         "allow_empty": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The host, when not in target."
+                    "purpose": "The same label, when not in target."
                 },
                 {
                     "field": "access",
@@ -16612,7 +16908,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "An inline cmd_access."
+                    "purpose": "The host login, complete: an inline cmd_access - method (ssh|winrm), host, port, username, auth_type, key_file or password - with the machine's platform and runtime facts. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
                 },
                 {
                     "field": "remote_path",
@@ -16761,7 +17057,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "relay-file: {target, path}."
+                    "purpose": "relay-file: {access, target, path} - each side states its own login."
                 },
                 {
                     "field": "destination",
@@ -16775,7 +17071,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "relay-file: {target, path}."
+                    "purpose": "relay-file: {access, target, path}."
                 }
             ]
         },
@@ -17267,7 +17563,7 @@
             "legacy_fields": {
                 "database": "database_name"
             },
-            "field_count": 11,
+            "field_count": 10,
             "required_field_count": 0,
             "fields": [
                 {
@@ -17297,20 +17593,6 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "Which login in users.json; default: the instance's own."
-                },
-                {
-                    "field": "user_ref",
-                    "type": "string",
-                    "required": false,
-                    "default": "none - optional",
-                    "range_text": "text",
-                    "constraint": {
-                        "kind": "string",
-                        "nullable": true,
-                        "allow_empty": true
-                    },
-                    "measured_against": "not a time value",
-                    "purpose": "A secret ref holding the login, for a target outside the inventory."
                 },
                 {
                     "field": "sql_access",
@@ -17381,20 +17663,6 @@
                     "purpose": "How long to wait."
                 },
                 {
-                    "field": "data_dir",
-                    "type": "string",
-                    "required": false,
-                    "default": "none - optional",
-                    "range_text": "text",
-                    "constraint": {
-                        "kind": "string",
-                        "nullable": true,
-                        "allow_empty": true
-                    },
-                    "measured_against": "not a time value",
-                    "purpose": "Another data/ folder to read."
-                },
-                {
                     "field": "key",
                     "type": "string",
                     "required": false,
@@ -17421,6 +17689,20 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "The same, base64."
+                },
+                {
+                    "field": "connection",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
                 }
             ]
         },
@@ -17443,7 +17725,7 @@
                 "xlsx_path": "file_path",
                 "xlsx_base64": "file_base64"
             },
-            "field_count": 16,
+            "field_count": 15,
             "required_field_count": 0,
             "fields": [
                 {
@@ -17473,20 +17755,6 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "Which login in users.json; default: the instance's own."
-                },
-                {
-                    "field": "user_ref",
-                    "type": "string",
-                    "required": false,
-                    "default": "none - optional",
-                    "range_text": "text",
-                    "constraint": {
-                        "kind": "string",
-                        "nullable": true,
-                        "allow_empty": true
-                    },
-                    "measured_against": "not a time value",
-                    "purpose": "A secret ref holding the login, for a target outside the inventory."
                 },
                 {
                     "field": "sql_access",
@@ -17656,18 +17924,18 @@
                     "purpose": "How long to wait."
                 },
                 {
-                    "field": "data_dir",
-                    "type": "string",
+                    "field": "connection",
+                    "type": "object",
                     "required": false,
                     "default": "none - optional",
-                    "range_text": "text",
+                    "range_text": "an object",
                     "constraint": {
-                        "kind": "string",
+                        "kind": "object",
                         "nullable": true,
-                        "allow_empty": true
+                        "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "Another data/ folder to read."
+                    "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
                 }
             ]
         },
@@ -17872,14 +18140,16 @@
             "object": "input_config_check",
             "kind": "input",
             "required": false,
-            "one_line": "Which data/ folder to hold to the reference.",
+            "one_line": "Which data/ folder to check - against the reference, or for logins that resolve.",
             "parsed_in": "db_ops/common/cli_config_objects.py",
             "parsers": [
-                "db_ops/common/cli_config_objects.py"
+                "db_ops/common/cli_config_objects.py",
+                "db_ops/common/cli_check_credentials.py"
             ],
             "commands": [
                 "check-objects",
-                "check-references"
+                "check-references",
+                "check-credentials"
             ],
             "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
             "used_in": [],
@@ -18016,7 +18286,7 @@
             "legacy_fields": {
                 "database": "database_name"
             },
-            "field_count": 23,
+            "field_count": 25,
             "required_field_count": 1,
             "fields": [
                 {
@@ -18046,6 +18316,20 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "The instance - an input_remote_target."
+                },
+                {
+                    "field": "sqlcmd",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "SQL Server: run the step with sqlcmd where the server is instead of a driver from here - the run-sqlcmd request less its sql (instance, sqlcmd_path, username, password, timeouts, via, host). One file per call; the answer is run-sqlcmd's."
                 },
                 {
                     "field": "backup_path",
@@ -18101,6 +18385,20 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "SQL Server: file moves."
+                },
+                {
+                    "field": "move_files",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "SQL Server full: {data, log} - where the two files go; the logical names are read on the server (RESTORE FILELISTONLY), and the database goes SINGLE_USER first."
                 },
                 {
                     "field": "replace",
@@ -18347,14 +18645,13 @@
             "parsed_in": "db_ops/common/cli_restorestep.py",
             "parsers": [
                 "db_ops/common/cli_restorestep.py",
-                "db_ops/common/cli_restore.py",
                 "db_ops/common/cli_backup.py"
             ],
             "commands": [],
             "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 9,
+            "field_count": 8,
             "required_field_count": 0,
             "fields": [
                 {
@@ -18467,20 +18764,6 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "Run through sudo."
-                },
-                {
-                    "field": "platform",
-                    "type": "string",
-                    "required": false,
-                    "default": "none - optional",
-                    "range_text": "text",
-                    "constraint": {
-                        "kind": "string",
-                        "nullable": true,
-                        "allow_empty": true
-                    },
-                    "measured_against": "not a time value",
-                    "purpose": "windows | linux."
                 }
             ]
         },
@@ -18806,153 +19089,6 @@
                     },
                     "measured_against": "seconds",
                     "purpose": "How long to wait."
-                }
-            ]
-        },
-        {
-            "object": "input_restore_database",
-            "kind": "input",
-            "required": false,
-            "one_line": "A whole restore to latest: the source, the target, the databases.",
-            "parsed_in": "db_ops/lib/restore/spec.py",
-            "parsers": [
-                "db_ops/lib/restore/spec.py",
-                "db_ops/common/cli_restore.py"
-            ],
-            "commands": [
-                "restore-database"
-            ],
-            "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
-            "used_in": [],
-            "legacy_fields": {
-                "databases": "database_names"
-            },
-            "field_count": 9,
-            "required_field_count": 1,
-            "fields": [
-                {
-                    "field": "db_type",
-                    "type": "string",
-                    "required": true,
-                    "default": "none - optional",
-                    "range_text": "text",
-                    "constraint": {
-                        "kind": "string",
-                        "nullable": true,
-                        "allow_empty": true
-                    },
-                    "measured_against": "not a time value",
-                    "purpose": "The engine."
-                },
-                {
-                    "field": "source",
-                    "type": "object",
-                    "required": false,
-                    "default": "none - optional",
-                    "range_text": "an object",
-                    "constraint": {
-                        "kind": "object",
-                        "nullable": true,
-                        "free_form": true
-                    },
-                    "measured_against": "not a time value",
-                    "purpose": "Where the backups are."
-                },
-                {
-                    "field": "target",
-                    "type": "object",
-                    "required": false,
-                    "default": "none - optional",
-                    "range_text": "an object",
-                    "constraint": {
-                        "kind": "object",
-                        "nullable": true,
-                        "free_form": true
-                    },
-                    "measured_against": "not a time value",
-                    "purpose": "Where they go, including target.import_dir for staged pieces."
-                },
-                {
-                    "field": "database_names",
-                    "type": "array",
-                    "required": false,
-                    "default": "none - optional",
-                    "range_text": "a list",
-                    "constraint": {
-                        "kind": "array",
-                        "nullable": true
-                    },
-                    "measured_against": "not a time value",
-                    "purpose": "Which databases; empty = every database in the backup set."
-                },
-                {
-                    "field": "point_in_time",
-                    "type": "string",
-                    "required": false,
-                    "default": "none - optional",
-                    "range_text": "text",
-                    "constraint": {
-                        "kind": "string",
-                        "nullable": true,
-                        "allow_empty": true
-                    },
-                    "measured_against": "not a time value",
-                    "purpose": "A point in time."
-                },
-                {
-                    "field": "copy_hours",
-                    "type": "integer",
-                    "required": false,
-                    "default": "none - optional",
-                    "range_text": "0 and up",
-                    "constraint": {
-                        "kind": "integer",
-                        "nullable": true,
-                        "min": 0
-                    },
-                    "measured_against": "hours",
-                    "purpose": "How far back pieces are copied."
-                },
-                {
-                    "field": "label",
-                    "type": "string",
-                    "required": false,
-                    "default": "none - optional",
-                    "range_text": "text",
-                    "constraint": {
-                        "kind": "string",
-                        "nullable": true,
-                        "allow_empty": true
-                    },
-                    "measured_against": "not a time value",
-                    "purpose": "What to call the run."
-                },
-                {
-                    "field": "extras",
-                    "type": "object",
-                    "required": false,
-                    "default": "none - optional",
-                    "range_text": "an object",
-                    "constraint": {
-                        "kind": "object",
-                        "nullable": true,
-                        "free_form": true
-                    },
-                    "measured_against": "not a time value",
-                    "purpose": "Engine-specific extras."
-                },
-                {
-                    "field": "dry_run",
-                    "type": "boolean",
-                    "required": false,
-                    "default": "none - optional",
-                    "range_text": "true | false",
-                    "constraint": {
-                        "kind": "boolean",
-                        "nullable": true
-                    },
-                    "measured_against": "not a time value",
-                    "purpose": "Plan only: change nothing."
                 }
             ]
         },
@@ -19758,6 +19894,594 @@
             ]
         },
         {
+            "object": "input_smb",
+            "kind": "input",
+            "required": false,
+            "one_line": "A Windows share and the login to it - what to list, fetch, delete, or store the login for.",
+            "parsed_in": "db_ops/common/smb.py",
+            "parsers": [
+                "db_ops/common/smb.py",
+                "db_ops/common/cli_smb.py"
+            ],
+            "commands": [
+                "smb-list",
+                "smb-get",
+                "smb-delete",
+                "smb-credential"
+            ],
+            "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 14,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "host",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The machine sharing it: //host/share. Every command but smb-credential."
+                },
+                {
+                    "field": "share",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The share's name on that host."
+                },
+                {
+                    "field": "username",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The login. A domain before it (DOMAIN, then a backslash, then the user) is split off, as Windows writes it. The caller resolves it - common.cli reads no configuration."
+                },
+                {
+                    "field": "password",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The login's password. Never on a command line: smbclient reads it from a file this command writes 0600 and deletes."
+                },
+                {
+                    "field": "domain",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The login's domain, when not part of username."
+                },
+                {
+                    "field": "backend",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "smbclient | unc. Default: unc on Windows (the share's own path, after cmdkey), smbclient elsewhere."
+                },
+                {
+                    "field": "timeout_seconds",
+                    "type": "integer",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The whole call. Default 600 for a listing or a delete, 3600 for one file."
+                },
+                {
+                    "field": "path",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "smb-list: the folder under the share to list; empty = the share's root."
+                },
+                {
+                    "field": "recurse",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "true or false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "smb-list: into subfolders (default true)."
+                },
+                {
+                    "field": "suffixes",
+                    "type": "array",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "smb-list: only file names ending in one of these, case-insensitive (e.g. [\".bak\", \".trn\"])."
+                },
+                {
+                    "field": "remote_path",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "smb-get: the file under the share, backslash- or slash-separated."
+                },
+                {
+                    "field": "local_path",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "smb-get: the file to write on this node; its folder is created."
+                },
+                {
+                    "field": "paths",
+                    "type": "array",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "smb-delete: exactly the files to delete, each under the share - never a pattern or a folder."
+                },
+                {
+                    "field": "target",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "smb-credential: the host whose UNC paths the stored login opens."
+                }
+            ]
+        },
+        {
+            "object": "output_smb_list",
+            "kind": "output",
+            "required": false,
+            "one_line": "The files under one folder of a share.",
+            "parsed_in": "db_ops/common/smb.py",
+            "produced_in": [
+                "db_ops/common/smb.py"
+            ],
+            "commands": [
+                "smb-list"
+            ],
+            "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 6,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "backend",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "How the share was reached: smbclient or unc."
+                },
+                {
+                    "field": "host",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The host."
+                },
+                {
+                    "field": "share",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The share."
+                },
+                {
+                    "field": "path",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The folder listed, backslash-separated."
+                },
+                {
+                    "field": "files",
+                    "type": "array",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "[{path, name, size_bytes, modified_epoch}] - path relative to the folder listed, backslash-separated; modified_epoch null when smbclient printed a time it could not read."
+                },
+                {
+                    "field": "count",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "How many files."
+                }
+            ]
+        },
+        {
+            "object": "output_smb_get",
+            "kind": "output",
+            "required": false,
+            "one_line": "One file fetched from a share.",
+            "parsed_in": "db_ops/common/smb.py",
+            "produced_in": [
+                "db_ops/common/smb.py"
+            ],
+            "commands": [
+                "smb-get"
+            ],
+            "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 6,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "backend",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "How the share was reached."
+                },
+                {
+                    "field": "remote_path",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The file under the share."
+                },
+                {
+                    "field": "local_path",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Where it was written."
+                },
+                {
+                    "field": "bytes",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Its size on this node; null when nothing arrived. Compare with the size smb-list gave."
+                },
+                {
+                    "field": "exit_code",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "smbclient's exit code (0 for a UNC copy that worked, 1 for one that failed). A non-zero code is an answer, not a failure of the command."
+                },
+                {
+                    "field": "detail",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "What smbclient or the copy said, when it said anything."
+                }
+            ]
+        },
+        {
+            "object": "output_smb_delete",
+            "kind": "output",
+            "required": false,
+            "one_line": "Named files deleted on a share.",
+            "parsed_in": "db_ops/common/smb.py",
+            "produced_in": [
+                "db_ops/common/smb.py"
+            ],
+            "commands": [
+                "smb-delete"
+            ],
+            "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 6,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "backend",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "How the share was reached."
+                },
+                {
+                    "field": "host",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The host."
+                },
+                {
+                    "field": "share",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The share."
+                },
+                {
+                    "field": "results",
+                    "type": "array",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "[{path, status, bytes, error}] per file, status DELETED or FAILED; bytes null through smbclient."
+                },
+                {
+                    "field": "deleted",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "How many went."
+                },
+                {
+                    "field": "failed",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "How many could not - the command fails when any did."
+                }
+            ]
+        },
+        {
+            "object": "output_smb_credential",
+            "kind": "output",
+            "required": false,
+            "one_line": "A share login stored for Windows.",
+            "parsed_in": "db_ops/common/smb.py",
+            "produced_in": [
+                "db_ops/common/smb.py"
+            ],
+            "commands": [
+                "smb-credential"
+            ],
+            "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 3,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "registered",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "true or false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "True when cmdkey stored it; false off Windows, where there is nothing to store."
+                },
+                {
+                    "field": "target",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The host it was stored for."
+                },
+                {
+                    "field": "reason",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Why nothing was stored, when nothing was."
+                }
+            ]
+        },
+        {
             "object": "input_instance_add",
             "kind": "input",
             "required": false,
@@ -20294,7 +21018,7 @@
                         "allow_empty": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "sqlserver | oracle | postgresql (a postgresql task takes no parameters)."
+                    "purpose": "sqlserver | oracle | postgresql."
                 },
                 {
                     "field": "sql_id",
@@ -21714,7 +22438,7 @@
                 "sql": "sql_text",
                 "database": "database_name"
             },
-            "field_count": 25,
+            "field_count": 24,
             "required_field_count": 0,
             "fields": [
                 {
@@ -21729,7 +22453,7 @@
                         "allow_empty": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The machine or instance: a server_id, or `<db_type> <ip>[:port]`."
+                    "purpose": "A label for the answer - the server_id. Nothing is looked up by it: common.cli reads no configuration (rules R09)."
                 },
                 {
                     "field": "sql_text",
@@ -21774,34 +22498,6 @@
                     "purpose": "One database."
                 },
                 {
-                    "field": "credential_name",
-                    "type": "string",
-                    "required": false,
-                    "default": "none - optional",
-                    "range_text": "text",
-                    "constraint": {
-                        "kind": "string",
-                        "nullable": true,
-                        "allow_empty": true
-                    },
-                    "measured_against": "not a time value",
-                    "purpose": "Which login in users.json; default: the instance's own."
-                },
-                {
-                    "field": "user_ref",
-                    "type": "string",
-                    "required": false,
-                    "default": "none - optional",
-                    "range_text": "text",
-                    "constraint": {
-                        "kind": "string",
-                        "nullable": true,
-                        "allow_empty": true
-                    },
-                    "measured_against": "not a time value",
-                    "purpose": "A secret ref holding the login, for a target outside the inventory."
-                },
-                {
                     "field": "sql_access",
                     "type": "object",
                     "required": false,
@@ -21813,7 +22509,21 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "How to reach the SQL engine, overriding the instance's block."
+                    "purpose": "How to reach the SQL engine, overriding the connection's own sql_access block (an 8i bridge on this machine)."
+                },
+                {
+                    "field": "secrets",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "{ref: value} for exactly the secret refs the connection's sql_access names (an 8i bridge's signing secret) - never the whole store. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); no store is opened."
                 },
                 {
                     "field": "connection",
@@ -21827,7 +22537,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "A full connection, instead of the inventory."
+                    "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
                 },
                 {
                     "field": "profile",
@@ -21924,6 +22634,21 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "Statements first."
+                },
+                {
+                    "field": "named_params",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "an object of name: value (text, number, true/false or null)",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Values by name, bound where an Oracle or PostgreSQL statement says :name.",
+                    "rule": "Oracle and PostgreSQL only, and not with params or prelude. Each :name outside a string or comment becomes the driver's own placeholder, so the value is never SQL text. A name no statement says is refused before connecting."
                 },
                 {
                     "field": "autocommit",
@@ -22047,20 +22772,6 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "json (default) | txt."
-                },
-                {
-                    "field": "data_dir",
-                    "type": "string",
-                    "required": false,
-                    "default": "none - optional",
-                    "range_text": "text",
-                    "constraint": {
-                        "kind": "string",
-                        "nullable": true,
-                        "allow_empty": true
-                    },
-                    "measured_against": "not a time value",
-                    "purpose": "Another data/ folder to read."
                 }
             ]
         },
@@ -22071,7 +22782,8 @@
             "one_line": "One shell command on a host.",
             "parsed_in": "db_ops/common/cli.py",
             "parsers": [
-                "db_ops/common/cli.py"
+                "db_ops/common/cli.py",
+                "db_ops/common/host_ops.py"
             ],
             "commands": [
                 "run-cmd"
@@ -22079,7 +22791,7 @@
             "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 10,
+            "field_count": 13,
             "required_field_count": 0,
             "fields": [
                 {
@@ -22094,7 +22806,49 @@
                         "allow_empty": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The machine or instance: a server_id, or `<db_type> <ip>[:port]`."
+                    "purpose": "A label for the answer - the server_id. Nothing is looked up by it: common.cli reads no configuration (rules R09)."
+                },
+                {
+                    "field": "access",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The host login, complete: an inline cmd_access - method (ssh|winrm), host, port, username, auth_type, key_file or password - with the machine's platform and runtime facts. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
+                },
+                {
+                    "field": "platform",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "windows | linux, when access does not say."
+                },
+                {
+                    "field": "profile",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "What the target is: os, os_major, runtime."
                 },
                 {
                     "field": "command",
@@ -22237,7 +22991,7 @@
             "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 6,
+            "field_count": 7,
             "required_field_count": 0,
             "fields": [
                 {
@@ -22322,6 +23076,20 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "The same, base64."
+                },
+                {
+                    "field": "connection",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
                 }
             ]
         },
@@ -22333,7 +23101,8 @@
             "parsed_in": "db_ops/common/dbstatus.py",
             "parsers": [
                 "db_ops/common/dbstatus.py",
-                "db_ops/common/cli.py"
+                "db_ops/common/cli.py",
+                "db_ops/common/sql_run.py"
             ],
             "commands": [
                 "db-status"
@@ -22344,7 +23113,7 @@
                 "database": "database_name",
                 "databases": "database_names"
             },
-            "field_count": 4,
+            "field_count": 5,
             "required_field_count": 0,
             "fields": [
                 {
@@ -22401,6 +23170,20 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "Which databases, at depth database."
+                },
+                {
+                    "field": "connection",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
                 }
             ]
         },
@@ -22435,7 +23218,7 @@
                         "allow_empty": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The machine or instance: a server_id, or `<db_type> <ip>[:port]`."
+                    "purpose": "A label for the answer - the server_id. Nothing is looked up by it: common.cli reads no configuration (rules R09)."
                 },
                 {
                     "field": "host",
@@ -22449,7 +23232,7 @@
                         "allow_empty": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "Or an address."
+                    "purpose": "The address to probe - required. The app that holds a server_id fills it, with the OS, from its own data/ (db_ops.lib.data_sources.request_fill)."
                 },
                 {
                     "field": "ports",
@@ -22490,9 +23273,7 @@
                 "db_ops/common/cli.py"
             ],
             "commands": [
-                "list-targets",
-                "self-status",
-                "timezone"
+                "list-targets"
             ],
             "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
             "used_in": [],
@@ -22513,6 +23294,68 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "json (default) | txt."
+                }
+            ]
+        },
+        {
+            "object": "input_self_status",
+            "kind": "input",
+            "required": false,
+            "one_line": "What this installation is - and, stated by the caller, when each app last ran.",
+            "parsed_in": "db_ops/common/cli.py",
+            "parsers": [
+                "db_ops/common/cli.py"
+            ],
+            "commands": [
+                "self-status"
+            ],
+            "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 3,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "format",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "json (default) | txt."
+                },
+                {
+                    "field": "last_runs",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "{app code: {status, started_at}} - the newest run of each app command in the last day. The store is not opened here (rules R09): the caller reads it (/spbot_self_status does). Absent, the column says not stated."
+                },
+                {
+                    "field": "store_error",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Why the caller could not read the last runs; shown in their place."
                 }
             ]
         },
@@ -23225,7 +24068,7 @@
                 "dest": "destination",
                 "database": "database_name"
             },
-            "field_count": 32,
+            "field_count": 29,
             "required_field_count": 0,
             "fields": [
                 {
@@ -23240,7 +24083,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "{target, database_name, schema, credential_name}."
+                    "purpose": "Where the schema is read from: {connection, database_name, schema} - connection is the complete login (db_type, host, port, username, password). The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
                 },
                 {
                     "field": "destination",
@@ -23254,7 +24097,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The same, for where it goes."
+                    "purpose": "Where it is written: {connection, database_name, schema} - connection is the complete login. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
                 },
                 {
                     "field": "mode",
@@ -23580,34 +24423,6 @@
                     "purpose": "One database."
                 },
                 {
-                    "field": "credential_name",
-                    "type": "string",
-                    "required": false,
-                    "default": "none - optional",
-                    "range_text": "text",
-                    "constraint": {
-                        "kind": "string",
-                        "nullable": true,
-                        "allow_empty": true
-                    },
-                    "measured_against": "not a time value",
-                    "purpose": "Which login in users.json; default: the instance's own."
-                },
-                {
-                    "field": "user_ref",
-                    "type": "string",
-                    "required": false,
-                    "default": "none - optional",
-                    "range_text": "text",
-                    "constraint": {
-                        "kind": "string",
-                        "nullable": true,
-                        "allow_empty": true
-                    },
-                    "measured_against": "not a time value",
-                    "purpose": "A secret ref holding the login, for a target outside the inventory."
-                },
-                {
                     "field": "timeout_seconds",
                     "type": "integer",
                     "required": false,
@@ -23620,20 +24435,6 @@
                     },
                     "measured_against": "seconds",
                     "purpose": "How long to wait."
-                },
-                {
-                    "field": "data_dir",
-                    "type": "string",
-                    "required": false,
-                    "default": "none - optional",
-                    "range_text": "text",
-                    "constraint": {
-                        "kind": "string",
-                        "nullable": true,
-                        "allow_empty": true
-                    },
-                    "measured_against": "not a time value",
-                    "purpose": "Another data/ folder to read."
                 },
                 {
                     "field": "key",
@@ -23854,8 +24655,8 @@
             "kind": "field",
             "required": true,
             "one_line": "A login to a monitoring tool (Grafana and the like), kept by ref.",
-            "parsed_in": "db_ops/common/data_sources/__init__.py",
-            "shared_entry_point": "db_ops.common.data_sources.__init__",
+            "parsed_in": "db_ops/lib/data_sources/__init__.py",
+            "shared_entry_point": "db_ops.lib.data_sources.__init__",
             "kind_note": "kind is 'field': its names live directly on the record.",
             "whole_record": true,
             "used_in": [
@@ -25130,6 +25931,913 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "The shortest accepted text. Documentation: not enforced."
+                }
+            ]
+        },
+        {
+            "object": "input_init",
+            "kind": "input",
+            "required": false,
+            "one_line": "Create a tool root: the directory, the app name, and whether to overwrite.",
+            "parsed_in": "db_ops/common/cli_tool_root.py",
+            "parsers": [
+                "db_ops/common/cli_tool_root.py"
+            ],
+            "commands": [
+                "init"
+            ],
+            "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 4,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "root",
+                    "required": false,
+                    "type": "string",
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The directory to initialise; default the current one."
+                },
+                {
+                    "field": "app_name",
+                    "required": false,
+                    "type": "string",
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The app name config.json carries; default dbabrain."
+                },
+                {
+                    "field": "force",
+                    "required": false,
+                    "type": "boolean",
+                    "default": "none - optional",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Overwrite files that already exist."
+                },
+                {
+                    "field": "format",
+                    "required": false,
+                    "type": "string",
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "json (the envelope, default) or txt (the lines a person reads)."
+                }
+            ]
+        },
+        {
+            "object": "output_init",
+            "kind": "output",
+            "required": false,
+            "one_line": "What init wrote, what it kept, and what to do next.",
+            "parsed_in": "db_ops/common/cli_tool_root.py",
+            "produced_in": [
+                "db_ops/common/cli_tool_root.py"
+            ],
+            "commands": [
+                "init"
+            ],
+            "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 6,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "root",
+                    "required": false,
+                    "type": "string",
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The tool root initialised."
+                },
+                {
+                    "field": "written",
+                    "required": false,
+                    "type": "array",
+                    "default": "none - optional",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Files created."
+                },
+                {
+                    "field": "kept",
+                    "required": false,
+                    "type": "array",
+                    "default": "none - optional",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Files already there and left alone."
+                },
+                {
+                    "field": "guide_saved_copy",
+                    "required": false,
+                    "type": "string",
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Where an edited AGENTS.md was saved before it was replaced."
+                },
+                {
+                    "field": "next_steps",
+                    "required": false,
+                    "type": "string",
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "What to do next, in words."
+                },
+                {
+                    "field": "config_upgrade",
+                    "required": false,
+                    "type": "object",
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Set when kept configuration uses shapes this version moved."
+                }
+            ]
+        },
+        {
+            "object": "input_guide",
+            "kind": "input",
+            "required": false,
+            "one_line": "The operating guide, printed or written as AGENTS.md.",
+            "parsed_in": "db_ops/common/cli_tool_root.py",
+            "parsers": [
+                "db_ops/common/cli_tool_root.py"
+            ],
+            "commands": [
+                "guide"
+            ],
+            "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 3,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "write",
+                    "required": false,
+                    "type": "boolean",
+                    "default": "none - optional",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Write it as AGENTS.md instead of printing it."
+                },
+                {
+                    "field": "root",
+                    "required": false,
+                    "type": "string",
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Where to write it; default the current directory."
+                },
+                {
+                    "field": "format",
+                    "required": false,
+                    "type": "string",
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "json (the envelope, default) or txt (the lines a person reads)."
+                }
+            ]
+        },
+        {
+            "object": "output_guide",
+            "kind": "output",
+            "required": false,
+            "one_line": "The guide's text, or what writing it did.",
+            "parsed_in": "db_ops/common/cli_tool_root.py",
+            "produced_in": [
+                "db_ops/common/cli_tool_root.py"
+            ],
+            "commands": [
+                "guide"
+            ],
+            "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 4,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "guide",
+                    "required": false,
+                    "type": "string",
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The guide, when printed."
+                },
+                {
+                    "field": "outcome",
+                    "required": false,
+                    "type": "string",
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "written | unchanged | replaced."
+                },
+                {
+                    "field": "path",
+                    "required": false,
+                    "type": "string",
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The AGENTS.md written."
+                },
+                {
+                    "field": "saved_copy",
+                    "required": false,
+                    "type": "string",
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Where an edited copy was saved."
+                }
+            ]
+        },
+        {
+            "object": "input_encrypt_secret",
+            "kind": "input",
+            "required": false,
+            "one_line": "The plaintext secret source and the encrypted store to write; never the passphrase.",
+            "parsed_in": "db_ops/common/cli_tool_root.py",
+            "parsers": [
+                "db_ops/common/cli_tool_root.py"
+            ],
+            "commands": [
+                "encrypt-secret"
+            ],
+            "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 3,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "source",
+                    "required": false,
+                    "type": "string",
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The plaintext file; default secrets/secret_text.json."
+                },
+                {
+                    "field": "dest",
+                    "required": false,
+                    "type": "string",
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The encrypted store; default data/encrypted_secret_text.json."
+                },
+                {
+                    "field": "format",
+                    "required": false,
+                    "type": "string",
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "json (the envelope, default) or txt (the lines a person reads)."
+                }
+            ]
+        },
+        {
+            "object": "output_encrypt_secret",
+            "kind": "output",
+            "required": false,
+            "one_line": "How many secrets were encrypted, and where.",
+            "parsed_in": "db_ops/common/cli_tool_root.py",
+            "produced_in": [
+                "db_ops/common/cli_tool_root.py"
+            ],
+            "commands": [
+                "encrypt-secret"
+            ],
+            "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 3,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "count",
+                    "required": false,
+                    "type": "integer",
+                    "default": "none - optional",
+                    "range_text": "a whole number, 0 or more",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Secrets encrypted."
+                },
+                {
+                    "field": "source",
+                    "required": false,
+                    "type": "string",
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The plaintext read."
+                },
+                {
+                    "field": "dest",
+                    "required": false,
+                    "type": "string",
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The encrypted store written."
+                }
+            ]
+        },
+        {
+            "object": "input_export_data",
+            "kind": "input",
+            "required": false,
+            "one_line": "Which tool root to carry, into which bundle file, with or without secrets and assets.",
+            "parsed_in": "db_ops/common/cli_tool_root.py",
+            "parsers": [
+                "db_ops/common/cli_tool_root.py"
+            ],
+            "commands": [
+                "export-data"
+            ],
+            "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 6,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "bundle",
+                    "required": false,
+                    "type": "string",
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The bundle file to write. Required."
+                },
+                {
+                    "field": "root",
+                    "required": false,
+                    "type": "string",
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The tool root to export; default the one resolved."
+                },
+                {
+                    "field": "include_secrets",
+                    "required": false,
+                    "type": "boolean",
+                    "default": "none - optional",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Carry the encrypted secret store; default true."
+                },
+                {
+                    "field": "include_assets",
+                    "required": false,
+                    "type": "boolean",
+                    "default": "none - optional",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Carry assets/ and data/ssh_keys/; default true."
+                },
+                {
+                    "field": "force",
+                    "required": false,
+                    "type": "boolean",
+                    "default": "none - optional",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Overwrite an existing bundle file."
+                },
+                {
+                    "field": "format",
+                    "required": false,
+                    "type": "string",
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "json (the envelope, default) or txt (the lines a person reads)."
+                }
+            ]
+        },
+        {
+            "object": "output_export_data",
+            "kind": "output",
+            "required": false,
+            "one_line": "What the bundle carries, and what it could not.",
+            "parsed_in": "db_ops/common/cli_tool_root.py",
+            "produced_in": [
+                "db_ops/common/cli_tool_root.py"
+            ],
+            "commands": [
+                "export-data"
+            ],
+            "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 5,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "bundle",
+                    "required": false,
+                    "type": "string",
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The file written."
+                },
+                {
+                    "field": "files_by_role",
+                    "required": false,
+                    "type": "object",
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Files carried, counted by role."
+                },
+                {
+                    "field": "missing_at_source",
+                    "required": false,
+                    "type": "array",
+                    "default": "none - optional",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Catalogued files absent here, so not carried."
+                },
+                {
+                    "field": "includes_secret_store",
+                    "required": false,
+                    "type": "boolean",
+                    "default": "none - optional",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The bundle carries the store as ciphertext."
+                },
+                {
+                    "field": "warnings",
+                    "required": false,
+                    "type": "array",
+                    "default": "none - optional",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Advice, e.g. a bundle name .gitignore does not cover."
+                }
+            ]
+        },
+        {
+            "object": "input_import_data",
+            "kind": "input",
+            "required": false,
+            "one_line": "Which bundle to apply to which tool root, as a plan or for real.",
+            "parsed_in": "db_ops/common/cli_tool_root.py",
+            "parsers": [
+                "db_ops/common/cli_tool_root.py"
+            ],
+            "commands": [
+                "import-data"
+            ],
+            "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 7,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "bundle",
+                    "required": false,
+                    "type": "string",
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The bundle file to read. Required."
+                },
+                {
+                    "field": "root",
+                    "required": false,
+                    "type": "string",
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The tool root to write into; default the one resolved."
+                },
+                {
+                    "field": "plan_only",
+                    "required": false,
+                    "type": "boolean",
+                    "default": "none - optional",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Report what would be written and change nothing."
+                },
+                {
+                    "field": "force",
+                    "required": false,
+                    "type": "boolean",
+                    "default": "none - optional",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Replace files that exist with different content."
+                },
+                {
+                    "field": "include_secrets",
+                    "required": false,
+                    "type": "boolean",
+                    "default": "none - optional",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Write the secret store if the bundle carries one; default true."
+                },
+                {
+                    "field": "include_assets",
+                    "required": false,
+                    "type": "boolean",
+                    "default": "none - optional",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Write assets/ and data/ssh_keys/; default true."
+                },
+                {
+                    "field": "format",
+                    "required": false,
+                    "type": "string",
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "json (the envelope, default) or txt (the lines a person reads)."
+                }
+            ]
+        },
+        {
+            "object": "output_import_data",
+            "kind": "output",
+            "required": false,
+            "one_line": "What the import wrote, or would write.",
+            "parsed_in": "db_ops/common/cli_tool_root.py",
+            "produced_in": [
+                "db_ops/common/cli_tool_root.py"
+            ],
+            "commands": [
+                "import-data"
+            ],
+            "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 11,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "plan_only",
+                    "required": false,
+                    "type": "boolean",
+                    "default": "none - optional",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Nothing was written."
+                },
+                {
+                    "field": "root",
+                    "required": false,
+                    "type": "string",
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The tool root."
+                },
+                {
+                    "field": "plan",
+                    "required": false,
+                    "type": "array",
+                    "default": "none - optional",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Each file and what would happen to it."
+                },
+                {
+                    "field": "counts",
+                    "required": false,
+                    "type": "object",
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The plan, counted by action."
+                },
+                {
+                    "field": "created",
+                    "required": false,
+                    "type": "array",
+                    "default": "none - optional",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Files created."
+                },
+                {
+                    "field": "replaced",
+                    "required": false,
+                    "type": "array",
+                    "default": "none - optional",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Files replaced."
+                },
+                {
+                    "field": "unchanged",
+                    "required": false,
+                    "type": "array",
+                    "default": "none - optional",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Files already identical."
+                },
+                {
+                    "field": "missing_at_source",
+                    "required": false,
+                    "type": "array",
+                    "default": "none - optional",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Files the source machine did not have."
+                },
+                {
+                    "field": "secret_store_imported",
+                    "required": false,
+                    "type": "boolean",
+                    "default": "none - optional",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The encrypted store was written; set DB_OPS_SECRET_KEY next."
+                },
+                {
+                    "field": "node_role_needed",
+                    "required": false,
+                    "type": "string",
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The node_role the imported schedule needs, when not master."
+                },
+                {
+                    "field": "config_upgrade",
+                    "required": false,
+                    "type": "object",
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Set when the imported configuration uses shapes this version moved."
                 }
             ]
         }

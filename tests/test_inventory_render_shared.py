@@ -24,8 +24,11 @@ def test_both_apps_use_the_same_render_functions_not_copies():
     for name in ("build_inventory_summary", "_merge_overlay", "_render_markdown",
                  "_findings", "_baseline_lines", "_backup_evidence"):
         shared = getattr(inventory_render, name)
-        assert getattr(control_inventory, name) is shared, f"control re-declared {name}"
         assert getattr(reports_inventory, name) is shared, f"reports re-declared {name}"
+    # control only merges an overlay since 0.24.0 - rendering is common.cli inventory-summary's
+    # and the workflow reports' (rules R43) - so the merge is all it has to share.
+    for name in ("_merge_overlay", "_write_inventory", "HEALTH_BLOCKS"):
+        assert getattr(control_inventory, name) is getattr(inventory_render, name), name
 
 
 def test_neither_app_defines_the_shared_functions_any_more():
@@ -49,7 +52,7 @@ def test_each_app_keeps_only_what_genuinely_differs():
     control_fns = {n.name for n in control.body if isinstance(n, ast.FunctionDef)}
     reports_fns = {n.name for n in reports.body if isinstance(n, ast.FunctionDef)}
 
-    assert control_fns == {"run_inventory_health", "run_inventory_workflow"}
+    assert control_fns == {"run_inventory_health"}
     assert reports_fns == {"build_inventory_workflow"}
 
 

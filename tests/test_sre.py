@@ -15,6 +15,7 @@ from db_ops.sre.service import (
     check_shared_vms,
     list_vmware_commands,
     run_bastion_ansible,
+    run_bastion_script,
     run_ssh_command,
 )
 
@@ -212,62 +213,130 @@ def test_list_vmware_commands():
 
 
 # ---------------------------------------------------------------------------
-# service — dry_run command construction
+# service — dry_run shows the run-cmd request
+#
+# sre reaches the lab through `common run-cmd` (rules R10), so a dry run returns the request that
+# would be sent - the bastion as the host, the hop to a node inside the command - rather than an
+# ssh argv this app no longer runs.
 # ---------------------------------------------------------------------------
 
 
 def test_run_ssh_command_dry_run():
     config = _make_config()
     result = run_ssh_command(config, host="10.0.0.5", command_args=["uptime"], dry_run=True)
-    assert isinstance(result, list)
-    assert result[0] == "ssh"
+    assert isinstance(result, dict)
+    assert result["access"] == {"method": "ssh", "host": "10.0.0.1", "username": "tuser",
+                                "auth_type": "key", "timeout_seconds": 10}
     # SSH to DB nodes is routed through the bastion (ProxyJump-style nested ssh):
-    # the outer hop targets the bastion, the inner command ssh'es to the DB node.
-    assert any("@10.0.0.5" in token for token in result)
-    assert any("uptime" in token for token in result)
+    # the request targets the bastion, the command ssh'es on to the DB node.
+    assert result["command"].startswith("ssh ")
+    assert "tuser@10.0.0.5" in result["command"]
+    assert "uptime" in result["command"]
+
+
+def test_a_command_for_the_bastion_is_not_hopped():
+    config = _make_config()
+    result = run_ssh_command(config, host="10.0.0.1", command_args=["uptime"], dry_run=True)
+    assert result["command"] == "uptime"
+
+
+def test_the_request_states_every_fact_and_answers_the_gate():
+    """R09: common looks nothing up, so the key goes in the request; the operator's own sre
+    command is the confirmation, as it was before any gate stood in the way."""
+    config = _make_config(credentials={"guest_user": "tuser", "ssh_identity_file": "/keys/sre_id"})
+    result = run_ssh_command(config, host="10.0.0.1", command_args=["uptime"], dry_run=True)
+    assert Path(result["access"]["key_file"]) == Path("/keys/sre_id").resolve()
+    assert result["confirm"] is True and result["assume_yes"] is True
 
 
 def test_run_bastion_ansible_dry_run():
     config = _make_config()
     result = run_bastion_ansible(config, target="mysql", args=["-m", "ping"], dry_run=True)
-    assert isinstance(result, list)
-    assert result[0] == "ssh"
-    cmd_str = result[-1]
-    assert "ansible" in cmd_str
-    assert "mysql" in cmd_str
-    assert "ping" in cmd_str
+    assert result["access"]["host"] == "10.0.0.1"
+    command = result["command"]
+    assert command.startswith("cd /opt/db-sre/repo && ")
+    assert "ansible" in command
+    assert "mysql" in command
+    assert "ping" in command
 
 
-def test_check_shared_vms_dry_run_returns_commands():
+def test_check_shared_vms_dry_run_returns_requests():
     config = _make_config()
     results = check_shared_vms(config, dry_run=True)
     assert len(results) == 2
-    for result in results:
-        assert isinstance(result, list)
-        assert result[0] == "ssh"
+    assert all(result["access"]["host"] == "10.0.0.1" for result in results)
+    assert "tuser@10.0.0.2" in results[1]["command"]
 
 
-def test_check_mysql_cluster_dry_run_returns_commands():
+def test_check_mysql_cluster_dry_run_returns_requests():
     config = _make_config()
     results = check_mysql_cluster(config, dry_run=True)
     assert len(results) == 3  # 2 ansible + 1 mysqlsh
-    assert all(isinstance(r, list) for r in results)
+    assert all(isinstance(r, dict) for r in results)
 
 
-def test_check_postgresql_ha_dry_run_returns_commands():
+def test_check_postgresql_ha_dry_run_returns_requests():
     config = _make_config()
     results = check_postgresql_ha(config, dry_run=True)
     assert len(results) == 3  # 2 ansible + 1 psql
-    assert all(isinstance(r, list) for r in results)
+    assert all(isinstance(r, dict) for r in results)
 
 
-def test_mysql_check_redacts_password_in_command():
+def test_a_dry_run_never_shows_the_mysql_admin_password():
+    """The hop to a node quotes the quoted password again ('"'"'secret'"'"'), and the old
+    `--password=` redaction did not match that - so `--dry-run` printed it in full."""
     config = _make_config()
-    results = check_mysql_cluster(config, dry_run=True)
-    mysqlsh_cmd = results[2]
-    assert isinstance(mysqlsh_cmd, list)
-    cmd_str = " ".join(str(p) for p in mysqlsh_cmd)
-    assert "mysqlsh" in cmd_str
+    command = check_mysql_cluster(config, dry_run=True)[2]["command"]
+    assert "mysqlsh" in command
+    assert "secret" not in command
+    assert "***" in command
+
+
+def test_a_dry_run_never_shows_the_guest_password(tmp_path):
+    bash_dir = tmp_path / "automation" / "bash"
+    bash_dir.mkdir(parents=True)
+    (bash_dir / "bootstrap.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    config = SreOperationalConfig(
+        root_dir=tmp_path, inventory=_SHARED_INVENTORY,
+        credentials={"guest_user": "tuser", "guest_password": "guest-pw-1"},
+        database_defaults=_MYSQL_DEFAULTS, vmware=_BASE_VMWARE,
+        automation={"bash_dir": str(bash_dir)})
+    result = run_bastion_script(config, script_name="bootstrap", args=["mysql"], dry_run=True)
+    assert "GUEST_BECOME_PASS=***" in result["command"]
+    assert "guest-pw-1" not in result["command"]
+
+
+def test_a_command_that_never_ran_keeps_ssh_s_exit_code(monkeypatch):
+    """`_wait_for_bastion_ssh` tells "the bastion is not up yet" from "the command failed" by
+    255, the code ssh exits with when it never ran the command. run-cmd answering without an
+    exit code is that same fact."""
+    from db_ops.sre import service
+
+    monkeypatch.setattr(service, "run_allowing_failure",
+                        lambda command, request: (False, {}, "could not connect to tuser@10.0.0.1"))
+    result = run_ssh_command(_make_config(), host="10.0.0.1", command_args=["true"])
+    assert result.returncode == service.SSH_DID_NOT_RUN
+    assert "could not connect" in result.stderr
+
+
+def test_a_command_that_ran_reports_its_own_exit_code(monkeypatch):
+    from db_ops.sre import service
+
+    sent = []
+    monkeypatch.setattr(service, "run_allowing_failure",
+                        lambda command, request: sent.append((command, request)) or (
+                            False, {"exit_code": 3, "stdout": "out", "stderr": "err"}, "exit=3"))
+    result = run_ssh_command(_make_config(), host="10.0.0.1", command_args=["false"])
+    assert (result.returncode, result.stdout, result.stderr) == (3, "out", "err")
+    assert sent[0][0] == "run-cmd"
+
+
+def test_the_cli_dry_run_masks_the_powershell_payload():
+    """The payload is base64 of the resolved credentials - encoded, not hidden."""
+    from db_ops.sre.cli import _dry_run_text
+
+    text = _dry_run_text(["powershell.exe", "-File", "x.ps1", "-DbSrePayloadJsonBase64", "c2VjcmV0"])
+    assert "c2VjcmV0" not in text
 
 
 def test_check_mysql_cluster_missing_group_raises():

@@ -67,25 +67,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-# The two places that need these names cannot import each other (`common` does not
-# import an app; an app runs `common` as a CLI), so the vocabulary lives in `lib`,
-# which both may import. It was spelled out twice until 2026-09-19.
-from db_ops.lib.task_input import TARGET_PLACEHOLDERS
+# The placeholder vocabulary lives in `lib` because `common` validates it and this module fills it
+# (2026-09-19). The input block's shape and its reading joined it in 0.24.0, with the rest of the
+# SQL task configuration (lib/sql_task_catalog.py): reading configuration is lib's. What stays here
+# is running the script.
+from db_ops.lib.task_input import (  # noqa: F401 - re-exported for this module's callers
+    DEFAULT_BATCH_ROWS, DEFAULT_FETCH_TIMEOUT_SECONDS, TARGET_PLACEHOLDERS, PythonSource,
+    PythonSourceError, parse)
 
-#: How many rows go into one execution of the SQL. Not one big parameter: the estate's first user
-#: of this pulls ten days of attendance scans - tens of thousands of rows, megabytes of JSON - and
-#: an ``nvarchar(max)`` that size is a parameter the driver, the network and ``OPENJSON`` each get
-#: to be slow about at once. Batching also bounds what a failure costs: the run stops on batch 7
-#: of 30 having committed 6, and the log says so.
-DEFAULT_BATCH_ROWS = 2000
-
-#: A fetch is allowed longer than a query. The default here is the one the estate's first script
-#: needs for ten days across two companies at its own concurrency; a task that needs more says so.
-#:
-#: Named for the fetch rather than `DEFAULT_TIMEOUT_SECONDS`, which `common/schema_copy.py` already
-#: uses for its own unrelated deadline. The two share a number and nothing else, and one name over
-#: two rules is how the second gets found by whoever is debugging why the first did not apply.
-DEFAULT_FETCH_TIMEOUT_SECONDS = 900
 
 #: How much of the script's stderr is kept in the run row. Enough to hold a traceback and the last
 #: few progress lines, not enough to turn a chatty script into a megabyte per run.
@@ -94,32 +83,6 @@ STDERR_TAIL_CHARS = 4000
 #: How much of an unparsable stdout is quoted back. The useful part of "this is not JSON" is
 #: whatever the program printed instead, and that is nearly always at the top.
 STDOUT_HEAD_CHARS = 600
-
-
-class PythonSourceError(RuntimeError):
-    """The task's Python step produced no rows, so the task's SQL never ran.
-
-    It says nothing about what the *program* did. A fetch has written nothing; a program that
-    does its own work - a stored procedure per row, say - may have done most of it before it
-    failed, and db_ops cannot see that from here. The messages below are careful about the
-    difference: a person reading that nothing reached the database stops looking.
-    """
-
-
-@dataclass(frozen=True)
-class PythonSource:
-    """The ``input`` block of an ``input_type: "python"`` command."""
-
-    script_path: str
-    args: tuple[str, ...] = ()
-    #: Dot path to the row array inside the document, e.g. ``data`` or ``result.items``.
-    rows_path: str = "data"
-    #: The SQL parameter each batch is bound to. It must also appear in ``parameters`` with a type
-    #: — ``nvarchar(max)`` — because that is what writes the ``DECLARE`` the script reads.
-    parameter: str = "payload"
-    batch_rows: int = DEFAULT_BATCH_ROWS
-    timeout_seconds: int = DEFAULT_FETCH_TIMEOUT_SECONDS
-    accept_exit_codes: tuple[int, ...] = (0,)
 
 
 @dataclass(frozen=True)
@@ -143,50 +106,6 @@ class PythonResult:
         }
 
 
-def parse(block: dict[str, Any], *, command_name: str) -> PythonSource:
-    """Read one ``input`` block (``input_type: "python"``), or say what is missing.
-
-    The keys are unprefixed because the block already says what it is: ``input.script``, not
-    ``python_path``. A prefix here would be doing the naming that ``input_type`` does properly.
-    """
-    script_path = str(block.get("script") or block.get("path") or "").strip()
-    if not script_path:
-        raise PythonSourceError(
-            f"SQL command {command_name} input_type=python requires input.script - the program "
-            "whose stdout is this task's input, e.g. assets/tasks/python/fetch_x.py.")
-
-    raw_args = block.get("args") or []
-    if not isinstance(raw_args, list):
-        raise PythonSourceError(
-            f"SQL command {command_name} input.args must be an array of strings.")
-
-    raw_codes = block.get("accept_exit_codes")
-    if raw_codes is None:
-        accept = (0,)
-    elif isinstance(raw_codes, list) and all(isinstance(code, int) for code in raw_codes):
-        accept = tuple(raw_codes) or (0,)
-    else:
-        raise PythonSourceError(
-            f"SQL command {command_name} input.accept_exit_codes must be an array of integers, "
-            "e.g. [0, 1] for a fetcher that exits 1 when some pages failed but still prints what "
-            "it got. Listing a code is a decision that a partial load is acceptable.")
-
-    batch_rows = int(block.get("batch_rows") or DEFAULT_BATCH_ROWS)
-    if batch_rows < 1:
-        raise PythonSourceError(
-            f"SQL command {command_name} input.batch_rows must be at least 1.")
-
-    return PythonSource(
-        script_path=script_path,
-        args=tuple(str(value) for value in raw_args),
-        rows_path=str(block.get("rows_path") or "data").strip(),
-        parameter=str(block.get("parameter") or "payload").strip(),
-        batch_rows=batch_rows,
-        timeout_seconds=int(block.get("timeout_seconds") or DEFAULT_FETCH_TIMEOUT_SECONDS),
-        accept_exit_codes=accept,
-    )
-
-
 def resolve_script(script_path: str, *, tool_root: Path) -> Path:
     """The script, as an absolute path under the tool root.
 
@@ -203,7 +122,6 @@ def resolve_script(script_path: str, *, tool_root: Path) -> Path:
     if not resolved.is_file():
         raise PythonSourceError(f"input.script not found: {resolved}")
     return resolved
-
 
 
 def substitute(args: tuple[str, ...], values: dict[str, Any]) -> list[str]:
@@ -247,7 +165,7 @@ def run(source: PythonSource, *, tool_root: Path,
     args = substitute(source.args, {**(target or {}), **dict(parameter_values or {})})
 
     environment = dict(os.environ)
-    # Pinned for the same reason `lib.common_cli.spawn` pins it, and this end matters more: the
+    # Pinned for the same reason `transport.common_cli.spawn` pins it, and this end matters more: the
     # script prints JSON with `ensure_ascii=False`, so a Vietnamese name reaches stdout as UTF-8
     # bytes. Left to `locale.getpreferredencoding()` the child would encode cp1252 on this
     # estate's Windows hosts and die on the first accented character - under the daemon, and never

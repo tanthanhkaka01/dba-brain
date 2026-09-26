@@ -16,8 +16,8 @@ import pytest
 
 from conftest import shipped_config
 from db_ops.telegram import command_processor as cp
-from db_ops.common import data_sources
-from db_ops.lib import common_cli
+from db_ops.lib import data_sources
+from db_ops.transport import common_cli
 
 
 def _cmd():

@@ -36,7 +36,7 @@ APPS = frozenset({
     "backup_restore", "control", "jobs", "metrics", "reports",
     "sla", "sql_tasks", "sre", "telegram", "webhost",
 })
-SHARED_LAYERS = frozenset({"common", "db", "logging_ops", "lib"})
+SHARED_LAYERS = frozenset({"common", "db", "logging_ops", "lib", "transport"})
 
 #: Composition roots: CLI entry points whose whole job is to drive several apps at once.
 #: Each maps to the apps it is allowed to reach, so a new one is a visible diff.
@@ -56,7 +56,9 @@ ALLOWED_UPWARD_IMPORTS: dict[str, frozenset[str]] = {
     # than a config-only imitation of it. That argument was sound; what was wrong was the
     # *location*. A command that spans two apps is not shared-layer work, so it moved to
     # `db_ops/cli.py`, a root module that is outside both rules by construction. Removed
-    # 2026-08-15.
+    # 2026-08-15. It came back in 0.24.0 as `common/cli_check_credentials.py`, importing only
+    # `lib`: the two resolvers moved *down* - the resolution this header recommends - once the
+    # root package stopped being outside the rules (R41).
     #
     # Before adding an entry, check whether the code is in the wrong place instead. Twice now
     # the answer has been yes.
@@ -207,7 +209,9 @@ def test_common_never_launches_a_db_ops_cli():
 #: this node's data folder and store (the resolver tier, moved out in 0.24), and two read the root
 #: package's `__version__`.
 COMMON_OUTSIDE_IMPORTS: dict[str, frozenset[str]] = {
-    "common/cli.py": frozenset({"db_ops.config", "db_ops"}),
+    # Empty since 0.24.0 - rule R04 is absolute. `common/cli.py` was the one entry: it imported
+    # `db_ops.config` and the root package's `__version__`; both are `lib`'s now (`lib/config.py`,
+    # `lib/version.py`).
 }
 
 

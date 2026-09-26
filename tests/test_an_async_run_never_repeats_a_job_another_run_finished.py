@@ -1,6 +1,6 @@
 """An overlapping async run never repeats a job another run has already done.
 
-APP-BACKUP-RESTORE is ``async``: ``max_parallel`` 4, due every 30 s. A run lists the due jobs,
+APP-BACKUP-RESTORE is ``async``: ``max_parallel`` 4, due every second since 0.24.0 (30 s before). A run lists the due jobs,
 then works through them one by one; 30 s later the daemon starts another, which takes whatever is
 due and not running - the jobs the first has not reached yet. That is the concurrency the schedule
 test of 2026-09-25 measured on the labs: the second run took the Oracle restore while the first
@@ -184,7 +184,7 @@ def test_a_scheduled_sql_scan_does_not_repeat_a_task_another_scan_finished(tmp_p
     def run_one(**kwargs):
         executed.append(kwargs["command"].sql_id)
         if kwargs["command"].sql_id == 1:
-            other_key = next(t for t in runner.load_sql_targets(data_dir / "sql_targets.json", logger=None)
+            other_key = next(t for t in runner.load_sql_targets(data_dir / "sql_targets.json")
                              if t.sql_id == 2).run_key
             started[other_key] = utc_now_text()        # the other scan ran task 2 meanwhile
         return True

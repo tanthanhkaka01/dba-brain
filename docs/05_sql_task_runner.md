@@ -155,13 +155,14 @@ an Oracle 8i target uses. `execute_on_target` now states the run and reads the a
 
 | What the task decides | Request field |
 | --- | --- |
-| where, and as whom | `target` (server_id), `database_name`, `credential_name` |
+| where, and as whom | `connection` - the instance and login this app already resolved, password included (`task_connection`, since 0.24.0: `run-sql` reads no configuration, rules R09), `target` as the label, `database_name` |
 | the commit mode | `autocommit` / `commit` — an autocommit task commits per batch, which is what procs rejecting `@@TRANCOUNT > 0` need |
 | **two** timeouts, kept apart | `timeout_seconds` (statements) and `connect_timeout_seconds` — a task allowed twenty minutes must not wait twenty minutes to learn the host is down |
 | how many rows and sets to keep | `max_rows`, `capture: "all"`, `max_result_sets: 0` |
-| what a parameter means here | `prelude` + `params` (bound) on a normal target; `define` (SQL*Plus substitution) on an 8i one, which binds nothing |
-| which transport | `sql_access`, straight off the target |
+| what a parameter means here | `prelude` + `params` (bound) on SQL Server; `named_params` (bound, `:name`) and on Oracle `define` (`&name`) on a direct Oracle or PostgreSQL connection; `define` (SQL*Plus substitution) on an 8i one, which binds nothing |
+| which transport | `sql_access`, straight off the target - and for an 8i bridge its signing secret in `secrets`, read here (`request_fill.bridge_secrets`) because `run-sql` opens no store |
 
+The request carries a password, so it goes on `run-sql`'s stdin (`db_ops.transport` does that).
 Every result set is asked for and the first **five** are stored, as they always were; the rows of
 the rest are still counted into the run's `row_count`, so a task never reports fewer rows than it
 read. Before the switch both resolvers were run over all 12 configured task targets and agreed on
@@ -228,6 +229,10 @@ Three ways to answer, and the gate records which one was used:
 | answered elsewhere | `--confirm yes` — how `/spbot_run_sql_task` passes the reply it collected |
 | genuinely unattended | `--assume-yes`, an explicit waiver, recorded as *no human was prompted* |
 
+What a forced run costs is this node's `data/emergency_operations.json` entry for `run-sql-task`.
+The runner reads it (`db_ops.lib.data_sources.request_fill`) and sends it to `common.cli authorize`
+as the request's `rules`, since `common.cli` reads no configuration (rules R09, 0.24.0).
+
 A **rehearsal is never asked** (`--dry-run`), and neither is the scheduled scan: a schedule was
 authorized when the operator wrote it, and a daemon at 03:00 has nobody to ask. Nothing else
 proceeds without an answer — a run whose confirmation is missing exits 1 having executed nothing.
@@ -264,7 +269,9 @@ works.
 ## Parameters
 
 A task may declare parameters, and the script then reads them as ordinary T-SQL variables. Added
-2026-08-12; a task without a `parameters` block behaves exactly as before.
+2026-08-12; a task without a `parameters` block behaves exactly as before. On Oracle and PostgreSQL
+the script says `:name` instead - see
+[Parameters on Oracle and PostgreSQL](#parameters-on-oracle-and-postgresql-0240).
 
 ```json
 {
@@ -325,6 +332,36 @@ The declaration is repeated in front of **every batch**: a T-SQL variable does n
 | no value, `default` declared | the default is bound |
 | no value, `required: true` | refused **before connecting** |
 | no value, no default | `NULL` is bound — so `WHERE @db IS NULL OR name = @db` means "all" |
+
+### Parameters on Oracle and PostgreSQL (0.24.0)
+
+Neither engine reads a `DECLARE`, so the prelude above is SQL Server's alone. On a **direct**
+Oracle or PostgreSQL connection the script names a parameter the way its own tools do, and the
+runner reads the script to see which form it used:
+
+```sql
+-- PostgreSQL, or Oracle: a bind variable. The value is bound, never pasted.
+SELECT * FROM jobs WHERE job_no = :job_no;
+-- Oracle only: a SQL*Plus substitution, as an archived script writes it.
+SELECT * FROM jobs WHERE job_no = '&JOB_NO';
+```
+
+- **`:name` is bound by name** - `run-sql`'s `named_params` ([13](13_common.md), `run-sql`). The
+  value is data, so a quote in it is fine. The cases in the table above hold, with one difference:
+  the value goes to the server as text and the server gives it the type of where it stands, so
+  where nothing says (`:d IS NULL`, `SELECT :n + 1` on PostgreSQL) write a cast - `CAST(:d AS date)`,
+  `:n::int`.
+- **`&name` on Oracle is what it is on an 8i bridge target**: a SQL*Plus substitution, the value
+  checked for quotes, comment markers and `;` first, and with no value the script's own `DEFINE`
+  line stands. So a command registered for a bridge target and a direct one (`ORACLE-019` is
+  written that way) means the same on both.
+- A parameter a file of the task does not say is not sent to that file, and **`sql-command-add`
+  refuses a parameter no script of the task says**: it would take a value and bind it to nothing.
+  A name the command does not declare is refused at run time, as on SQL Server.
+
+Until 0.24.0 an Oracle task with parameters failed at its first run on a direct connection - the
+`DECLARE @name` lines reached Oracle as they were - and a PostgreSQL task could declare none
+(0.23.0 §1.55).
 
 ### A SQL task and a `common` command may answer the same question
 
@@ -495,7 +532,7 @@ Use `python -m db_ops.telegram.cli groups` to print the whole level -> chat_id m
 
 ## EXE Packaging Notes
 
-- Credentials come from `data/encrypted_secret_text.json` (decrypted with the `--key_base64`/`--key` passphrase or `DB_OPS_SECRET_KEY`) and targets from `data/db_instances.json`, both resolved through `db_ops/common/data_sources/`. Provide the `data/` directory and supply the key, or tasks will run without credentials.
+- Credentials come from `data/encrypted_secret_text.json` (decrypted with the `--key_base64`/`--key` passphrase or `DB_OPS_SECRET_KEY`) and targets from `data/db_instances.json`, both resolved through `db_ops/lib/data_sources/`. Provide the `data/` directory and supply the key, or tasks will run without credentials.
 - SQL file paths in `sql_commands.json` are resolved relative to `TOOL_ROOT` and `REPO_ROOT`. Use absolute paths when packaging as EXE.
 
 ## Adding a SQL task at runtime (add-sql admin)
@@ -842,9 +879,9 @@ itself runs through `run-sql`, which already reached PostgreSQL. What did not wo
   (`lib.sql_text.split_postgresql_statements`). A `;` inside a string, a quoted name, a comment or a
   `$$` / `$tag$` body (a function, a `DO` block) is not a split. On the lab the same script came
   back as two sets and `affected_rows 1`. Each set is stored the way a SQL Server task's are.
-- **A PostgreSQL task takes no parameters yet.** Parameters become T-SQL `DECLARE @name` lines in
-  front of the script, which PostgreSQL cannot read, so `sql-command-add` refuses one by name.
-  Write the values into the script.
+- **A parameter is `:name` in the script**, bound by name (0.24.0,
+  [Parameters on Oracle and PostgreSQL](#parameters-on-oracle-and-postgresql-0240)). In 0.23.0 a
+  PostgreSQL task could declare none: parameters were T-SQL `DECLARE @name` lines.
 - **The whole task is one transaction**, as on the other engines: committed at the end, or run with
   `autocommit: true` for a task that manages its own (`VACUUM`, `CREATE INDEX CONCURRENTLY`).
 - **`timeout` is the server's `statement_timeout`**, set per session by `db_connect`, so a

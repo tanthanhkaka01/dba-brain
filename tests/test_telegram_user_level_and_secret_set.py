@@ -27,7 +27,7 @@ from pathlib import Path
 
 import pytest
 
-from db_ops import scaffold
+from db_ops.common import scaffold
 from db_ops.lib.secret_text import load_secret_text_file
 from db_ops.telegram.updates import set_user_level
 

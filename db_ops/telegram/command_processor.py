@@ -12,14 +12,16 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from db_ops.common import data_sources
+from db_ops.lib import data_sources
 from db_ops.lib.target_flags import is_record_active
 from db_ops.lib import field_names
 from db_ops.lib import node_role as node_role_rule
 from db_ops.lib.listing import active_only, choice_lines, hidden_note
 from db_ops.lib.secret_text import SECRET_KEY_ENV_VAR
 from db_ops.config import DEFAULT_CONFIG_PATH, load_config
-from db_ops.lib import common_cli
+from db_ops.transport import common_cli
+from db_ops.lib.common_cli import build_command, common_invocation
+from db_ops.lib.data_sources import request_fill
 from db_ops.lib import workflow_steps as ws
 # Reading a command message and writing one back is pure text, and `common` rebuilds a
 # command line from it for /spbot_list_my_commands. Re-exported so this module stays the
@@ -926,49 +928,31 @@ def prompt_condition_holds(
 
 
 def sql_tasks_listing(sql_id: str | int | None = None) -> dict[str, Any]:
-    """Ask the **sql_tasks app** what tasks exist, through its own CLI.
+    """What SQL tasks exist, read in-process by the reader the runner itself uses.
 
-    This app does not read ``sql_commands.json``. It used to, and then it disagreed with the app
-    that runs those tasks: whether a task counted as runnable was decided twice, and a task's
-    declared parameters were not part of the bot's picture at all — so ``/spbot_run_sql_task``
-    never asked for one and every run of a task that required a parameter failed. The owner
-    answers instead (``python -m db_ops.sql_tasks.cli list-tasks``), which is also the boundary
-    the rest of db_ops keeps: apps talk through ``common`` or through each other's CLI, never by
-    parsing each other's config.
+    This app does not parse ``sql_commands.json``: it used to, and then it disagreed with the app
+    that runs those tasks - whether a task counted as runnable was decided twice, and a task's
+    declared parameters were not part of the bot's picture at all, so ``/spbot_run_sql_task`` never
+    asked for one and every run of a task that required a parameter failed. Then it asked the
+    runner's CLI (``sql_tasks.cli list-tasks``): one app driving another's CLI (rules R42). Since
+    0.24.0 the reader is ``lib.sql_task_catalog`` - one definition, read by both, no process.
 
-    Returns the CLI's JSON object, or ``{"ok": False, "error": ...}``. Never raises: a listing
-    that cannot be produced is reported to the operator, and a prompt decision that cannot be
-    made falls back to not prompting — the behaviour that was correct for every task before
-    parameters existed.
+    Returns the listing, or ``{"ok": False, "error": ...}``. Never raises: a listing that cannot be
+    produced is reported to the operator, and a prompt decision that cannot be made falls back to
+    not prompting - the behaviour that was correct for every task before parameters existed.
     """
-    argv = [sys.executable, "-m", "db_ops.sql_tasks.cli", "list-tasks"]
-    if str(sql_id or "").strip():
-        argv += ["--sql-id", str(sql_id).strip()]
+    from db_ops.lib import sql_task_catalog
+    from db_ops.lib.paths import DEFAULT_DATA_DIR
+
+    wanted = str(sql_id or "").strip()
     try:
-        completed = subprocess.run(
-            argv, capture_output=True, text=True, timeout=60, cwd=str(TOOL_ROOT),
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
+        return dict(sql_task_catalog.collect_sql_tasks(
+            Path(DEFAULT_DATA_DIR).resolve(), sql_id=int(wanted) if wanted else None))
+    except (OSError, ValueError, RuntimeError) as exc:
         _dispatch_log(
-            None, f"telegram.command_processor.sql_tasks_cli.failed|error={safe_error_summary(exc)}",
+            None, f"telegram.command_processor.sql_tasks_listing.failed|error={safe_error_summary(exc)}",
             level="warning")
         return {"ok": False, "error": safe_error_summary(exc)}
-    if completed.returncode != 0 or not (completed.stdout or "").strip():
-        error = (completed.stderr or completed.stdout or "no output").strip()[:500]
-        _dispatch_log(
-            None,
-            f"telegram.command_processor.sql_tasks_cli.failed|exit={completed.returncode}|"
-            f"error={error}",
-            level="warning")
-        return {"ok": False, "error": error}
-    try:
-        return dict(json.loads(completed.stdout))
-    except (json.JSONDecodeError, TypeError, ValueError) as exc:
-        _dispatch_log(
-            None,
-            f"telegram.command_processor.sql_tasks_cli.badjson|error={safe_error_summary(exc)}",
-            level="warning")
-        return {"ok": False, "error": f"sql_tasks list-tasks did not answer with JSON: {exc}"}
 
 
 def sql_task_parameter_names(sql_id: str) -> list[str]:
@@ -1054,6 +1038,8 @@ def prompt_choice_text(parameter: dict[str, Any], parameters: list[dict[str, Any
         request[str(key)] = resolved
 
     try:
+        # The server's login is this node's to state (rules R09): common.cli reads no config.
+        request = request_fill.fill_request(command, request)
         success, data, _error = common_cli.run_allowing_failure(
             command, request, timeout_seconds=PROMPT_CHOICES_TIMEOUT_SECONDS)
     except Exception:  # noqa: BLE001 - listing is an aid; nothing here may block the prompt.
@@ -1121,7 +1107,7 @@ def skip_parameter_value(
 
 
 def _target_has_no_database(target_ip: str) -> bool:
-    from db_ops.common.data_sources import load_config_metric_targets
+    from db_ops.lib.data_sources import load_config_metric_targets
 
     try:
         targets = [item for item in load_config_metric_targets() if str(item.ip) == target_ip]
@@ -1645,7 +1631,7 @@ def execute_create_table_from_xlsx_command(*, command: SupportCommand,
     # customer database, and the request above is already the exact JSON that command takes — the
     # Telegram path and a shell caller hand over the same object.
     try:
-        data = common_cli.run("create-table-from-xlsx", request)
+        data = common_cli.run("create-table-from-xlsx", finish_common_request("create-table-from-xlsx", request))
     except common_cli.CommonCliError as exc:
         raise TelegramCommandError(str(exc), exit_code=1) from exc
 
@@ -1685,7 +1671,7 @@ def _describe_source(data: dict[str, Any]) -> str:
 
 def execute_list_server_id_command() -> dict[str, Any]:
     """Build the server-target listing for /spbot_list_server_id (reply via {result_listing})."""
-    from db_ops.common import data_sources as target_resolve
+    from db_ops.lib import data_sources as target_resolve
 
     targets = target_resolve.list_target_instances()
     return {
@@ -2064,7 +2050,7 @@ def execute_metric_toggle_command(*, command: SupportCommand, args: list[str]) -
     ``collector:<sql|cmd|docker|k8s>``, or one metric_code. The config write goes through
     ``python -m db_ops.common.cli metric-toggle`` — the same atomic ``db_instances.json`` update
     an operator gets at a shell, reached the same way, so the bot cannot drift from the CLI."""
-    from db_ops.lib import common_cli
+    from db_ops.transport import common_cli
 
     server_id = str(args[0]).strip() if len(args) >= 1 else ""
     state = str(args[1]).strip().lower() if len(args) >= 2 else ""
@@ -2395,8 +2381,9 @@ def execute_add_sql_task_command(*, command: SupportCommand, args: list[str]) ->
     Always returns a result dict (never raises) so the reply template can echo the outcome;
     ``result_status`` is ``OK`` or ``FAILED``.
     """
-    from db_ops.common import data_sources
-    from db_ops.lib import common_cli, task_output
+    from db_ops.lib import data_sources
+    from db_ops.lib import task_output
+    from db_ops.transport import common_cli
 
     def arg(position: int) -> str:
         return str(args[position - 1]).strip() if len(args) >= position else ""
@@ -2787,11 +2774,26 @@ def execute_cli_background_command(
             level="critical",
         )
         queue_command_reply(
-            store=store, row=row, command=command, text=message, source_id=source_id, status="failed",
+            store=store, row=row, command=command, message_text=message, source_id=source_id, status="failed",
         )
         return {"_queued_reply_count": 1, "status": "FAILED_NO_KEY"}
 
     argv = build_cli_argv(config, values)
+    # A `common.cli` action is finished here (rules R09) and its request sent on the child's stdin:
+    # it now carries a password, and an argument is readable by every process on the host.
+    stdin_payload: bytes | None = None
+    invocation = common_invocation(argv)
+    if invocation is not None and finishes(invocation.command):
+        try:
+            finished = finish_common_request(invocation.command, invocation.request, store=store)
+        except TelegramCommandError as exc:
+            _dispatch_log(dlog, f"dispatch request_unfinished command={command.command_text} "
+                                f"error={safe_error_summary(exc)}", level="critical")
+            queue_command_reply(store=store, row=row, command=command, message_text=str(exc),
+                                source_id=source_id, status="failed")
+            return {"_queued_reply_count": 1, "status": "FAILED_REQUEST"}
+        argv = [*argv[:invocation.request_index], "-", *argv[invocation.request_index + 1:]]
+        stdin_payload = json.dumps(finished, ensure_ascii=False).encode("utf-8")
     working_dir = resolve_working_dir(str(config.get("working_dir") or "tools/db_ops"))
     timeout_seconds = int(config.get("timeout_seconds") or 1800)
     _dispatch_log(
@@ -2850,9 +2852,16 @@ def execute_cli_background_command(
             popen_kwargs["creationflags"] = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
         else:
             popen_kwargs["start_new_session"] = True
+        if stdin_payload is not None:
+            popen_kwargs["stdin"] = subprocess.PIPE
         popen = subprocess.Popen(launch_argv, **popen_kwargs)  # noqa: S603
         popen_kwargs["stdout"].close()
         popen_kwargs["stderr"].close()
+        if stdin_payload is not None and popen.stdin is not None:
+            # Written and closed at once: the wrapper hands its stdin to the command, which reads
+            # the whole request before it does anything, so nothing here waits on the child.
+            popen.stdin.write(stdin_payload)
+            popen.stdin.close()
     except Exception as exc:
         try:
             os.close(stdout_fd)
@@ -3465,7 +3474,7 @@ def _inject_resolved_target(values: dict[str, Any], *, spec: str) -> None:
     """Resolve a unified target spec (server_id or '<db_type> <ip> [port]') and inject the
     canonical ``server_id`` (plus ip/db_type/port) into the CLI value map, so a command can be
     built with ``--server-id {server_id}`` from whichever form the user typed."""
-    from db_ops.common import data_sources as target_resolve
+    from db_ops.lib import data_sources as target_resolve
 
     try:
         instance = target_resolve.resolve_target_instance(spec)
@@ -3493,11 +3502,70 @@ def command_env(config: dict[str, Any], values: dict[str, Any]) -> dict[str, str
     return env
 
 
+#: `common.cli` commands this app finishes from its own store, beyond what `request_fill` fills from
+#: `data/`: `self-status`'s last-run column is in `job_runs`, which `common` may not open (R04, R09).
+FINISHED_FROM_THE_STORE = frozenset({"self-status"})
+
+
+def finishes(command: str) -> bool:
+    """Whether a configured ``common.cli`` action is finished here before it runs."""
+    return command in request_fill.FILLS or command in FINISHED_FROM_THE_STORE
+
+
+def finish_common_request(command: str, request: dict[str, Any], *,
+                          store: DbOpsStore | None = None) -> dict[str, Any]:
+    """``request`` with what ``common.cli <command>`` needs stated, from this node's ``data/``.
+
+    Since 0.24.0 ``common.cli`` reads no configuration (rules R09): the bot's actions name a
+    ``server_id``, and the login, the policy and the confirmation rules behind it are this app's to
+    send. The result carries a password, so it goes on stdin (``db_ops.transport``), never argv.
+    """
+    if command == "self-status":
+        return with_last_runs(request, store=store)
+    try:
+        return request_fill.fill_request(command, request)
+    except request_fill.RequestFillError as exc:
+        raise TelegramCommandError(str(exc), exit_code=2) from exc
+
+
+def with_last_runs(request: dict[str, Any], *, store: DbOpsStore | None = None,
+                   data_dir: str | Path | None = None) -> dict[str, Any]:
+    """``self-status``'s request with each app command's newest run of the last day stated.
+
+    Until 0.24.0 ``/spbot_self_status`` ran ``db.cli self-status``, a second door to the report
+    that could read the store; the report is ``common``'s alone now (rules R43), so the bot states
+    the column. A store that cannot be read costs the column and says why - never the reply, which
+    is most wanted exactly when something is down.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from db_ops.db import ops_status
+
+    finished = dict(request)
+    if "last_runs" in finished:
+        return finished
+    try:
+        commands = ops_status.load_app_commands(Path(data_dir or DEFAULT_DATA_DIR))
+        codes = sorted({str(c.get("app_command_id") or c.get("app_code") or "") for c in commands}
+                       - {""})
+        store = store or DbOpsStore.from_config(load_config(DEFAULT_CONFIG_PATH))
+        since = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        finished["last_runs"] = ops_status.latest_runs(store, codes, since=since)
+    except Exception as exc:  # noqa: BLE001 - the column is optional; the report is not.
+        first = (str(exc).splitlines() or [type(exc).__name__])[0]
+        finished["store_error"] = f"store not read: {first[:160]}"
+    return finished
+
+
 def run_configured_cli_command(*, command: SupportCommand, values: dict[str, Any]) -> dict[str, Any]:
     config = dict(command.action_config or {})
     argv = build_cli_argv(config, values)
     working_dir = resolve_working_dir(str(config.get("working_dir") or "tools/db_ops"))
     timeout_seconds = int(config.get("timeout_seconds") or 1800)
+    invocation = common_invocation(argv)
+    if invocation is not None and finishes(invocation.command):
+        return _run_finished_common_command(invocation.command, invocation.request,
+                                            timeout_seconds=timeout_seconds)
     completed = subprocess.run(  # noqa: S603 - argv is built without shell and comes from trusted command config.
         argv,
         cwd=working_dir,
@@ -3519,6 +3587,28 @@ def run_configured_cli_command(*, command: SupportCommand, values: dict[str, Any
     if completed.returncode != 0:
         error_summary = result.get("error_summary") or result.get("stderr") or result.get("stdout") or f"CLI failed with exit code {completed.returncode}"
         raise CliCommandError(str(error_summary), exit_code=completed.returncode, result=sanitized_cli_result(result))
+    return sanitized_cli_result(result)
+
+
+def _run_finished_common_command(command: str, request: dict[str, Any], *,
+                                 timeout_seconds: int) -> dict[str, Any]:
+    """A configured ``common.cli`` action, its request finished here and sent on stdin.
+
+    Read back exactly as the configured command line was - the same stdout, stderr and exit code -
+    so the action's ``success_text: "{stdout}"`` and its failure reply do not change.
+    """
+    started, why = common_cli.spawn(command, finish_common_request(command, request),
+                                    timeout_seconds=timeout_seconds)
+    if started is None:
+        raise CliCommandError(why, exit_code=1, result={"error_summary": why})
+    result = parse_cli_result(stdout=started.stdout, stderr=started.stderr)
+    result.update({"exit_code": started.returncode,
+                   "argv": list(build_command(command, {}).argv), "working_dir": ""})
+    if started.returncode != 0:
+        error_summary = (result.get("error_summary") or result.get("stderr") or result.get("stdout")
+                         or f"CLI failed with exit code {started.returncode}")
+        raise CliCommandError(str(error_summary), exit_code=started.returncode,
+                              result=sanitized_cli_result(result))
     return sanitized_cli_result(result)
 
 

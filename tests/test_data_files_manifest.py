@@ -24,7 +24,7 @@ from conftest import shipped_data_dir
 from db_ops.db import config_sync
 from db_ops.lib import data_files
 from db_ops.lib.paths import DEFAULT_DATA_DIR
-from db_ops.scaffold import PACKAGED_DEFAULTS
+from db_ops.common.scaffold import PACKAGED_DEFAULTS
 from db_ops.lib.data_files import (
     KNOWN_TRANSFERS,
     TRANSFER_FIELD_MERGE,

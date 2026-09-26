@@ -1,8 +1,8 @@
 """Restoring one named backup file: full, then diff, then log — the caller drives the chain.
 
-`restore-database` decides a whole chain for you. These three are the level below it: the caller
-already knows which file it wants applied, having chosen it with `list-backup-files`, and asks for
-exactly that. That is the API a recovery actually needs — an operator recovering to a moment wants
+The caller decides the chain; these apply it one file at a time - the drills through
+`restore-by-id`, having chosen each file with `list-backup-files`, and the nightly SMB restore
+(`restore-latest`), having chosen them off its staged share. Each asks for exactly that file. That is the API a recovery actually needs — an operator recovering to a moment wants
 to see each step land before deciding the next, not hand over a directory and hope.
 
 **The three engines do not mean the same thing by "restore one file", and the difference is not

@@ -947,7 +947,7 @@ CREATE INDEX IF NOT EXISTS ix_metric_results_importance ON metric_results(import
 
 CREATE TABLE IF NOT EXISTS metric_results_archive
 (
-    result_id INTEGER,
+    result_id INTEGER PRIMARY KEY,
     run_id INTEGER,
     target_id TEXT,
     server_id TEXT,

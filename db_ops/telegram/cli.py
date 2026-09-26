@@ -23,7 +23,6 @@ from db_ops.telegram.command_processor import (
     process_pending_conversation_messages,
 )
 from db_ops.telegram.commands import save_command_messages_from_messages
-from db_ops.telegram.metrics_reports import queue_metrics_reports
 from db_ops.telegram.send_queue import send_one_message, send_pending_messages
 from db_ops.telegram import bot_info, get_updates, send_message
 from db_ops.telegram.updates import add_group, set_group_level, set_user_level
@@ -170,11 +169,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     send_one_parser.add_argument("--retry-count", type=int, default=3, help="Retry count. Default: 3.")
     send_one_parser.set_defaults(telegram_function=send_one_message)
 
-    metrics_parser = subparsers.add_parser("queue-metrics-reports", help="Compatibility workflow for reports queue-metrics-reports.")
-    metrics_parser.add_argument("--summary-limit", type=int, default=40, help="Maximum alert detail lines per metrics report.")
-    metrics_parser.add_argument("--target-id", help="Only queue metrics reports for one target_id.")
-    metrics_parser.add_argument("--dedupe-seconds", type=int, default=300, help="Do not queue the same metrics report level again within this many seconds.")
-    metrics_parser.set_defaults(telegram_function=queue_metrics_reports)
+    # `queue-metrics-reports` was a compatibility alias that ran `reports.cli queue-metrics-reports`:
+    # one app driving another's CLI (rules R42), used by no schedule or node. Removed in 0.24.0 -
+    # the command is `reports`'.
 
     # Routing lookups, for the apps that need to know where an alert goes. They answer from
     # config alone - no bot call, no store - so they return before main() sets up logging and

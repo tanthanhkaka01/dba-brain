@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from db_ops.common import oracle_bridge, sql_run
+from db_ops.lib import data_sources
 from db_ops.lib.target_profile import TargetProfile
 from db_ops.metrics import executor
 from db_ops.metrics.models import MetricTarget
@@ -162,7 +163,11 @@ def test_a_metrics_row_cap_reaches_the_legacy_tool_like_it_reaches_every_other_e
         captured.update(kwargs)
         return []
 
-    monkeypatch.setattr(executor.oracle_bridge, "run_bridge_query", fake_run_bridge_query)
+    # The bridge call is made in `common.cli metric-batch` since 0.24.0 (in this process, by
+    # conftest): the cap has to survive the request as well as reach the tool.
+    from db_ops.common import oracle_bridge
+
+    monkeypatch.setattr(oracle_bridge, "run_bridge_query", fake_run_bridge_query)
 
     executor.execute_metric_sql(
         target=MetricTarget(
@@ -227,28 +232,41 @@ def test_an_unknown_method_names_the_instance_it_came_from():
         oracle_bridge.normalize_sql_access({"method": "ssh"}, label="ACME-192-0-2-236")
 
 
+#: An 8i target as its caller states it - run-sql reads no configuration since 0.24.0 (rules R09).
+_LEGACY = {"db_type": "oracle", "host": "192.0.2.236", "port": 1521, "service_name": "LEGACYDB",
+           "username": "sys", "password": "x", "role": "SYSDBA", "server_id": "ACME-192-0-2-236",
+           "credential_name": "oracle_2.236_LEGACYDB_sys", "sql_access": {"method": "subprocess"}}
+
+
+def _legacy_resolved(**overrides):
+    return {
+        "server_id": "ACME-192-0-2-236", "db_type": "oracle", "database_name": "LEGACYDB",
+        "credential_name": "oracle_2.236_LEGACYDB_sys", "username": "sys", "password": "x",
+        "credential_role": "SYSDBA", "ip": "192.0.2.236", "port": 1521,
+        "service_name": "LEGACYDB", "instance_name": "LEGACYDB",
+        "sql_access": {"method": "subprocess"},
+        "profile": TargetProfile(db_type="oracle", major_version=8),
+        "tool": {"tool": "subprocess", "chosen_by": "config", "reason": "legacy bridge"},
+        **overrides,
+    }
+
+
+def _no_store(*_args, **_kwargs):
+    raise AssertionError("run-sql opened the secret store - it reads no configuration (rules R09)")
+
+
 def test_run_sql_routes_a_legacy_target_through_the_tool_and_reports_the_normal_shape(monkeypatch):
     """An export must not have to know which transport answered it."""
-    monkeypatch.setattr(
-        sql_run, "resolve_sqlserver_target",
-        lambda spec, data_dir=None, database="", credential_name="", sql_access=None,
-        profile=None, driver="", oracle_client_mode="": {
-            "server_id": "ACME-192-0-2-236", "db_type": "oracle", "database_name": "LEGACYDB",
-            "credential_name": "oracle_2.236_LEGACYDB_sys", "username": "sys", "password": "x",
-            "credential_role": "SYSDBA", "ip": "192.0.2.236", "port": 1521,
-            "service_name": "LEGACYDB", "instance_name": "LEGACYDB",
-            "sql_access": {"method": "subprocess"},
-            "profile": TargetProfile(db_type="oracle", major_version=8),
-            "tool": {"tool": "subprocess", "chosen_by": "config", "reason": "legacy bridge"},
-        })
-    monkeypatch.setattr(sql_run.data_sources, "load_secret_text", lambda _dir: {})
+    monkeypatch.setattr(sql_run, "resolve_connection_spec", lambda spec, **_kw: _legacy_resolved())
+    monkeypatch.setattr(data_sources, "load_secret_text", _no_store)
     monkeypatch.setattr(
         oracle_bridge, "run_query",
         lambda **kwargs: {"columns": ["N"], "rows": [[1], [2]], "row_count": 2,
                           "truncated": False, "db_version": "8.1.7.0.0",
                           "transport": "subprocess"})
 
-    result = sql_run.run_sql({"target": "ACME-192-0-2-236", "sql": "select 1 from dual"})
+    result = sql_run.run_sql({"target": "ACME-192-0-2-236", "sql": "select 1 from dual",
+                              "connection": _LEGACY})
 
     assert result["ok"] is True
     assert result["columns"] == ["N"] and result["row_count"] == 2
@@ -258,23 +276,28 @@ def test_run_sql_routes_a_legacy_target_through_the_tool_and_reports_the_normal_
     assert result["committed"] is False and result["affected_rows"] == 0
 
 
+def test_the_bridges_signing_secret_is_the_requests_and_the_store_is_never_opened(monkeypatch):
+    """The bridge's token is signed with a stored secret. run-sql takes it from the request - the
+    caller read the store (``request_fill.bridge_secrets``) - so this process opens none."""
+    seen = {}
+    monkeypatch.setattr(sql_run, "resolve_connection_spec", lambda spec, **_kw: _legacy_resolved(
+        sql_access={"method": "api", "bridge_url": "http://192.0.2.246:8765/query", "secret_ref": "BRIDGE"}))
+    monkeypatch.setattr(data_sources, "load_secret_text", _no_store)
+    monkeypatch.setattr(oracle_bridge, "run_query", lambda **kwargs: seen.update(kwargs) or {
+        "columns": [], "rows": [], "row_count": 0, "truncated": False, "db_version": "", "transport": "api"})
+
+    sql_run.run_sql({"target": "ACME-192-0-2-236", "sql": "select 1 from dual", "connection": _LEGACY,
+                     "secrets": {"BRIDGE": "sign-me"}})
+
+    assert seen["secrets"] == {"BRIDGE": "sign-me"}
+
+
 def test_more_rows_than_the_cap_are_reported_as_truncated(monkeypatch):
     """The tool is asked for one row more than the cap, so 'there were more' is a fact rather
     than a guess about a result set that happens to be exactly max_rows long."""
     asked = {}
-
-    monkeypatch.setattr(
-        sql_run, "resolve_sqlserver_target",
-        lambda spec, data_dir=None, database="", credential_name="", sql_access=None,
-        profile=None, driver="", oracle_client_mode="": {
-            "server_id": "ACME-192-0-2-236", "db_type": "oracle", "database_name": "LEGACYDB",
-            "credential_name": "c", "username": "sys", "password": "x", "credential_role": "",
-            "ip": "192.0.2.236", "port": 1521, "service_name": "LEGACYDB",
-            "sql_access": {"method": "subprocess"},
-            "profile": TargetProfile(db_type="oracle", major_version=8),
-            "tool": {"tool": "subprocess", "chosen_by": "config", "reason": "legacy bridge"},
-        })
-    monkeypatch.setattr(sql_run.data_sources, "load_secret_text", lambda _dir: {})
+    monkeypatch.setattr(sql_run, "resolve_connection_spec", lambda spec, **_kw: _legacy_resolved())
+    monkeypatch.setattr(data_sources, "load_secret_text", _no_store)
 
     def fake_run_query(**kwargs):
         asked.update(kwargs)
@@ -284,7 +307,7 @@ def test_more_rows_than_the_cap_are_reported_as_truncated(monkeypatch):
     monkeypatch.setattr(oracle_bridge, "run_query", fake_run_query)
 
     result = sql_run.run_sql(
-        {"target": "ACME-192-0-2-236", "sql": "select 1 from dual", "max_rows": 2},
+        {"target": "ACME-192-0-2-236", "sql": "select 1 from dual", "max_rows": 2, "connection": _LEGACY},
     )
 
     assert asked["limit"] == 3
@@ -296,19 +319,7 @@ def test_the_request_may_override_the_instances_transport(monkeypatch):
     """What lets one run be pointed at a bridge on this machine without editing the deployed
     inventory — the same escape hatch run-cmd gives for cmd_access."""
     seen = {}
-    monkeypatch.setattr(
-        sql_run.target_resolve, "resolve_target_instance",
-        lambda spec, data_dir=None: {
-            "server_id": "ACME-192-0-2-236", "db_type": "oracle", "ip": "192.0.2.236",
-            "port": 1521, "service_name": "LEGACYDB", "default_credential_name": "c",
-            "sql_access": {"method": "api", "bridge_url": "http://192.0.2.246:8765/query"},
-        })
-    monkeypatch.setattr(
-        sql_run, "_find_sqlserver_credential",
-        lambda instance, data_dir=None, credential_name="", db_type="": {
-            "credential_name": "c", "username": "sys", "role": "SYSDBA"})
-    monkeypatch.setattr(sql_run.data_sources, "load_secret_text", lambda _dir: {})
-    monkeypatch.setattr(sql_run.sql_execution, "resolve_password", lambda *_args: "x")
+    monkeypatch.setattr(data_sources, "load_secret_text", _no_store)
 
     def fake_run_query(**kwargs):
         seen.update(kwargs)
@@ -319,6 +330,7 @@ def test_the_request_may_override_the_instances_transport(monkeypatch):
 
     sql_run.run_sql({
         "target": "ACME-192-0-2-236", "sql": "select 1 from dual",
+        "connection": {**_LEGACY, "sql_access": {"method": "api", "bridge_url": "http://192.0.2.246:8765/query"}},
         "sql_access": {"method": "api", "bridge_url": "http://127.0.0.1:8765/query"},
     })
 
@@ -496,37 +508,30 @@ def test_a_task_inherits_its_servers_transport_from_db_instances(tmp_path):
 # /spbot_run_sql_task has to ask for the parameters the chosen task requires
 # --------------------------------------------------------------------------- #
 def _run_sql_task_command(monkeypatch, declared_names):
-    """The real command config, with the sql_tasks CLI faked to declare `declared_names`.
+    """The real command config, with the task catalog answering that task 19 declares `declared_names`.
 
-    The fake is at the *process boundary* — what the CLI printed — not at
+    The fake is at the *boundary* - what the configuration reader answers - not at
     `sql_task_parameter_names`. Stubbing that function is what let the first version of this fix
     ship broken: it called a helper that did not exist, the NameError was swallowed, and every
-    test still passed because none of them ran the real lookup.
+    test still passed because none of them ran the real lookup. (The boundary was a process until
+    0.24.0, when the reader moved into `lib.sql_task_catalog`; rules R42.)
     """
-    from db_ops.telegram import command_processor
+    from db_ops.lib import sql_task_catalog
 
-    class _Completed:
-        returncode = 0
-        stderr = ""
-        stdout = json.dumps({
-            "ok": True, "command_count": 1, "target_count": 1, "hidden_count": 0,
-            "sql_tasks": [{
-                "sql_id": 19, "sql_code": "ORACLE-019-GET_JOB_DETAILS",
-                "parameter_names": list(declared_names),
-                "required_parameter_names": list(declared_names),
-                "parameters": [{"name": name, "required": True} for name in declared_names],
-                "targets": [],
-            }],
-        })
+    def fake_collect(_data_dir, *, sql_id=None, include_inactive=False):
+        if sql_id != 19:
+            return {"ok": True, "command_count": 0, "target_count": 0, "hidden_count": 0,
+                    "sql_tasks": []}
+        return {"ok": True, "command_count": 1, "target_count": 1, "hidden_count": 0,
+                "sql_tasks": [{
+                    "sql_id": 19, "sql_code": "ORACLE-019-GET_JOB_DETAILS",
+                    "parameter_names": list(declared_names),
+                    "required_parameter_names": list(declared_names),
+                    "parameters": [{"name": name, "required": True} for name in declared_names],
+                    "targets": [],
+                }]}
 
-    class _Empty(_Completed):
-        stdout = json.dumps({"ok": True, "command_count": 0, "target_count": 0,
-                             "hidden_count": 0, "sql_tasks": []})
-
-    def fake_run(argv, **_kwargs):
-        return _Completed() if "19" in argv else _Empty()
-
-    monkeypatch.setattr(command_processor.subprocess, "run", fake_run)
+    monkeypatch.setattr(sql_task_catalog, "collect_sql_tasks", fake_collect)
     return [
         {"name": "sql_id", "source": "arg", "position": 1, "required": True,
          "prompt_text": "Which sql_id?"},
@@ -645,42 +650,35 @@ def test_a_task_with_no_parameters_reports_none(tmp_path):
     assert payload["sql_tasks"][0]["parameter_names"] == []
 
 
-def test_the_bot_reads_the_parameters_out_of_the_cli_answer(monkeypatch):
-    """Exercises the real lookup end to end (only the subprocess is faked). The first version of
-    this call chain used a helper that did not exist; every test passed because they stubbed the
-    function being tested rather than the process boundary."""
+def test_the_bot_reads_the_parameters_out_of_the_task_configuration(monkeypatch, tmp_path):
+    """End to end, nothing faked but where the data folder is: the real configuration on disk, the
+    real reader, the real lookup. The first version of this call chain used a helper that did not
+    exist; every test passed because they stubbed the function being tested. And no process: the
+    bot reads the catalog in-process since 0.24.0 (rules R42)."""
+    import subprocess
+
+    from db_ops.lib import paths
     from db_ops.telegram import command_processor
 
-    captured = {}
+    def no_process(*_args, **_kwargs):
+        raise AssertionError("the bot started a process to learn a task's parameters")
 
-    class _Completed:
-        returncode = 0
-        stderr = ""
-        stdout = json.dumps({"ok": True, "sql_tasks": [
-            {"sql_id": 19, "parameter_names": ["job_no"]}]})
-
-    def fake_run(argv, **_kwargs):
-        captured["argv"] = argv
-        return _Completed()
-
-    monkeypatch.setattr(command_processor.subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "run", no_process)
+    monkeypatch.setattr(paths, "DEFAULT_DATA_DIR", _write_task_config(tmp_path))
 
     assert command_processor.sql_task_parameter_names("19") == ["job_no"]
-    assert captured["argv"][1:] == [
-        "-m", "db_ops.sql_tasks.cli", "list-tasks", "--sql-id", "19"]
 
 
-def test_a_cli_that_fails_does_not_wedge_the_conversation(monkeypatch):
+def test_a_listing_that_fails_does_not_wedge_the_conversation(monkeypatch):
     """No prompt is the behaviour every task had before parameters existed; a broken listing must
     not stop the bot answering."""
+    from db_ops.lib import sql_task_catalog
     from db_ops.telegram import command_processor
 
-    class _Failed:
-        returncode = 1
-        stdout = ""
-        stderr = "boom"
+    def unreadable(*_args, **_kwargs):
+        raise ValueError("sql_commands.json is not valid JSON")
 
-    monkeypatch.setattr(command_processor.subprocess, "run", lambda argv, **_k: _Failed())
+    monkeypatch.setattr(sql_task_catalog, "collect_sql_tasks", unreadable)
 
     assert command_processor.sql_task_parameter_names("19") == []
 

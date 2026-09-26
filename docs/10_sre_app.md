@@ -141,7 +141,9 @@ Pushes the Windows host public key into `~/.ssh/authorized_keys` on **bastion-01
 - `check-mysql-cluster` and `check-postgresql-ha` route through bastion via SSH ProxyJump — the Windows host never connects directly to MySQL/PostgreSQL nodes.
 - bastion's own key is deployed to MySQL nodes in Step 6 — that is the only key MySQL nodes need.
 
-`BatchMode=yes` is set on all SSH calls (no interactive password prompt), so the Windows host needs key-based auth on bastion. This is the only node that requires the host key.
+Every SSH call is a key login with no password prompt, so the Windows host needs key-based auth on bastion. This is the only node that requires the host key.
+
+**How `sre` reaches the lab (0.24.0).** `sre` starts no `ssh` of its own: every call above hands a request to **`common.cli run-cmd`** through `transport` (rules R10) - `access` names the bastion, the login (`guest_user`) and the key (`sre.credentials.ssh_identity_file`, or the agent's keys when it is unset), and a hop to a node rides inside `command` as a nested `ssh` run on the bastion. The request goes in on stdin, so the MySQL admin and guest passwords a check carries no longer show on this machine's process list. Two consequences: the lab needs the `ssh` extra (paramiko) - `pip install '<package>[ssh]'` - and the connect timeout is still 10 seconds while a command stays unbounded, as `ssh` had it. A step that could not reach the bastion at all exits **255**, the code `ssh` used, which is what the wait-for-bastion retry keys on.
 
 ---
 
@@ -477,7 +479,7 @@ Creates and attaches 5 shared VMDKs in `D:\VMs\oracle_rac_shared\`:
 
 | Disk | Size | Use |
 |---|---|---|
-| ocr01/02/03 | 10 GB Ã— 3 | OCR — Oracle Cluster Registry (ASM diskgroup) |
+| ocr01/02/03 | 10 GB × 3 | OCR — Oracle Cluster Registry (ASM diskgroup) |
 | data01 | 50 GB | DATA diskgroup |
 | fra01 | 30 GB | FRA diskgroup |
 
@@ -863,7 +865,7 @@ Use this flow when the DB VMs already exist and are reachable on the network but
 | start-bastion | `run-powershell 03-start-vms -- -VmName bastion-01` | bastion-01 | No |
 | fix-bastion-identity | `run-powershell 04-fix-guest-identity -- -VmName bastion-01` | bastion-01 | No |
 | deploy-host-key-bastion | `run-powershell 08-deploy-host-ssh-key -- -VmName bastion-01` | bastion-01 | No |
-| repo-sync-bastion | `scp` to bastion IP + `ssh bastion-IP` extract | None (SCP/SSH only) | No |
+| repo-sync-bastion | `common push-file` to bastion IP (sha256 checked on both ends) + `ssh bastion-IP` extract | None (SFTP/SSH only) | No |
 | bastion-key-to-sql-nodes | `ssh bastion-IP` → `sshpass ssh <sql-ip>` | None (SSH only) | SSH+password only |
 | bootstrap-bastion-ansible | `run-bastion-script bootstrap-bastion-ansible -- sqlserver` | None (SSH only) | Via Ansible key-auth |
 | playbook-sqlserver-ag | `run-bastion-playbook sqlserver-ag.yml` | None (SSH only) | Via Ansible key-auth |
@@ -1092,7 +1094,7 @@ python -m db_ops.sre.cli run-powershell stop-all-running-vms
 
 ## E2E Test Runner
 
-`tests/sre_e2e_runner.py` runs the full provisioning â†’ verify â†’ teardown sequence for each cluster group. Each group is a self-contained test case executed by the Python runner — no manual step-by-step needed.
+`tests/sre_e2e_runner.py` runs the full provisioning → verify → teardown sequence for each cluster group. Each group is a self-contained test case executed by the Python runner — no manual step-by-step needed.
 
 **Working directory:** the repository root (`db_ops`)
 
@@ -1210,7 +1212,7 @@ Teardown: `stop-vms -VmName bastion-01` (runs after all DB groups).
 | 1 | set-resources | `02-set-vm-resources -Group oracle_rac -CpuCount 4 -MemoryGB 12` |
 | 1 | add-shared-disks | `08-add-oracle-shared-disks` |
 | 1 | start-vms | `03-start-vms -Group oracle_rac` |
-| — | IP discovery | ARP scan â†’ MACâ†’IP map for fix-identity |
+| — | IP discovery | ARP scan → MAC→IP map for fix-identity |
 | 2 | fix-identity | `04-fix-guest-identity -Group oracle_rac -CurrentIpMapJson ...` |
 | 2 | bootstrap-bastion | `07-bootstrap-bastion-ansible -TargetGroup oracle_rac` |
 | 2 | bootstrap-ansible | `run-bastion-script bootstrap-bastion-ansible oracle_rac` |
@@ -1229,7 +1231,7 @@ Teardown: `stop-vms -VmName bastion-01` (runs after all DB groups).
 | 1 | clone-vms | `01-clone-vms -Group oracle_dg -Template tpl-oraclelinux-r9u6` |
 | 1 | set-resources | `02-set-vm-resources -Group oracle_dg -CpuCount 4 -MemoryGB 16` |
 | 1 | start-vms | `03-start-vms -Group oracle_dg` |
-| — | IP discovery | ARP scan â†’ MACâ†’IP map |
+| — | IP discovery | ARP scan → MAC→IP map |
 | 2 | fix-identity | `04-fix-guest-identity -Group oracle_dg -CurrentIpMapJson ...` |
 | 2 | bootstrap-bastion | `07-bootstrap-bastion-ansible -TargetGroup oracle_dg` |
 | 2 | bootstrap-ansible | `run-bastion-script bootstrap-bastion-ansible oracle_dg` |
@@ -1445,7 +1447,7 @@ python -m db_ops.sre.cli check-mysql-cluster
 # PostgreSQL: 1 primary + 2 streaming replicas via psql
 python -m db_ops.sre.cli check-postgresql-ha
 
-# Dry-run: print SSH commands without executing
+# Dry-run: print the run-cmd request each check would send, passwords masked as ***
 python -m db_ops.sre.cli check-mysql-cluster --dry-run
 python -m db_ops.sre.cli check-shared-vms --dry-run
 ```

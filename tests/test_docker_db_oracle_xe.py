@@ -18,7 +18,7 @@ import pytest
 from db_ops.common import db_connect
 from db_ops.common.docker_db import healthcheck, templates
 from db_ops.lib.docker_db_spec import ENGINE_META, HA_SUPPORTED_ENGINES, DockerDbSpec
-from db_ops.sre.docker_db.register_config import build_connection_entry
+from db_ops.lib.docker_db_registry import build_connection_entry
 
 
 def _spec(**over):

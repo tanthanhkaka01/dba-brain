@@ -29,7 +29,7 @@ from db_ops.db import cli
 #: deliberately not in scope: they provision and migrate a store, they are not the tool's API.
 STORE_COMMANDS = ["queue-telegram-message", "ops-status", "restore-drill-status",
                   "sql-run-history", "telegram-command-history", "sync-config", "config-items",
-                  "export-config", "run-app", "self-status"]
+                  "export-config", "run-app"]
 
 
 def test_the_command_list_matches_the_dispatcher() -> None:

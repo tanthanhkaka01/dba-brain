@@ -12,7 +12,7 @@ server (e.g. lab VMs with no metrics) untouched.
 
 from __future__ import annotations
 from db_ops.reports.server_report import QUERY_STORE_CODE  # noqa: F401 - one definition, see that module
-from db_ops.common import data_sources
+from db_ops.lib import data_sources
 from db_ops.lib.coerce import as_float
 from db_ops.lib.inventory_render import (  # moved to common: shared with control
     DISK_CRIT_PCT,

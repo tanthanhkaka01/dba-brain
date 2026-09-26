@@ -5,8 +5,8 @@ and nothing at all about memory. Every memory question about this estate was the
 running a DMV by hand — and the conclusion reached that way did not survive reading the same
 counter a second time:
 
-    "PLE hôm nay 54s so với 447s hôm qua — tệ hơn — mà engine lại nhanh hơn."
-    ... "Đọc lại chính counter đó ra 447 (per-NUMA: 378/391/476/721)."
+    "PLE today 54s against 447s yesterday - worse - and yet the engine is faster."
+    ... "Reading that same counter again gives 447 (per-NUMA: 378/391/476/721)."  (translated)
 
 Three separate mistakes are available to a page that prints one memory number, and this file is
 about all three:

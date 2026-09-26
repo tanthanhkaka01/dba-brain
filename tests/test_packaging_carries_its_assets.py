@@ -33,7 +33,7 @@ MUST_BE_IN_THE_WHEEL: tuple[tuple[str, str], ...] = (
     ("db_ops/metrics/collectors/sqlserver/001_sqlserver_instance_status.sql", "a metric's query"),
     ("db_ops/common/backup_scripts/sqlserver/mssql_backup_database.sh", "a backup script"),
     # scaffold reads it at import, so a wheel without it fails at the first command.
-    ("db_ops/agents_guide.md", "the AGENTS.md init writes and dbabrain guide prints"),
+    ("db_ops/common/agents_guide.md", "the AGENTS.md init writes and dbabrain guide prints"),
 )
 
 
@@ -102,7 +102,7 @@ def test_every_file_init_writes_from_the_package_is_in_the_wheel(tmp_path: Path)
     PACKAGED_DEFAULTS, left out of `package-data`, found only by building the wheel for a fresh-root
     test. The list is derived from the map itself, so the next one cannot be forgotten the same way.
     """
-    from db_ops import scaffold
+    from db_ops.common import scaffold
 
     names = _wheel_names(tmp_path)
     missing = sorted(f"db_ops/{source}" for source in scaffold.PACKAGED_DEFAULTS.values()

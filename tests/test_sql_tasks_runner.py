@@ -5,8 +5,10 @@ import pytest
 
 from db_ops.lib.sql_access import is_legacy as sql_access_is_legacy
 from db_ops.lib.time_window import TimeWindow
-from db_ops.common import data_sources, sql_execution
+from db_ops.common import sql_execution
+from db_ops.lib import data_sources
 from db_ops.sql_tasks import runner
+from db_ops.lib import sql_task_catalog
 from db_ops.sql_tasks.runner import parse_args, run_sql_id_tasks
 
 
@@ -322,11 +324,11 @@ def test_two_instances_on_one_server_refuse_to_guess_a_credential(tmp_path):
     # (common.data_sources) since 2026-08-15.
     defaults = runner.load_default_credential_names(data_sources.load_db_instances(data_dir))
 
-    loose = runner._target_default_key(
+    loose = sql_task_catalog._target_default_key(
         server_id="ACME-10-0-0-9", db_type="sqlserver", service_name="", instance_name="")
     assert defaults[loose] == runner._AMBIGUOUS_CREDENTIAL
     # The named instances still resolve exactly.
-    named = runner._target_default_key(
+    named = sql_task_catalog._target_default_key(
         server_id="ACME-10-0-0-9", db_type="sqlserver", service_name="prod",
         instance_name="mssqlserver")
     assert defaults[named] == "cred_prod"
@@ -429,7 +431,10 @@ def test_an_oracle_task_takes_the_same_path_and_carries_its_transport(monkeypatc
     )
 
     assert not sql_access_is_legacy(seen["sql_access"])   # a direct target, so binds
-    assert "params" in seen                  # bound, because this one is not the legacy bridge
+    # By name, where the script says :name - never the T-SQL DECLARE prelude, which reached Oracle
+    # as it was and failed every such task at its first run (0.23.0 section 1.55). This command
+    # declares no parameters, so nothing is bound at all.
+    assert "prelude" not in seen and "params" not in seen and "named_params" not in seen
 
 
 def test_every_result_set_is_asked_for_but_only_five_are_kept(monkeypatch):

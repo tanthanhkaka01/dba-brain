@@ -113,24 +113,26 @@ class Endpoint:
     target: str
     database: str
     schema: str = "dbo"
-    credential_name: str = ""
+    #: The login, stated in full - this reads no configuration (rules R09); ``target`` is the label.
+    connection: Mapping[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_json(cls, payload: Any, *, side: str) -> "Endpoint":
         if not isinstance(payload, Mapping):
-            raise SchemaCopyError(f'"{side}" must be an object with target/database/schema.')
-        target = str(payload.get("target") or "").strip()
+            raise SchemaCopyError(f'"{side}" must be an object with connection/database/schema.')
+        try:
+            connection = sql_run.stated_connection(dict(payload), what=f'"{side}"')
+        except sql_run.SqlRunError as exc:
+            raise SchemaCopyError(str(exc)) from exc
+        target = str(payload.get("target") or connection.get("server_id") or connection.get("host") or "")
         database = str(payload.get("database_name") or payload.get("database") or "").strip()
-        if not target:
-            raise SchemaCopyError(f'"{side}.target" is required (a server_id, or "<db_type> <ip>").')
         if not database:
             raise SchemaCopyError(f'"{side}.database" is required.')
         return cls(
-            target=target,
+            target=target.strip(),
             database=database,
             schema=str(payload.get("schema") or "dbo").strip() or "dbo",
-            credential_name=str(payload.get("credential_name")
-                                or payload.get("user_ref") or "").strip(),
+            connection=connection,
         )
 
     def label(self) -> str:
@@ -167,7 +169,6 @@ class SchemaCopyRequest:
     lock_name: str = ""
     lock_timeout_seconds: int = DEFAULT_LOCK_TIMEOUT_SECONDS
     module_passes: int = DEFAULT_MODULE_PASSES
-    data_dir: str = ""
 
     @classmethod
     def from_json(cls, payload: Any) -> "SchemaCopyRequest":
@@ -215,7 +216,6 @@ class SchemaCopyRequest:
                                            DEFAULT_LOCK_TIMEOUT_SECONDS, "lock_timeout_seconds"),
             module_passes=_positive(payload.get("module_passes"), DEFAULT_MODULE_PASSES,
                                     "module_passes"),
-            data_dir=str(payload.get("data_dir") or "").strip(),
         )
 
     def resource_name(self) -> str:
@@ -926,20 +926,15 @@ def verify_copy(source_cursor: Any, dest_cursor: Any, request: SchemaCopyRequest
 def _connect(endpoint: Endpoint, request: SchemaCopyRequest) -> Any:
     """One connection, opened the way every db_ops caller opens one.
 
-    Target resolution, credential decryption and driver choice all belong to ``sql_run``; nothing
-    here knows a host, a login or a password. Autocommit is on because the operation is DDL,
+    The endpoint's own ``connection``, resolved by ``sql_run``: the driver choice belongs there, and
+    the login is the request's (rules R09). Autocommit is on because the operation is DDL,
     ``ALTER DATABASE`` and bulk loads — none of which belong in one transaction, and the phase
     guards are what make a partial run resumable instead.
     """
-    parsed = sql_run.SqlRunRequest.from_json({
-        "target": endpoint.target,
-        "database": endpoint.database,
-        "credential_name": endpoint.credential_name,
-        "data_dir": request.data_dir,
-        "sql": "SELECT 1",
-    })
     try:
-        resolved = sql_run.resolve_request_target(parsed)
+        resolved = sql_run.resolve_stated_connection(
+            {"connection": dict(endpoint.connection)}, database=endpoint.database,
+            what=f"copy-schema {endpoint.label()}")
         if str(resolved.get("db_type") or "") != "sqlserver":
             raise SchemaCopyError(
                 f"{endpoint.target} is {resolved.get('db_type')}; schema copy is SQL Server only.")

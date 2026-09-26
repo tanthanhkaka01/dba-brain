@@ -25,7 +25,7 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.cli import _check_credentials_command
+from db_ops.common.cli_check_credentials import run as _check_credentials_command
 from db_ops.lib.secret_text import encrypt_secret_text_file
 
 
@@ -68,9 +68,18 @@ def test_check_credentials_refuses_a_flag_where_a_folder_belongs(capsys) -> None
     assert "not a flag" in capsys.readouterr().err
 
 
+def test_check_credentials_refuses_a_bare_folder_with_the_request_it_became(capsys) -> None:
+    """The root command took the folder positionally until 0.24.0; the common command takes a JSON
+    object, and says which one, rather than guessing what the word was."""
+    code = _check_credentials_command(["data"])
+
+    assert code == 2
+    assert '{"data_dir": "data"}' in capsys.readouterr().err
+
+
 def test_check_credentials_refuses_a_folder_that_is_not_there(tmp_path: Path, capsys) -> None:
     """Nothing to check and everything fine are different answers."""
-    code = _check_credentials_command([str(tmp_path / "no-such-folder")])
+    code = _check_credentials_command([json.dumps({"data_dir": str(tmp_path / "no-such-folder")})])
 
     assert code == 2
     assert "no such folder" in capsys.readouterr().err

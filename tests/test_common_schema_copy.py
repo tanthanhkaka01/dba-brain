@@ -32,6 +32,11 @@ from db_ops.common import schema_catalog, schema_copy
 from db_ops.lib import mssql_ddl, name_filter
 
 
+#: The login a caller states - common.cli reads no configuration (rules R09), so every request here
+#: carries one. RFC 5737 address; nothing connects to it.
+CONNECTION = {"db_type": "sqlserver", "host": "192.0.2.10", "port": 1433, "username": "u", "password": "p"}
+
+
 # ------------------------------------------------------------------------------- name_filter
 
 
@@ -198,8 +203,8 @@ def test_a_guard_embeds_the_statement_with_its_quotes_doubled() -> None:
 
 
 def _minimal(**overrides):
-    payload = {"source": {"target": "SRC", "database": "A", "schema": "sched"},
-               "dest": {"target": "DST", "database": "B", "schema": "sched"}}
+    payload = {"source": {"target": "SRC", "connection": CONNECTION, "database": "A", "schema": "sched"},
+               "dest": {"target": "DST", "connection": CONNECTION, "database": "B", "schema": "sched"}}
     payload.update(overrides)
     return payload
 
@@ -223,8 +228,8 @@ def test_an_unknown_phase_names_the_known_ones() -> None:
 
 
 def test_copying_a_schema_onto_itself_is_refused() -> None:
-    payload = {"source": {"target": "SRC", "database": "A", "schema": "sched"},
-               "dest": {"target": "src", "database": "a", "schema": "SCHED"}}
+    payload = {"source": {"target": "SRC", "connection": CONNECTION, "database": "A", "schema": "sched"},
+               "dest": {"target": "src", "connection": CONNECTION, "database": "a", "schema": "SCHED"}}
     with pytest.raises(schema_copy.SchemaCopyError, match="same schema"):
         schema_copy.SchemaCopyRequest.from_json(payload)
 

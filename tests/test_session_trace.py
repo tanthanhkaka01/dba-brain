@@ -17,6 +17,11 @@ import pytest
 from db_ops.common import session_trace
 
 
+#: The login a caller states - common.cli reads no configuration (rules R09), so every request here
+#: carries one. RFC 5737 address; nothing connects to it.
+CONNECTION = {"db_type": "sqlserver", "host": "192.0.2.10", "port": 1433, "username": "u", "password": "p"}
+
+
 class _Recorder:
     """Stands in for `sql_run.run_sql` and keeps the request it was handed."""
 
@@ -45,7 +50,7 @@ def test_session_id_zero_means_every_session_not_spid_zero(monkeypatch):
     recorder = _Recorder()
     _patch(monkeypatch, recorder)
 
-    session_trace.trace_sessions({"target": "S1", "session_id": 0, "min_tran_seconds": 300})
+    session_trace.trace_sessions({"target": "S1", "connection": CONNECTION, "session_id": 0, "min_tran_seconds": 300})
 
     sql = recorder.requests[0]["sql"]
     # The filter form specifically — `s.session_id =` also appears in the joins.
@@ -58,7 +63,7 @@ def test_the_same_holds_for_every_spelling_of_absent(monkeypatch, value):
     recorder = _Recorder()
     _patch(monkeypatch, recorder)
 
-    session_trace.trace_sessions({"target": "S1", "session_id": value})
+    session_trace.trace_sessions({"target": "S1", "connection": CONNECTION, "session_id": value})
 
     assert "AND s.session_id =" not in recorder.requests[0]["sql"]
 
@@ -67,7 +72,7 @@ def test_a_real_session_id_filters_to_it(monkeypatch):
     recorder = _Recorder()
     _patch(monkeypatch, recorder)
 
-    session_trace.trace_sessions({"target": "S1", "session_id": 505})
+    session_trace.trace_sessions({"target": "S1", "connection": CONNECTION, "session_id": 505})
 
     sql = recorder.requests[0]["sql"]
     assert "AND s.session_id = 505" in sql
@@ -79,14 +84,14 @@ def test_a_non_numeric_session_id_is_refused_rather_than_interpolated(monkeypatc
     _patch(monkeypatch, _Recorder())
 
     with pytest.raises(session_trace.SessionTraceError, match="session_id"):
-        session_trace.trace_sessions({"target": "S1", "session_id": "1; DROP TABLE x"})
+        session_trace.trace_sessions({"target": "S1", "connection": CONNECTION, "session_id": "1; DROP TABLE x"})
 
 
 def test_blocking_only_asks_for_the_sessions_that_are_costing_something(monkeypatch):
     recorder = _Recorder()
     _patch(monkeypatch, recorder)
 
-    session_trace.trace_sessions({"target": "S1", "blocking_only": True})
+    session_trace.trace_sessions({"target": "S1", "connection": CONNECTION, "blocking_only": True})
 
     assert "blocking_session_id = s.session_id" in recorder.requests[0]["sql"]
 
@@ -116,8 +121,8 @@ def test_an_empty_context_info_is_not_an_error():
                       "app_context_raw": ""}
 
 
-def test_a_missing_target_is_refused_before_anything_connects():
-    with pytest.raises(session_trace.SessionTraceError, match="target"):
+def test_a_missing_login_is_refused_before_anything_connects():
+    with pytest.raises(session_trace.SessionTraceError, match='needs a "connection"'):
         session_trace.trace_sessions({"session_id": 505})
 
 
@@ -128,7 +133,7 @@ def test_rows_are_shaped_with_the_context_decoded_and_the_name_resolved(monkeypa
     monkeypatch.setattr(session_trace, "_user_names",
                         lambda **_: {"ACMECEN01.PU": "ORDER PROCESSING PU&NON"})
 
-    result = session_trace.trace_sessions({"target": "S1"})
+    result = session_trace.trace_sessions({"target": "S1", "connection": CONNECTION})
 
     assert result["transaction_count"] == 1
     assert result["session_count"] == 1
@@ -153,7 +158,7 @@ def test_a_database_without_userinfo_costs_the_display_name_and_nothing_else(mon
 
     _patch(monkeypatch, flaky)
 
-    result = session_trace.trace_sessions({"target": "S1"})
+    result = session_trace.trace_sessions({"target": "S1", "connection": CONNECTION})
 
     assert result["transaction_count"] == 1
     assert result["sessions"][0]["app_user"] == "SOMEAPP"
@@ -169,7 +174,7 @@ def test_a_session_with_nested_transactions_is_counted_once_as_a_session(monkeyp
     _patch(monkeypatch, recorder)
     monkeypatch.setattr(session_trace, "_user_names", lambda **_: {})
 
-    result = session_trace.trace_sessions({"target": "S1"})
+    result = session_trace.trace_sessions({"target": "S1", "connection": CONNECTION})
 
     assert result["transaction_count"] == 2
     assert result["session_count"] == 1

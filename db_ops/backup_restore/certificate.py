@@ -13,8 +13,6 @@ from urllib import request
 
 from db_ops.backup_restore.config import BackupRestoreConfig, validate_restore_target_is_not_source
 from db_ops.backup_restore.copy_backup import resolve_password_ref
-from db_ops.lib import powershell
-from db_ops.lib.shell import is_powershell_executable, powershell_executable
 from db_ops.backup_restore.sanitize import sanitize_text
 from db_ops.logging_ops import log_event
 
@@ -50,14 +48,17 @@ def ensure_source_certificate(
         _log_remote_command(config, logger=logger, remote_exec_type="ssh", command_phase="certificate-import")
         result = _run_add_certificate_linux_via_ssh(certificate, config)
     else:
-        cmd = build_add_certificate_command(certificate=certificate, config=config)
         _log_remote_command(
             config,
             logger=logger,
             remote_exec_type="powershell" if config.vm_credential_target else "local",
             command_phase="certificate-import",
         )
-        result = _run_add_certificate_command(cmd, config=config)
+        if config.vm_credential_target:
+            result = _run_add_certificate_over_winrm(certificate, config)
+        else:
+            result = _run_add_certificate_command(
+                build_add_certificate_command(certificate=certificate, config=config), config=config)
     return {
         "status": "SUCCESS",
         "source_id": config.source_id,
@@ -111,54 +112,54 @@ def parse_backup_certificate(data: dict[str, object]) -> BackupCertificate:
     return certificate
 
 
+#: What the Windows target runs: write the certificate and its key into the import folder, then
+#: CREATE CERTIFICATE from them. The values are assigned at the top rather than passed as
+#: arguments, because the script travels in a run-cmd request on stdin - there is no argv.
+_WINDOWS_IMPORT_BODY = (
+    "$ErrorActionPreference = 'Stop'",
+    "$certDir = Join-Path $CertRoot '__db_ops_cert'",
+    "Write-Output ('CERT_IMPORT: creating cert dir: ' + $certDir)",
+    "New-Item -ItemType Directory -Force -Path $certDir | Out-Null",
+    "$safeName = ($CerName -replace '[^A-Za-z0-9_.-]', '_')",
+    "$cerPath = Join-Path $certDir ($safeName + '.cer')",
+    "$pvkPath = Join-Path $certDir ($safeName + '.pvk')",
+    "Write-Output ('CERT_IMPORT: writing cer file: ' + $cerPath)",
+    "[IO.File]::WriteAllBytes($cerPath, [Convert]::FromBase64String($CerBase64))",
+    "Write-Output ('CERT_IMPORT: writing pvk file: ' + $pvkPath)",
+    "[IO.File]::WriteAllBytes($pvkPath, [Convert]::FromBase64String($PvkBase64))",
+    "$cerSqlPath = $cerPath.Replace(\"'\", \"''\")",
+    "$pvkSqlPath = $pvkPath.Replace(\"'\", \"''\")",
+    "$Sql = $Sql.Replace('__DB_OPS_CERT_FILE__', $cerSqlPath).Replace('__DB_OPS_PVK_FILE__', $pvkSqlPath)",
+    "Write-Output ('CERT_IMPORT: running sqlcmd against: ' + $SqlInstance)",
+    "& $SqlcmdPath -S $SqlInstance -C @SqlAuthArgs -b -Q $Sql",
+    "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }",
+    "Write-Output ('CERT_IMPORT: completed for certificate: ' + $CerName)",
+)
+
+
+def build_add_certificate_script(*, certificate: BackupCertificate, config: BackupRestoreConfig) -> str:
+    """The PowerShell a Windows restore target runs to import the certificate (``run-cmd``, WinRM)."""
+    values = {
+        "SqlcmdPath": config.sqlcmd_path,
+        "SqlInstance": config.restore_sql_instance_on_vm,
+        "Sql": build_add_certificate_sql(certificate),
+        "CerBase64": certificate.certificate_base64,
+        "PvkBase64": certificate.private_key_base64,
+        "CerName": certificate.certificate_name,
+        "CertRoot": str(config.vm_import_local),
+    }
+    lines = [f"${name} = {_ps_quote(str(value))}" for name, value in values.items()]
+    lines.append(f"$sqlAuthArgs = @({_ps_array(_build_sqlcmd_auth_args(config))})")
+    return "\n".join([*lines, *_WINDOWS_IMPORT_BODY])
+
+
 def build_add_certificate_command(*, certificate: BackupCertificate, config: BackupRestoreConfig) -> list[str]:
+    """The local ``sqlcmd`` argv for a restore on this machine - the files written here first.
+
+    A remote Windows target runs :func:`build_add_certificate_script` through ``run-cmd`` instead.
+    """
     sql = build_add_certificate_sql(certificate)
     sql_auth_args = _build_sqlcmd_auth_args(config)
-    if config.vm_credential_target:
-        password = ""
-        if config.vm_username and config.vm_password_env:
-            password = resolve_password_ref(config.vm_password_env)
-            if not password:
-                raise RuntimeError(f"Password ref not found in environment or secret_text.json: {config.vm_password_env}")
-        # Shared Invoke-Command wrapper (credential + script block): db_ops.lib.powershell.
-        script_body = [
-            "    param($SqlcmdPath, $SqlInstance, $Sql, $CerBase64, $PvkBase64, $CerName, $CertRoot)",
-            "    $ErrorActionPreference = 'Stop'",
-            f"    $sqlAuthArgs = @({_ps_array(sql_auth_args)})",
-            "    $certDir = Join-Path $CertRoot '__db_ops_cert'",
-            "    Write-Output ('CERT_IMPORT: creating cert dir: ' + $certDir)",
-            "    New-Item -ItemType Directory -Force -Path $certDir | Out-Null",
-            "    $safeName = ($CerName -replace '[^A-Za-z0-9_.-]', '_')",
-            "    $cerPath = Join-Path $certDir ($safeName + '.cer')",
-            "    $pvkPath = Join-Path $certDir ($safeName + '.pvk')",
-            "    Write-Output ('CERT_IMPORT: writing cer file: ' + $cerPath)",
-            "    [IO.File]::WriteAllBytes($cerPath, [Convert]::FromBase64String($CerBase64))",
-            "    Write-Output ('CERT_IMPORT: writing pvk file: ' + $pvkPath)",
-            "    [IO.File]::WriteAllBytes($pvkPath, [Convert]::FromBase64String($PvkBase64))",
-            "    $cerSqlPath = $cerPath.Replace(\"'\", \"''\")",
-            "    $pvkSqlPath = $pvkPath.Replace(\"'\", \"''\")",
-            "    $Sql = $Sql.Replace('__DB_OPS_CERT_FILE__', $cerSqlPath).Replace('__DB_OPS_PVK_FILE__', $pvkSqlPath)",
-            "    Write-Output ('CERT_IMPORT: running sqlcmd against: ' + $SqlInstance)",
-            "    & $SqlcmdPath -S $SqlInstance -C @SqlAuthArgs -b -Q $Sql",
-            "    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }",
-            "    Write-Output ('CERT_IMPORT: completed for certificate: ' + $CerName)",
-        ]
-        return powershell.build_invoke_command_argv(
-            host=config.vm_credential_target,
-            username=config.vm_username if password else "",
-            password=password,
-            script_body=script_body,
-            arguments=[
-                config.sqlcmd_path,
-                config.restore_sql_instance_on_vm,
-                sql,
-                certificate.certificate_base64,
-                certificate.private_key_base64,
-                certificate.certificate_name,
-                str(config.vm_import_local),
-            ],
-        )
-
     cert_dir = config.vm_import_local / "__db_ops_cert"
     cert_dir.mkdir(parents=True, exist_ok=True)
     safe_name = "".join(char if char.isalnum() or char in ("_", "-", ".") else "_" for char in certificate.certificate_name)
@@ -230,12 +231,9 @@ def _run_add_certificate_linux_via_ssh(certificate: BackupCertificate, config: B
     sql_auth_args = _build_sqlcmd_auth_args(config)
 
     with open_ssh_connection(config) as ssh:
-        _, out, _ = ssh.exec_command(f"mkdir -p {shlex.quote(cert_dir)}")
-        out.read()
-        out.channel.recv_exit_status()
-        with ssh.open_sftp() as sftp:
-            sftp.putfo(io.BytesIO(cer_bytes), cer_path)
-            sftp.putfo(io.BytesIO(pvk_bytes), pvk_path)
+        # Written on the target from memory - the private key never lands on this machine's disk.
+        ssh.put_bytes(cer_bytes, cer_path)
+        ssh.put_bytes(pvk_bytes, pvk_path)
         final_sql = (
             sql.replace("__DB_OPS_CERT_FILE__", _escape_sql_string(cer_path))
                .replace("__DB_OPS_PVK_FILE__", _escape_sql_string(pvk_path))
@@ -248,10 +246,8 @@ def _run_add_certificate_linux_via_ssh(certificate: BackupCertificate, config: B
             f"-C {auth_str} -b "
             f"-Q {shlex.quote(final_sql)}"
         )
-        _, stdout, stderr = ssh.exec_command(remote_cmd)
-        stdout_data = stdout.read().decode("utf-8", errors="replace")
-        stderr_data = stderr.read().decode("utf-8", errors="replace")
-        rc = stdout.channel.recv_exit_status()
+        answer = ssh.run(remote_cmd)
+        stdout_data, stderr_data, rc = answer.stdout, answer.stderr, answer.exit_code
 
     if rc != 0:
         details = [f"Certificate import command failed with exit code {rc}."]
@@ -278,38 +274,69 @@ def _run_add_certificate_command(
     timeout_seconds: int = 600,
     config: BackupRestoreConfig | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    if config is not None:
-        first = str(cmd[0]).lower() if cmd else ""
-        if config.is_linux:
-            raise RuntimeError(
-                f"Target context mismatch: restore_id={config.restore_id} target_host={config.vm_credential_target} "
-                "target_os_type=linux cannot execute remote_exec_type=powershell."
-            )
-        if config.vm_credential_target:
-            expected = f"Invoke-Command -ComputerName {_ps_quote(config.vm_credential_target)}"
-            if not is_powershell_executable(cmd[0] if cmd else "") or expected not in cmd[-1]:
-                raise RuntimeError(
-                    f"Target context mismatch: restore_id={config.restore_id} certificate command does not match "
-                    f"target_host={config.vm_credential_target}."
-                )
-    try:
-        result = subprocess.run(cmd, capture_output=True, check=False, text=True, timeout=timeout_seconds)
-    except subprocess.TimeoutExpired as exc:
+    """Import on this machine: the local ``sqlcmd`` argv, run through ``common.cli run-sqlcmd`` (R10)."""
+    if config is not None and config.is_linux:
+        raise RuntimeError(
+            f"Target context mismatch: restore_id={config.restore_id} target_host={config.vm_credential_target} "
+            "target_os_type=linux cannot execute a local certificate import."
+        )
+    from db_ops.backup_restore.restore_database import _local_request_from_argv
+    from db_ops.transport import common_cli
+
+    ok, data, error = common_cli.run_allowing_failure(
+        "run-sqlcmd", _local_request_from_argv(cmd, timeout_seconds=timeout_seconds))
+    return _certificate_outcome(cmd, ok=ok, data=data, error=error, timeout_seconds=timeout_seconds)
+
+
+def _run_add_certificate_over_winrm(
+    certificate: BackupCertificate,
+    config: BackupRestoreConfig,
+    *,
+    timeout_seconds: int = 600,
+) -> subprocess.CompletedProcess[str]:
+    """Import on a Windows target: the script, run there by ``common.cli run-cmd`` over WinRM (R10).
+
+    It used to be a local PowerShell ``Invoke-Command`` whose script carried the password on this
+    machine's command line; the request now travels on stdin.
+    """
+    password = ""
+    if config.vm_username and config.vm_password_env:
+        password = resolve_password_ref(config.vm_password_env)
+        if not password:
+            raise RuntimeError(f"Password ref not found in environment or secret_text.json: {config.vm_password_env}")
+    from db_ops.transport import common_cli
+
+    request = {
+        "access": {"method": "winrm", "host": config.vm_credential_target, "platform": "windows",
+                   "shell": "powershell", "username": config.vm_username if password else "",
+                   "password": password, "timeout_seconds": config.remote_command_timeout_seconds},
+        "platform": "windows",
+        "script": build_add_certificate_script(certificate=certificate, config=config),
+        "timeout_seconds": timeout_seconds,
+        "confirm": True,
+        "assume_yes": True,
+    }
+    ok, data, error = common_cli.run_allowing_failure("run-cmd", request)
+    return _certificate_outcome(["__winrm_cert_import__"], ok=ok, data=data, error=error,
+                                timeout_seconds=timeout_seconds)
+
+
+def _certificate_outcome(cmd: list[str], *, ok: bool, data: dict, error: str,
+                         timeout_seconds: int) -> subprocess.CompletedProcess[str]:
+    """The import's answer as the process it used to be - or the error the caller has always seen."""
+    stdout = sanitize_text(str(data.get("stdout") or "").strip())
+    stderr = sanitize_text(str(data.get("stderr") or "").strip())
+    if data.get("timed_out"):
         details = [f"Certificate import command timed out after {timeout_seconds} seconds."]
-        stdout = sanitize_text((exc.stdout or "").strip()) if isinstance(exc.stdout, str) else ""
-        stderr = sanitize_text((exc.stderr or "").strip()) if isinstance(exc.stderr, str) else ""
-        if stdout:
-            details.append(f"stdout:\n{stdout}")
-        if stderr:
-            details.append(f"stderr:\n{stderr}")
-        raise RuntimeError("\n".join(details)) from exc
-    if result.returncode == 0:
-        return result
-    details = [
-        f"Certificate import command failed with exit code {result.returncode}.",
-    ]
-    stdout = sanitize_text(result.stdout.strip())
-    stderr = sanitize_text(result.stderr.strip())
+        details += [f"stdout:\n{stdout}"] if stdout else []
+        details += [f"stderr:\n{stderr}"] if stderr else []
+        raise RuntimeError("\n".join(details))
+    if "exit_code" not in data:
+        raise RuntimeError(f"Certificate import command could not be run: {error or 'no answer'}")
+    exit_code = int(data.get("exit_code") or 0)
+    if ok and exit_code == 0:
+        return subprocess.CompletedProcess(cmd, 0, str(data.get("stdout") or ""), str(data.get("stderr") or ""))
+    details = [f"Certificate import command failed with exit code {exit_code}."]
     if stdout:
         details.append(f"stdout:\n{stdout}")
     if stderr:

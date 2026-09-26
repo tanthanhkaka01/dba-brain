@@ -452,16 +452,13 @@ The instance files themselves (compose + `.env`) live on the worker under
 provision time from an environment variable named like the `--password-ref`, or the encrypted
 secret store — it is intentionally not committed.
 
-Run it inside the worker container from the master, then pull the updated config
-back, with the control app:
+Build it on the worker's host from the master with the control app; the record and a new
+password are written on the master, and the worker has them after the next deploy:
 
 ```bash
 python -m db_ops.control.cli worker-create-db-docker --key-base64 "<key>" \
   --name pg_lab_01 --engine postgres --version 16 --mode single \
-  --host-port 5433 --password-ref POSTGRES_PASSWORD --pull-config
-
-python -m db_ops.control.cli worker-pull-data-config --key-base64 "<key>" \
-  --all-json --merge-secrets --overwrite
+  --host-port 5433 --password-ref POSTGRES_PASSWORD
 ```
 
 `--merge-secrets` safely unions the worker encrypted store, the master encrypted

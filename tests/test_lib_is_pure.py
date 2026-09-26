@@ -35,12 +35,9 @@ LIB_ROOT = Path(__file__).resolve().parents[1] / "db_ops" / "lib"
 
 #: module -> the one thing it may import from db_ops, and why.
 ALLOWED_DB_OPS_IMPORTS: dict[str, str] = {
-    "notify.py": "db_ops.config",
-    # Same shape as notify's, and allowed for the same reason: a lazy, last-resort fallback to a
-    # root module. When the Telegram app's CLI cannot be reached, the level -> chat map is read
-    # straight from config rather than dropping the message. `db_ops.config` owns nothing and is
-    # imported by everything, so this does not point the layer at anything above it.
-    "telegram_route.py": "db_ops.config",
+    # Empty since 0.24.0, and that is the rule (R06): the configuration parser moved into `lib`
+    # (`lib/config.py`), so `notify` and `telegram_route` - the two entries that lived here, each
+    # reading `db_ops.config` - now read a sibling.
 }
 
 
@@ -125,8 +122,9 @@ def test_every_allowance_is_still_used() -> None:
 #: has to spawn a process. Naming the layer that owns the transport is a design decision and is
 #: open in the project's architecture rules (V7).
 KNOWN_CLI_LAUNCHERS: dict[str, str] = {
-    "common_cli.py": "the one client for `db_ops.common.cli` (and `db.cli` via `module=`)",
-    "telegram_route.py": "falls back to `db_ops.telegram.cli` for the level -> chat map",
+    # Empty since 0.24.0 - rule R07 is absolute. `common_cli.py` builds the command and reads the
+    # answer, and `transport` starts it (docs/15_transport.md); `telegram_route.py` reads the
+    # routing from the configuration in-process, since the parser is `lib.config`.
 }
 
 

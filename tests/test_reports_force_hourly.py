@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -153,11 +154,18 @@ def test_resolve_report_target_fails_when_reports_disabled(tmp_path):
 
 
 def test_stored_metric_summary_fails_when_metrics_disabled_and_no_rows(tmp_path):
-    with pytest.raises(service.ReportWorkflowError, match="metrics collection is disabled.*no stored metric rows"):
+    with pytest.raises(service.ReportWorkflowError, match="no stored metric rows.*collection is disabled"):
         service.stored_metric_summary(sqlite_path=tmp_path / "runtime.sqlite", target_id="server/sqlserver/db")
 
 
-def test_force_hourly_report_executes_collect_report_push_in_order(tmp_path, monkeypatch):
+def test_an_enabled_target_with_no_rows_yet_is_told_to_wait_for_the_schedule(tmp_path):
+    """Two states with two different fixes: switch collection on, or wait for its first pass."""
+    with pytest.raises(service.ReportWorkflowError, match="no stored metric rows.*its own schedule"):
+        service.stored_metric_summary(sqlite_path=tmp_path / "runtime.sqlite",
+                                      target_id="server/sqlserver/db", metrics_enabled=True)
+
+
+def test_force_hourly_report_reads_stored_results_then_reports_and_pushes_in_order(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(
         service,
@@ -166,8 +174,8 @@ def test_force_hourly_report_executes_collect_report_push_in_order(tmp_path, mon
     )
     monkeypatch.setattr(
         service,
-        "collect_target_metrics",
-        lambda **kwargs: calls.append(("collect", kwargs)) or collect_summary(),
+        "stored_metric_summary",
+        lambda **kwargs: calls.append(("stored", kwargs)) or collect_summary(),
     )
     monkeypatch.setattr(
         service,
@@ -187,37 +195,55 @@ def test_force_hourly_report_executes_collect_report_push_in_order(tmp_path, mon
         dedupe_seconds=0,
     )
 
-    assert [name for name, _ in calls] == ["resolve", "collect", "create", "push"]
+    assert [name for name, _ in calls] == ["resolve", "stored", "create", "push"]
     assert calls[1][1]["target_id"] == "server/sqlserver/db"
     assert calls[2][1]["summary_limit"] == 150
     assert calls[3][1]["dedupe_seconds"] == 0
     assert calls[3][1]["report_ids"] == [10]
     assert result["exit_code"] == 0
     assert result["target_id"] == "server/sqlserver/db"
+    assert result["stored"]["result_count"] == 2
 
 
-def test_force_hourly_report_collect_failure_stops_workflow(tmp_path, monkeypatch):
+def test_a_report_collects_nothing_and_starts_no_process():
+    """The operator, 2026-09-26: a report does not run metrics. It used to start
+    `metrics.cli collect --force` for the target first (rules R42); collecting is metrics' job."""
+    source = Path(service.__file__).read_text(encoding="utf-8")
+    assert "subprocess" not in source
+    assert "db_ops.metrics.cli" not in source
+
+
+def test_the_old_windowed_flag_is_refused_with_the_command_that_replaces_it(tmp_path):
+    """A bot catalogue from before 0.24.0 still sends --include-windowed for `full`. Ignoring it
+    would answer a question nobody asked; argparse's "unrecognized arguments" would say nothing."""
+    with pytest.raises(service.ReportWorkflowError, match="metrics.cli collect .*--include-windowed") as caught:
+        service.force_hourly_report(config=config(tmp_path), server_id="ACME-192-0-2-248",
+                                    include_windowed=True)
+    assert caught.value.exit_code == 2
+
+
+def test_force_hourly_report_stored_results_failure_stops_workflow(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(service, "resolve_report_target", lambda **_: target())
 
-    def fail_collect(**kwargs):
-        calls.append("collect")
-        raise RuntimeError("collect failed")
+    def fail_stored(**kwargs):
+        calls.append("stored")
+        raise RuntimeError("store unreachable")
 
-    monkeypatch.setattr(service, "collect_target_metrics", fail_collect)
+    monkeypatch.setattr(service, "stored_metric_summary", fail_stored)
     monkeypatch.setattr(service, "create_hourly_metrics_report", lambda **_: calls.append("create"))
     monkeypatch.setattr(service, "push_hourly_report_alerts", lambda **_: calls.append("push"))
 
-    with pytest.raises(service.ReportWorkflowError, match="collect failed"):
+    with pytest.raises(service.ReportWorkflowError, match="store unreachable"):
         service.force_hourly_report(config=config(tmp_path), target_ip="192.0.2.115")
 
-    assert calls == ["collect"]
+    assert calls == ["stored"]
 
 
 def test_force_hourly_report_report_creation_failure_stops_workflow(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(service, "resolve_report_target", lambda **_: target())
-    monkeypatch.setattr(service, "collect_target_metrics", lambda **_: calls.append("collect") or collect_summary())
+    monkeypatch.setattr(service, "stored_metric_summary", lambda **_: calls.append("stored") or collect_summary())
 
     def fail_create(**kwargs):
         calls.append("create")
@@ -229,13 +255,13 @@ def test_force_hourly_report_report_creation_failure_stops_workflow(tmp_path, mo
     with pytest.raises(service.ReportWorkflowError, match="report failed"):
         service.force_hourly_report(config=config(tmp_path), target_ip="192.0.2.115")
 
-    assert calls == ["collect", "create"]
+    assert calls == ["stored", "create"]
 
 
 def test_force_hourly_report_alert_push_failure_stops_workflow(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(service, "resolve_report_target", lambda **_: target())
-    monkeypatch.setattr(service, "collect_target_metrics", lambda **_: calls.append("collect") or collect_summary())
+    monkeypatch.setattr(service, "stored_metric_summary", lambda **_: calls.append("stored") or collect_summary())
     monkeypatch.setattr(service, "create_hourly_metrics_report", lambda **_: calls.append("create") or {"created": 1, "report_ids": [10]})
 
     def fail_push(**kwargs):
@@ -247,4 +273,4 @@ def test_force_hourly_report_alert_push_failure_stops_workflow(tmp_path, monkeyp
     with pytest.raises(service.ReportWorkflowError, match="push failed"):
         service.force_hourly_report(config=config(tmp_path), target_ip="192.0.2.115")
 
-    assert calls == ["collect", "create", "push"]
+    assert calls == ["stored", "create", "push"]

@@ -17,8 +17,8 @@ backup walkthrough registers (`LAB-192-0-2-49-MSSQL-1433`, `LAB-192-0-2-49-PG-54
 | Engine | `db_type` | A script is | Wait for N seconds | Parameters |
 | --- | --- | --- | --- | --- |
 | SQL Server | `sqlserver` | one batch, or several split by `GO` lines | `WAITFOR DELAY '00:01:00';` | yes (`DECLARE @name` lines) |
-| PostgreSQL | `postgresql` | statements split on `;`, run one at a time (a `;` in a string, a comment or a `$$` body is not a split) | `select pg_sleep(60);` | **not yet** - refused at registration |
-| Oracle | `oracle` | **one statement or one PL/SQL block per batch**, batches split by `GO` lines | `BEGIN DBMS_SESSION.SLEEP(60); END;` | only on an Oracle 8i bridge target (SQL*Plus `&` defines). **Not on a direct connection**, and not refused there yet - the run fails |
+| PostgreSQL | `postgresql` | statements split on `;`, run one at a time (a `;` in a string, a comment or a `$$` body is not a split) | `select pg_sleep(60);` | yes - the script says `:name`, bound by name (0.24.0) |
+| Oracle | `oracle` | **one statement or one PL/SQL block per batch**, batches split by `GO` lines | `BEGIN DBMS_SESSION.SLEEP(60); END;` | yes - `:name`, bound by name, on a direct connection (0.24.0); SQL*Plus `&name` on a direct connection and on an Oracle 8i bridge target |
 
 Each SELECT comes back as its own result set on every engine, and an INSERT's rows are counted in
 the run's `row_count`. An Oracle block keeps the `;` after its `END`; a statement loses its trailing
@@ -92,9 +92,10 @@ SELECT task, COUNT(*) AS runs, MAX(at) AS last_at FROM sqltask_drill WHERE task 
 
 Nine commands in the drill: 10, 5 and 1 minute on each engine, `sql_id` 1-9.
 
-**Proves:** `dbabrain sql-tasks list-tasks --all` lists nine commands. A PostgreSQL command with
-`parameters` is refused by name (*a postgresql task takes no parameters yet*), and an engine a task
-cannot run on (`mysql`) is refused at registration, not nine hours later at its first run.
+**Proves:** `dbabrain sql-tasks list-tasks --all` lists nine commands. A PostgreSQL or Oracle
+command declaring a parameter its script never says is refused by name (*declared but no script of
+this task says them*), and an engine a task cannot run on (`mysql`) is refused at registration, not
+nine hours later at its first run.
 
 ---
 
@@ -228,8 +229,8 @@ Then put `max_parallel` back where the node's real work needs it.
 | --- | --- |
 | An Oracle script with two statements and no `GO` | It is one batch, and Oracle refuses it. Put a `GO` line between them |
 | `BEGIN ... END` without the final `;` | PL/SQL requires it (PLS-00103). Keep it; the tool no longer strips it |
-| A PostgreSQL task with `parameters` | Refused: they are T-SQL `DECLARE` lines. Write the values into the script |
-| An Oracle task with `parameters` on a direct connection | Registered, then fails at its first run: the same `DECLARE` lines. Write the values into the script |
+| A PostgreSQL or Oracle parameter the script never says | Refused at registration. Nothing declares it for the script, as the `DECLARE` does on SQL Server: say `:name` (or `&name` on Oracle) |
+| A PostgreSQL `:name` where nothing gives it a type (`:d IS NULL`, `SELECT :n + 1`) | *could not determine data type of parameter*: the value arrives as text. Write `CAST(:d AS date)` or `:n::int` |
 | `"replace": true` with only the field you meant to change | The target is rewritten from that request: its window and database are gone. Send the whole record |
 | `timeout` below the run's length | The server cancels the statement at `timeout` |
 | Nine long tasks and `max_parallel` 4 | Five of them wait; a short task can wait many minutes for its turn |

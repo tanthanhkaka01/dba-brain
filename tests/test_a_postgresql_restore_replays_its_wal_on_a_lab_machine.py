@@ -188,7 +188,7 @@ def test_a_password_login_target_is_given_its_password(monkeypatch):
 
 def test_a_key_login_target_is_not_asked_for_secrets(monkeypatch, tmp_path):
     from db_ops.backup_restore import backup
-    import db_ops.common.data_sources as data_sources
+    import db_ops.lib.data_sources as data_sources
 
     target = SimpleNamespace(host="h", port=22, username="u", key_file="k.key", password_ref="X")
     monkeypatch.setattr(backup, "resolve_ssh_target", lambda *a, **k: target)

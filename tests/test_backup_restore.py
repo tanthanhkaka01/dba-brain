@@ -18,18 +18,16 @@ from db_ops.backup_restore.cli import _build_end_event, _build_restore_mapping, 
 from db_ops.backup_restore.copy_backup import (
     CopyBackupFileResult,
     CopyBackupResult,
-    build_cmdkey_command,
-    build_copy_cmdkey_commands,
     build_robocopy_command,
+    copy_share_login_requests,
     copy_backup_file,
     copy_backup_file_with_logging,
     list_recent_backup_files,
     run_copy_backup,
-    _pending_remote_backups,
-    _parse_smbclient_ls,
+    share_login_request,
+    _RemoteBackup,
     _selected_remote_backups,
     _smbclient_download_selected_to_staging,
-    _smbclient_remote_backups,
 )
 from db_ops.backup_restore.delete_backup import (
     DeleteBackupResult,
@@ -41,19 +39,20 @@ from db_ops.backup_restore.events import emit_backup_restore_event, _format_rest
 from db_ops.backup_restore.certificate import (
     BackupCertificate,
     build_add_certificate_command,
+    build_add_certificate_script,
     build_add_certificate_sql,
     ensure_source_certificate,
     parse_backup_certificate,
     _run_add_certificate_command,
 )
+from db_ops.common.restorestep import sqlserver as mssql_restore
 from db_ops.backup_restore.restore_database import (
+    RestoreCandidate,
+    _restore_step,
     build_restore_candidate,
-    build_restore_full_sql,
-    build_restore_log_stopat_sql,
     build_recovery_sql,
     build_recovery_if_restoring_sql,
     build_set_recovery_model_full_sql,
-    build_restore_sql,
     build_sqlcmd_query_command,
     ensure_source_certificate_with_events,
     find_latest_full_backups,
@@ -77,7 +76,6 @@ from db_ops.backup_restore.restore_database import (
 from db_ops.backup_restore.sanitize import sanitize_text, sanitize_value
 from db_ops.config import DbOpsConfig, TelegramConfig
 from db_ops.db import DbOpsStore
-from db_ops.backup_restore.verify_restore import build_checkdb_sql
 
 
 #: The PowerShell copy engine is chosen by `should_use_powershell_unc_copy`, which begins
@@ -128,21 +126,63 @@ _SAMPLE_RECURSE_LS = (
 )
 
 
-def test_smbclient_remote_backups_parses_recurse_relative_paths(monkeypatch):
-    monkeypatch.setattr(
-        "db_ops.backup_restore.copy_backup._run_smbclient_command",
-        lambda *a, **k: subprocess.CompletedProcess(a, 0, stdout=_SAMPLE_RECURSE_LS, stderr=""),
-    )
-    backups = _smbclient_remote_backups("h", "s", Path("auth"), "APPDB-DB$APPDB")
-    assert backups["APPDB_Prod\\FULL\\APPDB-DB$APPDB_APPDB_Prod_FULL_20260624_010005.bak"] == 11121102848
-    assert backups["APPDB_STG\\FULL\\APPDB-DB$APPDB_APPDB_STG_FULL_20260624_010147.bak"] == 70000000
-    assert backups["APPDB_STG\\LOG\\APPDB-DB$APPDB_APPDB_STG_LOG_20260624_080001.trn"] == 1048576
+class _FakeShare:
+    """``common.cli`` as the backup app calls it for a share: ``smb-list`` answers ``listing`` read by
+    the real parser in ``common.smb``, ``smb-get`` writes the bytes ``sizes`` says, and every request
+    is kept - the app's selection and staging run as they do against a real share."""
+
+    def __init__(self, listing: str, *, sizes=None):
+        self.listing, self.sizes, self.requests = listing, dict(sizes or {}), []
+
+    def __call__(self, command, request, **_kwargs):
+        from db_ops.common import smb
+
+        self.requests.append((command, dict(request)))
+        if command == "smb-list":
+            files = smb.parse_ls(self.listing, subpath=request.get("path") or "")
+            suffixes = tuple(request.get("suffixes") or ())
+            files = [item for item in files if not suffixes or item["name"].lower().endswith(suffixes)]
+            return {"files": files, "count": len(files)}
+        if command == "smb-get":
+            target = Path(request["local_path"])
+            target.parent.mkdir(parents=True, exist_ok=True)
+            size = self.sizes.get(request["remote_path"].rsplit("\\", 1)[-1], 10)
+            target.write_bytes(b"x" * size)
+            return {"local_path": str(target), "bytes": size, "exit_code": 0}
+        raise AssertionError(f"unexpected common.cli {command}")
+
+    def gets(self):
+        return [request["remote_path"] for command, request in self.requests if command == "smb-get"]
+
+
+def _share(monkeypatch, fake):
+    from db_ops.backup_restore import share
+
+    monkeypatch.setattr(share.common_cli, "run", fake)
+    return fake
+
+
+def _remote(listing: str, *, remote_dir: str):
+    """What the app builds from an ``smb-list`` answer - the real parser, the app's own record."""
+    from db_ops.common import smb
+    from db_ops.backup_restore.copy_backup import _backup_time_from_name
+
+    return [_RemoteBackup(relative_path=item["path"], size_bytes=item["size_bytes"],
+                          backup_timestamp=_backup_time_from_name(item["name"]))
+            for item in smb.parse_ls(listing, subpath=remote_dir) if item["name"].lower().endswith((".bak", ".trn"))]
+
+
+def test_smb_listing_is_relative_to_the_folder_listed_and_skips_directories():
+    rows = {item.relative_path: item.size_bytes for item in _remote(_SAMPLE_RECURSE_LS, remote_dir="APPDB-DB$APPDB")}
+    assert rows["APPDB_Prod\\FULL\\APPDB-DB$APPDB_APPDB_Prod_FULL_20260624_010005.bak"] == 11121102848
+    assert rows["APPDB_STG\\FULL\\APPDB-DB$APPDB_APPDB_STG_FULL_20260624_010147.bak"] == 70000000
+    assert rows["APPDB_STG\\LOG\\APPDB-DB$APPDB_APPDB_STG_LOG_20260624_080001.trn"] == 1048576
     # directory entries are excluded
-    assert all(rel.lower().endswith((".bak", ".trn")) for rel in backups)
+    assert all(rel.lower().endswith((".bak", ".trn")) for rel in rows)
 
 
 def test_selected_remote_backups_filters_by_window_and_pattern():
-    rows = _parse_smbclient_ls(
+    rows = _remote(
         (
             "\\APPDB-DB$APPDB\\APPDB_Prod\\FULL\n"
             "  APPDB_Prod_FULL_20260608_010000.bak      A  10  Mon Jun 08 01:00:00 2026\n"
@@ -174,8 +214,6 @@ def test_smbclient_selected_staging_lists_first_and_downloads_only_selected(tmp_
         copy_window_start_utc=datetime.datetime(2026, 6, 7, 5, 0, tzinfo=datetime.timezone.utc),
         copy_window_end_utc=datetime.datetime(2026, 6, 8, 5, 0, tzinfo=datetime.timezone.utc),
     )
-    commands = []
-    downloads = []
     listing = (
         "\\APPDB-DB$APPDB\\APPDB_Prod\\FULL\n"
         "  APPDB_Prod_FULL_20260608_010000.bak      A  10  Mon Jun 08 01:00:00 2026\n"
@@ -184,27 +222,17 @@ def test_smbclient_selected_staging_lists_first_and_downloads_only_selected(tmp_
         "  APPDB_Prod_LOG_20260608_043000.trn       A  20  Mon Jun 08 04:30:00 2026\n"
     )
 
-    def fake_run(args, *, timeout_seconds):
-        commands.append(args[-1])
-        return subprocess.CompletedProcess(args, 0, listing, "")
-
-    def fake_get(_host, _share, _authfile, remote_path, local_parent, local_name):
-        downloads.append(remote_path)
-        local_parent.mkdir(parents=True, exist_ok=True)
-        size = 20 if remote_path.endswith(".trn") else 10
-        (local_parent / local_name).write_bytes(b"x" * size)
-
-    monkeypatch.setattr(copy_module, "_run_smbclient_command", fake_run)
-    monkeypatch.setattr(copy_module, "_smbclient_get_file", fake_get)
+    fake = _share(monkeypatch, _FakeShare(listing, sizes={"APPDB_Prod_LOG_20260608_043000.trn": 20}))
     monkeypatch.setattr(copy_module, "_remote_destination_sizes", lambda config, *, logger=None: {})
 
     staging, pre_skipped, total_selected = _smbclient_download_selected_to_staging(config, logger=None)
     assert pre_skipped == []
     assert total_selected == 2
 
-    assert all("mget *" not in command for command in commands)
-    assert commands and commands[0].endswith('cd "APPDB-DB$APPDB"; ls')
-    assert downloads == [
+    listed = [request for command, request in fake.requests if command == "smb-list"]
+    assert [(request["host"], request["share"], request["path"]) for request in listed] == [
+        ("192.0.2.250", "SQLBK", "APPDB-DB$APPDB")]
+    assert fake.gets() == [
         "APPDB-DB$APPDB\\APPDB_Prod\\FULL\\APPDB_Prod_FULL_20260608_010000.bak",
         "APPDB-DB$APPDB\\APPDB_Prod\\LOG\\APPDB_Prod_LOG_20260608_043000.trn",
     ]
@@ -226,19 +254,7 @@ def test_smbclient_selected_staging_skips_files_already_in_destination(tmp_path,
         "  APPDB_Prod_FULL_20260608_010000.bak      A  10  Mon Jun 08 01:00:00 2026\n"
         "  APPDB_Prod_FULL_20260609_010000.bak      A  10  Tue Jun 09 01:00:00 2026\n"
     )
-    downloads = []
-
-    def fake_get(_host, _share, _authfile, remote_path, local_parent, local_name):
-        downloads.append(remote_path)
-        local_parent.mkdir(parents=True, exist_ok=True)
-        (local_parent / local_name).write_bytes(b"x" * 10)
-
-    monkeypatch.setattr(
-        copy_module,
-        "_run_smbclient_command",
-        lambda args, *, timeout_seconds: subprocess.CompletedProcess(args, 0, listing, ""),
-    )
-    monkeypatch.setattr(copy_module, "_smbclient_get_file", fake_get)
+    fake = _share(monkeypatch, _FakeShare(listing))
     # The 0608 backup already exists in the final destination at the same size; the 0609 does not.
     monkeypatch.setattr(
         copy_module,
@@ -252,7 +268,7 @@ def test_smbclient_selected_staging_skips_files_already_in_destination(tmp_path,
     assert len(pre_skipped) == 1
     assert pre_skipped[0].status == "SKIPPED_EXISTS"
     # Only the missing backup was downloaded from SMB.
-    assert downloads == ["APPDB-DB$APPDB\\APPDB_Prod\\FULL\\APPDB_Prod_FULL_20260609_010000.bak"]
+    assert fake.gets() == ["APPDB-DB$APPDB\\APPDB_Prod\\FULL\\APPDB_Prod_FULL_20260609_010000.bak"]
 
 
 def test_smbclient_selected_staging_fails_fast_when_no_files_selected(tmp_path, monkeypatch):
@@ -268,49 +284,11 @@ def test_smbclient_selected_staging_fails_fast_when_no_files_selected(tmp_path, 
         "\\APPDB-DB$APPDB\\APPDB_Prod\\FULL\n"
         "  APPDB_Prod_FULL_20260609_010000.bak      A  10  Tue Jun 09 01:00:00 2026\n"
     )
-    monkeypatch.setattr(
-        copy_module,
-        "_run_smbclient_command",
-        lambda args, *, timeout_seconds: subprocess.CompletedProcess(args, 0, listing, ""),
-    )
+    _share(monkeypatch, _FakeShare(listing))
     monkeypatch.setattr(copy_module, "_remote_destination_sizes", lambda config, *, logger=None: {})
 
     with pytest.raises(RuntimeError, match="selected no files"):
         _smbclient_download_selected_to_staging(config, logger=None)
-
-
-def test_pending_remote_backups_flags_missing_and_truncated(tmp_path):
-    # The APPDB_Prod copy truncated and aborted, so APPDB_STG was never downloaded.
-    remote = {
-        "APPDB_Prod\\FULL\\db_FULL_20260624_010005.bak": 11_000_000_000,  # truncated in staging
-        "APPDB_STG\\FULL\\db_FULL_20260624_010147.bak": 70_000_000,        # missing entirely
-        "SALESDB_Prod\\FULL\\db_FULL_20260624_010000.bak": 500,              # already complete
-        "OLD\\FULL\\db_FULL_20260101_010000.bak": 999,                   # older than cutoff
-    }
-    p1 = tmp_path / "APPDB_Prod" / "FULL"
-    p1.mkdir(parents=True)
-    (p1 / "db_FULL_20260624_010005.bak").write_bytes(b"x" * 100)
-    p2 = tmp_path / "SALESDB_Prod" / "FULL"
-    p2.mkdir(parents=True)
-    (p2 / "db_FULL_20260624_010000.bak").write_bytes(b"x" * 500)
-
-    cutoff = datetime.datetime(2026, 6, 23).timestamp()
-    pending = _pending_remote_backups(tmp_path, remote, cutoff)
-    by_rel = {rel: staged for rel, _, staged in pending}
-    assert set(by_rel) == {
-        "APPDB_Prod\\FULL\\db_FULL_20260624_010005.bak",
-        "APPDB_STG\\FULL\\db_FULL_20260624_010147.bak",
-    }
-    assert by_rel["APPDB_STG\\FULL\\db_FULL_20260624_010147.bak"] is None  # missing
-    assert by_rel["APPDB_Prod\\FULL\\db_FULL_20260624_010005.bak"] == 100  # truncated
-
-
-def test_pending_remote_backups_empty_when_all_complete(tmp_path):
-    remote = {"SALESDB_Prod\\FULL\\db_FULL_20260624_010000.bak": 500}
-    p = tmp_path / "SALESDB_Prod" / "FULL"
-    p.mkdir(parents=True)
-    (p / "db_FULL_20260624_010000.bak").write_bytes(b"x" * 500)
-    assert _pending_remote_backups(tmp_path, remote, datetime.datetime(2026, 6, 23).timestamp()) == []
 
 
 def test_get_latest_full_backup_selects_newest_bak(tmp_path):
@@ -367,11 +345,23 @@ def test_build_restore_sql_uses_vm_local_paths_and_escapes_literals(tmp_path):
         restore_log_file_on_vm=Path(r"D:\MSSQL\DATA\DR's_log.ldf"),
     )
 
-    sql = build_restore_sql(r"E:\SQLBK_IMPORT\full's.bak", config)
+    candidate = RestoreCandidate(
+        source_key="APPDB_Prod", source_database_name="APPDB_Prod", restore_database_name="DR]Name",
+        backup_file_unc=Path("unused"), backup_file_on_vm=Path(r"E:\SQLBK_IMPORT\full's.bak"),
+        restore_data_file_on_vm=config.restore_data_file_on_vm,
+        restore_log_file_on_vm=config.restore_log_file_on_vm)
+
+    # The app names the step - the files as the target sees them - and common writes the RESTORE
+    # (rules R43); each value lands escaped for the literal it sits in, two deep in the batch.
+    fields = _restore_step("full", candidate, config, path=candidate.backup_file_on_vm)
+    assert fields["backup_path"] == r"E:\SQLBK_IMPORT\full's.bak"
+    assert fields["move_files"] == {"data": r"D:\MSSQL\DATA\DR's.mdf",
+                                    "log": r"D:\MSSQL\DATA\DR's_log.ldf"}
+    sql = mssql_restore.build_statements("full", fields, [fields["backup_path"]])[0]
 
     assert "RESTORE DATABASE [DR]]Name]" in sql
-    assert "FROM DISK = N''E:\\SQLBK_IMPORT\\full''s.bak''" in sql
-    assert "TO N''D:\\MSSQL\\DATA\\DR''s.mdf''" in sql
+    assert "FROM DISK = N''E:\\SQLBK_IMPORT\\full''''s.bak''" in sql
+    assert "TO N''D:\\MSSQL\\DATA\\DR''''s.mdf''" in sql
 
 
 def test_build_restore_full_sql_uses_norecovery_and_final_steps_are_separate(tmp_path):
@@ -379,8 +369,10 @@ def test_build_restore_full_sql_uses_norecovery_and_final_steps_are_separate(tmp
     backup = config.vm_import_unc / "APPDB_Prod" / "FULL" / "latest.bak"
     candidate = build_restore_candidate(backup, config)
 
-    full_sql = build_restore_full_sql(candidate.backup_file_on_vm, config, candidate=candidate)
+    fields = _restore_step("full", candidate, config, path=candidate.backup_file_on_vm)
+    full_sql = mssql_restore.build_statements("full", fields, [fields["backup_path"]])[0]
 
+    assert fields["with_recovery"] is False
     assert "NORECOVERY" in full_sql
     assert "WITH RECOVERY" not in full_sql
     assert "SET MULTI_USER" not in full_sql
@@ -578,7 +570,7 @@ def test_long_running_linux_restore_has_no_default_command_deadline(tmp_path, mo
     """The request `common.cli run-sqlcmd` is handed (1.38) - the command it builds from it is
     held in tests/test_the_sql_server_restore_runs_through_common.py."""
     import db_ops.backup_restore.restore_database as restore_module
-    from db_ops.lib import common_cli
+    from db_ops.transport import common_cli
 
     config = dataclasses.replace(
         make_config(tmp_path),
@@ -746,22 +738,17 @@ def test_build_robocopy_command_rejects_mapped_drive_source(tmp_path):
         build_robocopy_command(config)
 
 
-def test_build_cmdkey_command_uses_password_from_environment(monkeypatch):
+def test_a_share_login_request_carries_the_password_resolved_from_the_environment(monkeypatch):
     monkeypatch.setenv("SQLBK_SMB_PASSWORD", "SecretPassword")
 
-    assert build_cmdkey_command(
+    assert share_login_request(
         credential_target="192.0.2.251",
         username="sqlbackupuser",
         password_env="SQLBK_SMB_PASSWORD",
-    ) == [
-        "cmdkey",
-        "/add:192.0.2.251",
-        "/user:sqlbackupuser",
-        "/pass:SecretPassword",
-    ]
+    ) == {"target": "192.0.2.251", "username": "sqlbackupuser", "password": "SecretPassword"}
 
 
-def test_build_copy_cmdkey_commands_includes_prod_and_vm_credentials(tmp_path, monkeypatch):
+def test_a_copy_stores_the_source_and_the_windows_target_logins(tmp_path, monkeypatch):
     config = BackupRestoreConfig(
         prod_backup_share=Path(r"\\192.0.2.250\SQLBK"),
         vm_import_unc=Path(r"\\VM_IP\E$\SQLBK_IMPORT"),
@@ -783,9 +770,9 @@ def test_build_copy_cmdkey_commands_includes_prod_and_vm_credentials(tmp_path, m
     monkeypatch.setenv("PROD_SQLBK_PASSWORD", "prod-secret")
     monkeypatch.setenv("VM_PASSWORD", "vm-secret")
 
-    assert build_copy_cmdkey_commands(config) == [
-        ["cmdkey", "/add:192.0.2.250", r"/user:192.0.2.250\appdbadmin", "/pass:prod-secret"],
-        ["cmdkey", "/add:VM_IP", r"/user:VM_NAME\vmadmin", "/pass:vm-secret"],
+    assert copy_share_login_requests(config) == [
+        {"target": "192.0.2.250", "username": r"192.0.2.250\appdbadmin", "password": "prod-secret"},
+        {"target": "VM_IP", "username": r"VM_NAME\vmadmin", "password": "vm-secret"},
     ]
 
 
@@ -913,8 +900,8 @@ def test_run_restore_database_stops_before_recovery_when_full_fails(tmp_path, mo
     )
     calls = []
 
-    def fail_full(_cmd, **_kwargs):
-        calls.append(_cmd[-1])
+    def fail_full(cmd, **_kwargs):
+        calls.append(cmd)
         raise RuntimeError("Msg 3013, Level 16\nRESTORE DATABASE is terminating abnormally.")
 
     monkeypatch.setattr("db_ops.backup_restore.restore_database.run_sqlcmd_query_command", fail_full)
@@ -929,8 +916,12 @@ def test_run_restore_database_stops_before_recovery_when_full_fails(tmp_path, mo
         )
 
     assert len(calls) == 1
-    assert "NORECOVERY" in calls[0]
-    assert "WITH RECOVERY" not in calls[0]
+    # The step the app hands to common.cli restore-full, and the text common writes from it (R43).
+    level, fields = calls[0].restore_step
+    text = mssql_restore.build_statements(level, fields, [fields["backup_path"]])[0]
+    assert level == "full" and fields["with_recovery"] is False
+    assert "NORECOVERY" in text
+    assert "WITH RECOVERY" not in text
 
 
 def test_run_sqlcmd_query_command_treats_restore_error_text_as_failure(monkeypatch):
@@ -1077,7 +1068,8 @@ def test_pitr_restore_log_stopat_recovery_only_on_final_log(tmp_path, monkeypatc
     sql_texts = []
 
     def fake_run_step(**kwargs):
-        sql_texts.append(kwargs["sql"])
+        level, fields = kwargs["restore"]
+        sql_texts.append(mssql_restore.build_statements(level, fields, [fields["backup_path"]])[0])
         return {"step": "restore-log", "status": "SUCCESS", "stdout": "ok", "stderr": ""}
 
     monkeypatch.setattr(restore_module, "_run_restore_step", fake_run_step)
@@ -1434,7 +1426,7 @@ def test_build_add_certificate_sql_checks_name_or_thumbprint_before_create():
     assert "DECRYPTION BY PASSWORD = N'pass''word'" in sql
 
 
-def test_build_add_certificate_command_runs_on_vm_and_writes_cert_files(tmp_path, monkeypatch):
+def test_the_windows_certificate_script_writes_the_files_then_creates_the_certificate(tmp_path, monkeypatch):
     monkeypatch.setenv("VM_PASSWORD", "vm-secret")
     config = BackupRestoreConfig(
         prod_backup_share=tmp_path / "prod_share",
@@ -1458,16 +1450,14 @@ def test_build_add_certificate_command_runs_on_vm_and_writes_cert_files(tmp_path
         private_key_password="secret",
     )
 
-    cmd = build_add_certificate_command(certificate=certificate, config=config)
+    script = build_add_certificate_script(certificate=certificate, config=config)
 
-    assert is_powershell_executable(cmd[0])
-    assert cmd[1:4] == ["-NoProfile", "-ExecutionPolicy", "Bypass"]
-    assert "Invoke-Command -ComputerName 'VM_IP' -Credential $credential" in cmd[-1]
-    assert "ScriptBlock {;\n    param(" not in cmd[-1]
-    assert "ScriptBlock {\n    param(" in cmd[-1]
-    assert "WriteAllBytes($cerPath, [Convert]::FromBase64String($CerBase64))" in cmd[-1]
-    assert "& $SqlcmdPath -S $SqlInstance -C @SqlAuthArgs -b -Q $Sql" in cmd[-1]
-    assert "CREATE CERTIFICATE [APPDB_PROD_2_250_2026]" in cmd[-1]
+    # The values are assigned, not passed: the script travels in a run-cmd request on stdin.
+    assert "$CerBase64 = 'Y2VydA=='" in script
+    assert "param(" not in script and "Invoke-Command" not in script
+    assert "WriteAllBytes($cerPath, [Convert]::FromBase64String($CerBase64))" in script
+    assert "& $SqlcmdPath -S $SqlInstance -C @SqlAuthArgs -b -Q $Sql" in script
+    assert "CREATE CERTIFICATE [APPDB_PROD_2_250_2026]" in script
 
 
 def test_parse_backup_certificate_reads_vault_payload_data():
@@ -1601,18 +1591,14 @@ def test_ensure_source_certificate_with_events_pushes_critical_on_error(tmp_path
 
 
 def test_run_add_certificate_command_reports_stdout_stderr(monkeypatch):
-    class FakeResult:
-        returncode = 1
-        stdout = "CERT_IMPORT: creating cert dir: C:\\SQLBK\\__db_ops_cert"
-        stderr = "CREATE CERTIFICATE failed"
+    from db_ops.transport import common_cli
 
-    monkeypatch.setattr(
-        "db_ops.backup_restore.certificate.subprocess.run",
-        lambda *args, **kwargs: FakeResult(),
-    )
+    monkeypatch.setattr(common_cli, "run_allowing_failure", lambda command, request, **_kw: (
+        True, {"exit_code": 1, "stdout": "CERT_IMPORT: creating cert dir: C:\\SQLBK\\__db_ops_cert",
+               "stderr": "CREATE CERTIFICATE failed"}, ""))
 
     with pytest.raises(RuntimeError) as exc:
-        _run_add_certificate_command(["powershell", "-Command", "fail"])
+        _run_add_certificate_command(["sqlcmd", "-S", "localhost", "-b", "-Q", "select 1"])
 
     assert "Certificate import command failed with exit code 1" in str(exc.value)
     assert "CERT_IMPORT: creating cert dir" in str(exc.value)
@@ -1620,23 +1606,22 @@ def test_run_add_certificate_command_reports_stdout_stderr(monkeypatch):
 
 
 def test_run_add_certificate_command_reports_timeout(monkeypatch):
-    def timeout_run(*args, **kwargs):
-        raise subprocess.TimeoutExpired(
-            cmd=args[0],
-            timeout=kwargs["timeout"],
-            output="partial stdout",
-            stderr="partial stderr",
-        )
+    from db_ops.transport import common_cli
 
-    monkeypatch.setattr("db_ops.backup_restore.certificate.subprocess.run", timeout_run)
+    sent = []
+    monkeypatch.setattr(common_cli, "run_allowing_failure", lambda command, request, **_kw: sent.append(
+        (command, request)) or (True, {"exit_code": None, "timed_out": True, "stdout": "partial stdout",
+                                       "stderr": "partial stderr"}, ""))
 
     with pytest.raises(RuntimeError) as exc:
-        _run_add_certificate_command(["powershell", "-Command", "hang"], timeout_seconds=5)
+        _run_add_certificate_command(["sqlcmd", "-S", "localhost", "-b", "-Q", "select 1"], timeout_seconds=5)
 
     assert "timed out after 5 seconds" in str(exc.value)
     assert "partial stdout" in str(exc.value)
     assert "partial stderr" in str(exc.value)
-
+    # A local import runs through common.cli run-sqlcmd, never a process of the app's own (R10).
+    assert [(command, request["via"], request["timeout_seconds"]) for command, request in sent] == [
+        ("run-sqlcmd", "local", 5)]
 
 def test_copy_backup_cli_accepts_hours_override():
     args = parse_args(["copy-backup", "--config", "config.json", "--source-id", "ACME-192-0-2-250", "--hours", "24"])
@@ -2068,7 +2053,7 @@ def test_run_copy_backup_uses_powershell_for_unc_sources(monkeypatch):
     )
 
     monkeypatch.setattr(
-        "db_ops.backup_restore.copy_backup.list_recent_backup_files_with_powershell",
+        "db_ops.backup_restore.copy_backup.list_recent_backup_files_on_share",
         lambda restore_config: calls.append(restore_config.source_id) or [fake_source],
     )
     monkeypatch.setattr(
@@ -2180,7 +2165,7 @@ def test_run_copy_backup_logs_scan_and_final_summary(monkeypatch, capsys):
         CopyBackupFileResult(selected[1], Path(r"\\vm\SQLBK_IMPORT\SRC\db\FULL\b.bak"), "SKIPPED_EXISTS", 20),
     ]
 
-    monkeypatch.setattr("db_ops.backup_restore.copy_backup.list_recent_backup_files_with_powershell", lambda *_args, **_kwargs: selected)
+    monkeypatch.setattr("db_ops.backup_restore.copy_backup.list_recent_backup_files_on_share", lambda *_args, **_kwargs: selected)
     monkeypatch.setattr("db_ops.backup_restore.copy_backup.copy_backup_file_with_logging", lambda source_file, **_kwargs: results[selected.index(source_file)])
     monkeypatch.setattr("db_ops.backup_restore.copy_backup._write_copy_log", lambda *args: None)
 
@@ -2384,31 +2369,22 @@ def test_linux_delete_backup_quotes_paths_with_dollar(tmp_path, monkeypatch):
     newer = "/opt/mssql2025/backup/SQLBK_IMPORT/ACME-192-0-2-250/APPDB-DB$APPDB/SALESDB_Prod/FULL/APPDB-DB$APPDB_SALESDB_Prod_FULL_20260626_010000.bak"
     commands = []
 
-    class FakeChannel:
-        def recv_exit_status(self):
-            return 0
-
-    class FakeStream:
-        def __init__(self, text=""):
-            self.text = text
-            self.channel = FakeChannel()
-
-        def read(self):
-            return self.text.encode("utf-8")
+    from db_ops.lib.remote_host import RemoteRun
 
     class FakeSsh:
+        """The Linux target, as `open_ssh_connection` hands it out: a `RemoteHost`'s `run`."""
+
         def __enter__(self):
             return self
 
         def __exit__(self, *_args):
             return None
 
-        def exec_command(self, command):
+        def run(self, command, **_kwargs):
             commands.append(command)
             if command.startswith("find "):
-                return None, FakeStream(
-                    f"{old_ts} 100 {target}\n{newer_ts} 100 {newer}\n"), FakeStream("")
-            return None, FakeStream(""), FakeStream("")
+                return RemoteRun(0, f"{old_ts} 100 {target}\n{newer_ts} 100 {newer}\n", "")
+            return RemoteRun(0, "", "")
 
     monkeypatch.setattr(delete_module, "open_ssh_connection", lambda _config: FakeSsh())
     now = datetime.datetime(2026, 6, 27, 0, 0, tzinfo=datetime.timezone.utc).timestamp()
@@ -2606,12 +2582,6 @@ def test_a_zero_retention_deletes_every_target_file(tmp_path):
     assert recent_target.exists()
 
 
-def test_build_checkdb_sql_targets_restore_database(tmp_path):
-    config = make_config(tmp_path)
-
-    assert build_checkdb_sql(config) == "DBCC CHECKDB ([APPDB_Prod_DR]) WITH NO_INFOMSGS;"
-
-
 def test_emit_backup_restore_event_writes_sqlite_and_pushes_telegram(tmp_path, monkeypatch):
     # Routing is the Telegram app's answer, fetched through its CLI, so stub this app's client
     # rather than app_config's TelegramConfig groups.
@@ -2724,7 +2694,10 @@ def test_build_restore_log_stopat_sql_contains_stopat(tmp_path):
     bak.touch()
     candidate = build_restore_candidate(bak, config)
     stopat = datetime.datetime(2026, 5, 30, 11, 0, 0, tzinfo=datetime.timezone.utc)
-    sql = build_restore_log_stopat_sql(Path(r"E:\SQLBK_IMPORT\APPDB_Prod\LOG\log1.trn"), candidate, stopat)
+    fields = _restore_step("log", candidate, config, path=Path(r"E:\SQLBK_IMPORT\APPDB_Prod\LOG\log1.trn"),
+                           recovery=True, stopat_utc=stopat)
+    assert fields["stopat"] == "2026-05-30T11:00:00+00:00"
+    sql = mssql_restore.build_statements("log", fields, [fields["backup_path"]])[0]
     assert "STOPAT" in sql
     assert "2026-05-30T11:00:00" in sql
     assert "RESTORE LOG" in sql

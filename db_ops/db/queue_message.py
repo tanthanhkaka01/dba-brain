@@ -35,7 +35,7 @@ import json
 import sys
 from typing import Any
 
-from db_ops.lib import common_cli
+from db_ops.transport import common_cli
 
 _TIMEOUT_SECONDS = 60
 
@@ -73,7 +73,7 @@ def queue_message(request: dict[str, Any], *, fallback_store: Any = None) -> int
         # the CLI would write somewhere else entirely. Better to take the short path than
         # to send the row to the wrong database.
         return _queue_in_process(request, fallback_store)
-    # The spawn is `lib.common_cli.spawn`, aimed at `db.cli`. What stays here is the only part
+    # The spawn is `transport.common_cli.spawn`, aimed at `db.cli`. What stays here is the only part
     # that is this module's own: **the fallback**. `lib` may not import `db`, so it cannot hold a
     # policy that ends in an in-process insert — and this module had its own copy of the twenty
     # lines around the subprocess until 2026-08-16, which is the same "spawn a db_ops CLI and read

@@ -18,7 +18,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from db_ops.common import data_sources
+from db_ops.lib import data_sources
 
 GROUPS = [{"server_id": "S1", "db_type": "sqlserver", "service_name": "SALES-DEV", "instance_name": "MSSQLSERVER",
            "credentials": [{"credential_name": "sqlserver_s1_dba", "username": "dba"}]},

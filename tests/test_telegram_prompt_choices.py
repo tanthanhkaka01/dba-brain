@@ -24,10 +24,20 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.lib import common_cli
+from db_ops.transport import common_cli
 from db_ops.lib.listing import MAX_PROMPT_CHOICES, choice_lines
 from db_ops.telegram import command_processor
 from conftest import shipped_config
+
+
+@pytest.fixture(autouse=True)
+def _the_request_is_sent_as_the_app_finished_it(monkeypatch):
+    """The app finishes a `common.cli` request from its node's data/ before it sends it (rules
+    R09). These tests are about what it does with the answer, so the fill hands the request back
+    unchanged; `request_fill` has tests of its own."""
+    from db_ops.lib.data_sources import request_fill
+
+    monkeypatch.setattr(request_fill, "fill_request", lambda command, request, **_kwargs: dict(request))
 
 
 PARAMETERS = [

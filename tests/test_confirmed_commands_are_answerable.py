@@ -81,7 +81,7 @@ def test_every_named_operation_is_in_the_ladder() -> None:
 
 def test_the_scaffold_writes_the_ladder_into_a_new_tool_root(tmp_path: Path) -> None:
     """`init` is the only thing that turns the packaged copy into a file the gate reads."""
-    from db_ops import scaffold
+    from db_ops.common import scaffold
 
     scaffold.initialise(tmp_path, app_name="dbabrain")
 

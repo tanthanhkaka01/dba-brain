@@ -27,11 +27,12 @@ worker. It follows the same layout as every other app — a self-contained packa
 > Store-local `inventory-workflow` (with `--beauty 1` for the HTML + Markdown report) is the
 > supported path.
 >
-> **Current state (not yet refactored):** the control app *still* carries
-> `inventory-health` / `inventory-summary` / `inventory-workflow` (the master→worker SSH
-> orchestration documented in the table below). These are **legacy / to be removed** — kept
-> working for now, to be cleared once the reports-app workflow fully replaces them. **Do not
-> add new report/rendering features to the control app**; add them to the reports app.
+> **Current state:** `inventory-summary` and `inventory-workflow` left the control app in 0.24.0 -
+> each did a job another command does (rules R43, the operator's choice): the summary is
+> `common.cli inventory-summary`, the workflow the worker's `reports.cli inventory-workflow`, run
+> from here with `worker-run`. `inventory-health` (the master→worker SSH fetch and merge into the
+> master's canonical JSON) is still here and still legacy. **Do not add new report/rendering
+> features to the control app**; add them to the reports app.
 
 Previously the deploy/version scripts were standalone, under a scripts tree that no longer exists; they
 were rewritten into this app so the master operations live in the same package as the rest of
@@ -84,13 +85,13 @@ control app) — they do **not** decide this node's role. Each daemon tick logs 
 | --- | --- |
 | `bump-version [--part patch\|minor\|major] [--set X.Y.Z] [--dry-run]` | Bump `db_ops/__init__.py` `__version__`. |
 | `build-image [--platform] [--no-cache] [--skip-build]` | Build `db_ops:<version>` + `db_ops:latest` and assemble the deploy bundle locally. |
-| `copy [--host --user --password --remote-dir]` | SFTP the bundle to the worker (overwrites config/data/assets/image; keeps `logs/` and `runtime/db_ops.sqlite`). The bundle also carries the canonical `architecture/database-inventory.json` (repo copy, where static blocks like `sqlserver_resources`/`deployment` are edited) into the worker's `runtime/reports/database-inventory.json` — the worker-side canonical the reports app merges health into. Health blocks are rebuilt from the runtime store on the next `inventory-workflow` run, so the overwrite loses nothing durable. After the upload it also **moves aside any top-level directory under `data/` or `assets/` that the bundle no longer carries** — see [Directories the bundle owns](#directories-the-bundle-owns). |
+| `copy [--host --user --password --remote-dir]` | Upload the bundle to the worker (small files as one tar, the image tar on its own, each hash-checked) (overwrites config/data/assets/image; keeps `logs/` and `runtime/db_ops.sqlite`). The bundle also carries the canonical `architecture/database-inventory.json` (repo copy, where static blocks like `sqlserver_resources`/`deployment` are edited) into the worker's `runtime/reports/database-inventory.json` — the worker-side canonical the reports app merges health into. Health blocks are rebuilt from the runtime store on the next `inventory-workflow` run, so the overwrite loses nothing durable. After the upload it also **moves aside any top-level directory under `data/` or `assets/` that the bundle no longer carries** — see [Directories the bundle owns](#directories-the-bundle-owns). |
 | `start-daemon [... --key-base64/--key --container --node-role]` | `docker load`, replace the container, start the daemon with `DB_OPS_NODE_ROLE` (default `worker`), set `restart=unless-stopped`, verify the version, then **prune the images this deploy superseded** (see below). |
 | `deploy [... all of the above ...] [--merge]` | `build-image` → `copy` → `start-daemon` in one shot. **Master → worker**: the master's `data/` and `assets/` overwrite the worker's, so anything registered through the bot since the last deploy is deleted. `--merge` prepends **merge worker secrets** → **merge worker config** → pull `*.sql`, which pulls what the bot created on the worker (SQL tasks/targets, Telegram groups/users, new secret refs) into the master first; a secret ref that differs on both sides then aborts the deploy before anything is built. See [Syncing worker-side config](#syncing-worker-side-config-back-to-the-master). |
 | `deploy --type <what> [--file-name NAME ...] [--dry-run]` | **Push only what changed.** Uploads the named files into the worker's `data/`/`assets/` bind mounts and stops there - no image build, no bundle, no container restart. `--type config` is the catalogued `data/*.json`, `--type assets` (or `assets/tasks`, `assets\tasks`, `data/ssh_keys`) is a directory; `--file-name` narrows it by filename, path or glob and may be repeated. The config-drift gate still runs, scoped to the files being pushed. See [Pushing one file instead of deploying](#pushing-one-file-instead-of-deploying). |
 | `worker-status [--host --user --key... --container --json --no-metrics]` | Read-only health check: is the daemon container up?, which db_ops version it runs, and — via the in-container `python -m db_ops.jobs.status` — every app command on that node (active?, last run time/status, due now?, last error) plus metric freshness per target. If the deployed image predates the status module the command **says so and exits** — it does not fall back to an inline query. The old fallback hard-coded a SQLite path, so against a PostgreSQL node it reported "no data" for a healthy worker; see the note at `db_ops/control/worker_status.py:17`. It closes with **container network reservations** — see below. |
 | `worker-run [--host --user --key... --container --on-host --sudo] -- <command...>` | Run an **arbitrary command inside the worker container** from the master. The command after `--` is passed through verbatim (each token shell-quoted), so any `python -m db_ops.<app>.cli ...` can be triggered on the worker without hard-coding. Exit code + stdout/stderr are returned. **`--on-host`** runs it on the worker **host** instead (compose file, `docker pull`, the bind mounts) with the same login; one quoted argument is a shell line. **`--sudo`** runs that under sudo, fed the SSH password. An image upgrade is `worker-run --on-host -- 'cd /opt/dbabrain && docker compose pull && docker compose up -d'`. |
-| `worker-create-db-docker [--host --user --key... --container] --name --engine --version --mode --replicas --host-port --password-ref [--worker-host --containers-dir --no-register --force --dry-run --pull-config]` | Convenience wrapper: runs `sre.cli create-db-docker` **inside the worker container** via `worker-run` (provisions a lab DB container, see `docs/10_sre_app.md`), then, with `--pull-config`, pulls the updated `data/` config back to the master. The `--key`/`--key-base64` is forwarded to the in-container command so it can resolve the DB password from the secret store. |
+| `worker-create-db-docker [--host --user --key...] --name --engine --version --mode --replicas --host-port --password-ref [--password-text --overwrite-secret --worker-host --containers-dir --network-subnet --install-docker --no-register --force --dry-run]` | Builds a lab database **on the worker's host**: `common.cli create-db-docker` with the worker's SSH login as `remote`, the login and the database password on stdin (see `docs/10_sre_app.md` for what gets built). The password (`--password-text`, stored only after the build succeeds) and the connection record are written **here, on this node**, with `created_by: db_ops.control.worker-create-db-docker`; the worker has them after the next deploy. Since 0.24.0 - it used to run `sre.cli create-db-docker` inside the worker container (one app driving another's CLI, rules R42, with the passphrase on that command line), so `--container` and `--pull-config` are accepted and do nothing. The SSH user runs `docker` itself; `--install-docker` prepares a host where it cannot (sudo, with the SSH password). |
 | `pull-node-config --from <node>/data [--merge-secrets --key... --dry-run]` | **Carry back what a LOCAL node created.** The sibling of `worker-pull-data-config` for a node that is an ordinary directory on a PC rather than the worker container - which is what the estate is since it moved off the container. Same merge rules, because it is the same function underneath: union by key with the master winning a shared key, named leaves only for field-merged files, and a secret ref that differs on both sides refuses and writes nothing. `store_config.json` and `telegram_config.json` are never carried back - a node's own store declaration and its `getUpdates` cursor are per-node state, and copying either back breaks the node it came from or the one it lands on. |
 | `worker-pull-data-config [--host --user --key... --from-worker-path --to-master-path --files --all-json --include-secrets --merge-secrets --plaintext-secret-path --overwrite --dry-run]` | Copy updated `data/` config files from the worker back to the master over SFTP (the worker's `data/` is bind-mounted on the host at `<remote-dir>/data`). Defaults to just `docker_db_connections.json`; `--all-json` widens to every `*.json` (still excluding the encrypted secret store unless `--include-secrets`). Existing master files are skipped unless `--overwrite`; `--dry-run` prints the plan. |
 
@@ -102,8 +103,6 @@ python -m db_ops.control.cli worker-pull-data-config `
     --key-base64 "<base64-passphrase>" --all-json --merge-secrets --overwrite
 ```
 | `inventory-health [--host --user --password --days --date --container ...]` | **(legacy — moving to reports app)** Trigger the reports app's `build-inventory-health` inside the worker container, copy the dated overlay into `runtime/reports/`, and merge its health blocks into `architecture/database-inventory.json` (servers without metrics — e.g. lab VMs — are left untouched). |
-| `inventory-summary [--inventory --output-dir --date]` | **(legacy — moving to reports app)** Render `<YYYYMMDD_HHMMSS>_database-inventory-summary.md` into `runtime/reports/` from the canonical inventory JSON (full inventory + merged health; lab VMs and credential fields excluded). |
-| `inventory-workflow [--host --user --password --days --date ...]` | **(legacy — moving to reports app)** Run `inventory-health` then `inventory-summary` in one shot, sharing one `YYYYMMDD_HHMMSS` stamp. `--user` defaults to the worker's `user` in `config.json`. Superseded by the worker-side `db_ops.reports.cli inventory-workflow [--beauty 1]` (store-local, no SSH). |
 
 ### `start-daemon` prunes what it replaced
 
@@ -181,24 +180,14 @@ python -m db_ops.control.cli worker-run `
     --point-in-time "2026-06-08 12:00:00 +07:00" `
     --key-base64 "<base64-passphrase>"
 
-# provision a lab DB container on the worker, then pull the updated config back
+# build a lab DB container on the worker's host, register it here; deploy to give it to the worker
 python -m db_ops.control.cli worker-create-db-docker `
     --key-base64 "<base64-passphrase>" `
     --name pg_lab_01 --engine postgres --version 16 --mode single `
-    --host-port 5433 --password-ref POSTGRES_PASSWORD --pull-config
-
-# or do it in two explicit steps (equivalent):
-python -m db_ops.control.cli worker-run `
-    --key-base64 "<base64-passphrase>" `
-    -- `
-    python -m db_ops.sre.cli create-db-docker `
-    --name pg_lab_01 --engine postgres --version 16 --mode single `
     --host-port 5433 --password-ref POSTGRES_PASSWORD
-python -m db_ops.control.cli worker-pull-data-config `
-    --key-base64 "<base64-passphrase>" --overwrite
 ```
 
-> In-container provisioning drives the host Docker daemon: the runtime compose mounts `/var/run/docker.sock` and passes `/opt/db_ops/containers` through at the same absolute path, and the worker image needs a Docker client + compose plugin (`apt: docker.io docker-compose-v2`). Preview safely first with `--dry-run`.
+> The build runs on the worker **host** over SSH, as the SSH user, into `/opt/db_ops/containers` - the same daemon and folder the in-container build used through `/var/run/docker.sock`. A folder a root-run build left behind is not the user's to write: `--install-docker` hands it over (and installs Docker where it is missing). Preview safely first with `--dry-run`.
 
 ### Notes
 
@@ -313,6 +302,18 @@ python -m db_ops.control.cli deploy --key-base64 <K> --on-config-drift keep
 
 With **no terminal and no `--on-config-drift`** the deploy aborts with exit code 3. Guessing which
 side is right is the one thing this gate must not do — both alternatives destroy somebody's change.
+
+**How the master reaches the worker (0.24.0).** Every command and every file goes through
+`common.cli` - `run-cmd`, `push-file`, `pull-file` - held as a `lib.remote_host.RemoteHost`; `control`
+does not import `common` (rules R03). Each call is its own SSH session, about half a second, so
+anything with many files travels as one tar: a push packs the small files together, a pull of
+the task SQL fetches the tree in one archive. A command's output arrives when it ends - a long
+`docker load` is silent until it is done. `--sudo` is `run-cmd`'s own: the line runs under
+`sudo -S` with the SSH password on stdin, never on the remote argv.
+
+The question itself is asked by `common.cli ask` (since 0.24.0 - `control` runs `common`, it does
+not import it; rules R03), on the controlling terminal, with its two-minute deadline: an answer
+that never comes is an abort, not a hang.
 
 ### This is not what `--merge` does
 
@@ -550,8 +551,7 @@ sudo (`/opt` is root-owned by default). Replace `user`/`ubuntu-host` accordingly
 sudo mkdir -p /opt/db_ops && sudo chown "$USER:$USER" /opt/db_ops
 ```
 
-Then copy the bundle contents from Windows. (The control app's `copy` automates this
-via SFTP.)
+Then copy the bundle contents from Windows. (The control app's `copy` automates this.)
 
 - **SSH key auth** — OpenSSH `scp` works:
   ```powershell
@@ -902,7 +902,7 @@ a removed toggle as `null`. A `server_id` only the worker has (a lab database
 #### The worker's files have to be readable first — `reclaim worker files`
 
 `data/` and `assets/` are bind mounts shared between the container and its host, the container runs
-as **root**, and the master reads the worker over SFTP as `dba_user`. So anything the container writes
+as **root**, and the master reads the worker as `dba_user`, the SSH login. So anything the container writes
 there lands owned by root, and from that moment the master cannot open it. The merge caught the
 permission error with the same `except IOError` as a missing file, printed
 `MISSING db_instances.json (not on worker)`, and the copy step overwrote the operator's change with
@@ -976,7 +976,7 @@ off when you are shipping a deliberate master-side change.
 
 ### Pulling explicitly
 
-`worker-pull-data-config` still does it on demand (master-initiated SFTP; no reverse credentials
+`worker-pull-data-config` still does it on demand (master-initiated; no reverse credentials
 on the worker) — useful to sync without deploying, or to take the worker's copy of a file
 wholesale rather than merging it:
 

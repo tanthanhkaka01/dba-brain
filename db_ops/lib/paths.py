@@ -4,7 +4,7 @@
 ``REPO_ROOT`` in four more and ``DEFAULT_DATA_DIR`` in eight. Each was correct, and each was
 correct only for the depth of the file it sat in — which is exactly how a module that moves one
 level deeper starts resolving ``data/`` to a folder that does not exist. That happened in this
-session, to ``common/data_sources`` when it became a package: the constant still said
+session, to ``lib/data_sources`` when it became a package: the constant still said
 ``parents[2]`` and the whole reports suite failed on ``db_ops/data/reports_config.json``.
 
 Computed here and imported everywhere, the depth is stated once, in the one file whose own

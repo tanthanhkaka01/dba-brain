@@ -54,16 +54,6 @@ class _FakeSFTP:
         pass
 
 
-class _FakeClient:
-    def __init__(self, sftp):
-        self._sftp = sftp
-
-    def open_sftp(self):
-        return self._sftp
-
-    def close(self):
-        pass
-
 
 def _merge(tmp_path, monkeypatch, *, master, worker, plaintext=None, key=KEY, dry_run=False):
     data = tmp_path / "data"
@@ -74,7 +64,7 @@ def _merge(tmp_path, monkeypatch, *, master, worker, plaintext=None, key=KEY, dr
     if plaintext is not None:
         plaintext_path.write_text(json.dumps(plaintext), encoding="utf-8")
     monkeypatch.setattr(worker_data, "ssh_connect",
-                        lambda *a, **k: _FakeClient(_FakeSFTP(worker_file)))
+                        lambda *a, **k: _FakeSFTP(worker_file))
     action = worker_data.merge_worker_secrets(
         host="h", user="u", password="p", key=key,
         to_master_path=str(data), plaintext_secret_path=str(plaintext_path), dry_run=dry_run)

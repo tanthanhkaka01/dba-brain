@@ -43,7 +43,7 @@ def test_the_refusal_names_the_form_that_works(capsys):
 def test_an_ordinary_level_is_still_answered(monkeypatch, capsys):
     """The lookup itself is untouched, including a level nobody configured: an unmapped level
     legitimately answers a blank chat, and that is not what this refusal is about."""
-    from db_ops.telegram import routing
+    from db_ops.lib import telegram_route as routing
 
     monkeypatch.setattr(routing, "telegram_settings",
                         lambda: (True, {"critical": "-100"}, list(routing.STANDARD_LEVELS)))
@@ -55,7 +55,7 @@ def test_an_ordinary_level_is_still_answered(monkeypatch, capsys):
 def test_a_level_that_merely_starts_with_a_letter_is_not_mistaken_for_a_request(monkeypatch, capsys):
     """Only the three shapes of the JSON contract are refused. A deployment defines its own
     levels — `sla` is one — and none of them may be caught by this."""
-    from db_ops.telegram import routing
+    from db_ops.lib import telegram_route as routing
 
     monkeypatch.setattr(routing, "telegram_settings",
                         lambda: (True, {"sla": "-200"}, [*routing.STANDARD_LEVELS, "sla"]))

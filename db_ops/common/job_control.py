@@ -129,11 +129,11 @@ def disable_job(
 
     statement = _disable_statement(db_type, job, source)
     exec_request: dict[str, Any] = {
+        # The same stated login the listing above used - rules R09, nothing is looked up.
         "target": request.get("target") or target_id,
+        "connection": request.get("connection"),
         "sql": statement,
         "commit": True,
-        "credential_name": request.get("credential_name") or request.get("user_ref") or "",
-        "data_dir": data_dir if data_dir is not None else request.get("data_dir"),
         "sql_access": request.get("sql_access"),
     }
     if db_type == "sqlserver":

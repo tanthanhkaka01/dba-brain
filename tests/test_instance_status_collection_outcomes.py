@@ -95,7 +95,7 @@ def _collect(monkeypatch, *, connect_error=None, execute_error=None, rows=()):
             raise connect_error
         return connection
 
-    monkeypatch.setattr("db_ops.metrics.executor.db_connect.connect_engine", fake_connect_engine)
+    monkeypatch.setattr("db_ops.common.metric_batch.db_connect.connect_engine", fake_connect_engine)
     results = _collect_one_metric(
         metric=_instance_status_definition(),
         target=_target(),
@@ -177,7 +177,7 @@ def test_the_same_two_failures_on_a_non_availability_metric_stay_warnings(monkey
             raise failure["connect_error"]
         return _FakeConnection(cursor)
 
-    monkeypatch.setattr("db_ops.metrics.executor.db_connect.connect_engine", fake_connect_engine)
+    monkeypatch.setattr("db_ops.common.metric_batch.db_connect.connect_engine", fake_connect_engine)
     results = _collect_one_metric(
         metric=backup_age,
         target=_target(),

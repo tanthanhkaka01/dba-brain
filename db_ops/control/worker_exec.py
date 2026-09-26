@@ -40,14 +40,13 @@ def run_worker_command(*, host: str, user: str, password: str | None, port: int 
     if on_host:
         # One token is a whole shell line (`cd /opt/dbabrain && docker compose ps`); several are
         # one command and its arguments, quoted as they came.
-        line = cmd[0] if len(cmd) == 1 else quoted
-        remote = f"sudo -S -p '' sh -c {shlex.quote(line)}" if sudo else line
+        remote = cmd[0] if len(cmd) == 1 else quoted
     else:
         remote = "docker exec " + shlex.quote(container) + " " + quoted
     client = ssh_connect(host, user, password, port)
     try:
         print(f"# worker {user}@{host}{' (host)' if on_host else ''}", flush=True)
-        return ssh_run(client, remote, check=False,
-                       sudo_password=password if (on_host and sudo) else None)
+        # `sudo` puts the line under `sudo -S` with the SSH password on stdin (run-cmd's own).
+        return ssh_run(client, remote, check=False, sudo=on_host and sudo)
     finally:
         client.close()

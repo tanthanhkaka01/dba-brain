@@ -44,7 +44,7 @@
                 "command_argv": [
                     "{python}",
                     "-m",
-                    "db_ops.db.cli",
+                    "db_ops.common.cli",
                     "self-status",
                     "{\"format\": \"txt\"}",
                     "--config",
@@ -351,7 +351,7 @@
                 "startup_grace_seconds": 3,
                 "timeout_seconds": 1800,
                 "success_output_contains": "\"status\": \"success\"",
-                "start_text": "Force hourly metrics report started for {server_id} ({target_ip}). Collecting...\nMetrics restricted to a night window (CHECKDB, index fragmentation, restore validation) are skipped; add 'full' to include them.",
+                "start_text": "Hourly metrics report started for {server_id} ({target_ip}), from the latest stored results - metrics collects them on its own schedule.",
                 "success_text": "Force hourly metrics report completed for {server_id}",
                 "failure_text": "Force hourly metrics report failed for {server_id}\nExit code: {exit_code}\nError: {error_summary}",
                 "timeout_text": "Force hourly metrics report timed out for {server_id}. Exceeded {timeout_seconds}s.",
@@ -361,17 +361,6 @@
                 },
                 "parameters": [
                     {
-                        "name": "windowed",
-                        "source": "flag",
-                        "flag_words": [
-                            "full",
-                            "all",
-                            "+windowed"
-                        ],
-                        "present": "yes",
-                        "absent": "no"
-                    },
-                    {
                         "name": "target",
                         "source": "arg",
                         "position": 1,
@@ -380,18 +369,9 @@
                         "resolve": "target",
                         "prompt_text": "Target? a server_id (e.g. <server_id>) or: <db_type> <ip>[:port] (e.g. mssql <ip> or mssql <ip>:1433). Use /spbot_list_server_id to list targets."
                     }
-                ],
-                "conditional_args": [
-                    {
-                        "parameter": "windowed",
-                        "equals": "yes",
-                        "argv": [
-                            "--include-windowed"
-                        ]
-                    }
                 ]
             },
-            "_note": "A read-only run that takes minutes, so it goes to the background and reports back when it finishes. 'working_dir' is the logical alias for the tool root, resolved to wherever the project actually lives - flat checkout or container."
+            "_note": "A read-only run over the stored results - it collects nothing since 0.24.0, so there is no 'full' word any more. It stays in the background so a slow store never holds the bot. 'working_dir' is the logical alias for the tool root, resolved to wherever the project actually lives - flat checkout or container."
         },
         {
             "node_role": "worker",

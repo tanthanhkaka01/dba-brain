@@ -40,16 +40,6 @@ class _FakeSFTP:
         pass
 
 
-class _FakeClient:
-    def __init__(self, sftp):
-        self._sftp = sftp
-
-    def open_sftp(self):
-        return self._sftp
-
-    def close(self):
-        pass
-
 
 @pytest.fixture
 def patched(monkeypatch):
@@ -58,7 +48,7 @@ def patched(monkeypatch):
         "sql_targets.json": "{}",
         "encrypted_secret_text.json": "SECRET",
     })
-    monkeypatch.setattr(worker_data, "ssh_connect", lambda *a, **k: _FakeClient(sftp))
+    monkeypatch.setattr(worker_data, "ssh_connect", lambda *a, **k: sftp)
     return sftp
 
 
@@ -145,7 +135,7 @@ def test_a_worker_file_the_manifest_does_not_know_is_never_pulled(monkeypatch, t
         "metric_groups.json": '{"metric_groups": []}',
         "notify_levels.json": '{"notify_levels": []}',
     })
-    monkeypatch.setattr(worker_data, "ssh_connect", lambda *a, **k: _FakeClient(sftp))
+    monkeypatch.setattr(worker_data, "ssh_connect", lambda *a, **k: sftp)
 
     _pull(tmp_path, all_json=True)
 
@@ -163,7 +153,7 @@ def test_an_unknown_worker_file_is_named_rather_than_ignored_silently(monkeypatc
     apart. Silence would leave a genuinely new file stranded on one host with nothing to notice.
     """
     sftp = _FakeSFTP({"sql_targets.json": "{}", "something_new.json": "{}"})
-    monkeypatch.setattr(worker_data, "ssh_connect", lambda *a, **k: _FakeClient(sftp))
+    monkeypatch.setattr(worker_data, "ssh_connect", lambda *a, **k: sftp)
 
     _pull(tmp_path, all_json=True)
 
@@ -179,7 +169,7 @@ def test_a_master_owned_file_is_not_swept_back(monkeypatch, tmp_path):
     sweep that took the worker's copy would silently revert whatever was last changed here.
     """
     sftp = _FakeSFTP({"metric_definitions.json": '{"metrics": []}', "sql_commands.json": "{}"})
-    monkeypatch.setattr(worker_data, "ssh_connect", lambda *a, **k: _FakeClient(sftp))
+    monkeypatch.setattr(worker_data, "ssh_connect", lambda *a, **k: sftp)
 
     _pull(tmp_path, all_json=True)
 

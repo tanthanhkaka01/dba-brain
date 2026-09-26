@@ -254,14 +254,11 @@ def _rows(cursor, sql: str) -> list[dict[str, Any]]:
 
 
 def _connect(request: dict[str, Any], *, data_dir: str | Path | None, timeout_seconds: int):
-    """Connect to the instance as the login the request (or the inventory) names."""
+    """Connect to the instance as the login the request states in its ``connection`` - this
+    process reads no configuration (rules R09); the host itself is the request's ``access``."""
     try:
-        resolved = sql_run.resolve_sqlserver_target(
-            str(request.get("target") or ""),
-            data_dir=data_dir,
-            database="master",
-            credential_name=str(request.get("credential_name") or ""),
-        )
+        resolved = sql_run.resolve_stated_connection(request, database="master",
+                                                     what="this SQL Server patch command")
     except sql_run.SqlRunError as exc:
         raise SqlServerPatchError(str(exc)) from exc
     if str(resolved.get("db_type")) != "sqlserver":
@@ -457,7 +454,7 @@ def precheck(
                              "services": services, "current_build": current_build})
 
     with host_ops.open_host_session(
-        target, data_dir=data_dir, connect_timeout_seconds=int(policy["connect_timeout_seconds"])
+        target, connect_timeout_seconds=int(policy["connect_timeout_seconds"])
     ) as session:
         facts = host_ops.read_facts(
             session, platform=target.platform, services=services,
@@ -669,7 +666,7 @@ def apply_cu(
 
     started = time.monotonic()
     with host_ops.open_host_session(
-        target, data_dir=data_dir, connect_timeout_seconds=int(policy["connect_timeout_seconds"])
+        target, connect_timeout_seconds=int(policy["connect_timeout_seconds"])
     ) as session:
         result = session.run_script(
             script, shell="powershell", timeout_seconds=int(policy["patch_timeout_seconds"])
@@ -766,7 +763,7 @@ def verify_build(
 
     if target.is_windows:
         with host_ops.open_host_session(
-            target, data_dir=data_dir, connect_timeout_seconds=int(policy["connect_timeout_seconds"])
+            target, connect_timeout_seconds=int(policy["connect_timeout_seconds"])
         ) as session:
             facts = host_ops.read_facts(
                 session, platform=target.platform, services=services,

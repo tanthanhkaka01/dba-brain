@@ -13,7 +13,7 @@ else's address*: on 2026-09-14 a node reported ``published links point at
 http://<the worker>:8080/report_dba/ - not this node``, correct and unactionable, because there was
 no command to change it.
 
-**Why not just derive it every time.** :func:`db_ops.common.data_sources.report_base_url` already
+**Why not just derive it every time.** :func:`db_ops.lib.data_sources.report_base_url` already
 falls back to a value worked out from the estate's declared worker host, which is right for the
 estate's own pages and wrong for a node being proved: that node serves its own copies, and every
 link it publishes would send the reader to the machine it was cloned from. ``--this-node`` writes
@@ -130,7 +130,7 @@ def use_base_url(url: str = "", *, data_dir: str | Path, this_node: bool = False
 
     # Reported rather than assumed, for the same reason `use-store` prints the resolved connection:
     # the mistake being prevented is believing the node is on the other address.
-    from db_ops.common.data_sources import derived_report_base_url
+    from db_ops.lib.data_sources import derived_report_base_url
 
     try:
         derived = derived_report_base_url(root)

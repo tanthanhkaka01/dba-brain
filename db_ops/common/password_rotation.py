@@ -34,7 +34,10 @@ import string
 from pathlib import Path
 from typing import Any, Iterable
 
-from db_ops.common import data_sources, db_connect, sql_run
+from db_ops.common import db_connect, sql_run
+
+from db_ops.lib import data_sources
+from db_ops.lib.data_sources import request_fill
 
 # Symbols restricted to ones that survive an ODBC connection string, a SQL string literal and shell
 # quoting without escaping. No quote, semicolon, backslash or brace: those are what turn a generated
@@ -273,9 +276,15 @@ def resolve_ref_target(
                 chosen = instance
                 break
 
-    target = sql_run.resolve_sqlserver_target(
-        str(chosen.get("server_id") or ""), data_dir=data_dir
-    )
+    # The instance's own login, filled the way every app fills a request (rules R09): run-sql's
+    # resolver stopped reading the inventory, and this module - whose job is the store - reads it.
+    try:
+        connection = request_fill.sql_connection(
+            str(chosen.get("server_id") or ""), data_dir=data_dir,
+            secrets=data_sources.load_secret_text(data_dir, key=key))
+    except request_fill.RequestFillError as exc:
+        raise PasswordRotationError(str(exc)) from exc
+    target = sql_run.resolve_stated_connection({"connection": connection}, what="rotate-password")
     if override:
         target["ip"] = override
     target["password_ref"] = ref

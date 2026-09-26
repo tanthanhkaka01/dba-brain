@@ -51,7 +51,7 @@ DEFAULT_DETAIL_LIMIT = 25
 #: than a literal: the port, mount and host are all deployment facts, not code facts.
 # Resolution lives in db_ops.lib.report_archive: the SLA app links to its published page too,
 # and two copies of "where are the reports" is how a link starts 404ing.
-from db_ops.common.data_sources import report_base_url  # noqa: E402,F401
+from db_ops.lib.data_sources import report_base_url  # noqa: E402,F401
 
 
 def server_dashboard_url(server_id: str) -> str:

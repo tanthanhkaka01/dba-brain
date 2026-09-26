@@ -24,7 +24,7 @@ from db_ops.backup_restore.backup import (
 
 
 def _instances(monkeypatch, *records):
-    from db_ops.common import data_sources
+    from db_ops.lib import data_sources
 
     monkeypatch.setattr(data_sources, "load_db_instances", lambda *_a, **_k: list(records))
     monkeypatch.setattr(

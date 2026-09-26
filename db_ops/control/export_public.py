@@ -469,12 +469,12 @@ def rename_distribution(target: Path) -> None:
         # nothing in the public tree should have to know this repository's counter.
         text = text.replace('dynamic = ["version"]', f'version = "{PUBLIC_VERSION}"', 1)
         text = text.replace(
-            "[tool.setuptools.dynamic]" + "\n" + 'version = { attr = "db_ops.__version__" }' + "\n",
+            "[tool.setuptools.dynamic]" + "\n" + 'version = { attr = "db_ops.lib.version.__version__" }' + "\n",
             "",
         )
         pyproject.write_text(text, encoding="utf-8")
 
-    init = target / "db_ops" / "__init__.py"
+    init = target / "db_ops" / "lib" / "version.py"
     if init.exists():
         text = init.read_text(encoding="utf-8")
         import re
@@ -531,14 +531,29 @@ def discard(target: Path) -> None:
     shutil.rmtree(target)
 
 
+class ScanRefused(RuntimeError):
+    """The scan could not look - no identifiers to search for, or nothing to read. The copy stands,
+    and nothing about it has been verified."""
+
+
 def scan_exported_tree(target: Path) -> dict:
     """Run the identifier scan over what was just written. A hit means the tree does not ship.
 
     Deliberately re-run against the *copy* rather than trusting the scan of the source. The two
     differ — the copy is what a stranger receives — and this is the last moment anything can be
     checked before a tree becomes public and permanent.
+
+    Run as ``common.cli check-identifiers`` (rules R03: this app does not import ``common``). A
+    refusal is :class:`ScanRefused`; any other failure raises, as the in-process scan did - an
+    export whose scan broke must not read as one whose scan had nothing to look for.
     """
-    from db_ops.common import identifier_scan
+    from db_ops.transport import common_cli
 
     paths = [child.name for child in sorted(target.iterdir()) if not child.name.startswith(".")]
-    return identifier_scan.scan({"root": str(target), "paths": paths})
+    success, data, error = common_cli.run_allowing_failure(
+        "check-identifiers", {"root": str(target), "paths": paths})
+    if success:
+        return data
+    if data.get("refused"):
+        raise ScanRefused(error)
+    raise common_cli.CommonCliError(f"check-identifiers: {error}")

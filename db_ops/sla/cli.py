@@ -186,7 +186,7 @@ def _maybe_notify_telegram(args, config, summary, logger, *, sla_run_id: int | N
         log_event(logger, level="warning", message=f"sla.notify skipped: no telegram group for level={level}.")
         return None
 
-    from db_ops.common.data_sources import report_base_url
+    from db_ops.lib.data_sources import report_base_url
 
     from db_ops.db.queue_message import queue_message, store_block
 

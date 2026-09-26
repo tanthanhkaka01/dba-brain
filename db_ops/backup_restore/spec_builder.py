@@ -1,14 +1,11 @@
-"""Turning a configured restore entry into a self-contained :class:`RestoreSpec`.
+"""Turning a configured backup entry into the complete request ``common.cli backup-database`` takes.
 
 This is the half that reads data, and it lives here because reading data is an app's job:
 ``restore_config.json`` for the entry, ``db_instances.json`` for the host behind a ``server_id``,
-and the encrypted store for the passwords. :mod:`db_ops.common.restore` does none of that - it is
-handed the answers.
+and the encrypted store for the passwords. ``common`` does none of that - it is handed the answers.
 
-The split is what makes the API portable. ``common`` can be packaged and dropped anywhere with no
-config file beside it, because everything it needs arrives in the request; and the same API is
-callable for a one-off recovery against a machine that is in no inventory at all, which is exactly
-the situation a real recovery tends to be.
+It also built a ``RestoreSpec`` for ``common.cli restore-database`` until 0.24.0; that command was a
+third route for a SQL Server restore and went (rules R43), and the spec with it.
 """
 
 from __future__ import annotations
@@ -16,10 +13,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from db_ops.lib.restore.plan import ENGINE, SCRIPT
-from db_ops.lib.restore.spec import RestoreSpecError, parse_restore_spec
 from db_ops.lib.paths import resolve_tool_path
 from db_ops.lib.timezone import display_now
+
+
+class SpecBuildError(ValueError):
+    """The entry cannot be turned into a complete request: a secret or a script it names is missing."""
 
 
 def _secret(ref: str, secrets: dict[str, str], *, where: str) -> str:
@@ -29,7 +28,7 @@ def _secret(ref: str, secrets: dict[str, str], *, where: str) -> str:
         return ""
     value = secrets.get(ref, "")
     if not value:
-        raise RestoreSpecError(
+        raise SpecBuildError(
             f"{where} maps to secret ref {ref!r}, which is not in the secret store. Add it, or "
             "pass --key/--key-base64 so the store can be read."
         )
@@ -101,7 +100,7 @@ def _script_path(script: str, *, label: str, data_dir: str | Path | None = None)
     path = Path(script)
     candidate = resolve_tool_path(path)
     if not candidate.is_file():
-        raise RestoreSpecError(f"{label}: script not found: {candidate}")
+        raise SpecBuildError(f"{label}: script not found: {candidate}")
     return candidate
 
 
@@ -109,7 +108,7 @@ def _resolved_key_file(target: Any, data_dir: str | Path | None = None) -> str:
     """The private key as a path on this machine, or empty when the target uses a password."""
     if not getattr(target, "key_file", None):
         return ""
-    from db_ops.common.data_sources import resolve_ssh_key
+    from db_ops.lib.data_sources import resolve_ssh_key
 
     return str(resolve_ssh_key(target.key_file, data_dir) or "")
 
@@ -120,82 +119,3 @@ def _ssh_password(target: Any, secrets: dict[str, str]) -> str:
         return ""
     ref = str(getattr(target, "password_ref", "") or "")
     return _secret(ref, secrets, where="backup.host.password_ref") if ref else ""
-
-
-def spec_from_engine_entry(
-    config: Any, *, secrets: dict[str, str], point_in_time: str = "", dry_run: bool = False
-) -> Any:
-    """Build a spec from a ``BackupRestoreConfig`` - the SMB + sqlcmd entries."""
-    return parse_restore_spec({
-        "db_type": "sqlserver",
-        "label": config.restore_id or config.source_id,
-        "source": {
-            "access": "smb",
-            "host": config.prod_smb_credential_target,
-            "path": str(config.prod_backup_share),
-            "username": config.prod_smb_username,
-            "password": _secret(config.prod_smb_password_env, secrets,
-                                where=f"{config.restore_id}.source.password_env"),
-        },
-        "target": {
-            "platform": config.vm_platform,
-            "host": config.vm_credential_target,
-            "port": 1433,
-            "instance": config.restore_sql_instance_on_vm,
-            "username": config.restore_sql_username,
-            "password": _secret(config.restore_sql_password_env, secrets,
-                                where=f"{config.restore_id}.target.sql_password_env"),
-            "data_dir": str(config.restore_data_dir_on_vm),
-            "import_dir": str(config.vm_import_unc),
-            "ssh_username": config.vm_username,
-            "ssh_password": _secret(config.vm_password_env, secrets,
-                                    where=f"{config.restore_id}.target.password_env"),
-        },
-        # The mapping's own field; `source_database_name` belongs to the entry, and asking a mapping
-        # for it through getattr emptied this list for every entry until 2026-09-23.
-        "database_names": [m.source_database for m in (config.databases or ()) if m.source_database],
-        "point_in_time": point_in_time,
-        "copy_hours": config.copy_recent_hours,
-        "dry_run": dry_run,
-        "extras": {"method": ENGINE, "restore_id": config.restore_id},
-    })
-
-
-def spec_from_script_entry(
-    job: Any, *, secrets: dict[str, str], data_dir: str | Path | None = None,
-    dry_run: bool = False,
-) -> Any:
-    """Build a spec from a ``ScriptRestore`` - the container-to-container drills.
-
-    No ``point_in_time`` parameter: this method cannot honour one, and offering the argument would
-    invite a caller to pass it and be quietly given the newest chain. The refusal belongs to
-    :mod:`db_ops.lib.restore.pitr`, which sees it through ``extras.method``.
-    """
-    from db_ops.backup_restore.backup import resolve_ssh_target
-
-    target = resolve_ssh_target(
-        job.target_server_id or job.server_id, label=job.label,
-        data_dir=data_dir, require_container=False,
-    )
-    return parse_restore_spec({
-        "db_type": job.db_type,
-        "label": job.label,
-        "source": {
-            "access": "ssh",
-            "host": job.server_id,
-            "path": job.source_backup_host_dir or job.backup_dir,
-        },
-        "target": {
-            "platform": "linux",
-            "host": target.host,
-            "port": 1433,
-            "username": job.env.get("MSSQL_USER", "sa"),
-            "password": _secret(job.env_secrets.get("MSSQL_PASSWORD", ""), secrets,
-                                where=f"{job.restore_id}.env_secrets.MSSQL_PASSWORD"),
-            "container": job.target_container,
-            "import_dir": job.target_backup_dir or job.backup_dir,
-            "ssh_username": target.username,
-        },
-        "dry_run": dry_run,
-        "extras": {"method": SCRIPT, "restore_id": job.restore_id},
-    })

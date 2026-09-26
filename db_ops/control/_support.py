@@ -1,5 +1,10 @@
 """Shared helpers for the db_ops control app: paths, local docker exec, and the
-paramiko SSH/SFTP transport used to drive the worker host from the master (PC).
+SSH session used to drive the worker host from the master (PC).
+
+The session is a :class:`db_ops.lib.remote_host.RemoteHost` - every command and every file goes
+through ``common.cli`` (``run-cmd``, ``push-file``, ``pull-file``). Until 0.24.0 it was a raw
+paramiko client out of ``common.ssh``, which made ``control`` an app importing ``common`` (rules
+R03). The helpers below kept their names, so the deploy reads as it did.
 
 These were previously the standalone ``scripts/python/db_ops_py`` helpers; they now
 live inside the control app so the master-side operations follow the same package
@@ -14,12 +19,11 @@ import re
 import shutil
 import subprocess
 import sys
-import time
 from pathlib import Path
 
-from db_ops.common.ssh import SshError, open_ssh_client
 from db_ops.config import DEFAULT_CONFIG_PATH, load_config
 from db_ops.lib.paths import TOOL_ROOT
+from db_ops.lib.remote_host import RemoteError, RemoteHost
 
 # The project root, resolved once in db_ops/lib/paths.py rather than re-derived here from
 # __file__ — that idiom answers "where is my config" with "where is my code", which is only
@@ -30,7 +34,7 @@ DB_OPS_ROOT = TOOL_ROOT
 # never escapes the project (was DB_OPS_ROOT.parents[1] under the old repo/tools/db_ops layout).
 REPO_ROOT = DB_OPS_ROOT
 BUNDLE_DIR = DB_OPS_ROOT / "deploy" / "db_ops_deploy"
-INIT_PY = DB_OPS_ROOT / "db_ops" / "__init__.py"
+INIT_PY = DB_OPS_ROOT / "db_ops" / "lib" / "version.py"
 IMAGE_TAR_NAME = "db_ops_image.tar"
 IMAGE_REPO = "db_ops"
 # Where the worker's tool root and its container are, as of 2026-09-16.
@@ -64,7 +68,7 @@ CONTAINER_DATA_DIR_NAME = "containers"
 
 
 # --------------------------------------------------------------------------- #
-# Version (single source of truth: db_ops/__init__.py __version__)
+# Version (single source of truth: db_ops/lib/version.py __version__)
 # --------------------------------------------------------------------------- #
 def read_version() -> str:
     text = INIT_PY.read_text(encoding="utf-8")
@@ -142,7 +146,7 @@ def resolve_password(password: str | None, *, host: str, user: str,
     if password:
         return password
     if password_ref:
-        from db_ops.common import data_sources
+        from db_ops.lib import data_sources
         from db_ops.lib.secret_text import SECRET_KEY_ENV_VAR, resolve_cli_key
         try:
             secret_key = resolve_cli_key(key, key_base64)
@@ -168,20 +172,16 @@ def resolve_password(password: str | None, *, host: str, user: str,
 
 
 # --------------------------------------------------------------------------- #
-# SSH / SFTP via paramiko
+# SSH / file transfer, through common.cli
 # --------------------------------------------------------------------------- #
-def ssh_connect(host: str, user: str, password: str, port: int = 22):
-    """Open the control app's SSH connection to the worker host.
+def ssh_connect(host: str, user: str, password: str, port: int = 22) -> RemoteHost:
+    """The worker host, reached through ``common.cli``. Nothing is opened here: each command and
+    each transfer is its own session, so a login that fails says so on the first call."""
+    from db_ops.transport import common_cli
 
-    The connect itself (auth rules, error classification) is
-    :func:`db_ops.common.ssh.open_ssh_client`; a raw paramiko client comes back because
-    ``ssh_run`` below streams output live off the channel, which the request/response
-    ``remote_exec`` sessions do not do."""
     print(f"Connecting to {user}@{host}:{port} ...", flush=True)
-    try:
-        return open_ssh_client(host, user, port=port, password=password, timeout=30, announce=False)
-    except SshError as exc:
-        raise SystemExit(str(exc)) from exc
+    return RemoteHost(host=host, username=user, password=password or "", port=port,
+                      call=common_cli.run_allowing_failure)
 
 
 def _emit(text: str, *, err: bool = False) -> None:
@@ -196,112 +196,73 @@ def _emit(text: str, *, err: bool = False) -> None:
     stream.flush()
 
 
-def ssh_run(client, command: str, *, sudo_password: str | None = None,
+def ssh_run(client: RemoteHost, command: str, *, sudo: bool = False,
             check: bool = True, quiet: bool = False) -> int:
+    """Run one shell line on the worker and show what it printed; the exit code is returned.
+
+    ``sudo`` runs it as root through ``sudo -S``, the login's own password on stdin - never on the
+    remote argv. The output arrives when the command ends rather than as it is written: the price
+    of going through ``run-cmd``, visible on a long ``docker load`` and nowhere else.
+    """
     if not quiet:
-        _emit(f"[remote] $ {command}\n")
-    stdin, stdout, stderr = client.exec_command(command, get_pty=False)
-    if sudo_password is not None:
-        stdin.write(sudo_password + "\n")
-        stdin.flush()
-    channel = stdout.channel
-    out_chunks: list[str] = []
-    err_chunks: list[str] = []
-    while True:
-        while channel.recv_ready():
-            chunk = channel.recv(4096).decode("utf-8", errors="replace")
-            out_chunks.append(chunk)
-            if chunk and not quiet:
-                _emit(chunk)
-        while channel.recv_stderr_ready():
-            chunk = channel.recv_stderr(4096).decode("utf-8", errors="replace")
-            err_chunks.append(chunk)
-            if chunk and not quiet:
-                _emit(chunk, err=True)
-        if channel.exit_status_ready():
-            break
-        time.sleep(0.1)
-    while channel.recv_ready():
-        chunk = channel.recv(4096).decode("utf-8", errors="replace")
-        out_chunks.append(chunk)
-        if chunk and not quiet:
-            _emit(chunk)
-    while channel.recv_stderr_ready():
-        chunk = channel.recv_stderr(4096).decode("utf-8", errors="replace")
-        err_chunks.append(chunk)
-        if chunk and not quiet:
-            _emit(chunk, err=True)
-    rc = channel.recv_exit_status()
-    if check and rc != 0:
-        raise SystemExit(f"Remote command failed (exit {rc}): {command}")
-    return rc
+        _emit(f"[remote] $ {'sudo ' if sudo else ''}{command}\n")
+    try:
+        result = client.run(command, sudo=sudo)
+    except RemoteError as exc:
+        raise SystemExit(str(exc)) from exc
+    if not quiet:
+        if result.stdout:
+            _emit(result.stdout if result.stdout.endswith("\n") else result.stdout + "\n")
+        if result.stderr.strip():
+            _emit(result.stderr if result.stderr.endswith("\n") else result.stderr + "\n", err=True)
+    if check and result.exit_code != 0:
+        raise SystemExit(f"Remote command failed (exit {result.exit_code}): {command}")
+    return result.exit_code
 
 
-def ssh_capture(client, command: str) -> tuple[int, str, str]:
+def ssh_capture(client: RemoteHost, command: str) -> tuple[int, str, str]:
     """Run a remote command and return (exit_code, stdout, stderr) without printing."""
-    _stdin, stdout, stderr = client.exec_command(command, get_pty=False)
-    out = stdout.read().decode("utf-8", errors="replace")
-    rc = stdout.channel.recv_exit_status()
-    err = stderr.read().decode("utf-8", errors="replace")
-    return rc, out, err
-
-
-def _sftp_mkdirs(sftp, remote_dir: str) -> None:
-    current = ""
-    for part in [p for p in remote_dir.split("/") if p]:
-        current = f"{current}/{part}" if current else f"/{part}"
-        try:
-            sftp.stat(current)
-        except IOError:
-            sftp.mkdir(current)
-
-
-def sftp_put_tree(client, local_dir: Path, remote_dir: str) -> None:
-    sftp = client.open_sftp()
     try:
-        _sftp_mkdirs(sftp, remote_dir)
-        files = [p for p in local_dir.rglob("*") if p.is_file()]
-        total = len(files)
-        for index, path in enumerate(sorted(files), start=1):
-            rel = path.relative_to(local_dir).as_posix()
-            target = f"{remote_dir}/{rel}"
-            _sftp_mkdirs(sftp, target.rsplit("/", 1)[0])
-            size_mb = path.stat().st_size / (1024 * 1024)
-            print(f"  [{index}/{total}] {rel} ({size_mb:.1f} MB)", flush=True)
-            sftp.put(str(path), target)
-    finally:
-        sftp.close()
+        result = client.run(command)
+    except RemoteError as exc:
+        raise SystemExit(str(exc)) from exc
+    return result.exit_code, result.stdout, result.stderr
 
 
-def sftp_get(client, remote_path: str, local_path: Path) -> None:
-    sftp = client.open_sftp()
+def sftp_put_tree(client: RemoteHost, local_dir: Path, remote_dir: str) -> None:
+    """Every file under ``local_dir`` to the same place under ``remote_dir``, said as it lands."""
+    files = [p for p in Path(local_dir).rglob("*") if p.is_file()]
+    total = len(files)
+    done = [0]
+
+    def _report(local: Path, _remote: str) -> None:
+        done[0] += 1
+        rel = local.relative_to(local_dir).as_posix()
+        print(f"  [{done[0]}/{total}] {rel} ({local.stat().st_size / (1024 * 1024):.1f} MB)", flush=True)
+
     try:
-        sftp.get(remote_path, str(local_path))
-    finally:
-        sftp.close()
+        client.put_tree(Path(local_dir), remote_dir, on_file=_report)
+    except RemoteError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
-def sftp_put_files(client, pairs, *, on_file=None) -> None:
-    """Upload named files over one SFTP session, creating the directories above them.
+def sftp_get(client: RemoteHost, remote_path: str, local_path: Path) -> None:
+    try:
+        client.get(remote_path, local_path)
+    except RemoteError as exc:
+        raise SystemExit(str(exc)) from exc
+
+
+def sftp_put_files(client: RemoteHost, pairs, *, on_file=None) -> None:
+    """Upload named files, creating the directories above them.
 
     The counterpart of :func:`sftp_put_tree` for a push that names its files instead of a
-    directory. One session for the batch, not one per file: a whole ``assets/`` push is a few
-    hundred small files, and a session handshake each would cost more than the transfer.
-
-    ``confirm`` defaults to true in paramiko, so a truncated transfer raises here rather than
-    leaving the worker holding half a config file that parses as valid JSON right up to where it
-    stops.
+    directory. The small ones travel as one tar, not a transfer each: a whole ``assets/`` push is a
+    few hundred small files. Every transfer is hash-checked at both ends, so a truncated one raises
+    here rather than leaving the worker holding half a config file that parses as valid JSON right
+    up to where it stops.
     """
-    sftp = client.open_sftp()
     try:
-        made: set[str] = set()
-        for local_path, remote_path in pairs:
-            parent = remote_path.rsplit("/", 1)[0]
-            if parent and parent not in made:
-                _sftp_mkdirs(sftp, parent)
-                made.add(parent)
-            sftp.put(str(local_path), remote_path)
-            if on_file is not None:
-                on_file(local_path, remote_path)
-    finally:
-        sftp.close()
+        client.put_files(pairs, on_file=on_file)
+    except RemoteError as exc:
+        raise SystemExit(str(exc)) from exc

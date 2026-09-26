@@ -34,7 +34,7 @@ from db_ops.reports.inventory_health import (
 from db_ops.reports.inventory_report import _build_backup, _metric_problem_cards, _monitoring_gap_cards
 from db_ops.reports.server_report import build_areas, build_freshness
 
-from db_ops.common import data_sources
+from db_ops.lib import data_sources
 from conftest import shipped_config
 
 # `evaluate_backup_policy` no longer reads data/backup_policy.json itself (2026-08-15):

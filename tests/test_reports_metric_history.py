@@ -181,10 +181,8 @@ def test_metric_history_workflow_reads_stored_rows_and_queues_report_without_col
     sqlite_path = tmp_path / "runtime.sqlite"
     insert_results(sqlite_path, [metric_result(collected_at="2026-07-13T05:30:00Z")])
 
-    def fail_collect(**_kwargs):
-        raise AssertionError("Metrics collection must not run for metric-history-report")
-
-    monkeypatch.setattr(service, "collect_target_metrics", fail_collect)
+    # No collection to forbid: since 0.24.0 no report in this app collects (rules R42).
+    assert not hasattr(service, "collect_target_metrics")
 
     result = service.metric_history_report(
         config=app_config(sqlite_path),

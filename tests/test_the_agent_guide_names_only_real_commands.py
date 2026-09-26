@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-from db_ops import scaffold
+from db_ops.common import scaffold
 
 GUIDE = scaffold.AGENTS_GUIDE
 
@@ -156,9 +156,10 @@ def test_guide_write_puts_it_here_before_init(tmp_path, monkeypatch, capsys):
     from db_ops import cli
 
     monkeypatch.chdir(tmp_path)
-    assert cli.main(["guide", "--write"]) == 0
+    # A JSON key since 0.24.0, when `guide` became a `common.cli` command (rules R41).
+    assert cli.main(["guide", '{"write": true, "format": "txt"}']) == 0
     assert (tmp_path / "AGENTS.md").read_text(encoding="utf-8").endswith(GUIDE)
-    assert cli.main(["guide", "--write"]) == 0
+    assert cli.main(["guide", '{"write": true, "format": "txt"}']) == 0
     assert "already this build's guide" in capsys.readouterr().out
 
 

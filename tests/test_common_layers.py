@@ -8,18 +8,22 @@ applied to a package that had since grown a second one.
 So the package is described as what it is:
 
 * **the library** — input in, result out, nothing looked up: ``restore/``, ``db_connect``,
-  ``response``, ``time_window``, ``policy_engine``, ``health_model``, and 66 others. This is the
+  ``remote_exec``, ``sql_run``, ``host_ops`` and the rest - 81 of the 90 modules in 0.24.0. This is the
   part that could be packaged and dropped anywhere, and it is the default a new module belongs to.
-* **the resolver tier** — the 14 modules in :data:`READS_LOCAL_CONFIG`, which answer "which host
-  is ``ACME-192-0-2-248``" or "what is that credential's password" and therefore have to read the
-  data folder. They are `common` rather than app code because every app asks the same questions.
+* **the resolver tier** — the 9 modules in :data:`READS_LOCAL_CONFIG`. Since 0.24.0 every one of
+  them is R09's other kind (the operator, 2026-09-26: *a command whose job is reading or writing a
+  configuration file may do so*): the registrars that write ``data/*.json`` and the store, the
+  audits of the store and of the estate's names, and ``cli.py``, which routes them. Answering
+  "which host is ``ACME-192-0-2-248``" for an *operation* is not one of them any more - the app
+  that holds the server_id does that (``lib.data_sources.request_fill``).
 
 What this test defends is the **boundary between them**, because the way it was breached was not a
-module announcing that it needed config — it was a **default argument**. ``ssh.py``,
-``sql_run.py`` and six others take the fact as a parameter and fall back to ``data_sources`` when
-the caller passes nothing. A caller who passes everything sees a pure function; a caller who
-passes nothing silently gets this repo's ``data/`` folder. Both are the same code, and only one of
-them works when the module is packaged somewhere else.
+module announcing that it needed config — it was a **default argument**, or a read **one import
+away**. ``ssh.py``, ``sql_run.py`` and ``remote_exec.py`` took the fact as a parameter and fell back
+to ``data/`` when the caller passed nothing - the last of them through ``lib.secret_value``, which
+opened the store. A caller who passed everything saw a pure function; a caller who passed nothing
+silently got this repo's ``data/`` folder. So the scan follows an import into ``lib`` and counts a
+module that reads there as a read here.
 
 Adding an entry below is therefore a visible diff that says "this module cannot answer without
 reading the machine it is installed on". The default answer for a new module is the library tier:
@@ -61,19 +65,11 @@ READS_LOCAL_CONFIG: dict[str, str] = {
                          "sql-target-add). The same argument as config_admin.py above it: editing "
                          "the config IS the operation. `data_dir` and `tool_root` are both "
                          "parameters, which is what keeps it testable against a temporary root.",
-    # data_sources became a package on 2026-08-15: `metric_targets_config` and `target_resolve`
-    # were doing the same job (open a file under data/, answer what is configured) and, under
-    # "an app does not import common", had nowhere else to live. One exemption, one package.
-    "data_sources/__init__.py": "is the data-folder loader itself; everything else in this list "
-                                "reaches the folder through it.",
-    "data_sources/metric_targets.py": "enumerates the configured metric targets — the question is "
-                                      "literally 'what is in the data folder'.",
-    "data_sources/ssh_auth.py": "answers where an SSH key file is (data/ssh_keys/) and what a "
-                                "password_ref decrypts to — both are the data folder, by "
-                                "definition. Split out of common/ssh.py on 2026-08-15 so an app "
-                                "needing a key path no longer imports the paramiko transport.",
-    "data_sources/target_resolve.py": "is the target resolver — db_instances.json is its input.",
-    "host_ops.py": "resolves a host's OS credential before running anything on it.",
+    # data_sources left `common` in 0.24.0 for `lib/data_sources/` (rules R03): the apps read the
+    # data folder through it in-process, and an app may import `lib`, never `common`. The modules
+    # below still reach it, which the markers below still see - by name, wherever it lives.
+    # "host_ops.py" left in 0.24.0 (R09): `run-cmd` and the file transfers take the host's login
+    # as `access` in the request, so the inventory branch that resolved a bare server_id is gone.
     # `showcase.py` was listed here for one commit on 2026-09-10 and taken out again by this
     # file's own second guard: it reaches the inventory only *through* `identifier_scan`, which is
     # already listed, so it reads no local state of its own. The allowance was the reflex and the
@@ -95,14 +91,19 @@ READS_LOCAL_CONFIG: dict[str, str] = {
     # vocabulary) is lazy and fails open, and db_ops.config is a root module, not a component.
     "password_rotation.py": "changes a password on the server AND in the secret store; the store "
                             "is half the operation.",
-    "remote_exec.py": "resolves the credential for the host it is about to reach.",
+    # "remote_exec.py" and "ssh.py" left in 0.24.0 (R09): a bare key name was found under
+    # data/ssh_keys and a password_ref nobody handed over was read from the store. The caller
+    # states the login now (lib.data_sources.ssh_login / request_fill), and lib.secret_value -
+    # the rule they ask - opens no store; lib.data_sources.resolve_secret_value does, for apps.
     # "report_archive.py" left on 2026-08-15: the only part of it that read the data folder
     # was `report_base_url`, which is now data_sources' own; the stamping and copying are
     # pure and moved to db_ops/lib/report_archive.py.
-    "secret_check.py": "audits the secret store — the store is its subject.",
-    "sql_run.py": "resolves a target spec (server_id or db_type/ip/port) to a db instance.",
-    "sqlserver_instance.py": "resolves the instance and its credential for export/replay.",
-    "ssh.py": "resolves the SSH credential and key path for a target.",
+    "secret_check.py": "audits the secret store - the store is its subject - and, since 0.24.0, "
+                       "whether every configured target resolves to a login (check-credentials, "
+                       "moved from the root package, R41): the configuration is that one's subject.",
+    # "sql_run.py" left in 0.24.0 (R09): run-sql takes the login as `connection`; the resolver
+    # that turned a server_id into one moved to the two commands whose job is the store, which
+    # fill it the way the apps do (request_fill).
 }
 
 #: What reading local state looks like in the AST. `DEFAULT_DATA_DIR` is in here because that is
@@ -110,9 +111,54 @@ READS_LOCAL_CONFIG: dict[str, str] = {
 #: data folder, used as a default argument.
 _MARKERS = {
     "db_ops.config": "imports db_ops.config",
+    # The same parser under its 0.24.0 address: moving it into `lib` made the import legal for
+    # `common` (R04), not the read (R09).
+    "db_ops.lib.config": "imports the configuration parser (db_ops.lib.config)",
     "db_ops.db": "imports the runtime store (db_ops.db)",
     "data_sources": "imports the data-folder loader",
 }
+
+LIB_ROOT = COMMON_ROOT.parent / "lib"
+
+
+def _lib_file(dotted: str) -> Path | None:
+    """The file behind `db_ops.lib.x.y`, if it is a module of `lib`."""
+    parts = dotted.split(".")
+    if parts[:2] != ["db_ops", "lib"] or len(parts) < 3:
+        return None
+    base = LIB_ROOT.joinpath(*parts[2:])
+    for candidate in (base.with_suffix(".py"), base / "__init__.py"):
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _lib_imports(path: Path) -> set[str]:
+    names: set[str] = set()
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path))):
+        if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            names.add(node.module)
+            names |= {f"{node.module}.{alias.name}" for alias in node.names}
+        elif isinstance(node, ast.Import):
+            names |= {alias.name for alias in node.names}
+    return names
+
+
+def _lib_reads(dotted: str, seen: frozenset[str] = frozenset()) -> bool:
+    """Whether a `lib` module reads the data folder or the config - itself, or through another
+    `lib` module it imports. 0.24.0: `remote_exec`'s secret resolution moved to `lib.secret_value`
+    so `sre` could share it (R03), and it still fell back to the store on disk - moving a function
+    hides a read one import away, and the scan named that one module until the rule was general."""
+    path = _lib_file(dotted)
+    if path is None or dotted in seen:
+        return False
+    imported = _lib_imports(path)
+    if any(name.split(".")[-1] == "data_sources" or name.startswith("db_ops.lib.data_sources")
+           or name.startswith("db_ops.lib.config") or name.startswith("db_ops.config")
+           for name in imported):
+        return True
+    return any(_lib_reads(name, seen | {dotted}) for name in imported
+               if name.startswith("db_ops.lib.") and not name.startswith(dotted + "."))
 
 
 def _module_files() -> list[Path]:
@@ -132,7 +178,7 @@ def _reads_local_state(path: Path) -> list[str]:
             for prefix, label in _MARKERS.items():
                 if node.module == prefix or node.module.startswith(prefix + "."):
                     found.add(label)
-            # `from db_ops.common.data_sources import _resolve_data_dir` — the loader named as
+            # `from db_ops.lib.data_sources import _resolve_data_dir` — the loader named as
             # the module rather than imported from its package. Same dependency, and the form
             # report_archive.py used, so matching only the package prefix missed it.
             if node.module.split(".")[-1] == "data_sources":
@@ -141,9 +187,18 @@ def _reads_local_state(path: Path) -> list[str]:
             for alias in node.names:
                 if alias.name.split(".")[-1] == "data_sources":
                     found.add(_MARKERS["data_sources"])
+            # `from db_ops.lib import config` - the parser named as the module.
+            if (isinstance(node, ast.ImportFrom) and node.module == "db_ops.lib"
+                    and any(alias.name == "config" for alias in node.names)):
+                found.add(_MARKERS["db_ops.lib.config"])
         # The default-argument form: a constant pointing at this repo's data folder.
         if isinstance(node, ast.Name) and node.id == "DEFAULT_DATA_DIR":
             found.add("defaults an argument to this repo's data/ folder (DEFAULT_DATA_DIR)")
+    # One import away: a `lib` module that reads is a read by whoever imports it.
+    for name in sorted(_lib_imports(path)):
+        named_above = name.startswith(("db_ops.lib.data_sources", "db_ops.lib.config"))
+        if not named_above and name.split(".")[-1] != "data_sources" and _lib_reads(name):
+            found.add(f"imports {name}, which reads the data folder or the config")
     return sorted(found)
 
 
@@ -203,14 +258,13 @@ def test_the_library_tier_is_still_the_large_majority() -> None:
 # become a resolver; and as a baseline for the rest, which may only shrink.
 
 #: Every module behind backup-database, list/prune-backup-files, restore-full/diff/log/key/
-#: metadata, verify-restore, restore-database, run-sqlcmd (the SMB restore's statements),
+#: metadata, verify-restore, run-sqlcmd (the SMB restore's statements),
 #: pack-backup/pull-file/push-file, create/move-db-docker and a restore's copy (backup-chain,
 #: copy-backup-dir, prune-staged-backups). A trailing slash names a package.
 CONFIG_FREE_BY_NAME: tuple[str, ...] = (
     "cli_backup.py", "backup/",
     "cli_backup_files.py", "backupfiles/", "deletefiles.py",
     "cli_restorestep.py", "restorestep/", "restorekey.py", "restoremetadata.py", "verifyrestore.py",
-    "cli_restore.py", "restore/",
     "cli_filetransfer.py", "filetransfer.py",
     "cli_docker_db.py", "docker_db/",
     "cli_sqlcmd.py", "sqlcmd_run.py",
@@ -219,12 +273,10 @@ CONFIG_FREE_BY_NAME: tuple[str, ...] = (
     "hostcmd.py", "ssh_relay.py", "db_connect.py",
 )
 
-#: The two transports a library module may reach a host through - with the credentials it was
-#: handed. Both *can* resolve (a `password_ref`, a bare key name under data/ssh_keys/), which is
-#: why they are resolver tier; what makes a call site library tier is that it never asks them to.
-TRANSPORTS = {"ssh", "remote_exec"}
-#: Handing a transport any of these asks it to look something up.
-_RESOLVING_KEYWORDS = {"data_dir", "secrets", "credential"}
+# The two transports a module reaches a host through, `ssh` and `remote_exec`, were resolver tier
+# until 0.24.0 - either could find a key name under data/ssh_keys/ or a ref in the store - so a
+# call site here was held to handing them values and `resolve_key=False`. They read nothing now
+# (R09), the scan above holds them like every other module, and that call-site check went with it.
 
 
 def _config_free_files() -> list[Path]:
@@ -264,7 +316,7 @@ def test_a_backup_restore_or_docker_module_reads_no_config_at_all(path: Path) ->
 def test_a_backup_restore_or_docker_module_reaches_no_resolver(path: Path) -> None:
     """Not even one hop away. A library module importing `host_ops` or `sql_run` reads config the
     moment it calls them, and the per-module scan above would not see it."""
-    resolvers = _resolver_modules() - TRANSPORTS
+    resolvers = _resolver_modules()
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     reached = set()
     for node in ast.walk(tree):
@@ -283,47 +335,16 @@ def test_a_backup_restore_or_docker_module_reaches_no_resolver(path: Path) -> No
     assert not offenders, f"common/{_relative(path)} imports the resolver tier: {offenders}"
 
 
-@pytest.mark.parametrize("path", _config_free_files(), ids=_relative)
-def test_a_transport_is_handed_values_never_asked_to_look_them_up(path: Path) -> None:
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    offenders = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        # A transport's own function - imported by name, or `remote_exec.x` / `ssh.x`. Not any
-        # method that happens to share a name: paramiko's `transport.open_session()` opens a
-        # channel on a connection already made, and asks nothing of anyone.
-        func = node.func
-        if isinstance(func, ast.Name):
-            name = func.id
-        elif (isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name)
-              and func.value.id in TRANSPORTS):
-            name = func.attr
-        else:
-            continue
-        if name not in {"open_session", "run_command", "run_script", "open_ssh_client"}:
-            continue
-        keywords = {kw.arg: kw.value for kw in node.keywords}
-        asked = sorted(set(keywords) & _RESOLVING_KEYWORDS)
-        if asked:
-            offenders.append(f"line {node.lineno}: {name}(... {', '.join(asked)} ...)")
-        # A key NAME resolves under data/ssh_keys/ unless the caller says it already did.
-        if name == "open_session" and not (
-                isinstance(keywords.get("resolve_key"), ast.Constant)
-                and keywords["resolve_key"].value is False):
-            offenders.append(f"line {node.lineno}: open_session without resolve_key=False")
-    assert not offenders, f"common/{_relative(path)}: {offenders}"
-
-
-#: READS_LOCAL_CONFIG as it stood at 0.23.0 - 18 modules. It may only shrink: moving one of them
+#: READS_LOCAL_CONFIG as it stood at 0.23.0 - 18 modules, 14 since data_sources left for lib (0.24.0), 13
+#: since sqlserver_instance takes its login, policy and secrets in the request (R09), 12 since
+#: host_ops takes the host's login as `access` (R09), 9 since sql_run, remote_exec and ssh read
+#: nothing (R09). It may only shrink: moving one of them
 #: to the library tier means deleting it here AND above, in the same commit. Adding one - or
 #: swapping one for another, which a count alone would not catch - fails.
 RESOLVER_TIER_AT_0_23_0 = frozenset({
     "cli.py", "remote_credential_admin.py", "config_admin.py", "app_command_admin.py",
-    "sql_task_admin.py", "data_sources/__init__.py", "data_sources/metric_targets.py",
-    "data_sources/ssh_auth.py", "data_sources/target_resolve.py", "host_ops.py",
-    "instance_admin.py", "identifier_scan.py", "password_rotation.py", "remote_exec.py",
-    "secret_check.py", "sql_run.py", "sqlserver_instance.py", "ssh.py",
+    "sql_task_admin.py",
+    "instance_admin.py", "identifier_scan.py", "password_rotation.py", "secret_check.py",
 })
 
 

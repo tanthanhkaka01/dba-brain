@@ -465,7 +465,7 @@ def format_stored(value: datetime | None = None) -> str:
 
 
 def describe(zone: Any = None, *, at: datetime | None = None) -> dict[str, Any]:
-    """What this node's clock is, as data - for the store row and for ``common.cli timezone``.
+    """What this node's clock is, as data - for the store row and for ``db.cli timezone``.
 
     ``utc_offset_minutes`` is a snapshot true as of ``at``; ``timezone`` is the setting. Both, not
     one, because under daylight saving the first changes twice a year and only the second can be
@@ -482,6 +482,57 @@ def describe(zone: Any = None, *, at: datetime | None = None) -> dict[str, Any]:
         "now_display": format_display(moment, resolved),
         "now_utc": format_stored(moment),
     }
+
+
+def node_id(config) -> str:
+    """This node's id: the cluster entry matching its role, else the hostname.
+
+    ``runtime_nodes`` is keyed by it - by ``db.cli timezone --record`` and by the daemon at start -
+    so both must ask here: a node reported under two ids would be two rows for one machine.
+
+    Hostname is the fallback rather than a fixed literal because ``runtime_nodes`` is keyed by it.
+    Two nodes sharing a store and a default id would be one row overwriting itself, and the
+    disagreement the table exists to show would be exactly what it hid.
+    """
+    import socket
+
+    if config is not None:
+        role = str(getattr(config, "node_role", "") or "")
+        for node in (getattr(config, "worker" if role == "worker" else "master", ()) or ()):
+            node_id = str(getattr(node, "node_id", "") or "").strip()
+            if node_id:
+                return node_id
+    return socket.gethostname()
+
+
+def listing(data: dict) -> str:
+    """The chat/terminal listing ``db.cli timezone`` prints."""
+    lines = [
+        f"node          : {data['node_id']} ({data['node_role']}) on {data['hostname']}",
+        f"timezone      : {data['timezone']}  [{data['source']}]",
+        f"utc offset    : {data['utc_offset']} ({data['utc_offset_minutes']} min)"
+        + (f"  {data['tz_abbreviation']}" if data.get("tz_abbreviation") else ""),
+        f"now (display) : {data['now_display']}",
+        f"now (stored)  : {data['now_utc']}",
+        "",
+        "Stored timestamps are UTC and unaffected by this setting. It decides what is SHOWN, and",
+        "what a time_window's from_hour/to_hour mean.",
+    ]
+    if data.get("config_error"):
+        lines.append(f"config        : not read - {data['config_error']}")
+    if data.get("record_error"):
+        lines.append(f"store         : not recorded - {data['record_error']}")
+    elif data.get("recorded"):
+        lines.append("store         : recorded in runtime_nodes")
+    nodes = data.get("nodes") or []
+    if nodes:
+        lines.append("")
+        lines.append("nodes that have reported:")
+        for node in nodes:
+            lines.append(
+                f"  {node['node_id']:<24} {node['timezone']:<20} "
+                f"{node['utc_offset_minutes']:>5} min   seen {node['updated_at']}")
+    return "\n".join(lines)
 
 
 def _is_tzinfo(value: Any) -> bool:

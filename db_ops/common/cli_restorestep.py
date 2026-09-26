@@ -37,13 +37,19 @@ that - so a recovery can watch each step land before deciding the next.
                                      // a database recovered early cannot take the rest.
    "stopat": "2026-08-07 01:40:00",  // restore-log only
    "move": {{"SALESDB_STG": "/var/opt/mssql/data/SALESDB_STG.mdf"}},   // restore-full only
+   "move_files": {{"data": "D:\\DATA\\X.mdf", "log": "D:\\DATA\\X_log.ldf"}},  // or: the two paths;
+                                     // the logical names are read on the server (FILELISTONLY)
    "dry_run": true,                  // show what would run, touch nothing
-{_TARGET},                            // sqlserver
+{_TARGET},                            // sqlserver, over a driver from this machine
+   "sqlcmd": {{...}},                 // sqlserver, OR run by sqlcmd where the server is: the
+                                     // run-sqlcmd request less "sql" - one file per call
 {_HOST}}}                             // oracle / postgresql
 
 The three engines do NOT mean the same thing by "restore one file", and the response says which
 happened rather than smoothing it over:
   sqlserver   one RESTORE per file. NORECOVERY between, RECOVERY on the last, STOPAT on a log.
+              Through sqlcmd the answer is run-sqlcmd's - exit_code, stdout, stderr, timed_out -
+              and whether it worked is the caller's to read, as it is for run-sqlcmd.
   oracle      the piece is CATALOGed and RMAN then RESTOREs/RECOVERs - it chooses what to read.
   postgresql  full = a base backup directory becomes the data directory; diff = the WHOLE chain
               combined with pg_combinebackup; log = writes recovery_target_time, replayed by the
@@ -142,6 +148,10 @@ def _dispatch(operation: str, request: dict) -> tuple[dict, str]:
 
         level = _LEVELS[operation]
         data = restore_step(level, request)
+        if data.get("via"):
+            state = "timed out" if data.get("timed_out") else f"exit {data.get('exit_code')}"
+            return data, (f"{data['db_type']}: {level} restore of 1 file ran through sqlcmd via "
+                          f"{data['via']} ({state}) - the caller reads the answer.")
         applied = data.get("applied") or data.get("cataloged") or []
         what = "would apply" if data.get("dry_run") else "applied"
         # `db_type`, the name every restorestep module answers with since 0.22.0. This line still

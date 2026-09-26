@@ -34,13 +34,6 @@ SRE_CONFIG   = _DB_OPS / "data" / "sre_config.json"
 HOSTS_YML    = _SRE_ROOT / "inventory" / "sqlserver" / "hosts.yml"
 GROUP_VARS   = _SRE_ROOT / "automation" / "ansible" / "group_vars" / "sqlserver.yml"
 
-SSH_FLAGS = [
-    "-o", "StrictHostKeyChecking=no",
-    "-o", "BatchMode=yes",
-    "-o", "ConnectTimeout=15",
-]
-
-
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def now_iso() -> str:
@@ -243,13 +236,20 @@ def step_repo_sync(install: dict) -> StepResult:
                 if item.is_file():
                     tf.add(str(item), arcname=str(item.relative_to(_SRE_ROOT)))
 
-        print(f"    SCP archive → bastion {bip}")
-        rc, _, err = _run(
-            ["scp"] + SSH_FLAGS + ["-i", str(idf), str(arc), f"{user}@{bip}:/tmp/db-sre-repo.tar"],
-            timeout=120,
-        )
-        if rc != 0:
-            return s.fail(f"SCP failed: {err}")
+        # `common push-file`, not an `scp` of this script's own (rules R10): the copy is also
+        # hashed on both ends, which an scp exit code never said.
+        print(f"    Push archive → bastion {bip}")
+        from db_ops.transport.common_cli import CommonCliError, run_allowing_failure
+
+        try:
+            pushed, _, err = run_allowing_failure("push-file", {
+                "local_path": str(arc), "remote_path": "/tmp/db-sre-repo.tar",
+                "host": {"runtime": "linux", "host": bip, "username": user, "key_file": str(idf)},
+            }, timeout_seconds=120)
+        except CommonCliError as exc:
+            pushed, err = False, str(exc)
+        if not pushed:
+            return s.fail(f"push-file failed: {err}")
 
     # Extract + fix line endings on bastion via CLI ssh
     extract_remote = (

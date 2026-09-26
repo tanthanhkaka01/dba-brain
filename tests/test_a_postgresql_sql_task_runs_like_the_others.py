@@ -11,8 +11,9 @@ INSERT ...; SELECT count(*) ...`` came back as ONE set holding both SELECTs' row
 one's column name, with ``affected_rows`` 0 for the INSERT. So a PostgreSQL script is now run a
 statement at a time (``lib.sql_text.split_postgresql_statements``).
 
-Task parameters stay T-SQL (``DECLARE @name`` lines), so a PostgreSQL task takes none yet, and is
-told so at registration.
+Task parameters were T-SQL (``DECLARE @name`` lines), so in 0.23.0 a PostgreSQL task could take
+none and was told so at registration. From 0.24.0 its script says ``:name`` and the value is bound
+by name (``test_an_oracle_or_postgresql_task_binds_its_parameters_by_name.py``).
 """
 
 from __future__ import annotations
@@ -140,10 +141,11 @@ def test_a_postgresql_task_registers(estate):
     assert [c["db_type"] for c in saved] == ["postgresql"]
 
 
-def test_a_postgresql_task_with_parameters_is_refused_by_name(estate):
+def test_a_postgresql_parameter_its_script_never_says_is_refused_by_name(estate):
+    """0.23.0 refused any parameter here; 0.24.0 binds ``:name``, and refuses one the script lacks."""
     from db_ops.common import sql_task_admin
 
-    with pytest.raises(sql_task_admin.SqlTaskAdminError, match="takes no parameters"):
+    with pytest.raises(sql_task_admin.SqlTaskAdminError, match="job_no are declared but no script"):
         sql_task_admin.add_sql_command({"display_name": "by job", "db_type": "postgresql",
                                         "sql_text": "select 1;",
                                         "parameters": [{"name": "job_no", "type": "nvarchar(50)"}]},

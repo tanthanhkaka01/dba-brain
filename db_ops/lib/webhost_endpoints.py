@@ -1,7 +1,7 @@
 """Where this installation's own web pages are, as URLs.
 
 Pure: every function here is a function of its arguments. Reading ``app_commands.json`` and
-``webhost_config.json`` is an operation and lives in ``db_ops.common.data_sources``.
+``webhost_config.json`` is an operation and lives in ``db_ops.lib.data_sources``.
 
 The port and the two mounts are **deployment facts**, not code facts - the webhost serve command
 carries them and an operator can change either. They were being retyped from memory into runbooks

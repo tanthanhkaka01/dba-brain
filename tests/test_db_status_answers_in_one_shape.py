@@ -25,6 +25,11 @@ import pytest
 from db_ops.common import db_catalog, dbstatus
 
 
+#: The login a caller states - common.cli reads no configuration (rules R09), so every request here
+#: carries one. RFC 5737 address; nothing connects to it.
+CONNECTION = {"db_type": "sqlserver", "host": "192.0.2.10", "port": 1433, "username": "u", "password": "p"}
+
+
 @pytest.fixture
 def server(monkeypatch):
     """A fake SQL Server: one reachable instance, three databases, one of them still RESTORING."""
@@ -57,7 +62,7 @@ def server(monkeypatch):
 
 
 def test_the_default_depth_is_the_instance(server) -> None:
-    answer = dbstatus.status({"target": "ACME-SQL01"})
+    answer = dbstatus.status({"target": "ACME-SQL01", "connection": CONNECTION})
 
     assert answer["depth"] == "instance"
     assert answer["ok"] is True
@@ -71,7 +76,7 @@ def test_an_unreachable_instance_is_a_result_not_an_error(server) -> None:
     make every caller write the same try/except to learn the same thing."""
     server["instance"] = None
 
-    answer = dbstatus.status({"target": "ACME-SQL01"})
+    answer = dbstatus.status({"target": "ACME-SQL01", "connection": CONNECTION})
 
     assert answer["ok"] is False
     assert answer["instance"]["state"] == "UNREACHABLE"
@@ -81,7 +86,7 @@ def test_an_unreachable_instance_is_a_result_not_an_error(server) -> None:
 def test_nothing_deeper_is_attempted_when_the_instance_is_down(server) -> None:
     server["instance"] = None
 
-    answer = dbstatus.status({"target": "ACME-SQL01", "depth": "database"})
+    answer = dbstatus.status({"target": "ACME-SQL01", "connection": CONNECTION, "depth": "database"})
 
     assert answer["items"] == []
     assert answer["ok"] is False
@@ -91,7 +96,7 @@ def test_nothing_deeper_is_attempted_when_the_instance_is_down(server) -> None:
 def test_a_database_still_restoring_is_not_usable(server) -> None:
     """The state this project keeps meeting: the restore command returned, the chain was never
     recovered, and the database is not there."""
-    answer = dbstatus.status({"target": "ACME-SQL01", "depth": "database"})
+    answer = dbstatus.status({"target": "ACME-SQL01", "connection": CONNECTION, "depth": "database"})
 
     by_name = {item["name"]: item for item in answer["items"]}
     assert by_name["STAGING"]["ok"] is False
@@ -102,7 +107,7 @@ def test_a_database_still_restoring_is_not_usable(server) -> None:
 
 
 def test_a_real_query_is_run_and_not_just_the_state_column(server) -> None:
-    dbstatus.status({"target": "ACME-SQL01", "depth": "database", "databases": ["SALES"]})
+    dbstatus.status({"target": "ACME-SQL01", "connection": CONNECTION, "depth": "database", "databases": ["SALES"]})
 
     assert ("SELECT COUNT(*) AS n FROM sys.tables", "SALES") in server["queries"]
 
@@ -112,7 +117,7 @@ def test_a_database_that_reads_online_and_refuses_a_query_fails(server) -> None:
     only way to tell is to ask it something."""
     server["answers"] = False
 
-    answer = dbstatus.status({"target": "ACME-SQL01", "depth": "database",
+    answer = dbstatus.status({"target": "ACME-SQL01", "connection": CONNECTION, "depth": "database",
                               "databases": ["SALES"]})
 
     assert answer["items"][0]["ok"] is False
@@ -121,7 +126,7 @@ def test_a_database_that_reads_online_and_refuses_a_query_fails(server) -> None:
 
 def test_a_database_that_is_not_there_is_named_rather_than_skipped(server) -> None:
     """Silence here is how an empty check passes for a database a restore never created."""
-    answer = dbstatus.status({"target": "ACME-SQL01", "depth": "database",
+    answer = dbstatus.status({"target": "ACME-SQL01", "connection": CONNECTION, "depth": "database",
                               "databases": ["NEVER_RESTORED"]})
 
     assert answer["items"][0]["state"] == "ABSENT"
@@ -130,13 +135,13 @@ def test_a_database_that_is_not_there_is_named_rather_than_skipped(server) -> No
 
 
 def test_asking_for_nothing_in_particular_checks_them_all(server) -> None:
-    answer = dbstatus.status({"target": "ACME-SQL01", "depth": "database"})
+    answer = dbstatus.status({"target": "ACME-SQL01", "connection": CONNECTION, "depth": "database"})
 
     assert {item["name"] for item in answer["items"]} == {"SALES", "ORDERS", "STAGING"}
 
 
 def test_a_schema_that_the_login_cannot_see_is_reported(server) -> None:
-    answer = dbstatus.status({"target": "ACME-SQL01", "depth": "schema",
+    answer = dbstatus.status({"target": "ACME-SQL01", "connection": CONNECTION, "depth": "schema",
                               "database": "APPDB", "schemas": ["sales", "hidden"]})
 
     by_name = {item["name"]: item for item in answer["items"]}
@@ -149,25 +154,25 @@ def test_a_schema_depth_without_a_database_is_refused_on_sqlserver(server) -> No
     """A schema lives inside a database. Without one, the answer would describe whatever the
     login's default happens to be — a different server's answer to a different question."""
     with pytest.raises(dbstatus.DbStatusError, match="database"):
-        dbstatus.status({"target": "ACME-SQL01", "depth": "schema"})
+        dbstatus.status({"target": "ACME-SQL01", "connection": CONNECTION, "depth": "schema"})
 
 
 def test_an_unknown_depth_is_refused_by_name(server) -> None:
     with pytest.raises(dbstatus.DbStatusError, match="depth must be one of"):
-        dbstatus.status({"target": "ACME-SQL01", "depth": "table"})
+        dbstatus.status({"target": "ACME-SQL01", "connection": CONNECTION, "depth": "table"})
 
 
 def test_the_answer_has_the_same_shape_whichever_engine_replied(server, monkeypatch) -> None:
     """A caller should not need to know which engine it is talking to. Every engine answers with
     the same keys; only the values differ."""
-    shape = set(dbstatus.status({"target": "ACME-SQL01"}))
+    shape = set(dbstatus.status({"target": "ACME-SQL01", "connection": CONNECTION}))
 
     monkeypatch.setattr(db_catalog, "_resolve",
                         lambda parsed: {"db_type": "postgresql", "server_id": "ACME-PG"})
     monkeypatch.setattr(db_catalog, "_query",
                         lambda parsed, sql, *, database="": [{"version": "PostgreSQL 18",
                                                               "state": "ACCEPTING"}])
-    postgres = dbstatus.status({"target": "ACME-PG"})
+    postgres = dbstatus.status({"target": "ACME-PG", "connection": CONNECTION})
 
     assert set(postgres) == shape
     assert postgres["ok"] is True
@@ -183,7 +188,7 @@ def test_a_postgresql_cluster_still_in_recovery_is_not_usable(server, monkeypatc
                         lambda parsed, sql, *, database="": [{"version": "PostgreSQL 18",
                                                               "state": "IN RECOVERY"}])
 
-    answer = dbstatus.status({"target": "ACME-PG"})
+    answer = dbstatus.status({"target": "ACME-PG", "connection": CONNECTION})
 
     assert answer["ok"] is False
     assert answer["instance"]["state"] == "IN RECOVERY"
@@ -200,7 +205,7 @@ def test_an_oracle_instance_open_with_the_database_only_mounted_is_not_usable(
                         lambda parsed, sql, *, database="": [{"version": "19.0.0", "status": "OPEN",
                                                               "state": "MOUNTED"}])
 
-    answer = dbstatus.status({"target": "ACME-ORA"})
+    answer = dbstatus.status({"target": "ACME-ORA", "connection": CONNECTION})
 
     assert answer["ok"] is False
     assert answer["instance"]["state"] == "MOUNTED"
@@ -212,7 +217,7 @@ def test_an_engine_this_command_cannot_answer_for_is_refused_by_name(server, mon
                         lambda parsed: {"db_type": "mysql", "server_id": "ACME-MY"})
 
     with pytest.raises(dbstatus.DbStatusError, match="mysql"):
-        dbstatus.status({"target": "ACME-MY"})
+        dbstatus.status({"target": "ACME-MY", "connection": CONNECTION})
 
 
 def test_a_request_that_is_not_an_object_is_refused() -> None:

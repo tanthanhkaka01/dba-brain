@@ -14,7 +14,7 @@ from db_ops.metrics.collector import (
     _resolve_metric_file_path,
     collect_metrics,
 )
-from conftest import shipped_config
+from conftest import answer_metric_items, shipped_config
 from db_ops.metrics.definitions import DEFAULT_SQL_DIR, load_metric_definitions
 from db_ops.metrics.models import MetricDefinition, MetricTarget, MetricVariant
 
@@ -31,6 +31,12 @@ def _target(db_type="sqlserver", *, platform="windows", method="local"):
         cmd_access={"enabled": True, "method": method, "host": "127.0.0.1", "shell": "powershell" if platform == "windows" else "bash"},
         cmd_credential={"credential_name": "remote", "username": "user", "password_ref": "PASS"},
     )
+
+
+def _sql_target():
+    import dataclasses
+
+    return dataclasses.replace(_target(), credential={"username": "monitor", "password": "pw"})
 
 
 def test_report_policy_disabled_metric_codes_disable_collection_case_insensitive():
@@ -124,9 +130,9 @@ def test_collect_metrics_skips_report_policy_disabled_metric_codes(tmp_path, mon
     target.report_policy["disabled_metric_codes"] = ["OS_CPU_USAGE"]
     executed = []
 
-    def fake_collect_one_metric(**kwargs):
-        executed.append(kwargs["metric"].metric_code)
-        return []
+    def fake_collect_metric_batch(*, target, planned, secrets):
+        executed.extend(metric.metric_code for metric, _importance in planned)
+        return [[] for _ in planned]
 
     monkeypatch.setattr(
         "db_ops.metrics.collector.load_metric_definitions",
@@ -135,7 +141,7 @@ def test_collect_metrics_skips_report_policy_disabled_metric_codes(tmp_path, mon
     monkeypatch.setattr("db_ops.metrics.collector.load_metric_importance_overrides", lambda *_, **__: [])
     monkeypatch.setattr("db_ops.metrics.collector.load_metric_targets", lambda **_: [target])
     monkeypatch.setattr("db_ops.metrics.collector.data_sources.load_secret_text", lambda *_, **__: {})
-    monkeypatch.setattr("db_ops.metrics.collector._collect_one_metric", fake_collect_one_metric)
+    monkeypatch.setattr("db_ops.metrics.collector._collect_metric_batch", fake_collect_metric_batch)
     # The catalogue is read twice on this path: once for the definitions, which this test supplies,
     # and once by `load_max_parallel_servers`, which takes its own default path. Redirecting only
     # the first left the second reading the repository's real `data/` — so on a checkout without
@@ -328,31 +334,20 @@ def test_sql_collector_dispatch_and_result_validation(tmp_path, monkeypatch):
     sql_path = tmp_path / "metric.sql"
     sql_path.write_text("select 1", encoding="utf-8")
     metric = _definition(path=sql_path)
-    captured = {}
-
-    def fake_execute_metric_sql(**kwargs):
-        captured.update(kwargs)
-        return [
-            {
-                "metric_item": "server",
-                "metric_value": "1",
-                "metric_unit": "status",
-                "status": "OK",
-                "message": "Online.",
-            }
-        ]
-
-    monkeypatch.setattr("db_ops.metrics.collector.execute_metric_sql", fake_execute_metric_sql)
+    sent = answer_metric_items(monkeypatch, lambda _item: {"rows": [{
+        "metric_item": "server", "metric_value": "1", "metric_unit": "status", "status": "OK",
+        "message": "Online."}]})
 
     results = _collect_one_metric(
         metric=metric,
-        target=_target(),
+        target=_sql_target(),
         importance=5,
         secrets={},
         collected_at="2026-06-08T00:00:00Z",
     )
 
-    assert "select 1" in captured["sql_text"]
+    assert sent[0]["kind"] == "sql"
+    assert "select 1" in sent[0]["sql"]
     assert results[0].metric_item == "server"
 
 
@@ -360,14 +355,11 @@ def test_sql_result_missing_required_field_fails(tmp_path, monkeypatch):
     sql_path = tmp_path / "metric.sql"
     sql_path.write_text("select 1", encoding="utf-8")
     metric = _definition(path=sql_path)
-    monkeypatch.setattr(
-        "db_ops.metrics.collector.execute_metric_sql",
-        lambda **_kwargs: [{"metric_item": "server", "metric_value": "1"}],
-    )
+    answer_metric_items(monkeypatch, lambda _item: {"rows": [{"metric_item": "server", "metric_value": "1"}]})
 
     results = _collect_one_metric(
         metric=metric,
-        target=_target(),
+        target=_sql_target(),
         importance=5,
         secrets={},
         collected_at="2026-06-08T00:00:00Z",
@@ -525,20 +517,9 @@ def test_cmd_ssh_execution_dispatch(tmp_path, monkeypatch):
     script = tmp_path / "metric.sh"
     script.write_text("echo []", encoding="utf-8")
     metric = _definition(collector_type="cmd", path=script)
-    captured = {}
-
-    def fake_execute_ssh(path, *, target, secrets, timeout_seconds, collector_env=None):
-        captured.update({"path": path, "target": target, "secrets": secrets,
-                         "timeout_seconds": timeout_seconds, "collector_env": collector_env})
-        return CommandExecution(
-            rows=[{"metric_item": "ssh", "metric_value": "1", "metric_unit": "count", "status": "OK", "message": "SSH."}],
-            raw_stdout="[]",
-            raw_stderr="",
-            exit_code=0,
-            execution_time=0.1,
-        )
-
-    monkeypatch.setattr("db_ops.metrics.collector.execute_ssh", fake_execute_ssh)
+    sent = answer_metric_items(monkeypatch, lambda _item: {
+        "exit_code": 0, "stderr": "", "duration_seconds": 0.1,
+        "stdout": '[{"metric_item": "ssh", "metric_value": "1", "metric_unit": "count", "status": "OK", "message": "SSH."}]'})
 
     results = _collect_one_metric(
         metric=metric,
@@ -548,8 +529,9 @@ def test_cmd_ssh_execution_dispatch(tmp_path, monkeypatch):
         collected_at="2026-06-08T00:00:00Z",
     )
 
-    assert captured["path"] == script
-    assert captured["target"].cmd_credential["username"] == "user"
+    [item] = sent
+    assert (item["kind"], item["shell"], item["script"]) == ("script", "bash", "echo []")
+    assert item["credential"]["username"] == "user"
     assert results[0].metric_item == "ssh"
 
 
@@ -558,16 +540,9 @@ def test_cmd_winrm_execution_dispatch(tmp_path, monkeypatch):
     script.write_text("'[]'", encoding="utf-8")
     metric = _definition(collector_type="cmd", path=script)
 
-    def fake_execute_winrm(path, *, target, secrets, timeout_seconds, collector_env=None):
-        return CommandExecution(
-            rows=[{"metric_item": "winrm", "metric_value": "1", "metric_unit": "count", "status": "OK", "message": "WinRM."}],
-            raw_stdout="[]",
-            raw_stderr="",
-            exit_code=0,
-            execution_time=0.1,
-        )
-
-    monkeypatch.setattr("db_ops.metrics.collector.execute_winrm", fake_execute_winrm)
+    sent = answer_metric_items(monkeypatch, lambda _item: {
+        "exit_code": 0, "stderr": "", "duration_seconds": 0.1,
+        "stdout": '[{"metric_item": "winrm", "metric_value": "1", "metric_unit": "count", "status": "OK", "message": "WinRM."}]'})
 
     results = _collect_one_metric(
         metric=metric,
@@ -577,6 +552,7 @@ def test_cmd_winrm_execution_dispatch(tmp_path, monkeypatch):
         collected_at="2026-06-08T00:00:00Z",
     )
 
+    assert sent[0]["shell"] == "powershell"
     assert results[0].metric_item == "winrm"
 
 

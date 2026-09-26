@@ -15,6 +15,197 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-09-26
+
+### Changed
+
+- **`db-ops init`, `guide`, `encrypt-secret`, `export-data` and `import-data` take one JSON object,
+  like every `common.cli` command.** Typed bare they work as before (`db-ops init` still prints what
+  it created). An option is now a key - **breaking** for scripts that pass flags:
+  - `init --force` -> `db-ops init '{"force": true}'`; `--app-name X` -> `"app_name"`
+  - `guide --write` -> `db-ops guide '{"write": true}'`
+  - `export-data FILE --root D --no-secrets --no-assets --force` -> `{"bundle": "FILE", "root": "D",
+    "include_secrets": false, "include_assets": false, "force": true}`
+  - `import-data FILE --root D --plan --force` -> `{"bundle": "FILE", "root": "D", "plan_only": true,
+    "force": true}`
+  - `encrypt-secret --source S --dest D` -> `{"source": "S", "dest": "D"}`; the passphrase stays
+    `DB_OPS_SECRET_KEY` or `--key-base64` after the JSON, never in the request.
+  An old flag is refused with the key it became. Add `"format": "txt"` for the text the flags printed.
+- **`db-ops check-credentials` takes a JSON object, like every `common.cli` command.** Bare it works
+  as before and checks this node. The folder it took positionally is now a key - **breaking** for a
+  script that passes one: `check-credentials data` -> `check-credentials '{"data_dir": "data"}'`
+  (the old form is refused with the request it became). A Telegram `sql_execute` command's login is
+  now resolved against the folder being checked, not always this node's own.
+- **`common.cli` reads no configuration: 20 commands take the login, the policy and the price in
+  their request** - **breaking** for a script that sent only a `server_id`. `shrink-log`,
+  `kill-spid`, `start-job`, `disable-job`, `list-databases`, `list-schemas`, `list-jobs`,
+  `db-status`, `create-table-from-xlsx`, `trace-session` and `copy-schema` (per side) need
+  `"connection"` - the SQL login, complete: `db_type`, `host`, `port`, `username`, `password`.
+  `host-facts`, `host-service` and `host-restart` need `"access"` (the host's `cmd_access` with its
+  password or key file) and take `"policy"` (the maintenance policy). The three SQL Server patch
+  commands need both. `sqlserver-export-instance` / `-replay-instance` need `"policy"` (the instance
+  policy's content), and a replay takes its bundle's `"secrets"`. Every command behind the
+  confirmation gate, and `authorize`, is priced by the request's `"rules"`, else by the ladder the
+  package ships - never by this node's `data/emergency_operations.json`. A request missing the field
+  is refused with its name. `credential_name`, `user_ref` and `data_dir` are no longer read by
+  these commands. The bot, `sql_tasks` and `backup_restore` send complete requests on stdin; a
+  person at a shell writes the request to a file and passes `@file`, or pipes it with `-`.
+- **`run-sql`, `run-cmd`, `probe-host` and the file transfers read no configuration either** -
+  **breaking** for a script that sent only a `server_id` (or an ip). `run-sql` needs
+  `"connection"`, and an Oracle 8i bridge's signing secret comes in `"secrets"`; `run-cmd`,
+  `fetch-file`, `send-file` and `pack-files` need `"access"`, and `relay-file` one per side;
+  `probe-host` needs `"host"`. `target` is only the label the answer carries. `run-sql` no longer
+  reads `credential_name`, `user_ref` or `data_dir`, and its `--key` changes nothing (still accepted).
+- **One command per job - four commands that repeated another's are gone** - **breaking** for a
+  script that calls them; `upgrade-config` (step `moved-commands`) rewrites a configured command
+  line that names the two that moved:
+  - `control inventory-summary` -> `common.cli inventory-summary`; `control inventory-workflow` ->
+    the worker's `reports.cli inventory-workflow` (from the master: `control worker-run -- ...`).
+  - `common.cli timezone` -> `db.cli timezone`, which now answers without opening the store unless
+    asked to `--record` / `--list`, answers with no readable `config.json`, takes `--format txt`,
+    and still takes the JSON request the common command did.
+  - `db.cli self-status` -> `common.cli self-status`, which takes each app command's last run in
+    its request (`last_runs`); `/spbot_self_status` fills it from the node's store as before.
+  - `backup_restore.cli verify-restore` -> `common.cli verify-restore` (the restore workflow's last
+    phase already asked that one).
+  - **A SQL Server RESTORE is written in one place.** The nightly SMB restore (`restore-latest`, and
+    `restore-workflow` for an SMB entry) asks `common.cli restore-full` / `restore-diff` /
+    `restore-log` for each step instead of writing its own statements; the text is unchanged except
+    that a quote in a database name or path is now escaped correctly. The steps gain `move_files`
+    (the data and log paths, logical names read on the server) and `sqlcmd` (run where the SQL
+    Server is, one file per call). A point-in-time `STOPAT` is written `YYYY-MM-DDTHH:MM:SS` for every
+    caller - the form SQL Server reads the same under any login language. Gone: `common.cli
+    restore-database` (a third chain restore nothing called), `backup_restore`'s hidden
+    `restore-full` / `restore-diff` / `restore-log`, and `restore-by-id` for an SMB entry - use
+    `restore-workflow --restore-id <id>` (latest, or `--point-in-time`).
+- **A host login in a `common.cli` request is used as stated.** A `key_file` given as a bare file
+  name is refused - state its full path - and a `password_ref` must be among the request's
+  `"secrets"` or in the environment: nothing under `common.cli` looks a key up in `data/ssh_keys/`
+  or opens the secret store for a host any more. The apps (the bot, `sre`, `metrics`, backup and
+  restore) resolve both from their own `data/` before they call, as before.
+- **The SQL Server restore reaches its shares through `common.cli`: four new commands, `smb-list`,
+  `smb-get`, `smb-delete` and `smb-credential`** (stdin only - each carries the share's password).
+  `smbclient` on Linux, the UNC path after `cmdkey` on Windows, one answer shape. The restore no
+  longer starts `smbclient`, `cmdkey`, a local PowerShell or `sqlcmd` itself: a Windows target's
+  certificate import runs through `run-cmd` over WinRM, a local one and CHECKDB through
+  `run-sqlcmd`. Two behaviours change: a **dry-run cleanup on a Windows target now deletes
+  nothing** (it deleted before), and `verify-restore` works on a Linux target (it could not start
+  there). The `smbclient` login file is deleted after each call instead of left in the temp folder.
+- **The root command no longer has a logging/store smoke test** (`db-ops --message`, `--recent`,
+  `--export-sqlite-schema`). The schema export is `db-ops db export-sqlite-schema`.
+- **Notification routing is read in-process** - no process per level is started to learn a chat.
+  `telegram.cli route` / `groups` still answer for a person at a shell. `telegram.cli
+  queue-metrics-reports`, an unused alias of `reports.cli queue-metrics-reports`, is removed.
+- For code that imports db_ops: `db_ops.config`, `db_ops.__version__` and `db_ops.lib.common_cli`'s
+  `run` / `run_allowing_failure` keep working under new homes - `db_ops.lib.config`,
+  `db_ops.lib.version`, `db_ops.transport.common_cli` (a new layer, docs/15_transport.md).
+  `db_ops.levels` is `db_ops.lib.levels`; `db_ops.common.data_sources` is `db_ops.lib.data_sources`.
+  `db_ops.metrics.targets` is `db_ops.lib.data_sources.collection_targets` (the same module object)
+  and `MetricTarget` is `db_ops.lib.metric_target.MetricTarget`, still importable from
+  `db_ops.metrics.models`.
+- **`sre` reaches the lab through `common.cli run-cmd`, and needs the `ssh` extra.** Its ssh and
+  ansible calls - `ssh`, `run-bastion-*`, `check-*` - no longer start an `ssh` of their own; the
+  request goes to `run-cmd` on stdin, so the passwords a check carries are off this machine's process
+  list. Install `'<package>[ssh]'` (paramiko) where `sre` runs. The key is still
+  `sre.credentials.ssh_identity_file`, the connect timeout still 10 seconds, and a step that never
+  reached the bastion still exits 255. `--dry-run` prints the `run-cmd` request instead of an `ssh`
+  line. The SQL Server AG orchestrator copies its archive with `push-file` (sha256 checked on both
+  ends) instead of `scp`.
+- **Metric collection runs its SQL and scripts through `common.cli metric-batch`, one process per
+  target.** It ran them in-process until now. A target's due metrics go out together; a metric with
+  a time window (CHECKDB, an index scan, a restore validation) runs in a batch of its own, so it
+  never holds the quick metrics' rows back from the store. What a metric stores is unchanged -
+  status, message, error type, raw streams - and each row is still stamped with when its own metric
+  ran. A batch that stops answering altogether now fails its items with the reason after a bound,
+  instead of holding that server's worker for the rest of the pass. For code that imports db_ops:
+  `metrics.executor.execute_metric_sql` and `collector.execute_local/_ssh/_winrm` keep working (a
+  batch of one); `collector._shell_prelude`, `_script_with_env` and `_remote_failure_phase` are
+  gone (`common.remote_exec.shell_prelude`, `common.metric_batch`); `load_database_inventory` is
+  `db_ops.lib.inventory_file` (still importable from `common.sql_execution`).
+- **`job_runs_history` and `metric_results_archive` have primary keys** - the id each row kept
+  (`log_id`, `result_id`). A new store has them at once. **An existing store needs one command, run
+  when it can take it:** `python -m db_ops.db.cli archive-keys` reports rows, missing ids and
+  duplicate ids; `--apply` adds each key the report found clean. No app does it on its own - on a
+  long-running store the archive is millions of rows, and the key reads all of them.
+- **The shipped app-command catalogue now carries the values this estate runs**, apart from
+  `node_role`, which stays `all` so a single-machine install works as copied:
+  - `APP-BACKUP-RESTORE`: `retry_interval` 30 -> 60 and `timeout` 7200 -> 18000 s;
+  - `APP-SQL_TASKS`: `timeout` 1800 -> 18000 s;
+  - `APP-REPORTS-CREATE`: `timeout` 2400 -> 1800 s.
+  The `data/app_commands.example.json` that ships is the catalogue itself now (it still said 300 s
+  and an older control command). A node made before this keeps its own values.
+- **`APP-BACKUP-RESTORE` runs every second by default, as `APP-SQL_TASKS` does** - it was 30 s. One
+  run works through its due jobs one at a time and the next run takes what is left, so the interval
+  decided how many jobs due together could run at once: at 30 s, three restores due at the same
+  moment reached two at once. A node made before this keeps its own value;
+  `app-command-set '{"app_code": "APP-BACKUP-RESTORE", "time_window": {"repeat_interval": 1}}'`
+  moves it.
+- **`force-hourly-report` (and `/spbot_report_hourly_metrics`) reports the stored results; it
+  collects nothing.** It used to run `metrics.cli collect --force` for the target first. The report
+  is now at most one collection cycle old and takes seconds. The bot command's `full` word is gone
+  with it; `--include-windowed` is refused with the command that replaces it - `metrics.cli collect
+  --target-id <id> --force --include-windowed`, then the report. The workflow's JSON says `stored`
+  where it said `collect`.
+- **`control worker-create-db-docker` builds on the worker's host through `common`, and registers on
+  this node.** It used to run `sre.cli create-db-docker` inside the worker container, with the
+  secret-store passphrase on that command line. The record (`created_by:
+  db_ops.control.worker-create-db-docker`) and a `--password-text` are written here and reach the
+  worker with the next deploy; `--container` and `--pull-config` do nothing any more. The SSH user
+  must be able to run `docker` on the host - `--install-docker` arranges it. New:
+  `--overwrite-secret`. For code that imports db_ops: `db_ops.sre.docker_db` is
+  `db_ops.lib.docker_db_registry`.
+- `run-cmd` with an inline `access` block that is a key login no longer reads `users.json` - it
+  never used what it read, and a missing or broken file stopped a complete request.
+
+### Fixed
+
+- **`run-sql` answered a traceback instead of JSON when its target dropped mid-statement** (seen on
+  a PostgreSQL SQL task in 0.23.0). Closing the dead connection raised and hid the reason; the run
+  now fails with the statement's own error, and nothing `run-sql` meets reaches its caller as a
+  traceback.
+- **`/spbot_self_status` said "last run unknown" on a node upgraded from before 0.23.0.** Its
+  command line ran `common.cli self-status`, which never reads the store. The bot now states each
+  app command's last run in the request, so that line works as it stands; one that 0.23.0 pointed at
+  `db.cli self-status` is pointed back by `upgrade-config`'s new step, `moved-commands`: a command
+  line naming a command that moved to another CLI (`self-status`, `timezone`, and `ops-status`,
+  `queue-telegram-message`, `restore-drill-status` from 2026-08-15) is pointed at it, the file's
+  layout kept. Run `upgrade-config` after upgrading, as always.
+- **No app imports `common` any more** (rules R03, absolute since this version). `control`: the
+  export's identifier scan runs `common.cli check-identifiers`, and the deploy's config-drift
+  question runs the new `common.cli ask`; a scan that refuses (nothing to search for, nothing to
+  read) now answers `data.refused: true`, so the export still says SKIPPED for it and stops for any
+  other failure. **`control`'s SSH session to the worker and `backup_restore`'s to a Linux restore
+  target** are a `lib.remote_host.RemoteHost`: every command is `common.cli run-cmd`, every file
+  `push-file` / `pull-file`, each its own session (about half a second); many files travel as one
+  tar. What you see: a deploy's remote output now appears when each command ends rather than as it
+  streams, and `worker-run --sudo` is `run-cmd`'s sudo (the line under `sudo -S`, the SSH password
+  on stdin). A certificate's private key is written on the target from memory - it never touches
+  the local disk. The Windows preflight's SMB share is a `run-cmd` over WinRM.
+- **Two `common.cli` answers carried a key the reference did not describe**:
+  `check-references` answers `data_dir` (the root it checked) and `list-backup-files` answers
+  `unreadable` (files named like backups the engine could not read). `shared_config_objects.json`
+  now describes both.
+- **`sre ... --dry-run` printed the MySQL admin password.** The hop to a node quotes the command a
+  second time, and the redaction's `--password=` pattern did not match the doubled quoting. A dry run
+  now masks every password it carries as `***` where it is built - the MySQL admin password, the
+  guest password a bastion script receives, and the base64 PowerShell payload of resolved
+  credentials.
+- **An Oracle SQL task with `parameters` runs on a direct connection, and a PostgreSQL task can
+  have parameters.** Parameters were T-SQL `DECLARE @name` lines in front of the script: on a
+  direct Oracle connection they reached Oracle as they were and the task failed at its first run,
+  and a PostgreSQL task could declare none. On both engines the script now says `:name` and the
+  value is **bound by name** - a quote in it is data, never SQL. On Oracle `&name` is still a
+  SQL*Plus substitution, as on an 8i bridge target, so one command means the same on both. SQL
+  Server is unchanged.
+  - **What to do:** say each parameter in the script as `:name` (or `&name` on Oracle). On
+    PostgreSQL the value arrives as text and the server types it from where it stands; where
+    nothing says (`:d IS NULL`), write a cast - `CAST(:d AS date)`.
+  - `sql-command-add` refuses an Oracle or PostgreSQL parameter no script of the task says: it
+    would take a value and bind it to nothing.
+  - `run-sql` takes `named_params` (`{"name": value}`) on Oracle and PostgreSQL, bound where the
+    SQL says `:name` in the driver's own placeholder. A name no statement says is refused before
+    connecting.
+
 ## [0.23.0] - 2026-09-26
 
 0.22.0 was built and soaked, then abandoned on 2026-09-24 before its day was out (the operator:

@@ -208,17 +208,6 @@ def test_sql_run_no_longer_refuses_a_non_sqlserver_target(monkeypatch, tmp_path)
     """The regression this whole change exists for: `/spbot_sql_to_xlsx` against a PostgreSQL
     target used to fail with 'only sqlserver is supported'."""
     conn = _Conn([])
-    monkeypatch.setattr(sql_run, "resolve_sqlserver_target",
-                        lambda spec, data_dir=None, database="", credential_name="", sql_access=None,
-                        profile=None, driver="", oracle_client_mode="": {
-                            "server_id": "PGLAB", "db_type": "postgresql",
-                            "database_name": "postgres", "credential_name": "pg_cred",
-                            "username": "postgres", "password": "x", "ip": "10.0.0.9",
-                            "port": 5432, "service_name": "",
-                            "sql_access": sql_access or {"method": "direct"},
-                            "profile": TargetProfile(db_type="postgresql"),
-                            "tool": {"tool": "postgresql", "chosen_by": "default", "reason": ""},
-                        })
     monkeypatch.setattr(
         sql_run, "connect_target",
         lambda target, timeout_seconds, connect_timeout_seconds=0,  # noqa: ARG005
@@ -226,7 +215,9 @@ def test_sql_run_no_longer_refuses_a_non_sqlserver_target(monkeypatch, tmp_path)
     monkeypatch.setattr(sql_run, "execute_capture", lambda cursor, sql, **_kwargs: (
         [{"columns": ["n"], "rows": [[1]], "row_count": 1, "truncated": False}], 0, False))
 
-    result = sql_run.run_sql({"target": "PGLAB", "sql": "SELECT 1 AS n"})
+    result = sql_run.run_sql({"target": "PGLAB", "sql": "SELECT 1 AS n", "connection": {
+        "db_type": "postgresql", "host": "10.0.0.9", "port": 5432, "username": "postgres",
+        "password": "x", "database": "postgres", "server_id": "PGLAB"}})
 
     assert result["ok"] is True and result["rows"] == [[1]]
     assert conn.closed is True
@@ -287,46 +278,36 @@ def test_the_other_engines_still_take_the_database_the_inventory_names():
 # --------------------------------------------------------------------------- #
 # Which database run-sql / spbot_sql_to_xlsx connect to
 # --------------------------------------------------------------------------- #
-def _instances(monkeypatch, entry):
-    """Point target resolution at one fabricated inventory entry."""
-    from db_ops.common import data_sources
-    from db_ops.common import data_sources as target_resolve
-    monkeypatch.setattr(target_resolve, "resolve_target_instance",
-                        lambda spec, data_dir=None: dict(entry))
-    monkeypatch.setattr(data_sources, "find_database_credential",
-                        lambda *a, **k: {"credential_name": "c", "username": "u",
-                                         "password_ref": "R"})
-    monkeypatch.setattr(data_sources, "load_credentials", lambda *a, **k: [])
-    monkeypatch.setattr(data_sources, "load_secret_text", lambda *a, **k: {"R": "pw"})
+def _stated(instance, *, database=""):
+    """What run-sql resolves for an inventory record, filled the way every app fills it (R09)."""
+    from db_ops.lib.data_sources import request_fill
+
+    connection = request_fill.connection_from(instance, {"credential_name": "c", "username": "u"}, "pw")
+    return sql_run.resolve_stated_connection({"connection": connection}, database=database)
 
 
-def test_sqlserver_connects_to_master_even_if_the_inventory_names_something_else(monkeypatch):
+def test_sqlserver_connects_to_master_even_if_the_inventory_names_something_else():
     """The inventory's `database` is unreliable on SQL Server: mostly empty, sometimes a copy of
     'master', and nothing stops a service label (`APPDB-PROD`) being written there — which is not
     a database, so the login fails with 4060. Metric collection hit exactly that. master is
     always openable and a script that needs another database says USE."""
-    _instances(monkeypatch, {"server_id": "ACME-x", "db_type": "sqlserver", "ip": "10.0.0.1",
-                             "port": 1433, "database": "APPDB-PROD"})
-
-    resolved = sql_run.resolve_target("ACME-x")
+    resolved = _stated({"server_id": "ACME-x", "db_type": "sqlserver", "ip": "10.0.0.1",
+                        "port": 1433, "database": "APPDB-PROD"})
 
     assert resolved["database_name"] == "master"
 
 
-def test_an_explicit_database_in_the_request_still_wins(monkeypatch):
+def test_an_explicit_database_in_the_request_still_wins():
     """Pinning the default must not remove the documented `"database": "SALESDB"` option — that is
     how a caller queries a user database without writing USE."""
-    _instances(monkeypatch, {"server_id": "ACME-x", "db_type": "sqlserver", "ip": "10.0.0.1",
-                             "port": 1433, "database": "APPDB-PROD"})
-
-    resolved = sql_run.resolve_target("ACME-x", database="SALESDB")
+    resolved = _stated({"server_id": "ACME-x", "db_type": "sqlserver", "ip": "10.0.0.1",
+                        "port": 1433, "database": "APPDB-PROD"}, database="SALESDB")
 
     assert resolved["database_name"] == "SALESDB"
 
 
-def test_the_other_engines_still_take_the_inventory_database(monkeypatch):
+def test_the_other_engines_still_take_the_inventory_database():
     """PostgreSQL/MySQL have no instance-level catalog to sit in, so the opposite rule holds."""
-    _instances(monkeypatch, {"server_id": "PG", "db_type": "postgresql", "ip": "10.0.0.2",
-                             "port": 5432, "database": "appdb"})
+    assert _stated({"server_id": "PG", "db_type": "postgresql", "ip": "10.0.0.2",
+                    "port": 5432, "database": "appdb"})["database_name"] == "appdb"
 
-    assert sql_run.resolve_target("PG")["database_name"] == "appdb"

@@ -5,7 +5,7 @@ on disk. Three things were left in that state, and each is a file an operator ha
 editor to make the tool work at all:
 
 * a **backup** entry and a **restore** entry in `data/restore_config.json` - asked for directly on
-  2026-09-13, *"phải có cli thêm backup restore giống cli thêm instance nhé"*;
+  2026-09-13, *"there has to be a CLI that adds a backup and a restore, like the one that adds an instance"* (translated);
 * an **OS login** in `users.json` `remote_credentials`, which 18 of this estate's entries were
   copied between nodes by hand to get.
 

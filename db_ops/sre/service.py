@@ -1,3 +1,15 @@
+"""What ``sre`` does on the lab: ansible and scripts on the bastion, checks on the nodes behind it.
+
+It reaches those machines through ``common run-cmd`` (rules R10), not an ``ssh`` of its own. Until
+0.24.0 every function here built an ``ssh`` argv and ran it, so the one thing ``common`` exists to
+own - how a host is reached - had a second copy that answered to nobody: its own options, its own
+idea of a timeout, and every password it carried on this machine's process list. ``run-cmd``
+takes the request on stdin, so none of that is visible here any more.
+
+The one process still started here is :func:`run_powershell_script`: the operator's VMware scripts,
+run on this machine. They are not a host this app reaches; they are the tool it drives.
+"""
+
 from __future__ import annotations
 
 import base64
@@ -11,6 +23,15 @@ from pathlib import Path
 
 from db_ops.lib.shell import powershell_executable
 from db_ops.sre.config import SreOperationalConfig
+from db_ops.transport.common_cli import CommonCliError, run_allowing_failure
+
+#: What ``ssh`` itself exits with when it never ran the command - no route, refused, no login.
+#: Kept for a ``run-cmd`` that answered without an exit code, because that is the same fact and
+#: :func:`_wait_for_bastion_ssh` tells "not up yet" from "the command failed" by it.
+SSH_DID_NOT_RUN = 255
+
+#: A remote step's result, or - on a dry run - the ``run-cmd`` request that would be sent.
+RemoteOutcome = subprocess.CompletedProcess[str] | dict
 
 
 def run_ssh_command(
@@ -19,15 +40,12 @@ def run_ssh_command(
     host: str,
     command_args: list[str],
     dry_run: bool = False,
-) -> subprocess.CompletedProcess[str] | list[str]:
+) -> RemoteOutcome:
     remote_command = (
         command_args[0] if len(command_args) == 1
         else " ".join(shlex.quote(arg) for arg in command_args)
     )
-    command = _ssh_command(sre_config, remote_command, host=host)
-    if dry_run:
-        return command
-    return subprocess.run(command, check=False, capture_output=True, text=True)
+    return _remote(sre_config, remote_command, host=host, dry_run=dry_run)
 
 
 def run_bastion_ansible(
@@ -37,16 +55,13 @@ def run_bastion_ansible(
     inventory: str | None = None,
     args: list[str] | None = None,
     dry_run: bool = False,
-) -> subprocess.CompletedProcess[str] | list[str]:
+) -> RemoteOutcome:
     parts = ["ANSIBLE_CONFIG=automation/ansible/ansible.cfg", "ansible"]
     if inventory:
         parts.extend(["-i", shlex.quote(inventory)])
     parts.append(shlex.quote(target))
     parts.extend(shlex.quote(arg) for arg in (args or []))
-    command = _ssh_command(sre_config, _join_remote(["cd /opt/db-sre/repo", " ".join(parts)]))
-    if dry_run:
-        return command
-    return subprocess.run(command, check=False, capture_output=True, text=True)
+    return _remote(sre_config, _join_remote(["cd /opt/db-sre/repo", " ".join(parts)]), dry_run=dry_run)
 
 
 def run_bastion_ansible_playbook(
@@ -56,16 +71,13 @@ def run_bastion_ansible_playbook(
     inventory: str | None = None,
     args: list[str] | None = None,
     dry_run: bool = False,
-) -> subprocess.CompletedProcess[str] | list[str]:
+) -> RemoteOutcome:
     parts = ["ANSIBLE_CONFIG=automation/ansible/ansible.cfg", "ansible-playbook"]
     if inventory:
         parts.extend(["-i", shlex.quote(inventory)])
     parts.append(shlex.quote(playbook))
     parts.extend(shlex.quote(arg) for arg in (args or []))
-    command = _ssh_command(sre_config, _join_remote(["cd /opt/db-sre/repo", " ".join(parts)]))
-    if dry_run:
-        return command
-    return subprocess.run(command, check=False, capture_output=True, text=True)
+    return _remote(sre_config, _join_remote(["cd /opt/db-sre/repo", " ".join(parts)]), dry_run=dry_run)
 
 
 def run_bastion_script(
@@ -74,7 +86,7 @@ def run_bastion_script(
     script_name: str,
     args: list[str] | None = None,
     dry_run: bool = False,
-) -> subprocess.CompletedProcess[str] | list[str]:
+) -> RemoteOutcome:
     bash_dir = sre_config.bash_dir()
     if not bash_dir:
         raise ValueError("SRE config 'sre.automation.bash_dir' is required to run bastion scripts.")
@@ -98,26 +110,24 @@ def run_bastion_script(
         f"chmod +x {shlex.quote(relative_script)}",
         env_prefix + " ".join([shlex.quote(f"./{relative_script}"), *(shlex.quote(a) for a in (args or []))]),
     ])
-    command = _ssh_command(sre_config, remote_command)
     if dry_run:
-        return command
+        return _remote(sre_config, remote_command, dry_run=True, secrets=[guest_pass])
     # Retry on TCP-level SSH failures (rc=255) — bastion may be briefly unreachable
     # right after heavy VMware Tools operations (repo sync, key distribution).
     _wait_for_bastion_ssh(sre_config, timeout=120)
-    return subprocess.run(command, check=False, capture_output=True, text=True)
+    return _remote(sre_config, remote_command)
 
 
 def _wait_for_bastion_ssh(sre_config: SreOperationalConfig, *, timeout: int = 120) -> None:
     """Block until bastion's SSH port accepts connections, up to `timeout` seconds."""
-    probe = _ssh_command(sre_config, "true")
     deadline = time.monotonic() + timeout
     while True:
-        result = subprocess.run(probe, check=False, capture_output=True, text=True)
+        result = _remote(sre_config, "true")
         if result.returncode == 0:
             return
-        # rc=255 → TCP failure (connection refused / timed out); anything else is
-        # an auth or remote-command error — not a connectivity issue, stop waiting.
-        if result.returncode != 255:
+        # rc=255 → the command never ran (refused, timed out, no login); anything else is the
+        # remote command's own answer — the bastion is up, stop waiting.
+        if result.returncode != SSH_DID_NOT_RUN:
             return
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -159,8 +169,8 @@ def check_shared_vms(
     *,
     vm_names: list[str] | None = None,
     dry_run: bool = False,
-) -> list[subprocess.CompletedProcess[str] | list[str]]:
-    results: list[subprocess.CompletedProcess[str] | list[str]] = []
+) -> list[RemoteOutcome]:
+    results: list[RemoteOutcome] = []
     net_interface = shlex.quote(sre_config.net_interface())
     nodes = sre_config.inventory_group("shared")
     if vm_names:
@@ -176,8 +186,7 @@ def check_shared_vms(
             "grep -Eq '^(running|degraded)$' /tmp/db-sre-system-state.txt; "
             f"echo {shlex.quote(name + ' OK hostname ip system')}"
         )
-        command = _ssh_command(sre_config, remote_command, host=ip)
-        results.append(command if dry_run else subprocess.run(command, check=False, capture_output=True, text=True))
+        results.append(_remote(sre_config, remote_command, host=ip, dry_run=dry_run))
     return results
 
 
@@ -185,7 +194,7 @@ def check_mysql_cluster(
     sre_config: SreOperationalConfig,
     *,
     dry_run: bool = False,
-) -> list[subprocess.CompletedProcess[str] | list[str]]:
+) -> list[RemoteOutcome]:
     # Resolved, not raw: the admin password may be a `cluster_admin_password_ref` naming an
     # entry in the secret store rather than a literal in the config file.
     mysql_defaults = dict(sre_config.resolved_database_defaults().get("mysql") or {})
@@ -194,7 +203,7 @@ def check_mysql_cluster(
     admin_user = str(mysql_defaults.get("cluster_admin_user", "clusteradmin"))
     admin_password = str(mysql_defaults.get("cluster_admin_password", ""))
     port = int(mysql_defaults.get("classic_port", 3306))
-    results: list[subprocess.CompletedProcess[str] | list[str]] = [
+    results: list[RemoteOutcome] = [
         run_bastion_ansible(sre_config, target="mysql", args=["-m", "ping"], dry_run=dry_run),
         run_bastion_ansible(sre_config, target="mysql", args=["-m", "shell", "-a", "systemctl is-active mysql"], dry_run=dry_run),
     ]
@@ -219,8 +228,8 @@ def check_mysql_cluster(
         f"--password={shlex.quote(admin_password)} "
         f"-e {shlex.quote(status_js)}"
     )
-    command = _ssh_command(sre_config, remote_command, host=str(primary["ip"]))
-    results.append(command if dry_run else subprocess.run(command, check=False, capture_output=True, text=True))
+    results.append(_remote(sre_config, remote_command, host=str(primary["ip"]), dry_run=dry_run,
+                           secrets=[admin_password]))
     return results
 
 
@@ -228,9 +237,9 @@ def check_postgresql_ha(
     sre_config: SreOperationalConfig,
     *,
     dry_run: bool = False,
-) -> list[subprocess.CompletedProcess[str] | list[str]]:
+) -> list[RemoteOutcome]:
     primary = sre_config.first_node("postgresql")
-    results: list[subprocess.CompletedProcess[str] | list[str]] = [
+    results: list[RemoteOutcome] = [
         run_bastion_ansible(
             sre_config,
             target="postgresql",
@@ -259,8 +268,7 @@ def check_postgresql_ha(
         "echo \"$result\"; "
         "echo \"$result\" | grep -q '^OK '"
     )
-    command = _ssh_command(sre_config, remote_command, host=str(primary["ip"]))
-    results.append(command if dry_run else subprocess.run(command, check=False, capture_output=True, text=True))
+    results.append(_remote(sre_config, remote_command, host=str(primary["ip"]), dry_run=dry_run))
     return results
 
 
@@ -308,26 +316,58 @@ def _run_streaming(command: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.CompletedProcess(args=command, returncode=proc.returncode, stdout="", stderr="")
 
 
-def _ssh_command(sre_config: SreOperationalConfig, remote_command: str, *, host: str | None = None) -> list[str]:
+def _remote(
+    sre_config: SreOperationalConfig,
+    remote_command: str,
+    *,
+    host: str | None = None,
+    dry_run: bool = False,
+    secrets: list[str | None] | None = None,
+) -> RemoteOutcome:
+    """Run ``remote_command`` on ``host`` (the bastion by default) through ``common run-cmd``.
+
+    A dry run returns the request instead, with every secret in ``secrets`` masked. It is masked
+    here, where the values are known, because the CLI redacting the printed text afterwards had to
+    guess at the quoting - and the hop to a node quotes a quoted password again
+    (``'"'"'secret'"'"'``), which the old ``--password=`` pattern did not match, so ``--dry-run``
+    printed the MySQL admin password in full.
+    """
+    request = _remote_request(sre_config, remote_command, host=host)
+    if dry_run:
+        for secret in secrets or []:
+            if secret:
+                request["command"] = request["command"].replace(secret, "***")
+        return request
+    try:
+        success, data, error = run_allowing_failure("run-cmd", request)
+    except CommonCliError as exc:
+        return subprocess.CompletedProcess(args=["run-cmd"], returncode=SSH_DID_NOT_RUN,
+                                           stdout="", stderr=f"{exc}\n")
+    exit_code = data.get("exit_code")
+    if exit_code is None:
+        # Answered, but ran nothing: the host was not reached or the login was refused.
+        return subprocess.CompletedProcess(args=["run-cmd"], returncode=SSH_DID_NOT_RUN,
+                                           stdout="", stderr=f"{error or 'run-cmd ran nothing'}\n")
+    return subprocess.CompletedProcess(args=["run-cmd"], returncode=int(exit_code),
+                                       stdout=str(data.get("stdout") or ""),
+                                       stderr=str(data.get("stderr") or ""))
+
+
+def _remote_request(sre_config: SreOperationalConfig, remote_command: str, *,
+                    host: str | None = None) -> dict:
+    """The ``run-cmd`` request, carrying every fact, so ``common`` looks nothing up (R09).
+
+    ``assume_yes`` is the operator's own ``sre`` command answering the gate: they typed it, and
+    nothing here asked before either. ``timeout_seconds`` on the access block is the *connect*
+    timeout ``ssh -o ConnectTimeout=10`` had; the command itself stays unbounded, as it was - a
+    playbook runs for as long as it runs.
+    """
     user = sre_config.guest_user()
     bastion = sre_config.bastion_host()
     target_host = host or bastion
-    ssh_key = sre_config.ssh_identity_file()
-    cmd = [
-        "ssh",
-        "-o", "ConnectTimeout=10",
-        "-o", "ServerAliveInterval=10",
-        "-o", "ServerAliveCountMax=2",
-        "-o", "StrictHostKeyChecking=no",
-        "-o", "UserKnownHostsFile=/dev/null",
-        "-o", "BatchMode=yes",
-    ]
-    if ssh_key:
-        cmd += ["-i", ssh_key]
     # Route through bastion when the target is a non-bastion node.
     # Wrap the remote_command in a second ssh hop executed ON bastion so that
-    # Windows host only needs its key on bastion; bastion's key reaches all other nodes.
-    # (ProxyCommand is avoided: on Windows the subprocess can't reach the SSH agent.)
+    # this machine only needs its key on bastion; bastion's key reaches all other nodes.
     if target_host != bastion:
         remote_command = (
             "ssh -o BatchMode=yes -o StrictHostKeyChecking=no"
@@ -335,9 +375,12 @@ def _ssh_command(sre_config: SreOperationalConfig, remote_command: str, *, host:
             f" {shlex.quote(user)}@{shlex.quote(target_host)}"
             f" {shlex.quote(remote_command)}"
         )
-        target_host = bastion
-    cmd += [f"{user}@{target_host}", remote_command]
-    return cmd
+    access = {"method": "ssh", "host": bastion, "username": user, "auth_type": "key",
+              "timeout_seconds": 10}
+    ssh_key = sre_config.ssh_identity_file()
+    if ssh_key:
+        access["key_file"] = ssh_key
+    return {"access": access, "command": remote_command, "confirm": True, "assume_yes": True}
 
 
 def _build_powershell_payload(sre_config: SreOperationalConfig) -> str:

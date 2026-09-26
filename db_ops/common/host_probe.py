@@ -39,7 +39,7 @@ from typing import Any
 from db_ops.lib.cmd_access import PLATFORM_WINDOWS
 from db_ops.lib.coerce import as_optional_int
 from db_ops.lib.target_profile import (
-    SOURCE_CONFIG, TargetProfile, windows_management_transport_available,
+    TargetProfile, windows_management_transport_available,
 )
 
 __all__ = [
@@ -105,7 +105,7 @@ def probe_port(host: str, port: int, timeout: float = 3.0) -> dict[str, Any]:
     return result
 
 
-def probe(request: dict[str, Any], *, instance: dict[str, Any] | None = None) -> dict[str, Any]:
+def probe(request: dict[str, Any]) -> dict[str, Any]:
     """Probe one host and say what db_ops can do with it.
 
     The request is a JSON object, like every other command here::
@@ -115,28 +115,19 @@ def probe(request: dict[str, Any], *, instance: dict[str, Any] | None = None) ->
          "ports": [22, 5985, 3389],       // default: DEFAULT_PORTS
          "timeout_seconds": 3}
 
-    **This module reads no file.** ``instance`` is the already-resolved ``db_instances.json``
-    record when the caller had a ``target`` to resolve — ``common/cli.py`` does that, because
-    resolving config before handing a JSON object down is the composition root's job and not this
-    one's (``docs/13_common.md`` rule 3). A caller that knows the ip passes it and this stays a
-    pure function of its arguments.
+    **This module reads no file, and since 0.24.0 nothing above it does either** (rules R09). The
+    inventory record it used to be handed - resolved from a bare ``target`` by ``common/cli.py`` - is
+    gone: an app holding a server_id states the address and the OS in the request
+    (``lib.data_sources.request_fill``), so this is a pure function of the request alone.
     """
     if not isinstance(request, dict):
         raise HostProbeError("request must be a JSON object.")
 
-    instance = instance or {}
-    host = str(request.get("host") or instance.get("ip") or "").strip()
-    server_id = (
-        str(request.get("target") or "").strip()
-        or str(instance.get("server_id") or "").strip()
-        or host
-    )
-    # The request's own facts win over the record's, the same precedence everything else here uses.
-    profile = TargetProfile.from_json(request).merge(
-        TargetProfile.from_json(instance, source=SOURCE_CONFIG)
-    )
+    host = str(request.get("host") or "").strip()
+    server_id = str(request.get("target") or "").strip() or host
+    profile = TargetProfile.from_json(request)
     if not host:
-        raise HostProbeError('give a "host" (an ip or hostname) — or a "target" the caller resolves.')
+        raise HostProbeError('give a "host" (an ip or hostname) - the caller states the address.')
 
     ports = request.get("ports") or DEFAULT_PORTS
     if not isinstance(ports, (list, tuple)):

@@ -26,7 +26,7 @@
         "to_minute": null,
         "repeat_interval": 1,
         "retry_interval": 60,
-        "timeout": 1800
+        "timeout": 18000
       },
       "note": "repeat_interval 1, the same as APP-TELEGRAM: this interval is checked once per run of the app, so it is a floor under every task inside it - at 60 a task whose own time_window asked for 60 s ran every 60-120 s depending on phase, and nothing in that task's config said why. The app exits immediately when nothing is due."
     },
@@ -82,7 +82,7 @@
         "to_minute": null,
         "repeat_interval": 120,
         "retry_interval": 60,
-        "timeout": 2400
+        "timeout": 1800
       }
     },
     {
@@ -191,11 +191,11 @@
         "to_hour": null,
         "from_minute": null,
         "to_minute": null,
-        "repeat_interval": 30,
-        "retry_interval": 30,
-        "timeout": 7200
+        "repeat_interval": 1,
+        "retry_interval": 60,
+        "timeout": 18000
       },
-      "note": "On by default, and idle until data/restore_config.json declares a backup or a restore: init writes that file with both lists empty, and an empty list is 'nothing configured' - status done, no work, no alert. Nothing is backed up or restored until an entry is added. repeat_interval 30 since 2026-09-21, down from 300: this app's interval is a FLOOR under every job inside it, because the app is one process working through its own due list - at 300 a log backup declared at 900 s ran every ~1200 s and nothing in that job's own config said why. It shipped at 300 for two more releases after the estate had already corrected it on one node, which is the drift a shipped default hides. 30 costs one process every 30 s that exits at once when nothing is due, and it is safe only because run_mode async is paired with the claim: ux_job_runs_claim accepts one running row per backup job, so a second process is told the work is taken."
+      "note": "On by default, and idle until data/restore_config.json declares a backup or a restore: init writes that file with both lists empty, and an empty list is 'nothing configured' - status done, no work, no alert. Nothing is backed up or restored until an entry is added. repeat_interval 1 since 0.24.0, as APP-SQL_TASKS - down from 30 (2026-09-21) and 300 before it. This app's interval is a FLOOR under every job inside it, because one run works through its own due list one job at a time: at 300 a log backup declared at 900 s ran every ~1200 s. And it is what decides how many jobs due at the same moment run at once: each async run takes the due jobs no other run has started, so at 30 s the second started 30 s after the first and three due restores reached two at once (measured on the 0.23.0 soak). At 1 s the next run starts a second later and takes the next job, up to max_parallel. 1 costs one short process a second that exits at once when nothing is due, and it is safe only because run_mode async is paired with the claim: ux_job_runs_claim accepts one running row per backup job, so a second process is told the work is taken."
     },
     {
       "node_role": "all",

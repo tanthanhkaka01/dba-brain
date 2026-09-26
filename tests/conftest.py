@@ -12,7 +12,7 @@ has no `config.json` and no `data/`, so a suite that reads them cannot pass ther
 
 `estate` gives a test the smallest inventory it needs, in a temporary directory, and points the
 one reader of the data folder at it. Everything else follows, because
-`db_ops.common.data_sources` is that single reader — `_resolve_data_dir` reads the module global
+`db_ops.lib.data_sources` is that single reader — `_resolve_data_dir` reads the module global
 at call time, so redirecting it redirects every loader that funnels through it.
 
     def test_something(estate):
@@ -47,7 +47,7 @@ class Estate:
         # tests/test_app_common_imports.py), so this is the only redirection needed for anything
         # that goes through it. Modules that imported the constant into their own namespace get
         # redirected on request, via `also_redirect`.
-        from db_ops.common import data_sources
+        from db_ops.lib import data_sources
 
         monkeypatch.setattr(data_sources, "DEFAULT_DATA_DIR", self.data_dir)
 
@@ -470,6 +470,14 @@ def write_catalogued_data(data: Path) -> Path:
                 "display_name": "Shared Rules",
                 "doc": "docs/14_lib.md",
                 "summary": "Pure values and rules - time windows, notify routing, severity, formatting. Imported everywhere, runs nothing.",
+                "app_command_ids": []
+        },
+        {
+                "app_code": "transport",
+                "ord": 15,
+                "display_name": "Transport",
+                "doc": "docs/15_transport.md",
+                "summary": "The one client of common.cli and db.cli: lib builds the command and reads the answer, this starts the process between them.",
                 "app_command_ids": []
         }
 ]})
@@ -935,3 +943,50 @@ def stdin_holding(monkeypatch):
         )
 
     return _hold
+
+
+@pytest.fixture(autouse=True)
+def _metric_batch_runs_in_this_process(monkeypatch):
+    """`common.cli metric-batch`, run in the test's own process - across a JSON round trip.
+
+    Since 0.24.0 the metrics app executes through that command, one process per target (rules R03,
+    R10). A real process would not see what a test fakes - the driver connect, `subprocess.run`,
+    `remote_exec.run_script`, the 8i bridge - and those fakes are how the metrics suite says what a
+    target does. So the command runs here; the request and the answer still go through
+    `json.dumps`/`loads`, because the boundary is where a value that is not JSON would break it,
+    and a test must break there too. A real-process run is its own test
+    (`tests/test_metric_batch_runs_as_its_own_process.py`).
+    """
+    from db_ops.transport import common_cli
+
+    real_run = common_cli.run
+
+    def run(command, request, **kwargs):
+        if command != "metric-batch":
+            return real_run(command, request, **kwargs)
+        from db_ops.common import metric_batch
+
+        return json.loads(json.dumps(metric_batch.run(json.loads(json.dumps(request)))))
+
+    monkeypatch.setattr(common_cli, "run", run)
+
+
+def answer_metric_items(monkeypatch, answer):
+    """Stand in for `metric-batch` altogether: record every item the metrics app sends, and answer
+    each with ``answer(item)`` - a dict like the command's own (``rows``; or ``exit_code``,
+    ``stdout``, ``stderr``; or ``error``). Returns the list the sent items land in.
+
+    For a test about what the app *sends* and what it makes of an answer, where running the item
+    - even in-process - would reach for a driver or a host the test has no business touching.
+    """
+    from db_ops.metrics import batch
+
+    sent: list[dict[str, Any]] = []
+
+    def run(target, secrets, items):
+        sent.extend(items)
+        return [{"id": item.get("id"), "kind": item.get("kind"), "started_at": 0, **answer(item)}
+                for item in items]
+
+    monkeypatch.setattr(batch, "run", run)
+    return sent

@@ -176,7 +176,6 @@ def test_ssh_key_auth_never_fails_on_an_unresolvable_passphrase(monkeypatch, tmp
 
     access = rx.RemoteAccess.from_json(
         {"method": "ssh", "host": "h", "auth_type": "key", "key_file": str(key), "password_ref": "MISSING_REF"},
-        data_dir=tmp_path,
     )
 
     assert access.key_file == str(key)

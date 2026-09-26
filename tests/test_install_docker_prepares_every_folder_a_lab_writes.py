@@ -21,11 +21,11 @@ import pytest
 from db_ops.common import cli_docker_db
 from db_ops.common.docker_db import provisioner
 from db_ops.common.docker_db import remote_host as remote
-from db_ops.lib import common_cli
+from db_ops.transport import common_cli
 from db_ops.lib.docker_db_spec import DEFAULT_BACKUP_MOUNT
 from db_ops.sre import cli as sre_cli
 from db_ops.sre import remote as sre_remote
-from db_ops.sre.docker_db import resolve
+from db_ops.lib import docker_db_registry as resolve
 
 
 class FakeHost:

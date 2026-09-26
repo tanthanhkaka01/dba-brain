@@ -26,6 +26,11 @@ from db_ops.common import table_load
 from db_ops.lib import xlsx_export
 
 
+#: The login a caller states - common.cli reads no configuration (rules R09), so every request here
+#: carries one. RFC 5737 address; nothing connects to it.
+CONNECTION = {"db_type": "sqlserver", "host": "192.0.2.10", "port": 1433, "username": "u", "password": "p"}
+
+
 # --------------------------------------------------------------------------- #
 # Identifiers: the file writes the column names, not the author of this module
 # --------------------------------------------------------------------------- #
@@ -175,32 +180,32 @@ def _sample_xlsx_base64(tmp_path) -> str:
 
 
 def test_a_request_without_a_target_says_so_before_reading_the_workbook(tmp_path):
-    with pytest.raises(table_load.TableLoadError, match='needs a "target"'):
+    with pytest.raises(table_load.TableLoadError, match='needs a "connection"'):
         table_load._parse_request({"xlsx_base64": _sample_xlsx_base64(tmp_path)})
 
 
 def test_a_request_without_a_workbook_is_refused():
     with pytest.raises(table_load.TableLoadError, match='needs "file_base64"'):
-        table_load._parse_request({"target": "ACME-1"})
+        table_load._parse_request({"target": "ACME-1", "connection": CONNECTION})
 
 
 def test_the_original_xlsx_keys_still_name_the_file():
     """`file_base64` is the name now that a text file is accepted too, but `xlsx_base64` is what
     the shipped Telegram command config and every saved shell payload still say. Dropping it
     would have broken the deployed worker at the moment the image was replaced."""
-    parsed = table_load._parse_request({"target": "ACME-1", "xlsx_base64": "UEsDBBQ="})
+    parsed = table_load._parse_request({"target": "ACME-1", "connection": CONNECTION, "xlsx_base64": "UEsDBBQ="})
 
     assert parsed["payload"] == "UEsDBBQ="
 
 
 def test_an_unknown_if_exists_is_refused_with_the_choices_listed():
     with pytest.raises(table_load.TableLoadError, match="error, drop, append"):
-        table_load._parse_request({"target": "ACME-1", "xlsx_base64": "x", "if_exists": "replace"})
+        table_load._parse_request({"target": "ACME-1", "connection": CONNECTION, "xlsx_base64": "x", "if_exists": "replace"})
 
 
 def test_load_rows_defaults_to_true_because_that_is_why_a_file_was_attached(tmp_path):
     parsed = table_load._parse_request(
-        {"target": "ACME-1", "xlsx_base64": _sample_xlsx_base64(tmp_path)})
+        {"target": "ACME-1", "connection": CONNECTION, "xlsx_base64": _sample_xlsx_base64(tmp_path)})
 
     assert parsed["load_rows"] is True
     assert parsed["if_exists"] == "error"       # never destroys without being asked
@@ -209,7 +214,7 @@ def test_load_rows_defaults_to_true_because_that_is_why_a_file_was_attached(tmp_
 
 def test_a_missing_xlsx_path_names_the_path(tmp_path):
     with pytest.raises(table_load.TableLoadError, match="file_path not found"):
-        table_load._parse_request({"target": "ACME-1", "xlsx_path": str(tmp_path / "nope.xlsx")})
+        table_load._parse_request({"target": "ACME-1", "connection": CONNECTION, "xlsx_path": str(tmp_path / "nope.xlsx")})
 
 
 @pytest.mark.parametrize("db_type,expected", [

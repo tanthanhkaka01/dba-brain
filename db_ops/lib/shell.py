@@ -14,10 +14,20 @@ import shutil
 
 __all__ = [
     "POWERSHELL_NOT_FOUND_HINT",
+    "SHELL_BASH",
+    "SHELL_CMD",
+    "SHELL_POWERSHELL",
     "docker_cli",
     "is_powershell_executable",
     "powershell_executable",
 ]
+
+#: The shells a remote script is written for. `common.remote_exec` runs a script in one and
+#: `metrics` declares which one a collector's script needs; one spelling for both sides, because a
+#: shell the two spell differently is a script sent to the wrong interpreter.
+SHELL_BASH = "bash"
+SHELL_POWERSHELL = "powershell"
+SHELL_CMD = "cmd"
 
 # Preference order: cross-platform PowerShell 7 first so a Linux host with
 # pwsh installed can still reach Windows targets via WinRM/Invoke-Command,

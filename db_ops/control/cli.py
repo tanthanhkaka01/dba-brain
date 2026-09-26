@@ -6,7 +6,7 @@ config.json, so most commands only need ``--user`` (and a password prompt).
     python -m db_ops.control.cli deploy --user <user>
     python -m db_ops.control.cli bump-version --part minor
     python -m db_ops.control.cli inventory-health --user <user>
-    python -m db_ops.control.cli inventory-summary
+    python -m db_ops.common.cli inventory-summary '{}'     # the summary is common's (rules R43)
 """
 
 from __future__ import annotations
@@ -15,7 +15,6 @@ import argparse
 import sys
 from pathlib import Path
 
-from db_ops.common.identifier_scan import IdentifierScanError
 from db_ops.lib.secret_text import encrypt_secret_text_file, resolve_cli_key, resolve_key
 from db_ops.control import deploy as deploy_ops, config_gate
 from db_ops.control import inventory as inventory_ops
@@ -253,7 +252,7 @@ def parse_args(argv):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    bump = sub.add_parser("bump-version", help="Bump db_ops/__init__.py __version__.")
+    bump = sub.add_parser("bump-version", help="Bump db_ops/lib/version.py __version__.")
     bump.add_argument("--part", choices=["major", "minor", "patch"], default="patch")
     bump.add_argument("--set", dest="set_to", default=None, help="Set the version explicitly.")
     bump.add_argument("--dry-run", action="store_true")
@@ -384,23 +383,9 @@ def parse_args(argv):
     enc.add_argument("--key-base64", "--key_base64", dest="key_base64", default=None,
                      help="Base64-encoded UTF-8 encryption passphrase. Defaults to the built-in project key.")
 
-    summ = sub.add_parser("inventory-summary", help="Render *-summary.md from the canonical inventory JSON.")
-    summ.add_argument("--inventory", default=str(inventory_ops.DEFAULT_INVENTORY))
-    summ.add_argument("--output-dir", default=str(inventory_ops.DEFAULT_SNAPSHOT_DIR))
-    summ.add_argument("--date", default=None)
-
-    flow = sub.add_parser("inventory-workflow",
-                          help="Run inventory-health then inventory-summary in one shot (--user defaults to worker user in config.json).")
-    _add_target(flow)
-    flow.add_argument("--container", default=DEFAULT_CONTAINER)
-    flow.add_argument("--days", type=int, default=2)
-    flow.add_argument("--date", default=None)
-    flow.add_argument("--inventory", default=str(inventory_ops.DEFAULT_INVENTORY))
-    flow.add_argument("--snapshot-dir", default=str(inventory_ops.DEFAULT_SNAPSHOT_DIR))
-    flow.add_argument("--output-dir", default=str(inventory_ops.DEFAULT_SNAPSHOT_DIR))
-    flow.add_argument("--container-runtime", default=inventory_ops.DEFAULT_CONTAINER_RUNTIME)
-    flow.add_argument("--host-runtime", default=inventory_ops.DEFAULT_HOST_RUNTIME)
-    flow.add_argument("--dry-run", action="store_true")
+    # `inventory-summary` and `inventory-workflow` were here until 0.24.0 - each did a job another
+    # command does (rules R43; the operator chose): the summary is `common.cli inventory-summary`,
+    # the workflow is the worker's `reports.cli inventory-workflow`, run here with `worker-run`.
 
     ws = sub.add_parser("worker-status",
                         help="Check the worker daemon: container up?, version, and per-app last-run "
@@ -459,9 +444,12 @@ def parse_args(argv):
     pp.add_argument("--dry-run", action="store_true", help="Print what would be copied without copying.")
 
     wc = sub.add_parser("worker-create-db-docker",
-                        help="Run sre.cli create-db-docker inside the worker, then optionally pull config back.")
+                        help="Build a lab database on the worker's host (common.cli create-db-docker "
+                             "over SSH) and register it here; the worker has it after the next deploy.")
     _add_target(wc)
-    wc.add_argument("--container", default=DEFAULT_CONTAINER)
+    # Both kept only to answer an old command line: the build no longer runs in the worker
+    # container, and the record is written here, so there is nothing to run in and nothing to pull.
+    wc.add_argument("--container", default=DEFAULT_CONTAINER, help=argparse.SUPPRESS)
     wc.add_argument("--name", required=True)
     wc.add_argument("--engine", required=True)
     wc.add_argument("--version", required=True)
@@ -478,12 +466,18 @@ def parse_args(argv):
     wc.add_argument("--network-subnet", dest="network_subnet", default=None,
                     help="CIDR for the lab's compose network. Default: a /24 derived from --name "
                          "inside 172.30.0.0/16, so it can never land on a range the estate routes.")
-    wc.add_argument("--worker-host", dest="worker_host", default=None)
+    wc.add_argument("--worker-host", dest="worker_host", default=None,
+                    help="The address to record, when clients reach the worker by another one "
+                         "than --host. Default: --host.")
+    wc.add_argument("--install-docker", dest="install_docker", action="store_true",
+                    help="Prepare the host first: install Docker if missing, put the SSH user in the "
+                         "docker group and give it the containers folder (sudo, with the SSH password).")
+    wc.add_argument("--overwrite-secret", dest="overwrite_secret", action="store_true",
+                    help="Replace a different value already stored under the password ref.")
     wc.add_argument("--force", action="store_true")
     wc.add_argument("--dry-run", action="store_true")
     wc.add_argument("--no-register", dest="register", action="store_false")
-    wc.add_argument("--pull-config", dest="pull_config", action="store_true",
-                    help="After creating, pull the updated data config back to the master.")
+    wc.add_argument("--pull-config", dest="pull_config", action="store_true", help=argparse.SUPPRESS)
 
     return parser.parse_args(argv)
 
@@ -564,7 +558,7 @@ def _export_public_command(args) -> int:
     # pass nor a failure: the check did not run, and saying so is the honest report.
     try:
         outcome = export_public.scan_exported_tree(target)
-    except IdentifierScanError as exc:
+    except export_public.ScanRefused as exc:
         print("")
         print(f"identifier scan SKIPPED: {exc}")
         print(
@@ -653,21 +647,6 @@ def _run(args) -> int:
         _gate_config_drift(args)
         deploy_ops.build_image(platform=args.platform, no_cache=args.no_cache, skip_build=args.skip_build)
         return 0
-    if args.command == "inventory-summary":
-        # The inventory JSON is *produced* by `inventory-health`, so on a fresh install it is
-        # legitimately absent — that is a sequence a reader has not run yet, not a broken toolkit.
-        # It used to surface as a `FileNotFoundError` traceback out of `pathlib.open`, which names
-        # the file and nothing about what makes one.
-        inventory_path = Path(args.inventory)
-        if not inventory_path.is_file():
-            print(f"ERROR: no inventory at {inventory_path}.", file=sys.stderr)
-            print("This file is generated, not written by hand. Build it first:", file=sys.stderr)
-            print("  db-ops control inventory-health      # collects, then merges", file=sys.stderr)
-            print("  db-ops control inventory-workflow    # health + summary in one step",
-                  file=sys.stderr)
-            return 2
-        inventory_ops.build_inventory_summary(inventory=args.inventory, output_dir=args.output_dir, date=args.date)
-        return 0
     if args.command == "encrypt-secret-text":
         try:
             key = resolve_cli_key(args.key, args.key_base64)
@@ -735,12 +714,6 @@ def _run(args) -> int:
                                            container_runtime=args.container_runtime, host_runtime=args.host_runtime,
                                            inventory=args.inventory, snapshot_dir=args.snapshot_dir,
                                            dry_run=args.dry_run)
-    elif args.command == "inventory-workflow":
-        inventory_ops.run_inventory_workflow(host=host, user=args.user, password=password, port=args.port,
-                                             container=args.container, days=args.days, date=args.date,
-                                             container_runtime=args.container_runtime, host_runtime=args.host_runtime,
-                                             inventory=args.inventory, snapshot_dir=args.snapshot_dir,
-                                             output_dir=args.output_dir, dry_run=args.dry_run)
     elif args.command == "worker-status":
         return worker_status_ops.run_worker_status(host=host, user=args.user, password=password, port=args.port,
                                                    container=args.container, remote_dir=args.remote_dir,
@@ -787,40 +760,18 @@ def _run(args) -> int:
         return rc
     elif args.command == "worker-create-db-docker":
         from db_ops.control import worker_data
-        # Omitted port / secret ref are left to the in-container CLI, which derives them from
-        # the engine (5432/3306/1433) and the instance name (<NAME>_PASSWORD).
-        sre_args = ["--name", args.name, "--engine", args.engine, "--version", args.version,
-                    "--mode", args.mode]
-        if args.host_port is not None:
-            sre_args += ["--host-port", str(args.host_port)]
-        if args.password_env:
-            sre_args += ["--password-ref", args.password_env]
-        if args.password_text:
-            sre_args += ["--password-text", args.password_text]
-        if args.replicas is not None:
-            sre_args += ["--replicas", str(args.replicas)]
-        if args.containers_dir:
-            sre_args += ["--containers-dir", args.containers_dir]
-        if args.network_subnet:
-            sre_args += ["--network-subnet", args.network_subnet]
-        if args.worker_host:
-            sre_args += ["--worker-host", args.worker_host]
-        if args.force:
-            sre_args.append("--force")
-        if args.dry_run:
-            sre_args.append("--dry-run")
-        if not args.register:
-            sre_args.append("--no-register")
-        # Forward the key so the in-container command can resolve the password from the secret store.
-        if args.key_base64:
-            sre_args += ["--key-base64", args.key_base64]
-        elif args.key:
-            sre_args += ["--key", args.key]
-        pull_kwargs = {"overwrite": True, "dry_run": args.dry_run}
+        if args.pull_config:
+            print("Note: --pull-config has nothing to pull since 0.24.0 - the record is written "
+                  "here, on this node.", flush=True)
         return worker_data.create_db_docker_on_worker(
             host=host, user=args.user, password=password, port=args.port,
-            container=args.container, sre_args=sre_args,
-            pull_config=args.pull_config, pull_kwargs=pull_kwargs)
+            name=args.name, engine=args.engine, version=args.version, mode=args.mode,
+            replicas=args.replicas, host_port=args.host_port, password_ref=args.password_env,
+            password_text=args.password_text, containers_dir=args.containers_dir,
+            network_subnet=args.network_subnet, worker_host=args.worker_host,
+            install_docker=args.install_docker, overwrite_secret=args.overwrite_secret,
+            force=args.force, dry_run=args.dry_run, register=args.register,
+            key=args.key, key_base64=args.key_base64)
     return 0
 
 

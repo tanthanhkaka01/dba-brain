@@ -245,10 +245,10 @@ def copy_bundle(*, host: str, user: str, password: str, port: int = 22,
         # deploy; the only symptom was archived_count freezing while failed_count climbed into the
         # thousands, i.e. recoverability was gone with the database still healthy.
         ssh_run(client,
-                f"sudo -S -p '' sh -c 'mkdir -p {remote_dir} && chown {user}:{user} {remote_dir} && "
+                f"mkdir -p {remote_dir} && chown {user}:{user} {remote_dir} && "
                 f"find {remote_dir} -mindepth 1 -maxdepth 1 ! -name {CONTAINER_DATA_DIR_NAME} "
-                f"-exec chown -R {user}:{user} {{}} +'",
-                sudo_password=password)
+                f"-exec chown -R {user}:{user} {{}} +",
+                sudo=True)
         print(f"Uploading bundle -> {host}:{remote_dir} (overwrites config/data/sql/image; "
               "keeps logs/ and runtime/db_ops.sqlite) ...")
         sftp_put_tree(client, bundle, remote_dir)
@@ -372,9 +372,9 @@ def reclaim_worker_files(*, host: str, user: str, password: str, port: int = 22,
         # A directory the worker does not have is skipped, so a fresh host is silent, not an error.
         rc = ssh_run(
             client,
-            f"sudo -S -p '' sh -c 'for d in {remote_dir}/data {remote_dir}/assets; do "
-            f"[ -d \"$d\" ] && chown -R {user}:{user} \"$d\"; done; true'",
-            sudo_password=password,
+            f"for d in {remote_dir}/data {remote_dir}/assets; do "
+            f"[ -d \"$d\" ] && chown -R {user}:{user} \"$d\"; done; true",
+            sudo=True,
             check=False,
         )
         if rc != 0:

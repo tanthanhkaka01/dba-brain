@@ -139,7 +139,7 @@ def test_init_no_longer_pins_the_token_ref_but_does_name_the_bot_file():
     """`init` wrote `telegram_bot_token_ref` as the placeholder "TELEGRAM_BOT_TOKEN", and a value
     there overrides the bot file - so a fresh node could not change its bot by editing the file
     its own notes point at. The master does not set that key, which is why the master works."""
-    from db_ops import scaffold
+    from db_ops.common import scaffold
 
     settings = scaffold.TELEGRAM_CONFIG
 

@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from db_ops.lib import common_cli
+from db_ops.transport import common_cli
 from db_ops.backup_restore.config import DEFAULT_RESTORE_CONFIG_PATH, parse_backup_restore_notify
 from db_ops.backup_restore.events import emit_backup_restore_event, stdout_excerpt
 from db_ops.backup_restore import schedule
@@ -37,9 +37,8 @@ from db_ops.backup_restore.server_metadata import (
     parse_server_metadata,
     summarize as summarize_server_metadata,
 )
-from db_ops.common import data_sources
-from db_ops.common.data_sources import resolve_ssh_key, resolve_ssh_password
-from db_ops.common.ssh import open_ssh_client
+from db_ops.lib import data_sources
+from db_ops.lib.data_sources import resolve_ssh_key, resolve_ssh_password
 from db_ops.lib.ssh_errors import SshError
 from db_ops.lib.notify import NotifyConfig
 from db_ops.lib import cleanup_retention
@@ -406,9 +405,12 @@ def execute_over_ssh(
     """Run a shell script on the container host, with ``env`` exported ahead of it.
 
     Shared by the backup jobs and the script-driven restores so both reach a host the same way.
-    The script is fed to ``bash -s`` on stdin, which is why any ``docker exec`` inside it must
+    The script is fed to the remote shell on stdin, which is why any ``docker exec`` inside it must
     close its own stdin - otherwise the container reads the rest of the script as its input and
     the shell silently runs out of work (exit 0, no output, nothing done).
+
+    Through ``common.cli run-cmd`` since 0.24.0 (rules R03): this app held a paramiko client from
+    ``common.ssh`` until then.
     """
     prelude = "".join(f"export {name}={shlex.quote(value)}\n" for name, value in sorted(env.items()))
     payload = prelude + script_text
@@ -421,21 +423,16 @@ def execute_over_ssh(
             key=key, key_base64=key_base64, data_dir=data_dir,
         )
 
-    client = open_ssh_client(
-        target.host, target.username, port=target.port,
-        password=password, key_filename=key_filename,
-    )
-    try:
-        stdin, stdout, stderr = client.exec_command("bash -s", timeout=timeout or None)
-        stdin.write(payload)
-        stdin.flush()
-        stdin.channel.shutdown_write()
-        out = stdout.read().decode("utf-8", errors="replace")
-        exit_code = stdout.channel.recv_exit_status()
-        err = stderr.read().decode("utf-8", errors="replace")
-    finally:
-        client.close()
-    return out, err, exit_code
+    from db_ops.lib.remote_host import RemoteHost
+    from db_ops.transport import common_cli
+
+    remote = RemoteHost(
+        host=target.host, username=target.username, port=target.port,
+        password=password or "", key_file=str(key_filename or ""),
+        auth_type="key" if key_filename else "password",
+        call=common_cli.run_allowing_failure)
+    result = remote.run_script(payload, timeout_seconds=timeout or None)
+    return result.stdout, result.stderr, result.exit_code
 
 
 def _load_secrets(

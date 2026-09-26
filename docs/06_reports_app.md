@@ -251,7 +251,7 @@ picker is HTML only: the stored copy feeds Telegram, where a fleet-sized nav blo
 - Writes/updates `reports`.
 - Reads/writes `report_send_state`. `last_run_at` is the **start of the run that last sent** — the anchor `repeat_interval` is counted from — and a skipped evaluation does not touch it. Until 2026-09-19 it was written on every evaluation and the schedule counted from `last_sent_at`, the moment the send *finished*, so a report that took 40 seconds to build pushed its own next cycle 40 seconds out. A row written by an older build still has the old meaning, and is ignored while `last_run_at` is later than `last_sent_at`.
 - Writes `telegram_send_messages` when pushing alerts.
-- May trigger metric collection during `force-hourly-report`.
+- Never collects metrics. `force-hourly-report` reads the latest stored `metric_results` for its target (since 0.24.0; it used to start `metrics.cli collect --force` first).
 
 ## Config Files
 
@@ -290,6 +290,8 @@ python -m db_ops.reports.cli --config config.json metric-history-report --server
 # Disambiguate when several targets share one IP (e.g. HA cluster nodes on different ports):
 python -m db_ops.reports.cli --config config.json force-hourly-report --target-ip 192.0.2.249 --db-type postgresql --port 5433
 ```
+
+`force-hourly-report` reports **the latest stored results** for one target, then queues its alerts. **It collects nothing** (0.24.0, the operator: *a report does not run metrics*): it used to start `metrics.cli collect --force` for the target first - one app running another's CLI (rules R42), and on-demand work against a production instance at whatever hour someone typed it. So the report is at most one collection cycle old. A target with no stored rows is refused with the reason - collection switched off, or not reached by the schedule yet. `--include-windowed` is refused with the command that replaces it: to collect a night-window metric in the daytime, run `metrics.cli collect --target-id <id> --force --include-windowed` first.
 
 `force-hourly-report` resolves the target from `--target-ip`. When more than one configured target shares that IP, add `--db-type` and/or `--port` to pick exactly one (otherwise it fails with an "ambiguous target" error). The same-IP case is the norm for SRE lab HA clusters whose primary/standbys publish different ports on one worker.
 
@@ -1116,9 +1118,8 @@ Required config keys: `log_dir`, plus a resolvable runtime store (`store_config_
 
 **Telegram delivery**: `push-report-alerts` writes to `telegram_send_messages`. If the Telegram app is not running or `telegram.groups` has no configured levels, rows are written but never sent. The reports app does not import or call the Telegram app directly.
 
-**`force-hourly-report`**: internally calls the metrics CLI as a subprocess passing the resolved config path. If the metrics app binary is absent, this command raises `ReportWorkflowError` with a non-zero exit code.
+**`force-hourly-report`**: reads the stored `metric_results`; it starts no process and needs no metrics app beside it.
 
 ## EXE Packaging Notes
 
-- `config_path` is passed through to the metrics subprocess call inside `force-hourly-report`. Ensure both EXEs use a consistent config path when running together.
 - `data/db_instances.json` is used for target resolution in `force-hourly-report`. Place it next to the EXE or pass the data path explicitly.

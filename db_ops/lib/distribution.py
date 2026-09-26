@@ -40,6 +40,9 @@ from __future__ import annotations
 #: new top-level app does not, and that asymmetry is the point.
 PUBLIC_PACKAGES: tuple[str, ...] = (
     "lib",
+    # 0.24.0: the one client of common.cli and db.cli (docs/15_transport.md). Every shipped
+    # component that reaches common does it through this, so it ships with them.
+    "transport",
     "common",
     "db",
     "logging_ops",
@@ -258,6 +261,7 @@ DOC_FOR_PACKAGE: dict[str, str] = {
     "webhost": "12_webhost_app.md",
     "common": "13_common.md",
     "lib": "14_lib.md",
+    "transport": "15_transport.md",
 }
 
 
@@ -297,4 +301,4 @@ PRIVATE_TESTS: dict[str, str] = {
 #: version is immutable** — it cannot be re-uploaded after deletion, so the mistake is permanent.
 #: The public tree starts where a first release starts.
 PUBLIC_DISTRIBUTION_NAME = "dbabrain"
-PUBLIC_VERSION = "0.23.0"
+PUBLIC_VERSION = "0.24.0"

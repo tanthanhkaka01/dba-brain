@@ -16,12 +16,11 @@ database, or that silently visits a subset, would reintroduce the exact fault be
 partial answer that reads like a complete one.
 """
 
-import dataclasses
-
 import pytest
 
+from db_ops.common import metric_batch
+from db_ops.lib.event_policy import PHASE_CONNECT, PHASE_EXECUTE
 from db_ops.metrics import executor
-from db_ops.metrics.executor import MetricConnectionError, MetricExecutionError
 from db_ops.metrics.models import MetricTarget
 
 
@@ -36,26 +35,32 @@ def _target(db_type="postgresql", database=None):
 
 @pytest.fixture
 def visited(monkeypatch):
-    """Record which database each _execute call was pointed at."""
+    """Record which database each connection was pointed at.
+
+    The walk runs in `common.cli metric-batch` since 0.24.0 (conftest runs it in this process),
+    so the fakes replace its one-database run and its listing; a failure is raised the way the
+    real one is - with the prefix the metrics app has always stored.
+    """
     seen: list[str] = []
 
-    def fake_execute(*, target, sql_text, password, sql_timeout_seconds, max_rows=0):
-        name = target.connection_info.get("database", "")
-        seen.append(name)
-        if name == "broken":
-            raise MetricExecutionError("relation does not exist")
-        if name == "locked":
-            raise MetricConnectionError("permission denied for database")
-        return [{"metric_item": f"{name}.idx", "metric_value": "1", "metric_unit": "idx_scan",
-                 "status": "OK", "message": f"db={name}"}]
+    def fake_execute(target, database, sql_text, *, timeout, max_rows):
+        seen.append(database)
+        if database == "broken":
+            raise metric_batch.ItemFailure("SQL execution failed: relation does not exist",
+                                           phase=PHASE_EXECUTE, kind="execute")
+        if database == "locked":
+            raise metric_batch.ItemFailure("Connection failed: permission denied for database",
+                                           phase=PHASE_CONNECT, kind="connect")
+        return [{"metric_item": f"{database}.idx", "metric_value": "1", "metric_unit": "idx_scan",
+                 "status": "OK", "message": f"db={database}"}], False
 
-    monkeypatch.setattr(executor, "_execute", fake_execute)
+    monkeypatch.setattr(metric_batch, "_execute", fake_execute)
     monkeypatch.setattr(executor, "resolve_password", lambda *_a, **_k: "pw")
     return seen
 
 
 def _databases(monkeypatch, names):
-    monkeypatch.setattr(executor, "_list_databases", lambda **_: list(names))
+    monkeypatch.setattr(metric_batch, "_list_databases", lambda *_a, **_k: list(names))
 
 
 def test_the_sql_runs_once_per_database(monkeypatch, visited):
@@ -138,13 +143,13 @@ def test_the_caller_s_target_is_not_left_pointing_at_the_last_database(monkeypat
     assert target.connection_info["database"] == "postgres"
 
 
-def test_with_database_returns_a_copy():
-    target = _target(database="postgres")
-    scoped = executor._with_database(target, "db_ops")
-
-    assert scoped.connection_info["database"] == "db_ops"
-    assert target.connection_info["database"] == "postgres"
-    assert dataclasses.replace(scoped, connection_info={}) != target
+def test_a_failed_database_keeps_the_words_its_failure_was_stored_with():
+    """The row's message is what an operator reads and what the error signature is taken from."""
+    rows = executor._per_database_rows({"databases": [{"name": "locked", "error": {
+        "message": "Connection failed: permission denied for database"}}], "skipped": []},
+        target=_target(), max_rows=0)
+    assert rows[0]["message"] == ("db=locked, collection failed: Connection failed: permission "
+                                  "denied for database")
 
 
 def test_per_database_is_refused_on_any_engine_but_postgresql(tmp_path):

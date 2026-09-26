@@ -1,7 +1,7 @@
 """Applying one named backup, and the ways each engine's version of that differs.
 
-`restore-database` decides a whole chain. These are the level below it: the caller already chose
-the file and asks for exactly that, so a recovery can watch each step land before deciding the
+The caller decides the chain; these apply one file of it: the caller already chose the file and
+asks for exactly that, so a recovery can watch each step land before deciding the
 next. The three engines do not mean the same thing by it, and the tests here pin the differences
 rather than a pretence that they match.
 
@@ -79,7 +79,9 @@ def test_stopat_lands_on_the_last_log_only():
     statements = mssql.build_statements(
         "log", _mssql(stopat="2026-08-07 01:40:00"), ["/b/1.trn", "/b/2.trn"])
     assert "STOPAT" not in statements[0]
-    assert "STOPAT = N'2026-08-07 01:40:00'" in statements[1]
+    # The ISO form, read the same under every login language: `YYYY-MM-DD HH:MM:SS` is read
+    # year-day-month under a British or French one (0.24.0, one composer for every caller).
+    assert "STOPAT = N'2026-08-07T01:40:00'" in statements[1]
 
 
 def test_replace_appears_on_the_full_and_nowhere_else():
@@ -96,7 +98,8 @@ def test_move_is_rejected_on_a_log():
 
 
 def test_a_log_uses_restore_log_not_restore_database():
-    assert mssql.build_statements("log", _mssql(), ["/b/1.trn"])[0].startswith("RESTORE LOG")
+    assert "RESTORE LOG [" in mssql.build_statements("log", _mssql(), ["/b/1.trn"])[0]
+    assert "RESTORE DATABASE" not in mssql.build_statements("log", _mssql(), ["/b/1.trn"])[0]
 
 
 def test_identifiers_and_paths_are_quoted():

@@ -40,7 +40,7 @@ there is now a third guard that does not depend on anyone remembering:
 1. **This file** — `bip` moves `docker0` off `172.17.0.0/16`, and `default-address-pools` confines
    every auto-allocated network to `172.31.0.0/16` in `/24` chunks (256 networks).
 2. **The generator** — every compose file `db_ops.sre.create-db-docker` writes pins its own subnet
-   in `172.30.0.0/16` (`db_ops/sre/docker_db/models.py::lab_network_subnet`), so a lab is safe even
+   in `172.30.0.0/16` (`db_ops/lib/docker_db_spec.py::lab_network_subnet`), so a lab is safe even
    on a host where this file was never applied.
 3. **The check** — `db_ops.control.cli worker-status` reads the host's actual subnets and compares
    them to [`data/network_reservations.json`](../../../data/network_reservations.json)

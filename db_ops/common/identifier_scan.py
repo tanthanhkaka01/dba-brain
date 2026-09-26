@@ -37,7 +37,7 @@ import re
 from pathlib import Path
 from typing import Any, Iterable
 
-from db_ops.common import data_sources
+from db_ops.lib import data_sources
 from db_ops.lib.paths import TOOL_ROOT
 
 #: What ships: the package, plus the repository-root files a clone receives. `data/`, `audits/`,

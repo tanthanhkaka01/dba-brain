@@ -44,7 +44,7 @@ cloned is a guide it will not read.
 the rules, the key and the clock, adding a database through `instance-add`, the files and their
 registrars, `describe-object` / `check-objects` / `check-references`, schedules, the daemon, what to
 ask the tool, and which commands change a database or a host and need a person first. Its source is
-`db_ops/agents_guide.md` in the package, and every `db-ops <app> <command>` it names is checked
+`db_ops/common/agents_guide.md` in the package, and every `db-ops <app> <command>` it names is checked
 against that app's `--help` by the suite.
 
 It is the one file `init` **always replaces**, so the guide in a root is the installed version's -
@@ -52,9 +52,10 @@ It is the one file `init` **always replaces**, so the guide in a root is the ins
 the build and a hash of the text; a guide somebody edited (or one from before the stamp) is copied to
 `runtime/agents_guide/AGENTS.<UTC stamp>.md` first, and `init` prints where. Keep your own notes in
 another file. Before a root exists, `dbabrain guide` prints it and
-`dbabrain guide --write` puts it in the current directory. The one limit is pip's: a wheel cannot
-write into the directory it was installed from, so the file appears on the first `init` or
-`guide --write`, never on `pip install` itself.
+`dbabrain guide '{"write": true}'` puts it in the current directory. The one limit is pip's: a wheel
+cannot write into the directory it was installed from, so the file appears on the first `init` or
+`guide '{"write": true}'`, never on `pip install` itself. (`init`, `guide`, `encrypt-secret`,
+`export-data` and `import-data` take one JSON object since 0.24.0 - an option is a key.)
 
 <!-- TODO(rename): the distribution is `db_ops` until the rename lands. The `db-ops` command
      below keeps its name; `python -m db_ops.<app>.cli` becomes `python -m dbabrain.<app>.cli`. -->

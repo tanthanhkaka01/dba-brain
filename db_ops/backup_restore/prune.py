@@ -25,7 +25,7 @@ import socket
 from pathlib import Path
 from typing import Any
 
-from db_ops.lib import common_cli
+from db_ops.transport import common_cli
 from db_ops.backup_restore.backup import _load_secrets, load_backup_jobs, resolve_backup_target
 from db_ops.backup_restore.events import emit_backup_restore_event
 from db_ops.lib.backupfiles_retention import AGE, DEFAULT_RETENTION_DAYS
@@ -178,7 +178,7 @@ def _prune_one(request: dict[str, Any], *, secrets: dict[str, str]) -> dict[str,
     The two halves are deliberately not the same kind of thing. Listing what is on the share and
     deleting from it are **operations on another machine**, so since 2026-08-15 they go through the
     ``common`` CLI like every other one; a failure there still raises, because
-    :mod:`db_ops.lib.common_cli` turns ``success: false`` into an exception rather than
+    :mod:`db_ops.transport.common_cli` turns ``success: false`` into an exception rather than
     letting it look like "nothing to delete".
 
     Deciding *which* files the retention window no longer covers is a pure function of the listing,

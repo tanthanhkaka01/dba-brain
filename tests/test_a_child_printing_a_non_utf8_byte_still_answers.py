@@ -21,7 +21,8 @@ import json
 import subprocess
 import sys
 
-from db_ops.lib import common_cli
+from db_ops.transport import common_cli
+from db_ops.transport import process as transport_process
 
 
 def _child_that_prints(prelude: bytes, answer: dict) -> str:
@@ -43,7 +44,7 @@ def test_a_cp1252_byte_on_stdout_no_longer_costs_the_answer(monkeypatch):
         return real_run([sys.executable, "-c", _child_that_prints(b"\x97 done\n", answer)],
                         capture_output=True)
 
-    monkeypatch.setattr(common_cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(transport_process.subprocess, "run", fake_run)
 
     completed, error = common_cli.spawn("authorize", {"run_key": "k"})
 
@@ -61,7 +62,7 @@ def test_the_request_is_written_as_bytes_and_encoded_strictly(monkeypatch):
         seen.update(kwargs)
         return subprocess.CompletedProcess(args, 0, b'{"success": true}', b"")
 
-    monkeypatch.setattr(common_cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(transport_process.subprocess, "run", fake_run)
 
     common_cli.spawn("secret-check", {"note": "an em dash — here"})
 
@@ -77,7 +78,7 @@ def test_stderr_is_decoded_the_same_way(monkeypatch):
     def fake_run(args, **kwargs):
         return subprocess.CompletedProcess(args, 1, b"", b"\x97 could not connect")
 
-    monkeypatch.setattr(common_cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(transport_process.subprocess, "run", fake_run)
 
     completed, error = common_cli.spawn("db-status", {})
 
@@ -92,7 +93,7 @@ def test_the_caller_is_told_what_happened_when_the_answer_really_is_missing(monk
     def fake_run(args, **kwargs):
         return subprocess.CompletedProcess(args, 0, b"nothing to say\n", b"")
 
-    monkeypatch.setattr(common_cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(transport_process.subprocess, "run", fake_run)
 
     try:
         common_cli.run("authorize", {})

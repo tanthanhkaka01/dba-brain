@@ -20,7 +20,7 @@ import datetime
 from db_ops.lib import backup_policy
 from db_ops.reports import inventory_health
 
-from db_ops.common import data_sources
+from db_ops.lib import data_sources
 
 # `evaluate_backup_policy` no longer reads data/backup_policy.json itself (2026-08-15):
 # reading is data_sources' job, judging is lib's. These tests exercised the shipped policy

@@ -31,7 +31,8 @@ import subprocess
 import pytest
 
 from db_ops.common.docker_db import mover
-from db_ops.sre.docker_db import register_config, resolve
+from db_ops.lib import docker_db_registry as register_config
+from db_ops.lib import docker_db_registry as resolve
 
 
 class FakeHost:

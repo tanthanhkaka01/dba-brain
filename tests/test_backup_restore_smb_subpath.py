@@ -13,6 +13,9 @@ nowhere until a maintenance-plan tree with no share of its own had to be reached
 
 Nothing raises when it fails. The files copy successfully, several directories too deep, and the
 restore reports that there are no backups.
+
+Since 0.24.0 the listing is read in `common` (`common.smb.parse_ls`, behind `smb-list` - rules R10),
+and the app hands it the sub-path exactly as before; these hold the parser where it lives now.
 """
 
 from __future__ import annotations
@@ -22,15 +25,16 @@ from pathlib import Path
 import pytest
 
 from db_ops.backup_restore import copy_backup
+from db_ops.common import smb
 
 
 ENTRY = "  f_LOG_20260813_021500.trn   A   99  Thu Aug 13 02:15:00 2026"
 
 
 def _relative(header: str, remote_dir: str) -> str:
-    parsed = copy_backup._parse_smbclient_ls(header + "\n" + ENTRY + "\n", remote_dir=remote_dir)
+    parsed = smb.parse_ls(header + "\n" + ENTRY + "\n", subpath=remote_dir)
     assert parsed, "the listing produced no entries at all"
-    return parsed[0].relative_path
+    return parsed[0]["path"]
 
 
 def test_a_single_segment_subpath_still_resolves_the_way_it_always_did():

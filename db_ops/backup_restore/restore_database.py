@@ -16,7 +16,7 @@ from db_ops.backup_restore.config import (
     load_restore_config,
     validate_restore_target_is_not_source,
 )
-from db_ops.backup_restore.copy_backup import build_cmdkey_command, open_ssh_connection, resolve_password_ref
+from db_ops.backup_restore.copy_backup import open_ssh_connection, resolve_password_ref, share_login_request, store_share_logins
 from db_ops.lib import powershell
 from db_ops.lib.shell import is_powershell_executable, powershell_executable
 from db_ops.backup_restore.events import emit_backup_restore_event
@@ -187,10 +187,10 @@ def _find_latest_full_backups_linux(config: BackupRestoreConfig, *, now: float |
     cutoff = (time.time() if now is None else now) - (config.copy_recent_hours * 60 * 60) if config.copy_recent_hours > 0 else None
 
     with open_ssh_connection(config) as ssh:
-        _, stdout, _ = ssh.exec_command(
+        answer = ssh.run(
             f'find {shlex.quote(linux_import)} -type f -name "*.bak" -printf "%T@ %p\\n" 2>/dev/null || true'
         )
-        lines = stdout.read().decode("utf-8", errors="replace").splitlines()
+        lines = answer.stdout.splitlines()
 
     grouped: dict[str, tuple[float, Path]] = {}
     for line in lines:
@@ -230,11 +230,11 @@ def _find_linux_files_with_mtime(
 ) -> list[tuple[float, str]]:
     linux_dir = str(directory).replace("\\", "/")
     with open_ssh_connection(config) as ssh:
-        _, stdout, _ = ssh.exec_command(
+        answer = ssh.run(
             f'find {shlex.quote(linux_dir)} -maxdepth 1 -type f -name {shlex.quote(pattern)} '
             f'-printf "%T@ %p\\n" 2>/dev/null || true'
         )
-        lines = stdout.read().decode("utf-8", errors="replace").splitlines()
+        lines = answer.stdout.splitlines()
     result: list[tuple[float, str]] = []
     for line in lines:
         parts = line.split(" ", 1)
@@ -251,10 +251,10 @@ def _find_linux_files_with_mtime(
 def _linux_file_mtime(config: BackupRestoreConfig, path: str | Path) -> float | None:
     linux_path = str(path).replace("\\", "/")
     with open_ssh_connection(config) as ssh:
-        _, stdout, _ = ssh.exec_command(
+        answer = ssh.run(
             f'stat -c "%Y" {shlex.quote(linux_path)} 2>/dev/null || true'
         )
-        value = stdout.read().decode("utf-8", errors="replace").strip()
+        value = answer.stdout.strip()
     try:
         return float(value) if value else None
     except ValueError:
@@ -266,10 +266,10 @@ def _backup_path_exists(config: BackupRestoreConfig, path: str | Path) -> bool:
         return Path(path).is_file()
     linux_path = str(path).replace("\\", "/")
     with open_ssh_connection(config) as ssh:
-        _, stdout, _ = ssh.exec_command(
+        answer = ssh.run(
             f'test -f {shlex.quote(linux_path)} && printf yes || true'
         )
-        return stdout.read().decode("utf-8", errors="replace").strip() == "yes"
+        return answer.stdout.strip() == "yes"
 
 
 def build_restore_candidate(
@@ -301,128 +301,41 @@ def build_restore_candidate(
     )
 
 
-def build_restore_sql(
-    backup_file: str | Path,
-    config: BackupRestoreConfig | None = None,
-    *,
-    candidate: RestoreCandidate | None = None,
-) -> str:
-    restore_config = config or load_restore_config()
-    restore_candidate = candidate or _candidate_from_backup_argument(backup_file, restore_config)
-    bak_path = _escape_sql_string(_target_path_str(restore_candidate.backup_file_on_vm, restore_config))
-    data_path = _escape_sql_string(_target_path_str(restore_candidate.restore_data_file_on_vm, restore_config))
-    log_path = _escape_sql_string(_target_path_str(restore_candidate.restore_log_file_on_vm, restore_config))
-    return f"""
-USE master;
+def _restore_step(level: str, candidate: RestoreCandidate, config: BackupRestoreConfig, *,
+                  path: str | Path, recovery: bool = False,
+                  stopat_utc: datetime.datetime | None = None) -> dict[str, object]:
+    """What ``common.cli restore-<level>`` is asked for one step of this restore.
 
-IF DB_ID(N'{_escape_sql_string(restore_candidate.restore_database_name)}') IS NOT NULL
-    AND DATABASEPROPERTYEX(N'{_escape_sql_string(restore_candidate.restore_database_name)}', N'Status') != N'RESTORING'
-BEGIN
-    ALTER DATABASE [{_escape_identifier(restore_candidate.restore_database_name)}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
-END;
-
-DECLARE @filelist TABLE
-(
-    LogicalName nvarchar(128),
-    PhysicalName nvarchar(260),
-    [Type] char(1),
-    FileGroupName nvarchar(128) NULL,
-    Size numeric(20, 0),
-    MaxSize numeric(20, 0),
-    FileId bigint,
-    CreateLSN numeric(25, 0) NULL,
-    DropLSN numeric(25, 0) NULL,
-    UniqueId uniqueidentifier,
-    ReadOnlyLSN numeric(25, 0) NULL,
-    ReadWriteLSN numeric(25, 0) NULL,
-    BackupSizeInBytes bigint,
-    SourceBlockSize int,
-    FileGroupId int,
-    LogGroupGUID uniqueidentifier NULL,
-    DifferentialBaseLSN numeric(25, 0) NULL,
-    DifferentialBaseGUID uniqueidentifier,
-    IsReadOnly bit,
-    IsPresent bit,
-    TDEThumbprint varbinary(32) NULL,
-    SnapshotUrl nvarchar(360) NULL
-);
-
-INSERT INTO @filelist
-EXEC('RESTORE FILELISTONLY FROM DISK = N''{bak_path}''');
-
-DECLARE @dataLogicalName nvarchar(128) = (SELECT TOP (1) LogicalName FROM @filelist WHERE [Type] = 'D' ORDER BY FileId);
-DECLARE @logLogicalName nvarchar(128) = (SELECT TOP (1) LogicalName FROM @filelist WHERE [Type] = 'L' ORDER BY FileId);
-
-IF @dataLogicalName IS NULL OR @logLogicalName IS NULL
-BEGIN
-    THROW 51000, 'Backup file does not contain one data file and one log file.', 1;
-END;
-
-DECLARE @restoreSql nvarchar(max) = N'
-RESTORE DATABASE [{_escape_identifier(restore_candidate.restore_database_name)}]
-FROM DISK = N''{bak_path}''
-WITH
-    MOVE N''' + REPLACE(@dataLogicalName, '''', '''''') + N''' TO N''{data_path}'',
-    MOVE N''' + REPLACE(@logLogicalName, '''', '''''') + N''' TO N''{log_path}'',
-    REPLACE,
-    RECOVERY,
-    CHECKSUM,
-    STATS = 10;';
-
-EXEC sys.sp_executesql @restoreSql;
-
-ALTER DATABASE [{_escape_identifier(restore_candidate.restore_database_name)}] SET MULTI_USER;
-""".strip()
+    The RESTORE statement itself is written in one place, ``common/restorestep/sqlserver.py``
+    (rules R43, the operator's choice, 0.24.0): this module composed its own until then, beside the
+    one the drills used. What stays here is what only this app knows - which files, as the target
+    sees them, and where the restored database's files go. The text that comes back is the text
+    this module wrote before, byte for byte (``tests/test_one_sqlserver_restore_statement.py``).
+    """
+    fields: dict[str, object] = {
+        "db_type": "sqlserver",
+        "database_name": candidate.restore_database_name,
+        "backup_path": _target_path_str(Path(str(path)), config),
+        "with_recovery": bool(recovery),
+    }
+    if level == "full":
+        # The logical names are read on the server (RESTORE FILELISTONLY), as they always were;
+        # only where the two files go is this app's to say.
+        fields["move_files"] = {
+            "data": _target_path_str(candidate.restore_data_file_on_vm, config),
+            "log": _target_path_str(candidate.restore_log_file_on_vm, config),
+        }
+    if stopat_utc is not None:
+        fields["stopat"] = stopat_utc.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    return fields
 
 
-def build_restore_full_sql(
-    backup_file: str | Path,
-    config: BackupRestoreConfig | None = None,
-    *,
-    candidate: RestoreCandidate | None = None,
-) -> str:
-    sql = build_restore_sql(backup_file, config, candidate=candidate)
-    sql = sql.replace("\n    RECOVERY,\n", "\n    NORECOVERY,\n")
-    multi_user = f"\n\nALTER DATABASE [{_escape_identifier((candidate or _candidate_from_backup_argument(backup_file, config or load_restore_config())).restore_database_name)}] SET MULTI_USER;"
-    if sql.endswith(multi_user):
-        sql = sql[: -len(multi_user)]
-    return sql
+def composed_restore_sql(level: str, fields: dict[str, object]) -> str:
+    """The statement ``common`` will run for a step, without running it - for a dry run's plan."""
+    from db_ops.transport import common_cli
 
-
-def build_restore_diff_sql(backup_file: str | Path, candidate: RestoreCandidate, config: BackupRestoreConfig | None = None) -> str:
-    path_str = _target_path_str(Path(str(backup_file)), config) if config else str(backup_file)
-    return f"""
-USE master;
-RESTORE DATABASE [{_escape_identifier(candidate.restore_database_name)}]
-FROM DISK = N'{_escape_sql_string(path_str)}'
-WITH NORECOVERY, CHECKSUM, STATS = 10;
-""".strip()
-
-
-def build_restore_log_sql(backup_file: str | Path, candidate: RestoreCandidate, config: BackupRestoreConfig | None = None) -> str:
-    path_str = _target_path_str(Path(str(backup_file)), config) if config else str(backup_file)
-    return f"""
-USE master;
-RESTORE LOG [{_escape_identifier(candidate.restore_database_name)}]
-FROM DISK = N'{_escape_sql_string(path_str)}'
-WITH NORECOVERY, CHECKSUM, STATS = 10;
-""".strip()
-
-
-def build_restore_log_stopat_sql(
-    backup_file: str | Path,
-    candidate: RestoreCandidate,
-    stopat_utc: datetime.datetime,
-    config: BackupRestoreConfig | None = None,
-) -> str:
-    path_str = _target_path_str(Path(str(backup_file)), config) if config else str(backup_file)
-    stopat_str = stopat_utc.strftime('%Y-%m-%dT%H:%M:%S')
-    return f"""
-USE master;
-RESTORE LOG [{_escape_identifier(candidate.restore_database_name)}]
-FROM DISK = N'{_escape_sql_string(path_str)}'
-WITH RECOVERY, CHECKSUM, STATS = 10, STOPAT = N'{stopat_str}';
-""".strip()
+    answer = common_cli.run(f"restore-{level}", {**fields, "dry_run": True})
+    return "\n".join(str(text) for text in answer.get("statements") or [])
 
 
 def build_recovery_sql(candidate: RestoreCandidate) -> str:
@@ -730,7 +643,8 @@ def run_restore_database(
     )
 
     if dry_run:
-        full_sql = build_restore_full_sql(candidate.backup_file_on_vm, restore_config, candidate=candidate)
+        full_sql = composed_restore_sql("full", _restore_step(
+            "full", candidate, restore_config, path=candidate.backup_file_on_vm))
         _emit_restore_log(
             logger,
             "restore-db completed "
@@ -879,7 +793,7 @@ def run_restore_full(*, config: BackupRestoreConfig, candidate: RestoreCandidate
     return _run_restore_step(
         step_name="restore-full",
         config=config,
-        sql=build_restore_full_sql(candidate.backup_file_on_vm, config, candidate=candidate),
+        restore=("full", _restore_step("full", candidate, config, path=candidate.backup_file_on_vm)),
         logger=logger,
         candidate=candidate,
         metadata={"file": str(candidate.backup_file_on_vm)},
@@ -897,7 +811,8 @@ def run_restore_diff(
         return _run_restore_step(
             step_name="restore-diff",
             config=config,
-            sql=build_restore_diff_sql(vm_unc_to_local_path(selected_backup, config), candidate, config=config),
+            restore=("diff", _restore_step("diff", candidate, config,
+                                           path=vm_unc_to_local_path(selected_backup, config))),
             logger=logger,
             candidate=candidate,
             metadata={"file": str(vm_unc_to_local_path(selected_backup, config))},
@@ -927,11 +842,11 @@ def run_restore_log(
         for index, backup in enumerate(selected_backups, start=1):
             backup_on_vm = vm_unc_to_local_path(backup, config)
             is_last_with_stopat = index == total and stopat_utc is not None
-            sql = (
-                build_restore_log_stopat_sql(backup_on_vm, candidate, stopat_utc, config=config)
-                if is_last_with_stopat
-                else build_restore_log_sql(backup_on_vm, candidate, config=config)
-            )
+            # The last log of a point-in-time restore stops inside itself and recovers; every other
+            # stays NORECOVERY, and a latest restore recovers in its own step after the chain.
+            step = ("log", _restore_step("log", candidate, config, path=backup_on_vm,
+                                         recovery=is_last_with_stopat,
+                                         stopat_utc=stopat_utc if is_last_with_stopat else None))
             metadata: dict[str, object] = {"sequence": index, "total": total, "file": str(backup_on_vm)}
             if is_last_with_stopat:
                 metadata["stopat_utc"] = stopat_utc.strftime('%Y-%m-%dT%H:%M:%SZ')
@@ -939,7 +854,7 @@ def run_restore_log(
                 result = _run_restore_step(
                     step_name="restore-log",
                     config=config,
-                    sql=sql,
+                    restore=step,
                     logger=logger,
                     candidate=candidate,
                     metadata=metadata,
@@ -1095,17 +1010,23 @@ def _run_restore_step(
     *,
     step_name: str,
     config: BackupRestoreConfig,
-    sql: str,
+    sql: str = "",
+    restore: tuple[str, dict[str, object]] | None = None,
     logger: object | None,
     candidate: RestoreCandidate,
     metadata: dict[str, object],
 ) -> dict[str, object]:
+    """One statement of the restore, through ``common.cli``: a RESTORE of a file as
+    ``restore-<level>`` (``restore``), the recovery, recovery model and CHECKDB as ``run-sqlcmd``
+    (``sql``). Either way the answer is read here, the same way - retries, a Msg 4305 log, a lost
+    connection mid-``RESTORE LOG`` are this app's decisions."""
     _emit_restore_log(
         logger,
         f"restore-db {step_name} start "
         + _format_metadata(restore_id=config.restore_id or None, database=candidate.source_database_name, target_database=candidate.restore_database_name, **metadata),
     )
-    cmd = build_sqlcmd_query_command(sql=sql, config=config)
+    cmd = (_restore_step_command(restore, config=config) if restore is not None
+           else build_sqlcmd_query_command(sql=sql, config=config))
     remote_exec_type = _assert_sql_command_target(cmd, config)
     _emit_restore_log(
         logger,
@@ -1141,7 +1062,7 @@ def _run_restore_step(
         output = {
             "step": step_name,
             "status": "SUCCESS",
-            "sql": sql,
+            "sql": "\n".join(getattr(result, "statements", None) or []) or sql,
             "command": cmd,
             "stdout": result.stdout.strip(),
             "stderr": result.stderr.strip(),
@@ -1509,13 +1430,13 @@ def ensure_source_certificate_with_events(
 def ensure_vm_share_credential(config: BackupRestoreConfig) -> None:
     if config.is_linux:
         return
-    cmd = build_cmdkey_command(
+    request = share_login_request(
         credential_target=config.vm_credential_target,
         username=config.vm_username,
         password_env=config.vm_password_env,
     )
-    if cmd:
-        subprocess.run(cmd, check=True, text=True)
+    if request:
+        store_share_logins([request])
 
 
 def _sql_of(cmd: list[str]) -> str:
@@ -1537,9 +1458,24 @@ class _SqlcmdCommand(list):
 
     A list, so everything that compared or asserted its shape still does; the batch rides along
     because the PowerShell shape buries it inside a script, and ``common.cli run-sqlcmd`` is handed
-    the batch and its context as values, not a command line to reverse-engineer."""
+    the batch and its context as values, not a command line to reverse-engineer. A restore step
+    rides along instead as ``restore_step`` - ``(level, request)`` - and goes to
+    ``common.cli restore-<level>``, which writes the RESTORE itself."""
 
     sql: str = ""
+    restore_step: tuple[str, dict[str, object]] | None = None
+
+
+def _restore_step_command(restore: tuple[str, dict[str, object]], *,
+                          config: BackupRestoreConfig) -> list[str]:
+    """The command shape for a restore step: where it runs (ssh / PowerShell / local), with the step
+    in place of a batch - the shape is still what :func:`_assert_sql_command_target` checks and what
+    the log names, and nothing reads a statement out of it."""
+    level, fields = restore
+    command = build_sqlcmd_query_command(
+        sql=f"-- restore-{level} {fields.get('backup_path')} (written by common.cli)", config=config)
+    command.restore_step = (level, dict(fields))
+    return command
 
 
 def _sqlcmd_request(cmd: list[str], config: BackupRestoreConfig, *, via: str) -> dict[str, object]:
@@ -1593,9 +1529,17 @@ def _sqlcmd_in_common(request: dict[str, object], *, cmd: list[str]) -> subproce
     connection lost mid-RESTORE LOG - is still decided by the caller of this function, unchanged.
     stderr streams: ``sqlcmd``'s *percent processed* reaches this process's log as it happens.
     """
-    from db_ops.lib import common_cli
+    from db_ops.transport import common_cli
 
-    ok, data, error = common_cli.run_allowing_failure("run-sqlcmd", request, stream_stderr=True)
+    step = getattr(cmd, "restore_step", None)
+    if step is not None:
+        level, fields = step
+        # The same sqlcmd, in the same place, with the same timeouts - the batch is written there.
+        sqlcmd = {key: value for key, value in request.items() if key != "sql"}
+        ok, data, error = common_cli.run_allowing_failure(
+            f"restore-{level}", {**fields, "sqlcmd": sqlcmd}, stream_stderr=True)
+    else:
+        ok, data, error = common_cli.run_allowing_failure("run-sqlcmd", request, stream_stderr=True)
     if not ok:
         raise RuntimeError(f"sqlcmd could not be run ({request.get('via')}): {error}")
     if data.get("timed_out"):
@@ -1604,9 +1548,12 @@ def _sqlcmd_in_common(request: dict[str, object], *, cmd: list[str]) -> subproce
             command_started=True,
         )
     exit_code = data.get("exit_code")
-    return subprocess.CompletedProcess(
+    completed = subprocess.CompletedProcess(
         cmd, 1 if exit_code is None else int(exit_code),
         str(data.get("stdout") or ""), str(data.get("stderr") or ""))
+    # What actually ran, for the step's record - a restore step's text is written in common.
+    completed.statements = list(data.get("statements") or [])
+    return completed
 
 
 def _run_sqlcmd_via_ssh(cmd: list[str], config: BackupRestoreConfig) -> subprocess.CompletedProcess[str]:
@@ -2031,10 +1978,10 @@ def find_full_backups_for_pitr(config: BackupRestoreConfig, point_in_time_utc: d
     if config.is_linux:
         linux_import = str(config.vm_import_unc).replace("\\", "/")
         with open_ssh_connection(config) as ssh:
-            _, stdout, _ = ssh.exec_command(
+            answer = ssh.run(
                 f'find {shlex.quote(linux_import)} -type f -name "*.bak" -printf "%T@ %p\\n" 2>/dev/null || true'
             )
-            lines = stdout.read().decode("utf-8", errors="replace").splitlines()
+            lines = answer.stdout.splitlines()
         for line in lines:
             parts = line.split(" ", 1)
             if len(parts) < 2:
@@ -2248,13 +2195,13 @@ def find_restore_diff_backup_for_pitr(
         db_linux_dir = "/".join(full_linux.split("/")[:-2])
         diff_dir = f"{db_linux_dir}/DIFF"
         with open_ssh_connection(config) as ssh:
-            _, st_out, _ = ssh.exec_command(f'stat -c "%Y" {shlex.quote(full_linux)} 2>/dev/null || echo 0')
-            full_stat_mtime = float(st_out.read().decode("utf-8", errors="replace").strip() or "0")
+            stat_answer = ssh.run(f'stat -c "%Y" {shlex.quote(full_linux)} 2>/dev/null || echo 0')
+            full_stat_mtime = float(stat_answer.stdout.strip() or "0")
             full_mtime = _backup_sort_timestamp(Path(full_linux), fallback_mtime=full_stat_mtime)
-            _, df_out, _ = ssh.exec_command(
+            diff_answer = ssh.run(
                 f'find {shlex.quote(diff_dir)} -maxdepth 1 -type f -name "*.bak" -printf "%T@ %p\\n" 2>/dev/null || true'
             )
-            lines = df_out.read().decode("utf-8", errors="replace").splitlines()
+            lines = diff_answer.stdout.splitlines()
         entries = []
         for line in lines:
             parts = line.split(" ", 1)
@@ -2302,8 +2249,8 @@ def find_restore_log_backups_for_pitr(
         db_linux_dir = "/".join(full_linux.split("/")[:-2])
         baseline_linux = str(diff_backup).replace("\\", "/") if diff_backup else full_linux
         with open_ssh_connection(config) as ssh:
-            _, st_out, _ = ssh.exec_command(f'stat -c "%Y" {shlex.quote(baseline_linux)} 2>/dev/null || echo 0')
-            baseline_stat_mtime = float(st_out.read().decode("utf-8", errors="replace").strip() or "0")
+            stat_answer = ssh.run(f'stat -c "%Y" {shlex.quote(baseline_linux)} 2>/dev/null || echo 0')
+            baseline_stat_mtime = float(stat_answer.stdout.strip() or "0")
             baseline_mtime = _backup_sort_timestamp(Path(baseline_linux), fallback_mtime=baseline_stat_mtime)
         entries = _find_log_backups_linux_with_mtime(config, db_linux_dir)
         entries_after = [
@@ -2355,21 +2302,3 @@ def find_restore_log_backups_for_pitr(
     return result_paths
 
 
-def _candidate_from_backup_argument(backup_file: str | Path, config: BackupRestoreConfig) -> RestoreCandidate:
-    backup_path = Path(backup_file)
-    try:
-        return build_restore_candidate(backup_path, config)
-    except ValueError:
-        source_database = config.source_database_name or backup_path.parent.parent.name or backup_path.stem
-        restore_database = config.restore_database_name or source_database
-        safe_restore_name = _safe_file_stem(restore_database)
-        return RestoreCandidate(
-            source_key=source_database,
-            source_database_name=source_database,
-            restore_database_name=restore_database,
-            backup_file_unc=backup_path,
-            backup_file_on_vm=backup_path,
-            restore_data_file_on_vm=config.restore_data_file_on_vm or config.restore_data_dir_on_vm / f"{safe_restore_name}.mdf",
-            restore_log_file_on_vm=config.restore_log_file_on_vm or target_path(
-                config.restore_data_dir_on_vm, f"{safe_restore_name}_log.ldf", config=config),
-        )

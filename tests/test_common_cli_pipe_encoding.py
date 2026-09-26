@@ -117,13 +117,17 @@ def test_the_spawn_pins_its_encoding() -> None:
     import inspect
 
     from db_ops.lib import common_cli
+    from db_ops.transport import process
 
-    source = inspect.getsource(common_cli.spawn)
-
-    assert "input=payload.encode(\"utf-8\")" in source, (
-        "the request goes out as bytes this module encoded, not through the machine's code page")
-    assert 'decode("utf-8", errors="replace")' in source, (
-        "the answer is decoded by this module, naming its encoding")
+    # 0.24.0: the call is built and read in `lib`, started in `transport` (docs/15_transport.md) -
+    # so the pin is asserted where each half now lives.
+    assert '.encode("utf-8")' in inspect.getsource(common_cli.build_command), (
+        "the request goes out as bytes lib encoded, not through the machine's code page")
+    assert 'decode("utf-8", errors="replace")' in inspect.getsource(common_cli.decode), (
+        "the answer is decoded by lib, naming its encoding")
+    started = inspect.getsource(process.execute)
+    assert "input=spec.stdin" in started and "text=" not in started and "encoding=" not in started, (
+        "the process is started on bytes - nothing is left to the locale in between")
 
 
 def test_the_reader_pins_its_encoding() -> None:

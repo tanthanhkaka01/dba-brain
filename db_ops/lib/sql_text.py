@@ -77,6 +77,210 @@ def build_parameter_prelude(
     return ("\n".join(prelude_parts) + "\n" if prelude_parts else "", bound)
 
 
+#: Engines whose SQL names a supplied value ``:name`` - a PL/SQL or SQL*Plus bind variable on
+#: Oracle, a psql variable on PostgreSQL. Neither reads a T-SQL ``DECLARE``, which is what
+#: `build_parameter_prelude` writes: until 0.24.0 an Oracle task with parameters failed at its first
+#: run on a direct connection, and a PostgreSQL task could not declare any (0.23.0 section 1.55).
+NAMED_BIND_DB_TYPES: tuple[str, ...] = ("oracle", "postgresql")
+
+
+def check_named_values(raw: Any) -> dict[str, Any]:
+    """``named_params`` as a mapping of lower-case names to scalar values, or refused by name.
+
+    The name goes into no SQL text - the placeholder written for it is the driver's own - but it
+    has to be one the script can say as ``:name``, so it is held to the same identifier pattern as
+    a T-SQL parameter. A value is text, a number, true/false or null: a list or an object would
+    reach PostgreSQL as an array or as JSON, which is not what a task parameter from a chat means.
+    """
+    if raw in (None, ""):
+        return {}
+    if not isinstance(raw, dict):
+        raise SqlParameterError(
+            f"named_params must be an object of name: value; got {type(raw).__name__}.")
+    values: dict[str, Any] = {}
+    for name, value in raw.items():
+        key = str(name).strip()
+        if not _SQL_IDENTIFIER_RE.fullmatch(key):
+            raise SqlParameterError(
+                f"Invalid parameter name {key!r}: letters, digits and underscore only.")
+        if key.lower() in values:
+            raise SqlParameterError(
+                f"named_params names {key.lower()!r} twice; the SQL's :name ignores case.")
+        if value is not None and not isinstance(value, (str, int, float, bool)):
+            raise SqlParameterError(
+                f"Parameter {key!r} is {type(value).__name__}; a bound value is text, a number, "
+                "true/false or null.")
+        values[key.lower()] = value
+    return values
+
+
+def named_placeholders(sql_text: str, db_type: str) -> set[str]:
+    """The ``:name`` placeholders ``sql_text`` binds, lower-case - never one in a string or comment.
+
+    What is *not* a placeholder matters as much: PostgreSQL's ``::int`` cast, PL/SQL's ``:=``, an
+    array slice ``[1:n]``, a time format ``'HH24:MI'``, and anything inside quotes or comments.
+    """
+    return {match.group(1).lower()
+            for kind, chunk in _code_pieces(sql_text, db_type) if kind == _CODE
+            for match in _NAMED_BIND_RE.finditer(chunk)}
+
+
+def sqlplus_substitution_names(sql_text: str) -> set[str]:
+    """The ``&name`` / ``&&name`` markers an Oracle script substitutes, lower-case.
+
+    Anywhere in the text, quotes included - SQL*Plus substitutes inside a literal too, which is
+    how an archived script writes ``WHERE job_no = '&JOB_NO'``.
+    """
+    return {match.group(1).lower() for match in _SQLPLUS_MARKER_RE.finditer(str(sql_text or ""))}
+
+
+def bind_named_values(
+    statement: str, values: "dict[str, Any]", *, db_type: str, style: str,
+) -> "tuple[str, list[Any]]":
+    """``statement`` with each ``:name`` in ``values`` written as a positional placeholder, and the
+    values to bind, in placeholder order.
+
+    **Oracle** gets ``:1``, ``:2`` ... one per occurrence (``style`` is oracledb's ``numeric``): a name
+    said twice is bound twice, which means the same in a SQL statement and in a PL/SQL block, where
+    oracledb counts repeated names differently. **PostgreSQL** gets its own ``$1``, one per *name*,
+    whatever pg8000's module-wide ``style`` is - pg8000 passes ``$n`` through and binds the list by
+    number. One number per name is what lets the server type ``:d IS NULL OR day = :d``: it infers
+    ``$1`` from ``day = $1``, where two numbers would leave the first with no type. A ``:name`` not
+    in ``values`` is left as written: it may be something the engine reads itself (``:new`` in a
+    trigger), and a real missing value is then the driver's own error, not a silent NULL.
+
+    With nothing to bind the statement comes back untouched. That is not only tidy: pg8000 runs a
+    statement without values through the simple protocol, where ``%`` is just ``%``, and through the
+    extended one with them, where its ``format`` style reads every ``%`` outside a literal - so that
+    is the only case in which one is doubled.
+    """
+    engine = str(db_type or "").strip().lower()
+    wanted = {str(name).lower(): value for name, value in (values or {}).items()}
+    pieces = _code_pieces(statement, engine)
+    if not any(match.group(1).lower() in wanted
+               for kind, chunk in pieces if kind == _CODE
+               for match in _NAMED_BIND_RE.finditer(chunk)):
+        return statement, []
+    if (engine, style) not in _NAMED_STYLES:
+        raise SqlParameterError(
+            f"the {engine} driver in this process reads placeholders in the {style!r} style, which "
+            "named values are not written in.")
+
+    bound: list[Any] = []
+    numbered: list[str] = []
+
+    def _write(match: "re.Match[str]") -> str:
+        name = match.group(1).lower()
+        if name not in wanted:
+            return match.group(0)
+        if engine == "postgresql":
+            if name not in numbered:
+                numbered.append(name)
+                bound.append(wanted[name])
+            return f"${numbered.index(name) + 1}"
+        bound.append(wanted[name])
+        return f":{len(bound)}"
+
+    parts: list[str] = []
+    for kind, chunk in pieces:
+        if kind == _QUOTED:
+            parts.append(chunk)
+            continue
+        if style == "qmark" and "?" in chunk and not chunk.startswith("--"):
+            # pg8000 has no escape for a `?` it would read as a placeholder: a jsonb `?` operator
+            # would take a value meant for the next `:name`, and the rest would shift by one.
+            raise SqlParameterError(
+                "this statement has a '?' outside a string, which the driver in this process reads "
+                "as a placeholder; it cannot also bind :name values. Write the value into the script.")
+        if style == "format":
+            chunk = chunk.replace("%", "%%")
+        parts.append(_NAMED_BIND_RE.sub(_write, chunk) if kind == _CODE else chunk)
+    return "".join(parts), bound
+
+
+#: The driver styles a `$n` / `:n` statement survives. pg8000's `format` needs every other `%`
+#: doubled and its `qmark` has no escape for a `?` - both handled in `bind_named_values`.
+_NAMED_STYLES = {("oracle", "numeric"), ("postgresql", "format"), ("postgresql", "qmark")}
+
+#: `:name`, not preceded by another `:` (a `::` cast) or by a name character (`[1:n]`, `a:b`).
+_NAMED_BIND_RE = re.compile(r"(?<![:\w$#]):([A-Za-z_][A-Za-z0-9_$#]*)")
+
+_SQLPLUS_MARKER_RE = re.compile(r"&&?([A-Za-z_][A-Za-z0-9_$#]*)")
+
+_CODE, _COMMENT, _QUOTED = "code", "comment", "quoted"
+
+#: Oracle's alternative quoting, `q'[ ... ]'`: the closing character for each opening one.
+_Q_QUOTE_CLOSE = {"[": "]", "(": ")", "{": "}", "<": ">"}
+
+
+def _code_pieces(text: str, db_type: str) -> "list[tuple[str, str]]":
+    """``text`` cut into code, comments and quoted text, in order - the pieces joined are ``text``.
+
+    Quoted is a string, a quoted name, an Oracle ``q'[...]'`` or a PostgreSQL ``$tag$`` body; a
+    placeholder in any of them is text, not a bind.
+    """
+    text = str(text or "")
+    engine = str(db_type or "").strip().lower()
+    pieces: list[tuple[str, str]] = []
+    code: list[str] = []
+    i, n = 0, len(text)
+
+    def _word_before(pos: int) -> bool:
+        return pos > 0 and (text[pos - 1].isalnum() or text[pos - 1] in "_$#")
+
+    def _take(kind: str, end: int) -> int:
+        if code:
+            pieces.append((_CODE, "".join(code)))
+            code.clear()
+        pieces.append((kind, text[i:end]))
+        return end
+
+    while i < n:
+        char = text[i]
+        if text.startswith("--", i):
+            end = text.find("\n", i)
+            i = _take(_COMMENT, n if end < 0 else end)
+            continue
+        if text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            i = _take(_COMMENT, n if end < 0 else end + 2)
+            continue
+        if (engine == "oracle" and char in "qQ" and text.startswith("'", i + 1) and i + 2 < n
+                and (not _word_before(i) or (text[i - 1] in "nN" and not _word_before(i - 1)))):
+            close = _Q_QUOTE_CLOSE.get(text[i + 2], text[i + 2]) + "'"
+            end = text.find(close, i + 3)
+            i = _take(_QUOTED, n if end < 0 else end + 2)
+            continue
+        if char in "'\"":
+            backslash = (char == "'" and engine == "postgresql" and i > 0
+                         and text[i - 1] in "eE" and not _word_before(i - 1))
+            j = i + 1
+            while j < n:
+                if backslash and text[j] == "\\":
+                    j += 2
+                    continue
+                if text[j] == char:
+                    if j + 1 < n and text[j + 1] == char:
+                        j += 2
+                        continue
+                    j += 1
+                    break
+                j += 1
+            i = _take(_QUOTED, min(j, n))
+            continue
+        if engine == "postgresql" and char == "$" and not _word_before(i):
+            match = _DOLLAR_TAG_RE.match(text, i)
+            if match:
+                close = text.find(match.group(0), match.end())
+                i = _take(_QUOTED, n if close < 0 else close + len(match.group(0)))
+                continue
+        code.append(char)
+        i += 1
+    if code:
+        pieces.append((_CODE, "".join(code)))
+    return pieces
+
+
 def resolve_password(credential: dict[str, Any], secrets: dict[str, str]) -> str:
     password_ref = str(credential.get("password_ref", "")).strip()
     if not password_ref:

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from db_ops.lib import common_cli
+from db_ops.transport import common_cli
 
 #: Long enough for a real instance: 145 KB of Agent job SQL against a remote server is not fast.
 #: The deadline is stated here rather than in the transport because this caller is the one that
@@ -38,7 +38,7 @@ def run_metadata_command(command: str, request: dict[str, Any]) -> dict[str, Any
     :func:`db_ops.backup_restore.server_metadata.summarize` and the restore's ``PHASE=`` line both
     expect, and they expect it of every phase alike.
 
-    The subprocess itself is ``lib.common_cli.run_allowing_failure``. This module carried its own copy of that
+    The subprocess itself is ``transport.common_cli.run_allowing_failure``. This module carried its own copy of that
     twenty lines until 2026-08-15 — the second copy in the tree of "spawn the `common` CLI and
     read JSON back" — and the two had already grown different answers for a command that printed
     nothing.
@@ -48,6 +48,15 @@ def run_metadata_command(command: str, request: dict[str, Any]) -> dict[str, Any
     `evidence_file` are what an incident review looks for, and they should not move house because
     the transport grew a wrapper.
     """
+    from db_ops.lib.data_sources import request_fill
+
+    try:
+        # The instance's login, the node's instance policy and, for a replay, the secrets its
+        # bundle names - this app states them, because common.cli reads no configuration (rules
+        # R09). They travel on stdin.
+        request = request_fill.fill_request(command, request)
+    except request_fill.RequestFillError as exc:
+        return {"ok": False, "operation": command, "error": str(exc)}
     try:
         success, report, error = common_cli.run_allowing_failure(
             command, request, timeout_seconds=_TIMEOUT_SECONDS)

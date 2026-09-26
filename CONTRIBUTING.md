@@ -55,6 +55,9 @@ needs a live engine belongs in the (separate, scheduled) integration suite, neve
 
 ## The rules that matter
 
+**Every rule is in [`docs/rules.md`](./docs/rules.md)**, numbered, with the test that guards it and
+the exceptions that exist today. What follows is the part a contributor meets first.
+
 ### Configuration is data
 
 New thresholds, targets, routes, schedules, severities, and policies belong in the JSON

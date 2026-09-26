@@ -26,7 +26,7 @@ import json
 
 import pytest
 
-from db_ops import scaffold
+from db_ops.common import scaffold
 from db_ops.backup_restore import backup as backup_module
 from db_ops.backup_restore import config as config_module
 from db_ops.backup_restore import restore_script as script_module
@@ -150,7 +150,7 @@ def test_a_flat_single_source_block_is_still_parsed(empty_root):
     assert configs[0].cleanup_retention == 691200
 
 
-@pytest.mark.parametrize("command", ["copy-backup", "restore-latest", "verify-restore"])
+@pytest.mark.parametrize("command", ["copy-backup", "restore-latest"])
 def test_a_manual_command_with_nothing_configured_says_so_rather_than_index_error(
         empty_root, monkeypatch, capsys, command):
     """The loader's `[]` is right for the scheduled `workflow`: nothing is due. A command asked to

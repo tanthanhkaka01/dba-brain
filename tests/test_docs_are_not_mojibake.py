@@ -16,6 +16,7 @@ corrupted. No list of known-bad sequences to keep up to date, and no character t
 cover.
 """
 
+import re
 from pathlib import Path
 
 import pytest
@@ -47,12 +48,32 @@ def _shipped_text_files() -> list[Path]:
 
 
 def _original_if_mojibake(line: str) -> str | None:
-    """What the line said before it was corrupted, or None if it was never corrupted."""
+    """What the line said before it was corrupted, or None if it was never corrupted.
+
+    The whole line first; then each run of non-ASCII characters on its own. A line that also holds
+    a character cp1252 has but UTF-8 cannot start with - a genuine `—` - cannot round-trip as a
+    whole, and three lines of `docs/10_sre_app.md` kept `â†’` past this check for exactly that
+    reason until 0.24.0.
+    """
     try:
         repaired = line.encode("cp1252").decode("utf-8")
+        return repaired if repaired != line else None
     except (UnicodeEncodeError, UnicodeDecodeError):
-        return None
-    return repaired if repaired != line else None
+        pass
+    changed = False
+
+    def repair(match: "re.Match[str]") -> str:
+        nonlocal changed
+        run = match.group(0)
+        try:
+            fixed = run.encode("cp1252").decode("utf-8")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            return run
+        changed = changed or fixed != run
+        return fixed
+
+    repaired = re.sub(r"[^\x00-\x7f]+", repair, line)
+    return repaired if changed else None
 
 
 def test_no_shipped_file_holds_mojibake() -> None:
@@ -88,6 +109,14 @@ def test_the_check_recognises_the_corruption_it_exists_for() -> None:
     corrupted = "Windows host â†’ bastion-01"
 
     assert _original_if_mojibake(corrupted) == "Windows host → bastion-01"
+
+
+def test_the_corruption_is_found_beside_a_character_that_was_meant():
+    """The line that slipped through: a genuine em dash made the whole-line round trip fail, so the
+    arrow beside it was never looked at."""
+    corrupted = "| — | IP discovery | ARP scan â†’ MAC map |"
+
+    assert _original_if_mojibake(corrupted) == "| — | IP discovery | ARP scan → MAC map |"
 
 
 @pytest.mark.parametrize("line", [

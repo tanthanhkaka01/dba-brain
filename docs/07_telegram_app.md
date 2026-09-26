@@ -753,10 +753,28 @@ through `db_ops.common.confirm`, so a shell caller pays exactly the same price.
 decides who may ask (`command_type`) and what the prompts say;
 [`data/emergency_operations.json`](../data/emergency_operations.example.json) decides what the answers must
 be, and `db_ops/common/confirm.py` checks them. Running
-`python -m db_ops.common.cli host-restart '{...}'` from a shell costs exactly the same two answers.
-An operation that is missing from `emergency_operations.json` gets the strictest treatment, not the
-weakest — a command added to the CLI and forgotten in the config becomes harder to run, never
-easier.
+`python -m db_ops.common.cli host-restart -` from a shell with the same request costs exactly the
+same two answers. An operation that is missing from `emergency_operations.json` gets the strictest
+treatment, not the weakest — a command added to the CLI and forgotten in the config becomes harder
+to run, never easier.
+
+**The bot finishes the request before it runs it (0.24.0).** `common.cli` reads no configuration
+(rules R09), so an action whose argv names `db_ops.common.cli` with an inline request - the six
+above among them - is recognised (`db_ops.lib.common_cli.common_invocation`) and completed from this
+node's `data/` by `db_ops.lib.data_sources.request_fill`: the SQL login as `connection`, the host
+login as `access`, the address `probe-host` knocks on, an 8i bridge's `secrets`, the maintenance
+`policy`, and the operation's `rules` - this node's
+`emergency_operations.json` entry, read here and sent, because `common` prices a request without
+`rules` from the ladder the package ships. The finished request carries a password, so the request
+argument becomes `-` and the JSON goes on the child's stdin: through `db_ops.transport` for a
+foreground action, and into the detached wrapper's stdin for `host-restart`. A `server_id` this
+node cannot finish is refused in the chat before anything starts.
+
+`/spbot_self_status` is finished the same way, from the store rather than from `data/`: it runs
+`common.cli self-status` (one command since 0.24.0 - `db.cli self-status` went, rules R43), and the
+last-run column is in `job_runs`, which `common` may not open. The bot reads each app command's
+newest run of the last day (`with_last_runs`) and states it as `last_runs`; a store it cannot read
+costs that column, as `store_error`, never the reply.
 
 The answers travel in the request rather than being typed at a terminal, because there is no
 terminal on a phone:

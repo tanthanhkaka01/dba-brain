@@ -93,7 +93,7 @@ def test_a_root_this_version_initialised_has_nothing_to_move(tmp_path):
     template still said `database`, and the reference files `init` had just written were called an
     older version's because they were compared byte for byte with the packaged copies - so a new
     operator was told on their first command to upgrade a root nothing older had touched."""
-    from db_ops import scaffold
+    from db_ops.common import scaffold
 
     scaffold.initialise(tmp_path / "root")
     _, plan = config_upgrade.upgrade({"data_dir": str(tmp_path / "root" / "data")})
@@ -169,3 +169,33 @@ def test_a_telegram_record_whose_two_switches_disagree_is_left_whole(tmp_path):
 
     assert result["conflicts"] == 1
     assert (data / "telegram_users.json").read_text(encoding="utf-8") == text
+
+
+def test_a_command_line_naming_a_moved_command_is_pointed_at_its_cli(tmp_path):
+    """A worker moved to 0.23.0 had /spbot_self_status pointed at `db.cli`; 0.24.0 keeps one
+    self-status and it is `common.cli`'s (rules R43), and one timezone, `db.cli`'s. The step
+    rewrites the argv, keeps the file's layout, leaves every command that did not move alone, and
+    plans nothing the second time."""
+    data = tmp_path / "data"
+    data.mkdir()
+    status = ["{python}", "-m", "db_ops.db.cli", "self-status", '{"format": "txt"}']
+    clock = ["{python}", "-m", "db_ops.common.cli", "timezone", '{"format": "txt"}']
+    stays = ["{python}", "-m", "db_ops.common.cli", "kill-spid", "-"]
+    path = data / "telegram_support_commands.json"
+    path.write_text(json.dumps({"telegram_support_commands": [
+        {"command_text": "spbot_self_status", "action_config": {"command_argv": status}},
+        {"command_text": "spbot_timezone", "action_config": {"command_argv": clock}},
+        {"command_text": "spbot_kill_spid", "action_config": {"command_argv": stays}},
+    ]}, indent=4) + "\n", encoding="utf-8")
+
+    _, result = config_upgrade.upgrade({"data_dir": str(data), "dry_run": False,
+                                        "steps": ["moved-commands"]})
+
+    commands = _read(data, "telegram_support_commands.json")["telegram_support_commands"]
+    assert commands[0]["action_config"]["command_argv"][2:4] == ["db_ops.common.cli", "self-status"]
+    assert commands[1]["action_config"]["command_argv"][2:4] == ["db_ops.db.cli", "timezone"]
+    assert commands[2]["action_config"]["command_argv"] == stays
+    assert result["records_changed"] == 2
+    assert '    "telegram_support_commands": [' in path.read_text(encoding="utf-8"), "layout kept"
+    _, again = config_upgrade.upgrade({"data_dir": str(data), "steps": ["moved-commands"]})
+    assert again["records_changed"] == 0

@@ -1,4 +1,4 @@
-"""Read and bump the db_ops version (db_ops/__init__.py __version__).
+"""Read and bump the db_ops version (db_ops/lib/version.py __version__).
 
 Convention: bump on every code fix / deploy so each shipped image is identifiable.
 Format is MAJOR.MINOR.PATCH, zero-padded (e.g. 2.01.00).

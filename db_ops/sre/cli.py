@@ -28,8 +28,8 @@ from db_ops.lib.docker_db_spec import (
     VALID_MODES,
     DockerDbSpec,
 )
-from db_ops.sre.docker_db import register_config as docker_register
-from db_ops.sre.docker_db.resolve import DockerDbRequestError
+from db_ops.lib import docker_db_registry as docker_register
+from db_ops.lib.docker_db_registry import DockerDbRequestError
 from db_ops.sre.inventory import list_inventory_assets
 from db_ops.sre.service import (
     check_mysql_cluster,
@@ -660,7 +660,7 @@ def _remote_login(args: argparse.Namespace, *, data_dir: str) -> dict:
     A key-auth VM (e.g. Oracle Cloud) needs no SSH password; a password-auth host resolves it
     from --remote-password / -ref / -env. Exactly one path is required.
     """
-    from db_ops.common.data_sources import resolve_ssh_key
+    from db_ops.lib.data_sources import resolve_ssh_key
     from db_ops.sre.remote import resolve_remote_ssh_password
 
     if not args.remote_user:
@@ -685,9 +685,9 @@ def _handle_create_db_docker(args: argparse.Namespace, logger, *, sre_config=Non
     node's own data stays here: the password (stored, then resolved), the SSH login, and the
     connection record in ``data/docker_db_connections.json``.
     """
-    from db_ops.lib import common_cli
+    from db_ops.transport import common_cli
     from db_ops.lib.ssh_errors import SshError
-    from db_ops.sre.docker_db.resolve import resolve_password_value
+    from db_ops.lib.docker_db_registry import resolve_password_value
     from db_ops.sre.remote import RemoteHostError
 
     log_function_call(logger, function_name="sre.create_db_docker")
@@ -808,9 +808,9 @@ def _handle_move_db_docker(args: argparse.Namespace, logger, *, sre_config=None)
     registry, and ``common.cli move-db-docker`` does the move (:mod:`db_ops.common.docker_db.mover`)
     reading nothing; the registry entry is repointed here afterwards.
     """
-    from db_ops.lib import common_cli
+    from db_ops.transport import common_cli
     from db_ops.lib.secret_text import set_key_env
-    from db_ops.sre.docker_db.resolve import registered_engine
+    from db_ops.lib.docker_db_registry import registered_engine
     from db_ops.sre.remote import RemoteHostError, resolve_ubuntu_login
 
     log_function_call(logger, function_name="sre.move_db_docker")
@@ -922,22 +922,9 @@ def _worker_host(value: str | None) -> str:
 def _assert_password_can_be_stored(args: argparse.Namespace, spec, value: str, *, data_dir) -> None:
     """Refuse up front what :func:`_store_password` would refuse after the build: a different
     value already under this ref without ``--overwrite-secret``, or no passphrase to store with."""
-    from db_ops.common import data_sources
-    from db_ops.lib.secret_text import resolve_cli_key
-
-    key = resolve_cli_key(args.key, args.key_base64) or os.environ.get("DB_OPS_SECRET_KEY")
-    if not key:
-        raise DockerDbRequestError(
-            "Storing a password needs the secret-store passphrase (--key/--key-base64 or "
-            "DB_OPS_SECRET_KEY): the store is encrypted at rest."
-        )
-    existing = (data_sources.load_secret_text(data_dir, key=key) or {}).get(spec.password_env)
-    if existing is not None and existing != value and not args.overwrite_secret:
-        raise DockerDbRequestError(
-            f"Secret ref {spec.password_env} already exists with a different value. Pass "
-            "--overwrite-secret to replace it (from Telegram: answer 'yes' to recreate), or give "
-            "no password to reuse the stored one."
-        )
+    docker_register.assert_password_can_be_stored(
+        spec.password_env, value, data_dir=data_dir, key=args.key, key_base64=args.key_base64,
+        overwrite=bool(args.overwrite_secret))
 
 
 def _store_password(args: argparse.Namespace, spec, value: str, *, data_dir, logger) -> None:
@@ -948,17 +935,9 @@ def _store_password(args: argparse.Namespace, spec, value: str, *, data_dir, log
     Resolving *which* value was supplied belongs to :func:`_supplied_password_text`; by the time
     this runs the caller has already decided that a password was given.
     """
-    from db_ops.lib.secret_text import resolve_cli_key, set_secret_text
-
-    key = resolve_cli_key(args.key, args.key_base64) or os.environ.get("DB_OPS_SECRET_KEY")
-    if not key:
-        raise DockerDbRequestError(
-            "Storing a password needs the secret-store passphrase (--key/--key-base64 or "
-            "DB_OPS_SECRET_KEY): the store is encrypted at rest."
-        )
-    written = set_secret_text(data_dir, spec.password_env, value, key=key,
-                              overwrite=bool(args.overwrite_secret))
-    os.environ[spec.password_env] = value  # so resolve_password_value finds it without a re-read
+    written = docker_register.store_password(
+        spec.password_env, value, data_dir=data_dir, key=args.key, key_base64=args.key_base64,
+        overwrite=bool(args.overwrite_secret))
     log_event(logger, level="logging",
               message=f"sre.create_db_docker.secret|ref={spec.password_env} "
                       f"stored={'yes' if written else 'already-current'}")
@@ -1005,7 +984,7 @@ def _emit_results(results, *, dry_run: bool) -> int:
     for index, result in enumerate(results, start=1):
         if dry_run:
             print(f"# check {index}")
-            print(_redact_command(subprocess.list2cmdline(result)))
+            print(_dry_run_text(result))
             continue
         if result.stdout:
             print(result.stdout, end="")
@@ -1018,7 +997,7 @@ def _emit_results(results, *, dry_run: bool) -> int:
 
 def _emit_single(result, *, dry_run: bool, logger, label: str) -> int:
     if dry_run:
-        print(_redact_command(subprocess.list2cmdline(result)))
+        print(_dry_run_text(result))
         return 0
     if result.stdout:
         print(result.stdout, end="")
@@ -1034,7 +1013,20 @@ def _strip_sep(args: list[str]) -> list[str]:
     return args[1:] if args[:1] == ["--"] else args
 
 
+def _dry_run_text(result) -> str:
+    """What a dry run would have done: the ``run-cmd`` request, or a local command line.
+
+    The request is printed rather than an ``ssh`` line because no ``ssh`` runs any more - showing
+    one would describe a command this app does not execute.
+    """
+    if isinstance(result, dict):
+        return _redact_command("common.cli run-cmd " + json.dumps(result, ensure_ascii=False))
+    return _redact_command(subprocess.list2cmdline(result))
+
+
 def _redact_command(command: str) -> str:
+    # The PowerShell payload is base64 of the *resolved* credentials - encoded, not hidden.
+    command = re.sub(r"(-DbSrePayloadJsonBase64\s+)(\S+)", r"\1***", command)
     return re.sub(r"(--password=)(\"[^\"]*\"|'[^']*'|\S+)", r"\1***", command)
 
 

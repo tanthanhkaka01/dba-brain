@@ -1,6 +1,6 @@
 """The backup spec: everything a backup run needs, stated in the request rather than looked up.
 
-Same split as :mod:`db_ops.lib.restore.spec`, and for the same reason. ``backup_restore`` reads
+The split every ``common`` operation keeps (rules R09). ``backup_restore`` reads
 ``restore_config.json`` for the entry, asks ``db_instances.json`` for the SSH host and container
 behind a ``server_id``, decrypts the passphrase, decides whether the job is due — and hands the
 finished object down. Nothing here reads any of that.

@@ -5,11 +5,9 @@ subprocess. That put two things in the wrong place at once: ``common`` sits belo
 it was reading the Telegram app's configuration — and it was starting a process to do it, from
 inside a shared library.
 
-The settings moved to their owner, :mod:`db_ops.telegram.routing`, reachable through
-``db_ops.telegram.cli route`` / ``groups``. Each app carries a small client for that call
-(``<app>/telegram_route.py``), because an app may not import another app but may cross a process
-boundary. What is left here is the part that really is app-independent, and there is exactly one
-copy of it.
+The route itself is read in-process by :mod:`db_ops.lib.telegram_route` since 0.24.0 - it is a
+function of the configuration, and the configuration parser is ``lib``'s. What is here is the
+policy, the part that is app-independent, and there is exactly one copy of it.
 
 **Everything in this module is a pure function of its arguments.** Nothing reads config, opens a
 store, or starts a process. The app fetches, the shared layer decides.

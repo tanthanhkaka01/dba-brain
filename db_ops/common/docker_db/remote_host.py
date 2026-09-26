@@ -70,7 +70,7 @@ class RemoteUbuntuHost:
             "key_file": key_filename or None,
             "password": password or "",
             "timeout_seconds": int(timeout),
-        }, resolve_key=False)  # the caller resolved the key path; nothing is looked up here
+        })  # the caller states the key's path; remote_exec looks nothing up (rules R09)
 
     @classmethod
     def from_login(cls, login: dict, *, timeout: int = 30) -> "RemoteUbuntuHost":

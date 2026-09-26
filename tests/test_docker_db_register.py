@@ -5,7 +5,8 @@ import json
 import pytest
 
 from db_ops.common.docker_db import provisioner
-from db_ops.sre.docker_db import register_config, resolve
+from db_ops.lib import docker_db_registry as register_config
+from db_ops.lib import docker_db_registry as resolve
 from db_ops.lib.docker_db_spec import DockerDbSpec
 
 

@@ -21,7 +21,7 @@ import subprocess
 import sys
 
 from db_ops.common import cli_docker_db
-from db_ops.lib import common_cli
+from db_ops.transport import common_cli
 
 
 def _run(monkeypatch, capfd, work):

@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 from db_ops.config import DbOpsConfig
-from db_ops.levels import LEVEL_TO_PYTHON, normalize_level
+from db_ops.lib.levels import LEVEL_TO_PYTHON, normalize_level
 from db_ops.logging_ops.formatter import LOG_HEADER, format_function_message
 from db_ops.logging_ops.handlers import DailyArchiveFileHandler, HostNameFilter
 

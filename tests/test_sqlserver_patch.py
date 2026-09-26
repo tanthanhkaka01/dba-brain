@@ -119,6 +119,20 @@ def _facts(services=("MSSQL$APPDB", "SQLAgent$APPDB", "SQLBrowser")):
     )
 
 
+#: The instance's login, as a caller states it. The tests below stub the SQL side, so only its shape
+#: matters; RFC 5737 address, nothing connects to it.
+CONNECTION = {"db_type": "sqlserver", "host": "192.0.2.10", "port": 1433, "username": "u", "password": "p"}
+
+
+def _filled(command, request, data_dir):
+    """The request as the app sends it (rules R09): the host's login, policy and rules filled from
+    the fixture's data folder, the database login stated."""
+    from db_ops.lib.data_sources import request_fill
+
+    return request_fill.fill_request(command, {"connection": CONNECTION, **request},
+                                     data_dir=data_dir, secrets={"PW": "pw"})
+
+
 @pytest.fixture()
 def data_dir(tmp_path):
     (tmp_path / "db_instances.json").write_text(
@@ -235,7 +249,7 @@ def test_verify_build_compares_the_registry_patch_level_not_the_installed_versio
                         lambda *a, **k: FakeSession([_facts(), _probe()]))
 
     result = patch.verify_build(
-        {"target": "TEST-10-0-0-5", "expected_build": "16.0.4265.3", "evidence": False},
+        _filled("sqlserver-verify-build", {"target": "TEST-10-0-0-5", "expected_build": "16.0.4265.3", "evidence": False}, data_dir),
         data_dir=data_dir,
     )
 
@@ -259,7 +273,7 @@ def test_verify_build_fails_when_the_instance_is_on_another_build(data_dir, monk
                         lambda *a, **k: FakeSession([_facts(), _probe(patch_level="16.0.1000.6")]))
 
     result = patch.verify_build(
-        {"target": "TEST-10-0-0-5", "expected_build": "16.0.4900.1", "evidence": False},
+        _filled("sqlserver-verify-build", {"target": "TEST-10-0-0-5", "expected_build": "16.0.4900.1", "evidence": False}, data_dir),
         data_dir=data_dir,
     )
 
@@ -272,7 +286,7 @@ def test_verify_build_fails_when_the_instance_is_on_another_build(data_dir, monk
 # precheck / apply-cu
 # ---------------------------------------------------------------------------
 def test_a_cumulative_update_is_refused_on_a_non_windows_target(data_dir):
-    result = patch.precheck({"target": "TEST-LINUX", "evidence": False}, data_dir=data_dir)
+    result = patch.precheck(_filled("sqlserver-precheck", {"target": "TEST-LINUX", "evidence": False}, data_dir), data_dir=data_dir)
 
     assert result["ok"] is False
     assert "host.platform" in result["blockers"]
@@ -294,13 +308,13 @@ def test_apply_cu_reruns_every_gate_and_stops_before_touching_the_host(data_dir,
                         lambda *a, **k: opened.append("session") or FakeSession(["{}"]))
 
     result = patch.apply_cu(
-        {
+        _filled("sqlserver-apply-cu", {
             "target": "TEST-10-0-0-5",
             "installer": r"D:\Softwares\SQLServer2022-KB5093420-x64.exe",
             "expected_build": "16.0.4265.3",
             "confirm": True,
             "evidence": False,
-        },
+        }, data_dir),
         data_dir=data_dir,
     )
 
@@ -323,11 +337,11 @@ def test_apply_cu_will_not_run_unconfirmed(data_dir, monkeypatch):
                         lambda *a, **k: opened.append("session") or FakeSession(["{}"]))
 
     result = patch.apply_cu(
-        {
+        _filled("sqlserver-apply-cu", {
             "target": "TEST-10-0-0-5",
             "installer": r"D:\Softwares\SQLServer2022-KB5093420-x64.exe",
             "evidence": False,
-        },
+        }, data_dir),
         data_dir=data_dir,
     )
 
@@ -362,14 +376,14 @@ def test_the_patch_prompt_says_the_cu_cannot_be_uninstalled(data_dir, monkeypatc
                         lambda prompt, stream=None: next(patch_answers))
 
     result = patch.apply_cu(
-        {
+        _filled("sqlserver-apply-cu", {
             "target": "TEST-10-0-0-5",
             "installer": r"D:\Softwares\SQLServer2022-KB5093420-x64.exe",
             "expected_build": "16.0.4265.3",
             "kb": "KB5093420",
             "confirm": True,
             "evidence": False,
-        },
+        }, data_dir),
         data_dir=data_dir,
     )
     shown = capsys.readouterr().err
@@ -384,7 +398,7 @@ def test_the_patch_prompt_says_the_cu_cannot_be_uninstalled(data_dir, monkeypatc
 
 def test_apply_cu_needs_an_installer_path(data_dir):
     with pytest.raises(patch.SqlServerPatchError) as excinfo:
-        patch.apply_cu({"target": "TEST-10-0-0-5", "confirm": True}, data_dir=data_dir)
+        patch.apply_cu(_filled("sqlserver-apply-cu", {"target": "TEST-10-0-0-5", "confirm": True}, data_dir), data_dir=data_dir)
 
     assert "installer is required" in str(excinfo.value)
 
@@ -401,14 +415,14 @@ def test_a_dry_run_prints_the_exact_command_it_would_execute(data_dir, monkeypat
                         lambda *a, **k: opened.append("session") or FakeSession(["{}"]))
 
     result = patch.apply_cu(
-        {
+        _filled("sqlserver-apply-cu", {
             "target": "TEST-10-0-0-5",
             "installer": r"D:\Softwares\SQLServer2022-KB5093420-x64.exe",
             "expected_build": "16.0.4265.3",
             "dry_run": True,
             "confirm": True,
             "evidence": False,
-        },
+        }, data_dir),
         data_dir=data_dir,
     )
 

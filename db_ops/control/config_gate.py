@@ -100,9 +100,10 @@ def resolve(
     """Run the gate. Returns what was found and what was done; raises to stop the deploy.
 
     ``ask`` and ``interactive`` are injectable so the whole gate is testable without a terminal —
-    the same reason the console is a request -> response function.
+    the same reason the console is a request -> response function. Without them the question is
+    asked by ``common.cli ask`` (rules R03: this app runs ``common``, it does not import it), which
+    also says when there is no terminal to ask on.
     """
-    from db_ops.common import confirm
     from db_ops.db import config_sync
 
     stream = out or sys.stderr
@@ -117,16 +118,13 @@ def resolve(
     print(describe(drifted), file=stream, flush=True)
     chosen = decision
     if chosen == "ask":
-        can_ask = confirm.is_interactive() if interactive is None else bool(interactive)
-        if not can_ask:
-            # No terminal and no declared answer. Refusing is the only safe reading: both
-            # alternatives destroy somebody's change, and neither is a default.
-            raise ConfigDriftAbort(
-                "Config drift found and there is no terminal to ask on. Re-run with "
-                "--on-config-drift adopt (take the store's values) or "
-                "--on-config-drift keep (ship this master's files and re-sync the store).")
-        reader = ask or (lambda prompt: confirm.read_answer(prompt, stream=stream))
-        chosen = _read_choice(reader)
+        # No terminal and no declared answer. Refusing is the only safe reading: both alternatives
+        # destroy somebody's change, and neither is a default.
+        if interactive is False:
+            raise ConfigDriftAbort(NO_TERMINAL)
+        chosen = _read_choice(ask or _ask_on_the_terminal)
+        if chosen is None:
+            raise ConfigDriftAbort(NO_TERMINAL)
 
     if chosen == "abort":
         raise ConfigDriftAbort("Deploy stopped: config drift was not resolved.")
@@ -151,14 +149,35 @@ def resolve(
     return {"drifted": drifted, "decision": chosen, "applied": True, "result": result}
 
 
-def _read_choice(reader: Any) -> str:
+NO_TERMINAL = (
+    "Config drift found and there is no terminal to ask on. Re-run with "
+    "--on-config-drift adopt (take the store's values) or "
+    "--on-config-drift keep (ship this master's files and re-sync the store).")
+
+#: How long one question may take through ``common.cli ask``: its own deadline for a typed line is
+#: two minutes, and this only stops a process that outlived it.
+ASK_TIMEOUT_SECONDS = 300
+
+
+def _ask_on_the_terminal(prompt: str) -> str | None:
+    """One typed line, asked by ``common.cli ask`` - or ``None`` when there is no terminal."""
+    from db_ops.transport import common_cli
+
+    answer = common_cli.run("ask", {"prompt": prompt}, timeout_seconds=ASK_TIMEOUT_SECONDS)
+    return str(answer.get("answer") or "") if answer.get("interactive") else None
+
+
+def _read_choice(reader: Any) -> str | None:
     """Ask until the answer is one of the three. An empty answer is abort, never a default action.
 
     Three tries, then abort: a prompt that loops forever is a deploy that hangs a CI job, and the
-    safe end of that is stopping.
+    safe end of that is stopping. ``None`` from the reader means nobody can be asked.
     """
     for _ in range(3):
-        answer = str(reader("  adopt / keep / abort ? ") or "").strip().lower()
+        typed = reader("  adopt / keep / abort ? ")
+        if typed is None:
+            return None
+        answer = str(typed or "").strip().lower()
         if answer in {"adopt", "keep", "abort"}:
             return answer
         if answer == "":

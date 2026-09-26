@@ -135,18 +135,21 @@ def trace_sessions(request: Any) -> dict[str, Any]:
 
     Request fields (a JSON object, like every other ``common`` command):
 
-    ``target``            (required) server_id, or ``<db_type> <ip> [port]``
+    ``connection``        (required) the login, stated in full - this reads no configuration
+    ``target``            what the answer calls the server (a label; nothing is looked up)
     ``database``          which database to report transaction log usage for (default: the login's)
     ``session_id``        trace exactly one SPID instead of scanning
     ``min_tran_seconds``  ignore transactions younger than this (default 60)
     ``blocking_only``     only sessions that are blocking someone
-    ``credential_name`` / ``data_dir`` / ``timeout_seconds`` — as ``run-sql``
+    ``timeout_seconds`` — as ``run-sql``
     """
     if not isinstance(request, dict):
         raise SessionTraceError("The request must be a JSON object.")
-    target = str(request.get("target") or "").strip()
-    if not target:
-        raise SessionTraceError("target is required (a server_id, or '<db_type> <ip> [port]').")
+    try:
+        # Checked here, before any SQL is built: rules R09 - the login is the request's own.
+        sql_run.stated_connection(request, what="trace-session")
+    except sql_run.SqlRunError as exc:
+        raise SessionTraceError(str(exc)) from exc
 
     filters = []
     session_id = request.get("session_id")
@@ -172,7 +175,7 @@ def trace_sessions(request: Any) -> dict[str, Any]:
 
     run_request = {
         key: value for key, value in request.items()
-        if key in {"target", "database", "credential_name", "data_dir", "timeout_seconds"}
+        if key in {"target", "connection", "database", "timeout_seconds"}
     }
     run_request["sql"] = _TRACE_SQL.format(filters="\n  ".join(filters))
     result = sql_run.run_sql(run_request)

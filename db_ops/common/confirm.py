@@ -43,18 +43,19 @@ from pathlib import Path
 from typing import Any, Callable, Sequence, TextIO
 
 from db_ops.common.evidence import FAIL, OK, GateReport
-from db_ops.lib.paths import TOOL_ROOT  # noqa: F401 - one definition, see that module
+from db_ops.lib import confirmation_ladder
 from db_ops.lib.timezone import format_display
 
 __all__ = [
     "ANSWER_DEADLINE_SECONDS",
     "CONFIRM_WORD",
+    "ask_request",
     "authorize_operation",
     "authorize_request",
-    "DEFAULT_OPERATIONS_PATH",
     "banner",
     "is_interactive",
     "load_operation",
+    "rules_for",
     "open_terminal",
     "open_terminal_write",
     "read_answer",
@@ -74,57 +75,51 @@ ANSWER_DEADLINE_SECONDS = 120
 
 _RULE = "=" * 72
 
-DEFAULT_OPERATIONS_PATH = TOOL_ROOT / "data" / "emergency_operations.json"
-
-#: The ladder this package ships, used when the tool root has no file of its own — the same
-#: fallback `data_files.json` has. Without it an install that has not run `db-ops init` yet prices
-#: every operation at the strictest level while every command collects one answer, so each one is
-#: refused for a reason that reads like a defect in the command. The strictest default still
-#: applies to an operation neither file lists: this changes where the pricing is read from, never
-#: what an unpriced operation costs.
+#: The ladder this package ships - what an operation costs when its request states no ``rules``.
+#: Never this node's ``data/emergency_operations.json``: ``common.cli`` reads no configuration
+#: (rules R09), so the app that calls it reads the node's ladder and sends the operation's rules
+#: (``db_ops.lib.data_sources.request_fill.operation_rules``). Without it an install that had not
+#: been given a ladder priced every operation at the strictest level while every command collects
+#: one answer, so each one was refused for a reason that read like a defect in the command. The
+#: strictest default still applies to an operation the ladder does not list.
 PACKAGED_OPERATIONS_PATH = Path(__file__).parent / "catalogue" / "emergency_operations.json"
 
 
 def load_operation(
-    operation: str, *, path: str | Path = DEFAULT_OPERATIONS_PATH
+    operation: str, *, path: str | Path = PACKAGED_OPERATIONS_PATH
 ) -> dict[str, Any]:
     """How hard ``operation`` is to authorize: ``{"level", "confirmations", "challenge", "effects"}``.
 
-    An operation the file does not list gets the **strictest** answer, not the weakest: two
-    confirmations and a typed target. A command added to the CLI but forgotten in the config must
+    An operation the ladder does not list gets the **strictest** answer, not the weakest: two
+    confirmations and a typed target. A command added to the CLI but forgotten in the ladder must
     become harder to run, never easier — the failure mode of the opposite default is a destructive
     command that quietly needs no confirmation at all.
 
-    Read from the tool root first and from :data:`PACKAGED_OPERATIONS_PATH` second, so an install
-    that has not been given its own ladder is priced by the product's rather than by the strictest
-    default. That distinction is not cosmetic: before it, a fresh install demanded two answers for
-    `kill-spid` while `/spbot_kill_spid` collected one, and every confirmed command was refused.
+    A ``path`` that does not exist falls back to :data:`PACKAGED_OPERATIONS_PATH`; one that exists
+    and will not parse is the strictest answer, because there IS a ladder and it is broken -
+    pricing from another table would be pricing from one nobody is looking at. The reading itself
+    is :func:`db_ops.lib.confirmation_ladder.operation_rules`, shared with the app side.
     """
-    strictest = {"level": 100, "confirmations": 2, "challenge": "target_id", "effects": []}
-    # Absent and unreadable are not the same fault. No file means this install was never given a
-    # ladder of its own, and the product's is the right answer. A file that will not parse means
-    # there IS one and it is broken — falling back would price the operation from a table its
-    # operator is not looking at, so that stays strictest.
     source = Path(path)
     if not source.exists():
         source = PACKAGED_OPERATIONS_PATH
     try:
-        data = json.loads(source.read_bytes().decode("utf-8-sig"))
+        document = json.loads(source.read_bytes().decode("utf-8-sig"))
     except (OSError, ValueError):
-        return strictest
-    entry = (data.get("operations") or {}).get(operation)
-    if not isinstance(entry, dict):
-        return strictest
-    level = entry.get("level", 100)
-    rules = (data.get("levels") or {}).get(str(level))
-    if not isinstance(rules, dict):
-        return strictest
-    return {
-        "level": int(level),
-        "confirmations": int(rules.get("confirmations", 2)),
-        "challenge": str(rules.get("challenge") or ""),
-        "effects": [str(item) for item in (entry.get("effects") or [])],
-    }
+        return dict(confirmation_ladder.STRICTEST)
+    return confirmation_ladder.operation_rules(document, operation)
+
+
+def rules_for(request: dict[str, Any], operation: str) -> dict[str, Any]:
+    """The rules ``request`` states for its operation, else the shipped ladder's.
+
+    The caller reads its node's own ladder and sends the operation's entry as ``"rules"``; a request
+    run by hand with none is priced by the product's ladder, never by a file this process would have
+    to find. A ``rules`` block that is there and malformed raises rather than falling back.
+    """
+    stated = confirmation_ladder.rules_from_request(
+        request.get("rules") if isinstance(request, dict) else None)
+    return stated if stated is not None else load_operation(operation)
 
 
 def open_terminal() -> TextIO | None:
@@ -155,7 +150,7 @@ def open_terminal_write() -> TextIO | None:
     """The controlling terminal, opened for **writing** — or ``None`` when there is none.
 
     The mirror of :func:`open_terminal`, and it exists for the caller that reaches a gate through
-    ``db_ops.lib.common_cli``: that transport captures the subprocess's stdout *and* stderr, so a
+    ``db_ops.transport.common_cli``: that transport captures the subprocess's stdout *and* stderr, so a
     question printed to stderr goes into a buffer nobody reads until after the answer was due —
     which is indistinguishable from a hang. The terminal is not the pipe, so the question still
     has somewhere to go.
@@ -449,7 +444,7 @@ def authorize_operation(
     to reproduce the thing the payload will actually act on, so a payload written for one host is
     rejected by another rather than waved through by muscle memory.
     """
-    rules = load_operation(operation)
+    rules = rules_for(request, operation)
     return require_confirmation(
         report,
         request,
@@ -476,17 +471,17 @@ def authorize_request(
     to prevent: a safety control spelled differently per command is one an operator cannot learn
     once.
 
-    The caller reaches this through ``db_ops.lib.common_cli``, which captures both streams, so the
+    The caller reaches this through ``db_ops.transport.common_cli``, which captures both streams, so the
     prompt goes to the controlling terminal (:func:`open_terminal_write`) rather than to stderr.
     ``data_dir`` is accepted for the CLI family's shared signature and deliberately unused: how
-    hard an operation is to confirm is read from the installation's own
-    ``data/emergency_operations.json``, the same file every other gate reads.
+    hard an operation is to confirm is the request's ``rules`` - its caller read them from the
+    node's ladder - else the ladder this package ships (:func:`rules_for`).
     """
     operation = str(request.get("operation") or "").strip()
     if not operation:
         raise ValueError(
-            'authorize needs "operation" — the name of the row in data/emergency_operations.json. '
-            "An operation the file does not list is confirmed at the strictest level, not waved "
+            'authorize needs "operation" — the name of the row in emergency_operations.json. '
+            "An operation the ladder does not list is confirmed at the strictest level, not waved "
             "through, so a typo costs two answers rather than none.")
     target_id = str(request.get("target_id") or "").strip()
     label = str(request.get("target_label") or "").strip() or target_id or operation
@@ -503,3 +498,58 @@ def authorize_request(
         if terminal is not None:
             terminal.close()
     return report.to_dict()
+
+
+def ask_request(request: dict[str, Any], *, data_dir: str | Path | None = None,
+                echo: Callable[[str], None] | None = None) -> dict[str, Any]:
+    """``common.cli ask`` - one question on the controlling terminal, for a caller that asks it.
+
+    The deploy's config-drift gate asks *adopt / keep / abort*: not a yes that authorizes an
+    operation, so :func:`authorize_request` is the wrong door, but the same terminal, the same
+    deadline and the same "silence is no answer". An app may not import this module (rules R03),
+    and a prompt written app-side is a second copy of :func:`read_answer` - the one that forgot the
+    deadline is how a backgrounded run waited for ever. So the question comes here.
+
+    The caller reaches this through ``db_ops.transport.common_cli``, which captures both streams, so
+    the question goes to the controlling terminal (:func:`open_terminal_write`), like the gate's.
+
+    ``answer`` in the request is a reply already collected - held to ``choices`` exactly as a typed
+    one is, so an unattended caller and a person answer from the same list. An empty typed answer,
+    or none before the deadline, is ``""``: never a choice made for the person. ``data_dir`` is the
+    CLI family's shared signature; nothing is read.
+    """
+    prompt = str(request.get("prompt") or "")
+    if not prompt.strip():
+        raise ValueError('ask needs "prompt" - the question to show.')
+    choices = [str(item).strip().lower() for item in (request.get("choices") or ()) if str(item).strip()]
+    tries = max(1, int(request.get("tries") or 1))
+    raw_deadline = request.get("deadline_seconds")
+    deadline = ANSWER_DEADLINE_SECONDS if raw_deadline in (None, "") else float(raw_deadline)
+
+    def accepted(text: Any) -> str | None:
+        answer = str(text or "").strip()
+        if not choices:
+            return answer
+        return answer.lower() if answer.lower() in choices else None
+
+    if "answer" in request:
+        answer = accepted(request.get("answer"))
+        if answer is None:
+            raise ValueError(f"answer {request.get('answer')!r} is not one of {choices}.")
+        return {"interactive": False, "answer": answer, "source": "request"}
+    if not is_interactive():
+        return {"interactive": False, "answer": "", "source": "none"}
+
+    terminal = open_terminal_write()
+    try:
+        for _ in range(tries):
+            typed = read_answer(prompt, stream=terminal, deadline_seconds=deadline)
+            if not typed.strip():
+                break
+            answer = accepted(typed)
+            if answer is not None:
+                return {"interactive": True, "answer": answer, "source": "terminal"}
+    finally:
+        if terminal is not None:
+            terminal.close()
+    return {"interactive": True, "answer": "", "source": "terminal"}

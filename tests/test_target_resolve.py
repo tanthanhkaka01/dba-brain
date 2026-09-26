@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from db_ops.common import data_sources as target_resolve
-from db_ops.common.data_sources import (
+from db_ops.lib import data_sources as target_resolve
+from db_ops.lib.data_sources import (
     TargetResolveError,
     parse_target_spec,
     resolve_target_instance,
@@ -115,7 +115,7 @@ def test_the_target_listing_offers_only_targets_that_can_be_used(tmp_path):
     """The listing is meant to be copied from into another command, so a disabled target has no
     business in it - the resolver would refuse the id the operator just copied."""
     import json
-    from db_ops.common.data_sources import format_target_list
+    from db_ops.lib.data_sources import format_target_list
 
     (tmp_path / "db_instances.json").write_text(json.dumps({"db_instances": [
         {"server_id": "LIVE", "db_type": "sqlserver", "ip": "10.0.0.1", "port": 1433, "enabled": True},
@@ -133,7 +133,7 @@ def test_resolution_still_sees_disabled_targets_so_it_can_explain_itself(tmp_pat
     """Hiding is a listing concern only. If resolution also forgot disabled instances, asking
     for one would report "unknown server_id" for an id that is right there in the config."""
     import json
-    from db_ops.common.data_sources import list_target_instances
+    from db_ops.lib.data_sources import list_target_instances
 
     (tmp_path / "db_instances.json").write_text(json.dumps({"db_instances": [
         {"server_id": "RETIRED", "db_type": "sqlserver", "ip": "10.0.0.2", "port": 1433, "enabled": False},

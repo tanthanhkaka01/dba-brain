@@ -16,6 +16,24 @@ CONNECT_FAILED_PATTERNS = (
     "no valid connections",
     "cannot connect",
     "closed the connection",
+    # Oracle's own words for "the database did not answer" (0.24.0, the operator's call). An 8i
+    # target reached through the legacy bridge reports them as text - the bridge answered, the
+    # target's listener or instance did not - so nothing declares the phase, and without these
+    # a dead listener graded as a failed query: WARNING where connection_error_severity says
+    # CRITICAL. The bridge process itself being down ("... did not answer") is deliberately not
+    # here: that is the monitoring's failure, not the target's.
+    "ora-12541",  # TNS: no listener
+    "ora-12514",  # listener does not know of the requested service
+    "ora-12505",  # listener does not know of the SID
+    "ora-12170",  # TNS: connect timeout
+    "ora-12543",  # TNS: destination host unreachable
+    "ora-12545",  # target host or object does not exist
+    "ora-12537",  # TNS: connection closed
+    "ora-12519",  # TNS: no appropriate service handler found
+    "ora-12520",
+    "ora-12528",  # TNS: all appropriate instances are blocking new connections
+    "ora-01033",  # initialization or shutdown in progress (a mounted standby)
+    "ora-01034",  # ORACLE not available
 )
 AUTH_FAILED_PATTERNS = (
     "authentication failed",
@@ -24,6 +42,9 @@ AUTH_FAILED_PATTERNS = (
     "negotiate authentication",
     "kerberos",
     "login failed",
+    "ora-01017",  # invalid username/password; logon denied
+    "ora-28000",  # the account is locked
+    "ora-28001",  # the password has expired
 )
 PERMISSION_DENIED_PATTERNS = (
     "permission was denied",

@@ -43,6 +43,9 @@ across a process boundary, where the request is a JSON object and the answer is 
 Crossing either direction fails differently: importing `common` routes around the CLI contract,
 while spawning a CLI from `lib` puts an operation inside the layer that everything imports.
 
+Rule A and Rule B are R06 and R07 in [`rules.md`](./rules.md), the one numbered list of the
+project's rules, with their guards and the exceptions left.
+
 ### Rule A — a `lib` module imports nothing from `db_ops`
 
 Not `common`, not `db`, not an app, not `config.json`. Everything it needs arrives as an argument.
@@ -52,46 +55,34 @@ including `restore/`. The guard is three tests, not one: the import check, plus 
 allowance list honest — every allowance must still name a real module, and every allowance must
 still be used. An allowance that has been fixed fails the suite rather than lingering.
 
-### The two allowances, in full
+### No allowances left (0.24.0)
 
 ```python
-ALLOWED_DB_OPS_IMPORTS = {
-    "notify.py":         "db_ops.config",
-    "telegram_route.py": "db_ops.config",
-}
+ALLOWED_DB_OPS_IMPORTS = {}
 ```
 
-Both are the same shape: a **lazy, last-resort read of a root module**, failing open.
-
-* `notify.py` reads the configured notify-level vocabulary, because that vocabulary is data an
-  operator adds by registering a Telegram group — it is not knowable at import time.
-* `telegram_route.py` falls back to the level → chat map in config when the Telegram app's CLI
-  cannot be reached, rather than dropping the message.
-
-`db_ops.config` owns nothing and is imported by everything, so neither allowance points the layer
-at anything above it. Both are written down at the guard, not just in the module.
+There were two - `notify.py` and `telegram_route.py`, each reading `db_ops.config`. The
+configuration parser moved into this layer (`lib/config.py`; `db_ops.config` is now an alias of
+it), so both read a sibling and the rule is absolute (R06). So are the data-folder reader
+(`lib/data_sources/`) and the version (`lib/version.py`), which moved in with it: `common` reads
+them from here, because `common` may import nothing but `lib` (R04).
 
 ### Rule B — a `lib` module does not launch a CLI
 
 Guarded by the same file, on the AST rather than a text search: roughly a third of the package
 mentions `subprocess` in a docstring explaining why it is **not** one, and a grep counts those.
 
-Two modules currently do, and they are **the same two that hold the import allowances above** —
-they break the layer in both directions:
+None does, since 0.24.0 (R07, absolute):
 
 ```python
-KNOWN_CLI_LAUNCHERS = {
-    "common_cli.py":     "the one client for db_ops.common.cli (and db.cli via module=)",
-    "telegram_route.py": "falls back to db_ops.telegram.cli for the level -> chat map",
-}
+KNOWN_CLI_LAUNCHERS = {}
 ```
 
-Both are **transport clients** — their job is to spawn another component's CLI and read the JSON
-back, which is doing something rather than deciding something. They are recorded rather than moved
-because the resolution is structural: `common_cli` is the transport *every* app uses to reach
-`common`, so wherever it lives, some layer has to spawn the process. Which layer owns the transport
-is an open question, recorded as violation **V7** against the architecture rules and still open. The
-set may shrink and may not grow.
+There were two, and the open question behind them - which layer owns the launch every app needs to
+reach `common` - is answered by [`15_transport.md`](./15_transport.md): **`lib` builds the command
+and reads the answer, `transport` starts it.** `common_cli.py` keeps the building (`CommandSpec`,
+`build_command`) and the reading (`read_answer`, `decode`); `telegram_route.py` stopped needing a
+process at all - routing is a function of the configuration, read in-process.
 
 ---
 
@@ -102,7 +93,7 @@ Three mechanisms, and the choice is not a matter of taste:
 | The thing | Goes to |
 | --- | --- |
 | a **value or a rule** — pure, takes its inputs as arguments | `db_ops/lib/` |
-| a **read of `data/`** | `db_ops/common/data_sources/` — the one reader |
+| a **read of `data/`** | `db_ops/lib/data_sources/` — the one reader |
 | an **operation** — touches a database, host, file, or the network | a `common` CLI command |
 
 A module that does two of these is doing two jobs and gets split. That split is not hypothetical:
@@ -132,8 +123,11 @@ differently in two places.
 | `task_input.py` | the reserved `{target_*}` placeholders a task's `input.args` may use without declaring them — the runner fills them from the `sql_targets` entry it is running for. Here because both sides need it and neither may import the other: `common.sql_task_admin` validates the args at registration, `sql_tasks.python_source` substitutes them at run time. It was spelled out in both until `test_no_duplicate_definitions.py` found the two copies |
 | `instance_bundle.py` | what a SQL Server instance-metadata bundle is — layout, two phases, order |
 | `ssh_errors.py` | what can go wrong reaching a host over SSH, as four names |
+| `docker_db_registry.py` | the lab-database connection registry (`data/docker_db_connections.json`: build an entry, upsert, relocate, the engine it records) and the password around a build (resolve from the environment or the store; check, then store after the build). `sre/docker_db/` until 0.24.0 - here because `control worker-create-db-docker` builds the same thing, and an app imports neither another app nor `common` |
 | `docker_db_spec.py` | what a lab database Docker instance **is** - `DockerDbSpec` and its validation, `ENGINE_META` (image, port, login, health ceiling per engine), the lab subnet rule, and the default folders. Here since 0.23.0 because both sides of the `common.cli` boundary need it: `sre` for its argparse choices and the connection record, `common.docker_db` to build the instance |
 | `target_flags.py` | per-target on/off flags, and `is_record_active` - one rule for a Telegram chat or person switched on by `active` or the older `status: "active"`, absent meaning on |
+| `remote_host.py` | `RemoteHost` - a Linux host reached through `common.cli`: `run` / `run_script` (`run-cmd`), `put` / `get` (`push-file` / `pull-file`), `exists` / `stat` / `listdir_attr`, and `put_files` / `get_files`, which move many files as one tar. What `control` and `backup_restore` hold instead of an SSH client (rules R03). It builds each request and reads each answer; the one thing that starts a process is the `call` the app passes in - `db_ops.transport.common_cli.run_allowing_failure` - so it starts nothing itself (R07). `put_bytes` writes a few kilobytes from memory, base64 on a here-document, so a certificate's private key touches no local disk |
+| `moved_commands.py` | `MOVED_COMMANDS` - which command moved from which CLI to which (`common.cli self-status` -> `db.cli`), the table `upgrade-config`'s `moved-commands` step rewrites an old command line by. Here because it is a value, and `common` may name no CLI module in its own code (rules R05) |
 | `webhost_endpoints.py` | where this node's own pages are — parses `--port`/`--mount` out of the webhost serve `command_text`, builds the console and reports base URLs, and names the pages that exist under stable names. A per-server page stays a `{server_id}` template: a real server id in shipped code is what `check-identifiers` refuses |
 | `report_links.py` | `page_relative` / `href_for_page` — turning an absolute report URL into a relative href when it is one of our own pages. The report text stays absolute for Telegram; the rendered page gets the relative form, which resolves against whatever host served it rather than the one that rendered it |
 | `page_banner.py` | the one head banner every published page leads with — product, page title, scope, `snapshot <time>`, and relative links to the sibling pages that **exist**. Pure: the stamp is passed in already rendered, so a page rebuilt for a past day says that day. `siblings_present(exists)` takes a predicate rather than a directory, because touching the filesystem is an operation. `snapshot_stamp(markup)` reads that stamp back out, so a page copied off a node can be named after the moment it states rather than the moment it was copied. `pick_index_usage(names)` + `siblings_present(..., index_usage=)` add the per-server index report to the head - it cannot be a `SIBLING_PAGES` entry because its file name is a `server_id`, so the href is the caller's and only the label lives here |
@@ -163,7 +157,7 @@ Two halves, split along the `lib`/`common` line:
 | | Where | Kind |
 | --- | --- | --- |
 | The rule | `db_ops/lib/timezone.py` | pure — parse, resolve, render. Imports nothing from `db_ops` |
-| The operation | `python -m db_ops.common.cli timezone` | reads this node's config and says what it resolved. Writes nothing, so it answers when the store is down |
+| The operation | `python -m db_ops.db.cli timezone` | reads this node's config and says what it resolved - `node_id` and `listing` here are its rules. Opens no store unless asked to record, so it answers when the store is down (0.24.0: `common.cli timezone` did this, and went - rules R43) |
 | The record | `python -m db_ops.db.cli timezone --record` | upserts this node's row in `runtime_nodes`. In `db.cli` because `common` may not import `db` |
 
 **Bound once, in `db_ops.config.parse_config`.** Producers deep in the reports and telegram apps
@@ -194,6 +188,10 @@ verdict; none of them reads a file.
 | `capacity_forecast.py` | when does this run out |
 | `state_transition.py` | does a recurring check have anything *new* to say |
 | `event_policy.py` | which events matter |
+| `data_sources/request_fill.py` | what an app does **before** it calls `common.cli` (0.24.0): `fill_request(command, request)` turns a `server_id` into the fields the command needs stated - `connection` (the SQL login, password resolved), `access` (the host's `cmd_access` with its login), `policy` (the maintenance policy, defaults then the server's own; or the instance policy), `rules` (the node's ladder entry) and a replay's `secrets`. `FILLS` says which command needs which; what the caller already stated is kept. `common.cli` reads no configuration (rules R09), so this is the other half of it - imported by apps only, never by `common` |
+| `confirmation_ladder.py` | one reading of an `emergency_operations.json` ladder - `operation_rules(document, operation)`, strictest for anything unpriced, and `rules_from_request` for the `rules` a request states. Both sides read a ladder since 0.24.0 - the app its node's file, `common.confirm` the shipped one when a request states none - and this is why they read it the same way |
+| `metric_target.py` | `MetricTarget` - one target metric collection runs against, resolved from config. Here since 0.24.0 with its loader, `data_sources/collection_targets.py` (`db_ops.metrics.targets` is that module under its old name): `common.cli check-credentials` asks it, and `common` may import only `lib` |
+| `inventory_file.py` | the database inventory file an explicit `--inventory` names - JSON, or YAML read without PyYAML. From `common.sql_execution` (0.24.0), which the metrics target loader could not import |
 | `metric_score.py` | how a set of metric rows scores for one status — the fleet ordering rule |
 | `health_model.py` | what is true about a target *now*, shared by every page that claims to say so |
 | `notify_route.py` | how an entry's `notify` block narrows a node's route |
@@ -305,13 +303,13 @@ were valid, and nothing in the tree compared one against the other.
 splitting must happen **before** decoration, because `telegram_severity` tells a first chunk from a
 continuation by the `[part i/n]` marker that the splitter writes.
 
-### Clients to another component's CLI
+### A call to `common.cli`, and the routing
 
-Two modules are the in-process face of a subprocess boundary. They are pure in the sense the guard
-means — they build a request and read a response — and they are the only two.
-
-* **`common_cli.py`** — the one client for `db_ops.common.cli`.
-* **`telegram_route.py`** — this app's client for the Telegram app's routing commands.
+* **`common_cli.py`** — builds the call to `common.cli` / `db.cli` (`CommandSpec`: the argv, the
+  stdin bytes, the deadline, whether stderr streams) and reads the envelope back. Starting it is
+  `transport`'s ([`15_transport.md`](./15_transport.md)).
+* **`telegram_route.py`** — the notification route (`telegram_route`, `telegram_groups`), read from
+  the configuration in-process and cached for a minute; it fails closed and says why.
 
 ### Infrastructure
 
@@ -473,7 +471,7 @@ to notice.
 Hiding a machine is a statement about *an* estate, which makes it configuration. The library's
 default is now to hide nothing, the list arrives as an argument (`exclude_ip_prefixes`), and the
 apps read it from `reports_config.json` through
-`db_ops.common.data_sources.inventory_exclude_ip_prefixes()`. The reader lives in `common` rather
+`db_ops.lib.data_sources.inventory_exclude_ip_prefixes()`. The reader lives in `common` rather
 than here for the usual reason: reading the data folder is an operation, and `lib` is only ever a
 function of its arguments.
 
@@ -596,9 +594,10 @@ arithmetic.
 
 ### `lib/restore/`
 
-The one subpackage: `spec.py`, `plan.py`, `pitr.py` — what a restore *is* and what it would do,
-with no ability to perform it. Held to the same purity rule as the flat modules, and additionally
-covered by `tests/test_common_restore_is_pure.py`.
+The one subpackage: `moment.py` - a point in time read into the server's clock, for the restore
+steps, the backup listings and the workflow alike. `spec.py`, `plan.py` and `pitr.py` described the
+work of `common.cli restore-database` and went with it in 0.24.0 (rules R43: a third route for a SQL
+Server restore that nothing called). Held to the same purity rule as the flat modules.
 
 ---
 

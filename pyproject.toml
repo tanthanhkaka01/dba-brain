@@ -23,7 +23,7 @@ license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Trieu Tan Thanh" }]
 keywords = ["dba", "database", "sqlserver", "oracle", "postgresql", "mysql", "monitoring", "operations"]
-version = "0.23.0"
+version = "0.24.0"
 
 # Measured 2026-08-21, not guessed (D-05):
 #
@@ -131,6 +131,9 @@ include = [
     "db_ops",
     "db_ops.lib*",
     "db_ops.common*",
+    # 0.24.0: the one client of common.cli / db.cli (docs/15_transport.md). Missing here, the
+    # wheel shipped every app that calls common without the module that makes the call.
+    "db_ops.transport*",
     "db_ops.db*",
     "db_ops.logging_ops*",
     "db_ops.metrics*",
@@ -170,7 +173,10 @@ namespaces = false
                    "restore_scripts/**/*.sh", "restore_scripts/**/*.ps1",
                    # The lab compose templates moved here from `sre` with create-db-docker (0.23.0).
                    "docker_db/templates/**/*",
-                   "catalogue/*.json"]
+                   "catalogue/*.json",
+                   # The guide `init` writes as AGENTS.md; it moved from the root package with
+                   # scaffold.py in 0.24.0, when the root stopped holding anything of its own.
+                   "agents_guide.md"]
 # Back with the packages in `v0.2.0`. The removal note is worth keeping as the reason this list is
 # checked rather than trusted: **package-data for a package that is not in `packages.find` is
 # silently ignored**, so an entry here proves nothing on its own — a stale one reads as "this
@@ -197,10 +203,6 @@ namespaces = false
 # scaffold.PACKAGED_DEFAULTS instead of naming files by hand.
 "db_ops.backup_restore" = ["sql/**/*.sql", "**/*.ps1", "**/*.sh", "catalogue/*.json"]
 "db_ops.sql_tasks" = ["**/*.sql"]
-# The operating guide `init` writes as AGENTS.md and `dbabrain guide` prints. Read at import by
-# db_ops/scaffold.py, so an install without it fails at the first command rather than writing an
-# empty guide.
-"db_ops" = ["agents_guide.md"]
 
 
 # Lint and format. Added 2026-08-22 for go-live gate `G-08`, which requires CI green on tests,

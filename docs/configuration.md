@@ -126,7 +126,7 @@ neither is set, and is deprecated.
 Ask any node what it resolved, and put the answer on the record:
 
 ```bash
-python -m db_ops.common.cli timezone '{"format":"txt"}'          # reads nothing; answers anyway
+python -m db_ops.db.cli timezone --format txt                   # opens no store; answers anyway
 python -m db_ops.db.cli --config config.json timezone --record --list
 ```
 
@@ -500,12 +500,12 @@ Two commands do it instead.
 
 ```bash
 # on the machine that already works
-db-ops export-data prod-bundle.json
+db-ops export-data '{"bundle": "prod-bundle.json", "format": "txt"}'
 
 # on the new machine, after `pip install dbabrain`
 mkdir estate && cd estate
-db-ops import-data prod-bundle.json --plan --root .   # read this first; it writes nothing
-db-ops import-data prod-bundle.json --root .
+db-ops import-data '{"bundle": "prod-bundle.json", "root": ".", "plan_only": true, "format": "txt"}'   # writes nothing
+db-ops import-data '{"bundle": "prod-bundle.json", "root": ".", "format": "txt"}'
 export DB_OPS_SECRET_KEY='<the source machine's passphrase>'
 db-ops check-credentials                              # proves the store decrypts here
 ```
