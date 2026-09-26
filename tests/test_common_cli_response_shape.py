@@ -34,6 +34,7 @@ so converting a command means deleting its line here in the same commit.
 from __future__ import annotations
 
 import json
+import tempfile
 
 import pytest
 
@@ -55,6 +56,11 @@ SAFE_REQUEST: dict[str, dict] = {
     #: `{}` renders the real inventory and **writes** a dated summary into runtime/reports.
     #: An inventory path that does not exist fails on the read instead.
     "inventory-summary": {"inventory": "__no_such_inventory__.json"},
+    #: `{}` scaffolds a whole tool root **in the working directory** - the repository. Here that
+    #: went unnoticed because most of the files exist; on a public checkout it wrote `config.json`,
+    #: `AGENTS.md` and every `data/*.json`, and nine later tests read those instead of the shipped
+    #: examples (found while building 0.24.0). A throwaway directory takes it instead.
+    "init": {"root": tempfile.mkdtemp(prefix="dbops_response_shape_init_")},
 }
 
 
