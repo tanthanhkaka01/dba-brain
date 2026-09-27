@@ -680,6 +680,24 @@ the final drain; a run past `timeout_seconds` comes back `timed_out: true` with 
 because a RESTORE LOG cut off mid-way must be inspected rather than retried. The fields are
 `input_run_sqlcmd` / `output_run_sqlcmd`.
 
+**`container` (0.24.1)** runs the batch with that container's own `sqlcmd` (`docker exec`), for a
+host that has none - a lab VM with only Docker on it, found restoring a production server into a lab VM on
+2026-09-27. A `sqlcmd_path` left at `sqlcmd` then means the image's `/opt/mssql-tools18/bin/sqlcmd`.
+`via` `ssh` or `local` only: a Windows host runs its own, and a container there is refused.
+
+### `restore-key` — the certificate an encrypted backup needs, by thumbprint
+
+A backup written `WITH ENCRYPTION` is readable only by an instance holding its certificate, and SQL
+Server finds that certificate by **thumbprint**. The batch is `lib.sqlserver_certificate.import_batch`,
+and the SMB restore and the script restore's shell send the same one: the thumbprint is the SHA-1 of
+the `.cer` file, read by the instance itself (`OPENROWSET(BULK ...)`); a certificate already there is
+left alone (its private key added if it had none); a requested name that belongs to a different
+certificate becomes `<name>_<first 8 hex digits>`. **Nothing is ever dropped** - until 0.24.1 this
+dropped any certificate of the requested name, and `db_ops_backup_cert` is the default everywhere,
+so on a target dbabrain also backs up it replaced the target's own. The answer names the certificate
+that holds the thumbprint now; `imported` false means it was already there. `target` connects over
+a driver; `sqlcmd` (as `restore-full` takes it) runs it where the SQL Server is.
+
 ### `smb-list`, `smb-get`, `smb-delete`, `smb-credential` — a Windows share (0.24.0)
 
 The SQL Server restore reached its backup shares itself until 0.24.0 - `smbclient` on a Linux worker,

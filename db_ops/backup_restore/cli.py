@@ -30,7 +30,7 @@ from db_ops.backup_restore.config import (
     load_restore_configs,
     merge_notify_configs,
 )
-from db_ops.backup_restore.copy_backup import run_copy_backup
+from db_ops.backup_restore.copy_backup import newest_backup_hint, run_copy_backup
 from db_ops.backup_restore.delete_backup import run_delete_backup
 from db_ops.backup_restore.preflight import PreflightError, run_target_preflight
 from db_ops.backup_restore.events import announce, emit_backup_restore_event, resolve_run_id
@@ -1158,6 +1158,7 @@ def run_restore_workflow(
                         f"for source_id={step_config.source_id} restore_id={step_config.restore_id or 'unknown'} "
                         f"window_start_utc={copy_window_start.isoformat() if copy_window_start is not None else 'now-minus-hours'} "
                         f"window_end_utc={copy_window_end.isoformat() if copy_window_end is not None else 'unbounded'}"
+                        + newest_backup_hint(step_config)
                     )
         summary["copy-backup"] = {"status": "SUCCESS", "sources": copy_outputs}
         _copied = sum(int(o.get("copied") or 0) for o in copy_outputs)

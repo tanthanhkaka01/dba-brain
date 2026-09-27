@@ -17,6 +17,17 @@ do about it. Not the internal refactor that made it possible.
 
 ## [0.24.0] - 2026-09-26
 
+### Added
+
+- **An SMB restore can read the certificate dbabrain's own backups were encrypted with** -
+  `source.backup_certificate` (`name`, `password_ref`, `source_dir`): the `.cer` / `.pvk` pair the
+  SQL Server backup job exports beside the backups, read from the share, or over the source host's
+  own login from `source_dir` when the share refuses it. Until now an SMB entry took a certificate
+  only from a Vault URL, so a share of dbabrain's own encrypted backups could not be restored onto an
+  instance that did not already hold it.
+- **`target.sql_container`, and `run-sqlcmd`'s `container`** - every `sqlcmd` of the restore runs
+  inside the target's SQL Server container (`docker exec`), for a host with no `sqlcmd` of its own.
+
 ### Changed
 
 - **`db-ops init`, `guide`, `encrypt-secret`, `export-data` and `import-data` take one JSON object,
@@ -159,6 +170,36 @@ do about it. Not the internal refactor that made it possible.
 
 ### Fixed
 
+- **Importing a backup certificate never drops one any more, and finds it by thumbprint.**
+  `restore-key` and the SQL Server script restore dropped any certificate of the requested name and
+  created their own - on a target dbabrain also backs up, that was its own `db_ops_backup_cert` -
+  and the SMB restore skipped the import when the name existed, so the source's never arrived. All
+  three send one batch now: a certificate already there is left alone, and a name that belongs to
+  another certificate becomes `<name>_<first 8 hex digits of the thumbprint>`. `restore-key` answers
+  `imported: false` when it was already there, and can run through `sqlcmd` like `restore-full`.
+- **The Windows backup job leaves the exported certificate pair as readable as the backups** -
+  the engine writes it for its service account alone, and a restore reading the share was refused.
+- **An SMB restore on a Windows node copies only the mapped databases**, as a Linux node always
+  did; it copied every recent file on the whole share.
+- **"copy-backup selected no files" names the newest matching file and how old it is**, so a share
+  nothing writes to any more reads as that and not as a copy window set too narrow.
+- **A restore checks its whole backup chain in one SSH session**, not one per file, and a session
+  that never opened (refused, reset, timed out) is tried again twice before the step fails.
+- **A full disk under the runtime store no longer ends the daemon.** A write that failed with
+  `53100` (and the store out of memory, `53000`/`53200`) is waited out like a restart, and the
+  budget for one outage is 6 hours instead of 10 minutes: the full disk that ended a soak took a
+  person an hour to clear, and the daemon that had given up was all that stayed down. A store that
+  answers a definite error - a wrong password, a missing database - still ends it at once.
+- **A dead SQL-task run is reported once.** Ten scans run at once, and each closed the same
+  abandoned `running` row and sent its alert; the close is a claim now, and only the scan whose
+  close lands reports it.
+- **A restore's Telegram message carries its result, not its work.** A 13-database
+  `restore-latest` put its whole output in its END message - 181,174 characters in 49 parts - and
+  the Telegram workflow timed out sending it. The message now summarises each source's verdict and
+  per-database statuses (at most about three parts); the whole output stays on the run's
+  `job_runs` row.
+- **A Telegram pass stops starting messages after 180 s** and leaves the rest queued for the next
+  pass, instead of being killed at the daemon's 300 s timeout with everything behind it waiting.
 - **`run-sql` answered a traceback instead of JSON when its target dropped mid-statement** (seen on
   a PostgreSQL SQL task in 0.23.0). Closing the dead connection raised and hid the reason; the run
   now fails with the statement's own error, and nothing `run-sql` meets reaches its caller as a

@@ -74,7 +74,10 @@ def test_the_eighteen_shared_objects_are_described_and_nothing_else_is(reference
         "database_credential_group", "database_credential", "remote_credential_group",
         "remote_credential", "telegram_group", "telegram_user", "report_entry", "webhost_app",
         # 0.22.0, third pass: every file the data catalogue calls `config`.
-        "restore_source", "restore_target", "docker_db_connection", "store_config", "store_sqlite",
+        "restore_source", "restore_target",
+        # 0.24.1: where an SMB restore reads dbabrain's own backup certificate.
+        "restore_backup_certificate",
+        "docker_db_connection", "store_config", "store_sqlite",
         "store_postgresql", "telegram_settings", "telegram_bot", "backup_policy",
         "backup_policy_override", "backup_type_rule", "capacity_defaults", "capacity_override",
         "restore_drill_defaults", "restore_drill_override", "maintenance_settings", "emergency_level",

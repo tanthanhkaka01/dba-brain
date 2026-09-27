@@ -11,11 +11,23 @@ command is what turns that into an action.
 
 **The private key is decrypted with the same passphrase the backup was encrypted with**, so the
 caller passes it in like every other credential here; nothing is looked up.
+
+**Nothing is dropped.** Until 0.24.1 this dropped any certificate of the requested name and created
+its own, and ``db_ops_backup_cert`` is the default name everywhere: on a target that dbabrain also
+backs up, that was the target's own backup certificate. The batch is
+:func:`db_ops.lib.sqlserver_certificate.import_batch`, the same one the SMB restore sends - it
+finds the certificate by thumbprint and takes another name when the requested one is taken.
+
+It runs one of two ways, as ``restore-full`` does: over a driver to ``target`` (host and port as
+this machine reaches them), or through ``sqlcmd`` where the SQL Server is (``sqlcmd``, the
+``run-sqlcmd`` request without its ``sql``) - for an instance this machine cannot reach directly.
 """
 
 from __future__ import annotations
 
 from typing import Any
+
+from db_ops.lib import sqlserver_certificate
 
 DEFAULT_CERT_NAME = "db_ops_backup_cert"
 
@@ -24,22 +36,12 @@ class RestoreKeyError(ValueError):
     """The certificate cannot be imported."""
 
 
-def _q(value: str) -> str:
-    """A T-SQL string literal body: double every quote."""
-    return str(value).replace("'", "''")
-
-
-def _name(value: str) -> str:
-    return "[" + str(value).replace("]", "]]") + "]"
-
-
 def build_statements(request: dict[str, Any]) -> list[str]:
-    """The statements that make the certificate available. Pure - nothing is executed."""
+    """The batch that makes the certificate available. Pure - nothing is executed."""
     name = str(request.get("certificate_name") or DEFAULT_CERT_NAME).strip()
     cer = str(request.get("cer_path") or "").strip()
     pvk = str(request.get("pvk_path") or "").strip()
     password = str(request.get("password") or "")
-
     if not cer or not pvk:
         raise RestoreKeyError(
             "cer_path and pvk_path are both required - the certificate is useless for a restore "
@@ -50,24 +52,7 @@ def build_statements(request: dict[str, Any]) -> list[str]:
             "password is required: it decrypts the private key, and is the same passphrase the "
             "backup was encrypted with."
         )
-
-    return [
-        # A master key must exist before a certificate with a private key can be created, and a
-        # freshly built instance has none. Guarded, because creating a second one fails.
-        "IF NOT EXISTS (SELECT 1 FROM sys.symmetric_keys WHERE name = '##MS_DatabaseMasterKey##')\n"
-        f"    CREATE MASTER KEY ENCRYPTION BY PASSWORD = '{_q(password)}';",
-        # Dropped and recreated rather than left alone: a certificate with the right *name* but the
-        # wrong thumbprint reads as present and fails the restore, which is a worse place to find
-        # out than here.
-        f"IF EXISTS (SELECT 1 FROM sys.certificates WHERE name = '{_q(name)}')\n"
-        f"    DROP CERTIFICATE {_name(name)};",
-        f"CREATE CERTIFICATE {_name(name)}\n"
-        f"    FROM FILE = '{_q(cer)}'\n"
-        f"    WITH PRIVATE KEY (\n"
-        f"        FILE = '{_q(pvk)}',\n"
-        f"        DECRYPTION BY PASSWORD = '{_q(password)}'\n"
-        f"    );",
-    ]
+    return [sqlserver_certificate.import_batch(name=name, cer_path=cer, pvk_path=pvk, password=password)]
 
 
 def import_key(request: dict[str, Any]) -> dict[str, Any]:
@@ -76,10 +61,11 @@ def import_key(request: dict[str, Any]) -> dict[str, Any]:
     statements = build_statements(request)
     if request.get("dry_run"):
         return {"certificate_name": name, "statements": statements, "dry_run": True, "ok": True}
-
+    if isinstance(request.get("sqlcmd"), dict):
+        return _through_sqlcmd(dict(request["sqlcmd"]), statements[0])
     target = request.get("target") or {}
     if not str(target.get("host") or "").strip():
-        raise RestoreKeyError("target.host is required.")
+        raise RestoreKeyError('target.host is required (or "sqlcmd": run it where the SQL Server is).')
 
     from db_ops.common.db_connect import connect_engine
 
@@ -91,20 +77,38 @@ def import_key(request: dict[str, Any]) -> dict[str, Any]:
     )
     try:
         cursor = connection.cursor()
-        for statement in statements:
-            cursor.execute(statement)
-            while cursor.nextset():
-                pass
-        # A literal, not a `?` placeholder: SQL Server is reached through pyodbc when the
-        # local ODBC stack can negotiate TLS with it and through pymssql when it cannot, and
-        # the pymssql adapter takes the statement alone - `execute() takes 2 positional
-        # arguments but 3 were given` on the first target that fell back. The value is ours,
-        # and it is escaped.
-        cursor.execute("SELECT thumbprint FROM sys.certificates WHERE name = "
-                       "N'" + _q(name) + "'")
-        row = cursor.fetchone()
-        thumbprint = row[0].hex() if row and row[0] is not None else ""
+        cursor.execute(statements[0])
+        row = _last_row(cursor)
     finally:
         connection.close()
+    if row is None:
+        raise RestoreKeyError("the import batch ran but answered nothing - the certificate's state is unknown.")
+    return {"certificate_name": str(row[0]), "thumbprint": str(row[1] or "").lower(),
+            "imported": bool(row[2]), "ok": True}
 
-    return {"certificate_name": name, "thumbprint": thumbprint, "imported": True, "ok": True}
+
+def _last_row(cursor: Any) -> Any:
+    """The batch's one result set - after the statements that return none, on either driver."""
+    row = None
+    while True:
+        try:
+            fetched = cursor.fetchone()
+        except Exception:  # noqa: BLE001 - "no results" from a statement without a result set.
+            fetched = None
+        if fetched is not None:
+            row = fetched
+        if not cursor.nextset():
+            return row
+
+
+def _through_sqlcmd(sqlcmd: dict[str, Any], batch: str) -> dict[str, Any]:
+    from db_ops.common import sqlcmd_run
+
+    answer = sqlcmd_run.run_sqlcmd({**sqlcmd, "sql": batch})
+    if answer.get("timed_out") or answer.get("exit_code") != 0:
+        detail = (str(answer.get("stdout") or "") + "\n" + str(answer.get("stderr") or "")).strip()
+        raise RestoreKeyError(f"the import batch failed (exit {answer.get('exit_code')}): {detail[-800:]}")
+    found = sqlserver_certificate.parse_marker(answer.get("stdout") or "")
+    if found is None:
+        raise RestoreKeyError("the import batch ran but printed no result line - the certificate's state is unknown.")
+    return {**found, "ok": True}

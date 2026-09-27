@@ -23,6 +23,7 @@ class RecordingSqlRunStore:
 
     def update_sql_run(self, **kwargs):
         self.updated.append(kwargs)
+        return True  # the store answers whether its write landed
 
     def insert_telegram_send_message(self, **kwargs):
         self.messages.append(kwargs)
@@ -311,6 +312,28 @@ def test_a_reaped_run_alerts_the_error_chat_like_any_other_failure():
     assert "timeout_seconds=1" in store.messages[0]["message_text"]
     # The lesson of 2026-09-03: the row is closed but the server may not be.
     assert "may still be" in store.messages[0]["message_text"]
+
+
+def test_two_scans_that_find_the_same_dead_run_report_it_once(tmp_path, monkeypatch):
+    """APP-SQL_TASKS runs ten scans at once; on 2026-09-26 two of them read the same `running` row,
+    each closed it and each alerted, so three dead runs reached the chat twice. The close is a claim
+    now - only the scan whose write lands reports - and it is held by the real store, not a fake."""
+    store = DbOpsStore(tmp_path / "db_ops.sqlite")
+    store.initialize()
+    run_id = insert_running_sql(store, started_at="2026-01-01T00:00:00Z")
+    # What each scan read before either closed it: that row, with no live claim on it.
+    listing = _stale_running_row(sql_run_id=run_id)
+    target = sql_target(timeout=1, alert_on_error=runner.NotifyRule(enabled=True, telegram_chat="sql"))
+    sent: list[dict] = []
+    monkeypatch.setattr(runner, "enqueue_sql_task_message", lambda **kwargs: sent.append(kwargs))
+
+    for _scan in range(2):
+        runner.mark_stale_running_sql_runs(
+            store=store, commands={9: sql_command()}, targets=[target], running_runs=listing,
+            telegram_groups={"sql": "chat-7"}, logger=FakeLogger())
+
+    assert len(sent) == 1
+    assert [row["sql_run_id"] for row in store.fetch_running_sql_runs()] == []
 
 
 def test_the_alert_says_when_the_run_died_and_on_which_clock():

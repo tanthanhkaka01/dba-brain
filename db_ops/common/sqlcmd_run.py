@@ -37,6 +37,10 @@ VIA = ("local", "ssh", "winrm")
 #: Where the Microsoft tools install on Linux. `sqlcmd` is not on a login shell's PATH by default.
 _LINUX_TOOL_PATH = "export PATH=$PATH:/opt/mssql-tools/bin:/opt/mssql-tools18/bin; "
 
+#: `sqlcmd` inside Microsoft's SQL Server image, which does not put it on PATH either. A request
+#: that names a `container` and leaves `sqlcmd_path` at the bare default means this one.
+CONTAINER_SQLCMD = "/opt/mssql-tools18/bin/sqlcmd"
+
 
 class SqlcmdRunError(ValueError):
     """The request cannot be run as written."""
@@ -54,6 +58,22 @@ def _auth_args(request: dict[str, Any]) -> list[str]:
     if not username or not password:
         raise SqlcmdRunError("a SQL login needs both username and password; give neither for -E.")
     return ["-U", username, "-P", password]
+
+
+def sqlcmd_words(request: dict[str, Any]) -> list[str]:
+    """The ``sqlcmd`` to start: the path itself, or ``docker exec <container> <path>``.
+
+    A SQL Server in a container on a host with no tools of its own had no way in: this ran
+    ``sqlcmd`` on the host, and a lab VM with only Docker on it has none (2026-09-27 - the restore
+    of a production server into a lab VM needed a wrapper script on the VM to get past it). The container's own
+    ``sqlcmd`` sees the same ``localhost,1433`` and the same bind-mounted backup path, so nothing
+    else about the batch changes.
+    """
+    path = str(request.get("sqlcmd_path") or "").strip()
+    container = str(request.get("container") or "").strip()
+    if not container:
+        return [path or "sqlcmd"]
+    return ["docker", "exec", container, CONTAINER_SQLCMD if path in ("", "sqlcmd") else path]
 
 
 def _timeout_args(request: dict[str, Any]) -> list[str]:
@@ -99,7 +119,7 @@ def _run_ssh(request: dict[str, Any], host: dict[str, Any], *, timeout: int,
                          "port": host.get("port") or 22, "username": host.get("username"),
                          "password": host.get("password") or "", "key_file": host.get("key_file") or ""})
     remote = (_LINUX_TOOL_PATH
-              + f"{shlex.quote(str(request.get('sqlcmd_path') or 'sqlcmd'))} "
+              + " ".join(shlex.quote(word) for word in sqlcmd_words(request)) + " "
               + f"-S {shlex.quote(str(request['instance']))} "
               + "-C " + " ".join(shlex.quote(arg) for arg in _auth_args(request)) + " "
               + " ".join(_timeout_args(request)) + " -b "
@@ -175,7 +195,7 @@ def winrm_argv(request: dict[str, Any], host: dict[str, Any], *, timeout: int) -
 
 
 def local_argv(request: dict[str, Any]) -> list[str]:
-    return [str(request.get("sqlcmd_path") or "sqlcmd"), "-S", str(request["instance"]), "-C",
+    return [*sqlcmd_words(request), "-S", str(request["instance"]), "-C",
             *_auth_args(request), *_timeout_args(request), "-b", "-Q", str(request["sql"])]
 
 
@@ -192,6 +212,10 @@ def run_sqlcmd(request: dict[str, Any]) -> dict[str, Any]:
     host = request.get("host") or {}
     if via != "local" and not (isinstance(host, dict) and str(host.get("host") or "").strip()):
         raise SqlcmdRunError(f'via {via} needs "host": the machine sqlcmd runs on, with its login.')
+    if via == "winrm" and str(request.get("container") or "").strip():
+        raise SqlcmdRunError(
+            "container is for a Linux host (via ssh) or this machine (via local); a Windows host "
+            "runs its own sqlcmd - leave container out.")
     timeout = int(request.get("timeout_seconds") or 0)
     started = time.monotonic()
     if via == "ssh":

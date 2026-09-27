@@ -1979,12 +1979,26 @@ class DbOpsStore:
         result: dict | list | None = None,
         error_text: str | None = None,
         metadata: dict | None = None,
-    ) -> None:
+        only_if_status: str | None = None,
+    ) -> bool:
+        """Write a run's outcome; True when the row was changed.
+
+        ``only_if_status`` makes the write a claim: it lands only while the row still has that
+        status, so of two processes closing the same run exactly one is told it did. The stale-run
+        reaper needs that - ``APP-SQL_TASKS`` runs ten scans at once, each reads the same ``running``
+        row, and each closed it and sent its alert, so one dead run was reported twice (2026-09-26).
+        """
         self.initialize()
         result_json = json.dumps(result if result is not None else {}, ensure_ascii=False, sort_keys=True)
         metadata_json = json.dumps(metadata or {}, ensure_ascii=False, sort_keys=True)
+        values = [status, level, message, finished_at, duration_ms, row_count, result_json,
+                  error_text, metadata_json, sql_run_id]
+        guard = ""
+        if only_if_status is not None:
+            guard = " AND status = ?"
+            values.append(only_if_status)
         with self.connect() as conn:
-            conn.execute(
+            cursor = conn.execute(
                 """
                 UPDATE sql_runs
                 SET
@@ -1997,21 +2011,10 @@ class DbOpsStore:
                     result_json = ?,
                     error_text = ?,
                     metadata_json = ?
-                WHERE sql_run_id = ?;
-                """,
-                (
-                    status,
-                    level,
-                    message,
-                    finished_at,
-                    duration_ms,
-                    row_count,
-                    result_json,
-                    error_text,
-                    metadata_json,
-                    sql_run_id,
-                ),
+                WHERE sql_run_id = ?""" + guard + ";",
+                tuple(values),
             )
+            return int(cursor.rowcount or 0) > 0
 
     def fetch_latest_done_or_running_sql_runs_by_run_key(self) -> dict[str, sqlite3.Row]:
         self.initialize()

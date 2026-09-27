@@ -14,8 +14,9 @@ shutdown codes.
 
 **Bounded, deliberately.** Retrying forever turns a store that has really gone away into a daemon
 that looks alive and schedules nothing, which is the failure this module is against, one level up.
-The budget below is what separates "restarted" from "gone": past it the error is raised exactly as
-it is today, and the process exits loudly.
+The budget below is what separates "coming back" from "gone": past it the error is raised exactly as
+it is today, and the process exits loudly. It is hours, not minutes, since a full disk under the store
+took a person an hour to clear and the daemon that had given up was all that stayed down.
 
 This module holds the *rule* and no I/O, so it can be read and tested without a database — the whole
 point of :mod:`db_ops.lib`. The sleeping and the logging belong to the caller.
@@ -32,10 +33,16 @@ from dataclasses import dataclass, field
 #: server says it is on its way down or not yet up — ``57P03`` is the one that ended 0.18.0.
 #: ``53300`` is *too many connections*: a real limit, but one that clears, and every db_ops process
 #: opens its connection per statement and closes it, so waiting is the correct response.
+#:
+#: ``53000``/``53100``/``53200`` are the store out of disk or memory. Not a restart, but the same
+#: kind of answer: the statement was right and the server could not take it now. On 2026-09-27 a full
+#: disk under the store raised ``53100`` on a write, the daemon let it out and exited, and a PC node
+#: with nothing to restart it lost its soak - while the store came back 62 minutes later, once a
+#: person had freed the disk.
 TRANSIENT_SQLSTATES: frozenset[str] = frozenset({
     "08000", "08001", "08003", "08004", "08006", "08007", "08P01",
     "57P01", "57P02", "57P03",
-    "53300",
+    "53000", "53100", "53200", "53300",
 })
 
 #: Read only when there is no SQLSTATE to read: a connection lost at the socket never reaches the
@@ -62,11 +69,15 @@ TRANSIENT_PHRASES: tuple[str, ...] = (
     "timeout expired",
 )
 
-#: How long the daemon may wait in total for one outage before letting the error out. Ten minutes
-#: covers a container restart, a failover and a service restart on the store host; it does not cover
-#: a store that has been moved, taken down for maintenance or lost its credentials, and those must
-#: still reach a person.
-BUDGET_SECONDS: int = 600
+#: How long the daemon may wait in total for one outage before letting the error out.
+#:
+#: Ten minutes until 0.24.0, which covered a restart and nothing a person has to do: the full disk of
+#: 2026-09-27 took 62 minutes to clear, and the daemon that gave up on it was the one thing that did
+#: not come back. Six hours covers a person being reached at night. Waiting is not silence - every
+#: wait is written to the error log - and a store that has been moved or lost its credentials still
+#: answers with a definite code (``28P01``, ``3D000``) that is never waited on, so it still reaches a
+#: person at once.
+BUDGET_SECONDS: int = 6 * 60 * 60
 
 #: The longest single wait. A short first wait catches the two-second restart without losing a
 #: scheduling cycle; the cap keeps the budget from being spent in three sleeps.

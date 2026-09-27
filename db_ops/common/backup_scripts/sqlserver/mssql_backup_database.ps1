@@ -169,6 +169,18 @@ BACKUP CERTIFICATE [$certName]
         if (-not $result.ok) { Die "could not export the backup certificate to ${certDir}: $($result.output)" }
         "exported backup certificate: $certDir\$certName.cer"
     }
+    # The engine writes the pair readable by its own service account only, so a restore that reads
+    # the backups through the share was refused the certificate sitting beside them (2026-09-27:
+    # the source's share login read every .bak and .trn and got "access denied" on _cert). Given the
+    # folder's own permissions - the backups' - on every run, so a pair exported by an older
+    # version is opened too. The .pvk stays encrypted by the backup passphrase either way.
+    foreach ($part in @("$certDir\$certName.cer", "$certDir\$certName.pvk")) {
+        $out = & icacls $part /reset /Q 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            "warning: could not give $part the backups' own permissions ($(@($out) -join ' ')); a restore " +
+            "reading it through the share will be refused - its entry can name backup_certificate.source_dir"
+        }
+    }
     $encryptClause = ", ENCRYPTION (ALGORITHM = AES_256, SERVER CERTIFICATE = [$certName])"
 }
 

@@ -105,9 +105,15 @@ hex thumbprint rather than the file sitting next to the backup.
    "password": "...",              // decrypts the private key: the backup's own passphrase
    "dry_run": false,
    "target": {"host": "...", "port": 1433, "username": "sa", "password": "..."}}
+                                   // OR "sqlcmd": the run-sqlcmd request without its sql -
+                                   // run where the SQL Server is, as restore-full can
 
 Paths are resolved BY THE INSTANCE, so on a container target they are container paths.
-data: {"certificate_name", "thumbprint", "imported"}
+The certificate is found by THUMBPRINT (the SHA-1 of the .cer file) and nothing is dropped: one
+already there is left alone (its private key added if it had none), and a name that belongs to a
+different certificate becomes <name>_<first 8 hex digits of the thumbprint>.
+data: {"certificate_name", "thumbprint", "imported"}   // the name that holds it now;
+                                                      // imported false = it was already there
 """
 
 _LEVELS = {"restore-full": "full", "restore-diff": "diff", "restore-log": "log"}
@@ -163,7 +169,8 @@ def _dispatch(operation: str, request: dict) -> tuple[dict, str]:
         from db_ops.common.restorekey import import_key
 
         data = import_key(request)
-        what = "would import" if data.get("dry_run") else "imported"
+        what = ("would import" if data.get("dry_run") else "imported" if data.get("imported")
+                else "already present - nothing changed")
         return data, f"Certificate {data['certificate_name']} {what}."
 
     if operation == "restore-metadata":

@@ -141,6 +141,27 @@ class DatabaseRestoreMapping:
     target_database: str = ""
 
 
+#: The name dbabrain's own SQL Server backup job gives its encryption certificate.
+DEFAULT_BACKUP_CERT_NAME = "db_ops_backup_cert"
+
+
+@dataclass(frozen=True)
+class BackupCertificateSource:
+    """Where an SMB restore finds the certificate dbabrain's OWN backups were encrypted with.
+
+    The backup job exports it beside the backups, as ``<share>/_cert/<name>.cer`` + ``.pvk``, and
+    until 0.24.1 an SMB entry could take a certificate only from a Vault URL - so a share of
+    dbabrain's own backups could not be restored anywhere the certificate was not already
+    (2026-09-27, a production server into a lab VM). ``source_dir`` is the same folder as the SOURCE host sees
+    it, read over that host's login when the share refuses the pair: a pair exported by a version
+    before 0.24.1 is readable by the SQL Server service account only.
+    """
+
+    name: str
+    password_ref: str
+    source_dir: str = ""
+
+
 @dataclass(frozen=True)
 class BackupRestoreConfig:
     prod_backup_share: Path
@@ -187,6 +208,10 @@ class BackupRestoreConfig:
     certificate_api_url: str = ""
     certificate_api_token_ref: str = "TOKEN_192_0_2_112_VAULT"
     certificate_api_verify_tls: bool = False
+    backup_certificate: BackupCertificateSource | None = None
+    # The container the target's SQL Server runs in: sqlcmd runs inside it (`docker exec`), for a
+    # host with no sqlcmd of its own - a lab VM with only Docker on it has none.
+    sql_container: str = ""
     execution_mode: str = "sync"
     active: bool = True
     # `DBCC CHECKDB` on every restored database, after recovery. On unless the entry says
@@ -553,6 +578,9 @@ def parse_restore_config(raw: dict[str, Any]) -> BackupRestoreConfig:
         certificate_api_url=str(values.get("certificate_api_url") or values.get("api_link_get_cer") or ""),
         certificate_api_token_ref=str(values.get("certificate_api_token_ref") or "TOKEN_192_0_2_112_VAULT"),
         certificate_api_verify_tls=_parse_bool(values.get("certificate_api_verify_tls"), default=False),
+        backup_certificate=_parse_backup_certificate(
+            values.get("backup_certificate"), restore_id=restore_id_for_label),
+        sql_container=str(values.get("sql_container") or "").strip(),
         execution_mode=_parse_execution_mode(values.get("execution_mode")),
         active=_parse_bool(values.get("active"), default=True),
         checkdb=_parse_bool(values.get("checkdb"), default=True),
@@ -562,6 +590,24 @@ def parse_restore_config(raw: dict[str, Any]) -> BackupRestoreConfig:
         notify=parse_backup_restore_notify(
             values, context=f"backup_restore.restores[{values.get('restore_id') or '?'}]"
         ),
+    )
+
+
+def _parse_backup_certificate(raw: Any, *, restore_id: str) -> BackupCertificateSource | None:
+    if raw is None or raw == {}:
+        return None
+    where = f"backup_restore.restores[{restore_id or '?'}].source.backup_certificate"
+    if not isinstance(raw, dict):
+        raise ValueError(f"{where} must be an object: name, password_ref, source_dir.")
+    password_ref = str(raw.get("password_ref") or "").strip()
+    if not password_ref:
+        raise ValueError(
+            f"{where}.password_ref is required: the secret ref of the backup passphrase, which "
+            "decrypts the certificate's private key.")
+    return BackupCertificateSource(
+        name=str(raw.get("name") or DEFAULT_BACKUP_CERT_NAME).strip(),
+        password_ref=password_ref,
+        source_dir=str(raw.get("source_dir") or "").strip(),
     )
 
 

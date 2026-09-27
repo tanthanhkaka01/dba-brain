@@ -49,6 +49,23 @@ def test_every_connection_and_shutdown_code_is_waited_out(code):
     assert store_outage.is_transient(FakePgError(code, "…"))
 
 
+@pytest.mark.parametrize("code", ["53000", "53100", "53200"])
+def test_a_store_out_of_disk_or_memory_is_waited_out_too(code):
+    """2026-09-27: a full disk under the store raised 53100 on a write, the daemon exited, and a PC
+    node with nothing to restart it lost its soak - the store itself was back 62 minutes later."""
+    assert store_outage.is_transient(FakePgError(code, 'could not extend file "base/1/2": No space left on device'))
+
+
+def test_the_budget_outlasts_the_hour_a_person_took_to_free_that_disk():
+    waiter = store_outage.OutageWaiter()
+    error = FakePgError("53100", "No space left on device")
+    waited = 0
+    while waited < 62 * 60:
+        wait = waiter.wait_for(error)
+        assert wait is not None, f"gave up after {waited} s"
+        waited += wait
+
+
 @pytest.mark.parametrize("code", ["42P01", "42703", "23505", "28P01", "3D000"])
 def test_a_definite_answer_is_never_retried(code):
     """A missing table, a wrong column, a duplicate key, a rejected password, a missing database.

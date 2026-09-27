@@ -145,6 +145,12 @@ A 429 is Telegram asking for a pause, not refusing the message, and it says for 
 Either way it is **logged** — a warning for a deferral, an error for a refusal. A message nobody
 received is a message that did not happen, and it belongs where an operator reads failures.
 
+**A pass has a time budget (`SEND_BUDGET_SECONDS`, 180 s).** It starts no further message after
+it, and what is left stays at `send_status = 0` for the next pass, a second later, in the same
+order (`deferred` in the step's answer). The daemon kills the whole workflow at its 300 s
+timeout: on 2026-09-26 one 49-part message waited out the chat's limit past it, and the pass was
+killed between two rows with every message behind it still queued.
+
 ## How to Run
 
 ```powershell

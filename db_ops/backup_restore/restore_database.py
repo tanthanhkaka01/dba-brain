@@ -261,6 +261,25 @@ def _linux_file_mtime(config: BackupRestoreConfig, path: str | Path) -> float | 
         return None
 
 
+def _missing_backup_paths(config: BackupRestoreConfig, paths: list[Path] | list[str]) -> set[str]:
+    """The chain's files that are NOT on the target, asked in ONE session.
+
+    Asked one file at a time until 0.24.1: a FULL and its logs are a session each, every session a
+    fresh SSH connection, and on 2026-09-27 a lab VM dropped one of them (``WinError 10054``) while
+    a 97-log chain was being checked - which failed the database, and cost 2 min 46 s before it
+    did. The answer is compared by :func:`_normalize_restore_path`.
+    """
+    if not paths:
+        return set()
+    if not config.is_linux:
+        return {_normalize_restore_path(path) for path in paths if not Path(path).is_file()}
+    posix = [str(path).replace("\\", "/") for path in paths]
+    script = "\n".join(f"[ -f {shlex.quote(path)} ] || printf '%s\\n' {shlex.quote(path)}" for path in posix)
+    with open_ssh_connection(config) as ssh:
+        answer = ssh.run_script(script)
+    return {_normalize_restore_path(line.strip()) for line in answer.stdout.splitlines() if line.strip()}
+
+
 def _backup_path_exists(config: BackupRestoreConfig, path: str | Path) -> bool:
     if not config.is_linux:
         return Path(path).is_file()
@@ -586,8 +605,9 @@ def run_restore_database(
     if selected_diff_backup:
         selected_chain.append(selected_diff_backup)
     selected_chain.extend(selected_log_backups)
+    missing = _missing_backup_paths(restore_config, selected_chain)
     for selected_path in selected_chain:
-        if not _backup_path_exists(restore_config, selected_path):
+        if _normalize_restore_path(selected_path) in missing:
             reason = "file_not_copied" if Path(selected_path).suffix.lower() in {".bak", ".trn"} else "path_missing"
             _emit_restore_log(
                 logger,
@@ -1341,9 +1361,9 @@ def ensure_source_certificate_with_events(
     dry_run: bool = False,
     logger: object | None = None,
 ) -> dict[str, object]:
-    from db_ops.backup_restore.certificate import ensure_source_certificate
+    from db_ops.backup_restore.certificate import ensure_source_certificate, has_certificate_source
 
-    if not config.certificate_api_url:
+    if not has_certificate_source(config):
         result = ensure_source_certificate(config=config, dry_run=dry_run, logger=logger)
         _emit_restore_log(
             logger,
@@ -1359,6 +1379,7 @@ def ensure_source_certificate_with_events(
         "source_id": config.source_id,
         "target_id": config.target_id,
         "certificate_api_configured": bool(config.certificate_api_url),
+        "certificate_from_backups": config.backup_certificate is not None,
         "dry_run": dry_run,
     }
     _emit_restore_log(
@@ -1493,6 +1514,9 @@ def _sqlcmd_request(cmd: list[str], config: BackupRestoreConfig, *, via: str) ->
         "timeout_seconds": config.restore_command_timeout_seconds,
         "via": via,
     }
+    if config.sql_container and via != "winrm":
+        # The container's own sqlcmd: the target host may have none (a lab VM with only Docker).
+        request["container"] = config.sql_container
     if via != "local":
         host_password = ""
         if config.vm_password_env and (via == "ssh" or config.vm_username):

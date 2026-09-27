@@ -24,6 +24,8 @@ Run ONE sqlcmd batch where the SQL Server is. Reads no config - every value is r
   {"sql": "RESTORE DATABASE [APPDB] FROM DISK = N'/import/APPDB_FULL.bak' WITH NORECOVERY, STATS = 10",
    "instance": "localhost,1433",        // -S, as the host running sqlcmd sees it
    "sqlcmd_path": "sqlcmd",
+   "container": "MSSQL_1433",           // optional: run the container's own sqlcmd (docker exec)
+                                        // on a host with none; ssh / local only
    "username": "sa", "password": "...", // a SQL login; give neither for -E
    "login_timeout_seconds": 30, "query_timeout_seconds": 0,
    "timeout_seconds": 0,                // the whole run; 0 = none

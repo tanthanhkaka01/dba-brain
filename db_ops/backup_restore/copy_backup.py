@@ -121,15 +121,73 @@ def list_backup_files(source_dir: Path, patterns: tuple[str, ...]) -> list[Path]
     return _scan_backup_files(source_dir=source_dir, patterns=patterns, cutoff=None)
 
 
+def mapped_database_folders(config: BackupRestoreConfig) -> list[str]:
+    """The folders a copy reads: one per mapped source database, as the entry spells it - or ``[]``
+    when the entry maps none, which means everything on the share.
+
+    The backup jobs write ``<share>/<database>/<FULL|DIFF|LOG>/``, and the restore looks for
+    ``<import>/<source_database>/FULL``. The Linux node's copy (``smbclient``) always read only the
+    mapped folders; the Windows node's two did not, and took every recent file on the WHOLE share
+    - on 2026-09-27, an entry mapping two databases of a production server would have staged the third's 30 G
+    full and a day of its logs into a lab VM with 17 G free. Reading ``<share>/<spelling>`` also
+    stages it under that spelling, which is the one the restore then asks the Linux target for.
+    """
+    return [mapping.source_database for mapping in config.databases if mapping.source_database]
+
+
+def newest_backup_hint(config: BackupRestoreConfig, *, now: float | None = None) -> str:
+    """What to add when the copy window holds nothing: the newest matching file there IS, and how
+    long before the window it was written.
+
+    "Selected no files" read like a window that was set too narrow. On 2026-09-27 it meant the
+    share was dead: a production server's Agent share had had no new file for eight days, because dbabrain's
+    own backup job writes that server's backups somewhere else now - and every entry for that server still
+    named the old share. Only asked on this failure, so it may list the folders it reads.
+    """
+    from db_ops.backup_restore import share
+
+    root = str(config.prod_backup_share).replace("/", "\\").rstrip("\\")
+    patterns = [pattern.lower() for pattern in config.copy_file_patterns]
+    folders = mapped_database_folders(config)
+    newest: tuple[float, str] | None = None
+    try:
+        password = resolve_password_ref(config.prod_smb_password_env) if config.prod_smb_password_env else ""
+        for listed in ([f"{root}\\{name}" for name in folders] if folders else [root]):
+            for item in share.list_files(listed, username=config.prod_smb_username or "", password=password):
+                modified = item.get("modified_epoch")
+                name = str(item.get("name") or "").lower()
+                if modified is None or not any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns):
+                    continue
+                if newest is None or float(modified) > newest[0]:
+                    newest = (float(modified), f"{listed}\\{item['path']}")
+    except Exception as exc:  # noqa: BLE001 - the hint must never replace the error it explains.
+        return f" - and the share could not be listed to say more ({exc})"
+    if newest is None:
+        return " - nothing under it matches the entry's copy_file_patterns at all"
+    written = dt.datetime.fromtimestamp(newest[0], tz=dt.timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
+    cutoff, _end = _copy_window_timestamps(config, now=now)
+    if cutoff is None or newest[0] >= cutoff:
+        return f" - the newest matching file there is {newest[1]}, written {written}"
+    days = (cutoff - newest[0]) / 86400
+    return (f" - the newest matching file there is {newest[1]}, written {written}, {days:.1f} day(s) "
+            "before the window opens: the source no longer writes its backups to this share, or the "
+            "entry names the wrong one")
+
+
 def list_recent_backup_files(config: BackupRestoreConfig | None = None, *, now: float | None = None) -> list[Path]:
     restore_config = config or load_restore_config()
     cutoff, end_ts = _copy_window_timestamps(restore_config, now=now)
-    return _scan_backup_files(
-        source_dir=restore_config.source_backup_dir,
-        patterns=restore_config.copy_file_patterns,
-        cutoff=cutoff,
-        end_ts=end_ts,
-    )
+    root = restore_config.source_backup_dir
+    folders = mapped_database_folders(restore_config)
+    found: list[tuple[float, Path]] = []
+    for source_dir in ([root / name for name in folders] if folders else [root]):
+        found.extend(_scan_backup_files_with_mtime(
+            source_dir=source_dir,
+            patterns=restore_config.copy_file_patterns,
+            cutoff=cutoff,
+            end_ts=end_ts,
+        ))
+    return [path for _, path in sorted(found, key=lambda item: (item[0], str(item[1]).lower()))]
 
 
 def _copy_window_timestamps(config: BackupRestoreConfig, *, now: float | None = None) -> tuple[float | None, float | None]:
@@ -141,6 +199,17 @@ def _copy_window_timestamps(config: BackupRestoreConfig, *, now: float | None = 
 
 
 def _scan_backup_files(*, source_dir: Path, patterns: tuple[str, ...], cutoff: float | None, end_ts: float | None = None) -> list[Path]:
+    return [path for _, path in _scan_backup_files_with_mtime(
+        source_dir=source_dir, patterns=patterns, cutoff=cutoff, end_ts=end_ts)]
+
+
+def _scan_backup_files_with_mtime(*, source_dir: Path, patterns: tuple[str, ...], cutoff: float | None,
+                                  end_ts: float | None = None) -> list[tuple[float, Path]]:
+    """``(mtime, path)`` for every file under ``source_dir`` matching a pattern, in the window,
+    oldest first. A folder that is not there answers nothing - a mapped database with no backups
+    yet is the restore's to report, not the copy's."""
+    if not source_dir.is_dir():
+        return []
     seen: set[str] = set()
     files: dict[str, tuple[float, Path]] = {}
     for pattern in patterns:
@@ -160,7 +229,7 @@ def _scan_backup_files(*, source_dir: Path, patterns: tuple[str, ...], cutoff: f
             if end_ts is not None and file_stat.st_mtime > end_ts:
                 continue
             files[key] = (file_stat.st_mtime, path)
-    return [path for _, path in sorted(files.values(), key=lambda item: (item[0], str(item[1]).lower()))]
+    return sorted(files.values(), key=lambda item: (item[0], str(item[1]).lower()))
 
 
 def copy_backup_file(source_file: Path, *, source_root: Path, target_root: Path) -> CopyBackupFileResult:
@@ -193,7 +262,8 @@ def list_recent_backup_files_on_share(
 ) -> list[Path]:
     """The recent backups on a Windows source share, read through ``common.cli smb-list`` (R10).
 
-    The same selection the PowerShell scan made until 0.24.0: every file whose NAME matches a copy
+    The same selection the PowerShell scan made until 0.24.0 - in the mapped database folders only
+    since 0.24.1 (:func:`mapped_database_folders`): every file whose NAME matches a copy
     pattern (case-insensitive, as ``Get-ChildItem -Include`` matched) and whose last write falls in
     the copy window - oldest first, then by full path.
     """
@@ -204,17 +274,20 @@ def list_recent_backup_files_on_share(
     root = str(config.prod_backup_share).replace("/", "\\").rstrip("\\")
     patterns = [pattern.lower() for pattern in config.copy_file_patterns]
     chosen: list[tuple[float, Path]] = []
-    for item in share.list_files(config.prod_backup_share, username=config.prod_smb_username or "",
-                                 password=password):
-        name = str(item.get("name") or "").lower()
-        modified = item.get("modified_epoch")
-        if not any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns) or modified is None:
-            continue
-        if cutoff_ts is not None and float(modified) < cutoff_ts:
-            continue
-        if end_ts is not None and float(modified) > end_ts:
-            continue
-        chosen.append((float(modified), Path(root + "\\" + str(item["path"]))))
+    # One listing per mapped database folder, as the Linux node's copy does - never the whole
+    # share, whose other databases this entry does not restore (mapped_database_folders).
+    folders = mapped_database_folders(config)
+    for listed in ([f"{root}\\{name}" for name in folders] if folders else [root]):
+        for item in share.list_files(listed, username=config.prod_smb_username or "", password=password):
+            name = str(item.get("name") or "").lower()
+            modified = item.get("modified_epoch")
+            if not any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns) or modified is None:
+                continue
+            if cutoff_ts is not None and float(modified) < cutoff_ts:
+                continue
+            if end_ts is not None and float(modified) > end_ts:
+                continue
+            chosen.append((float(modified), Path(listed + "\\" + str(item["path"]))))
     return [path for _, path in sorted(chosen, key=lambda item: (item[0], str(item[1]).lower()))]
 
 
@@ -785,6 +858,7 @@ def _smbclient_download_selected_to_staging(
         raise RuntimeError(
             f"smbclient source scan selected no files from //{host}/{share} "
             f"{_format_copy_window(config)} patterns={','.join(config.copy_file_patterns)}"
+            + newest_backup_hint(config)
         )
     _log_progress(
         logger,

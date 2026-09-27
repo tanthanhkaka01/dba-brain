@@ -143,21 +143,53 @@ phase restore-key "import the backup-encryption certificate"
 cert_dir="${backup_dir%/}/_cert"
 if in_t "test -f '${cert_dir}/${cert_name}.cer'"; then
     [ -n "$enc_password" ] || die "the backup set carries an encryption certificate but BACKUP_ENCRYPTION_PASSWORD is not set."
+    # The batch of db_ops/lib/sqlserver_certificate.py, written out because a shell cannot import
+    # it - keep the two the same. By THUMBPRINT (the SHA-1 of the .cer), never dropping anything:
+    # this used to drop any certificate of this name, and on a target dbabrain also backs up that
+    # is the target's own backup certificate (db_ops_backup_cert is the default everywhere).
+    # CREATE/ALTER CERTIFICATE take no variables, so the values inside sp_executesql are escaped
+    # twice: once for their own literal, once for the literal that carries it.
     esc_pw="$(sql_escape "$enc_password")"
+    esc_pw2="$(sql_escape "$esc_pw")"
     esc_cert="$(sql_escape "$cert_name")"
-    run_sql "
-IF NOT EXISTS (SELECT 1 FROM sys.symmetric_keys WHERE name = '##MS_DatabaseMasterKey##')
-    CREATE MASTER KEY ENCRYPTION BY PASSWORD = '${esc_pw}';
-IF EXISTS (SELECT 1 FROM sys.certificates WHERE name = '${esc_cert}')
-    DROP CERTIFICATE [${cert_name}];
-CREATE CERTIFICATE [${cert_name}]
-    FROM FILE = '${cert_dir}/${cert_name}.cer'
-    WITH PRIVATE KEY (
-        FILE = '${cert_dir}/${cert_name}.pvk',
-        DECRYPTION BY PASSWORD = '${esc_pw}'
-    );
-" >/dev/null || die "could not import the backup certificate; the encrypted backups cannot be read without it."
-    printf 'certificate_imported=%s\n' "$cert_name"
+    esc_cer="$(sql_escape "${cert_dir}/${cert_name}.cer")"
+    esc_cer2="$(sql_escape "$esc_cer")"
+    esc_pvk2="$(sql_escape "$(sql_escape "${cert_dir}/${cert_name}.pvk")")"
+    with_key="WITH PRIVATE KEY (FILE = N''${esc_pvk2}'', DECRYPTION BY PASSWORD = N''${esc_pw2}'')"
+    imported="$(run_sql "
+SET NOCOUNT ON;
+IF NOT EXISTS (SELECT 1 FROM master.sys.symmetric_keys WHERE name = N'##MS_DatabaseMasterKey##')
+    CREATE MASTER KEY ENCRYPTION BY PASSWORD = N'${esc_pw}';
+DECLARE @thumbprint varbinary(64) =
+    (SELECT HASHBYTES('SHA1', f.BulkColumn) FROM OPENROWSET(BULK N'${esc_cer}', SINGLE_BLOB) AS f);
+DECLARE @present sysname =
+    (SELECT TOP (1) name FROM master.sys.certificates WHERE thumbprint = @thumbprint);
+DECLARE @name sysname = N'${esc_cert}';
+DECLARE @imported bit = 0;
+DECLARE @sql nvarchar(max);
+IF @present IS NULL
+BEGIN
+    IF EXISTS (SELECT 1 FROM master.sys.certificates WHERE name = @name)
+        SET @name = @name + N'_' + LOWER(CONVERT(varchar(8), SUBSTRING(@thumbprint, 1, 4), 2));
+    SET @sql = N'USE master; CREATE CERTIFICATE ' + QUOTENAME(@name) + N' FROM FILE = N''${esc_cer2}'' ${with_key}';
+    EXEC sys.sp_executesql @sql;
+    SET @imported = 1;
+END
+ELSE
+BEGIN
+    SET @name = @present;
+    IF EXISTS (SELECT 1 FROM master.sys.certificates WHERE name = @present AND pvt_key_encryption_type = 'NA')
+    BEGIN
+        SET @sql = N'USE master; ALTER CERTIFICATE ' + QUOTENAME(@present) + N' ${with_key}';
+        EXEC sys.sp_executesql @sql;
+        SET @imported = 1;
+    END
+END
+DECLARE @hex varchar(64) = CONVERT(varchar(64), @thumbprint, 2);
+PRINT N'DB_OPS_CERTIFICATE|' + @name + N'|' + @hex + N'|' + CASE WHEN @imported = 1 THEN N'1' ELSE N'0' END;
+")" || die "could not import the backup certificate; the encrypted backups cannot be read without it."
+    held_by="$(printf '%s\n' "$imported" | tr -d '\r' | grep '^DB_OPS_CERTIFICATE|' | tail -1 | cut -d'|' -f2)"
+    printf 'certificate_imported=%s\n' "${held_by:-$cert_name}"
 else
     printf 'no certificate exported with the backup set; treating the backups as unencrypted\n'
 fi

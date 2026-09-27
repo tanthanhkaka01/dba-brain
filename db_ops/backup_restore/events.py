@@ -222,7 +222,9 @@ def _safe_push_telegram(
             # source_id identifies the run this message belongs to, so a queued message can be
             # traced back to its restore/backup entry without parsing the text.
             "source_id": f"{command}:{run_id}" if command else run_id,
-            "metadata": metadata,
+            # The same summary the text carries: the queue row is for tracing a message, and the
+            # run's full output is already on its job_runs row.
+            "metadata": telegram_metadata(metadata),
         })
     except Exception as exc:  # noqa: BLE001 - Telegram push must not fail the operation.
         print(f"backup_restore event telegram queue failed: {exc}", file=sys.stderr)
@@ -349,8 +351,49 @@ def _format_telegram_message(*, level: str, message: str, metadata: dict[str, An
     # The clip is gone (the send layer splits instead) but the line stays: an id on its own line
     # survives a split intact, while one inside a long JSON blob lands in whichever part it falls.
     id_key, id_value = resolve_run_id(str(metadata.get("command") or ""), metadata)
-    payload = json.dumps(metadata, ensure_ascii=False, sort_keys=True)
+    payload = json.dumps(telegram_metadata(metadata), ensure_ascii=False, sort_keys=True)
+    if len(payload) > MAX_TELEGRAM_PAYLOAD_CHARS:
+        payload = (payload[:MAX_TELEGRAM_PAYLOAD_CHARS]
+                   + f" ... ({len(payload) - MAX_TELEGRAM_PAYLOAD_CHARS} characters more; the whole "
+                   "output is on the run's job_runs row)")
     return f"{level.upper()}|{socket.gethostname()}|{message}\n{id_key}={id_value}\n{payload}"
+
+
+#: What a message may carry of its run's output, beyond its header and run id: about three parts.
+#: The rest is on the run's `job_runs` row, which is where anyone reading it this closely goes.
+MAX_TELEGRAM_PAYLOAD_CHARS = 10_000
+
+#: The keys of a restore's output that are its WORK rather than its result: every database's
+#: statements, the files considered and skipped. On 2026-09-26 a 13-database `restore-latest` put
+#: them all in its END message - each statement three times, the skipped files at three levels -
+#: 181,174 characters, 49 parts, and the Telegram workflow timed out sending them.
+_BULKY_OUTPUT_KEYS = ("sources", "selected_full_backup", "selected_diff_backup",
+                      "selected_log_backups", "skipped_backups")
+
+
+def telegram_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    """The event's metadata as a message carries it: the output summarised, never dropped whole.
+
+    Lists become their counts; each source keeps its verdict and its per-database statuses and
+    errors - what a reader acts on - and loses its statements and file lists.
+    """
+    output = metadata.get("output")
+    if not isinstance(output, dict):
+        return metadata
+    summary: dict[str, Any] = {key: value for key, value in output.items() if key not in _BULKY_OUTPUT_KEYS}
+    for key in _BULKY_OUTPUT_KEYS[1:]:
+        if isinstance(output.get(key), list):
+            summary[f"{key}_count"] = len(output[key])
+    sources = output.get("sources")
+    if isinstance(sources, list):
+        summary["sources"] = [
+            {key: source.get(key) for key in (
+                "source_id", "target_id", "status", "overall_status", "databases_considered",
+                "per_database_restore_status", "per_database_error", "checkdb_status")
+             if key in source}
+            for source in sources if isinstance(source, dict)
+        ]
+    return {**metadata, "output": summary}
 
 
 # A run's stored output keeps both ends, not just the tail. The phase lines a script prints

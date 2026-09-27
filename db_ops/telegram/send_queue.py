@@ -17,6 +17,13 @@ from db_ops.telegram.api import (
 )
 
 
+#: Seconds after which a pass starts no further message; what is left stays queued for the next
+#: pass, a second later. Well under the 300 s the daemon gives the whole Telegram workflow: on
+#: 2026-09-26 one 49-part message spent its pass waiting out Telegram's rate limit, the daemon killed
+#: the workflow at 300 s between two rows, and every message behind it waited for the next pass.
+SEND_BUDGET_SECONDS = 180
+
+
 def send_pending_messages(
     *,
     sqlite_path: str | Path,
@@ -25,6 +32,8 @@ def send_pending_messages(
     timeout_seconds: int = 20,
     limit: int = 50,
     retry_count: int = 3,
+    budget_seconds: float = SEND_BUDGET_SECONDS,
+    clock: Any = time.monotonic,
 ) -> dict[str, int]:
     store = DbOpsStore(sqlite_path)
     rows = store.fetch_pending_telegram_send_messages(limit=limit)
@@ -32,9 +41,15 @@ def send_pending_messages(
         "read": len(rows),
         "sent": 0,
         "failed": 0,
+        "deferred": 0,
     }
 
-    for row in rows:
+    started = clock()
+    for index, row in enumerate(rows):
+        if clock() - started >= budget_seconds:
+            # Left at send_status 0, untouched: the next pass takes them first, in the same order.
+            counts["deferred"] = len(rows) - index
+            break
         result = send_one_message(
             sqlite_path=sqlite_path,
             send_tlgmsg_id=int(row["send_tlgmsg_id"]),

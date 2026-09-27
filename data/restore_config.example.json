@@ -181,7 +181,12 @@
                     "backup_share": "\\\\192.0.2.10\\SQLBK\\APPDB",
                     "credential_target": "192.0.2.10",
                     "username": "192.0.2.10\\svc_backup",
-                    "password_ref": "REMOTE_192_0_2_10_SVC_BACKUP"
+                    "password_ref": "REMOTE_192_0_2_10_SVC_BACKUP",
+                    "backup_certificate": {
+                        "name": "db_ops_backup_cert",
+                        "password_ref": "BACKUP_ENC_192_0_2_10",
+                        "source_dir": "D:\\SQLBK\\_cert"
+                    }
                 },
                 "target": {
                     "vm_platform": "linux",

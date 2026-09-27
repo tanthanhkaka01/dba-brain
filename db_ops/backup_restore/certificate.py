@@ -2,18 +2,22 @@ from __future__ import annotations
 from db_ops.backup_restore.shell_quoting import _build_sqlcmd_auth_args, _escape_identifier, _escape_sql_string, _ps_array, _ps_quote  # noqa: F401 - one definition
 
 import base64
+import hashlib
 import io
 import json
 import shlex
 import ssl
 import subprocess
+import sys
+import tempfile
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from urllib import request
 
 from db_ops.backup_restore.config import BackupRestoreConfig, validate_restore_target_is_not_source
 from db_ops.backup_restore.copy_backup import resolve_password_ref
 from db_ops.backup_restore.sanitize import sanitize_text
+from db_ops.lib import sqlserver_certificate
 from db_ops.logging_ops import log_event
 
 
@@ -26,24 +30,32 @@ class BackupCertificate:
     private_key_password: str
 
 
+def has_certificate_source(config: BackupRestoreConfig) -> bool:
+    """Does this entry say where its backups' certificate comes from - a Vault URL, or the pair
+    dbabrain's own backup job exports beside the backups (``backup_certificate``)?"""
+    return bool(config.certificate_api_url) or config.backup_certificate is not None
+
+
 def ensure_source_certificate(
     *,
     config: BackupRestoreConfig,
     dry_run: bool = False,
     logger: object | None = None,
 ) -> dict[str, object]:
-    if not config.certificate_api_url:
+    if not has_certificate_source(config):
         return {"status": "SKIPPED_NO_CERTIFICATE_API", "source_id": config.source_id}
 
     if dry_run:
-        return {
-            "status": "DRY_RUN",
-            "source_id": config.source_id,
-            "certificate_api_url": config.certificate_api_url,
-        }
+        if config.certificate_api_url:
+            return {"status": "DRY_RUN", "source_id": config.source_id,
+                    "certificate_api_url": config.certificate_api_url}
+        return {"status": "DRY_RUN", "source_id": config.source_id,
+                "certificate_source": _share_cert_path(config, "cer"),
+                "certificate_source_dir": config.backup_certificate.source_dir or None}
 
     validate_restore_target_is_not_source(config)
-    certificate = fetch_backup_certificate(config)
+    certificate = (fetch_backup_certificate(config) if config.certificate_api_url
+                   else read_backup_certificate_pair(config, logger=logger))
     if config.is_linux:
         _log_remote_command(config, logger=logger, remote_exec_type="ssh", command_phase="certificate-import")
         result = _run_add_certificate_linux_via_ssh(certificate, config)
@@ -59,14 +71,113 @@ def ensure_source_certificate(
         else:
             result = _run_add_certificate_command(
                 build_add_certificate_command(certificate=certificate, config=config), config=config)
+    # The name that holds the thumbprint NOW - the requested one, one already there, or the
+    # requested one with the thumbprint's first digits when that name belonged to another key.
+    held = sqlserver_certificate.parse_marker(result.stdout) or {}
     return {
         "status": "SUCCESS",
         "source_id": config.source_id,
-        "certificate_name": certificate.certificate_name,
-        "thumbprint": certificate.thumbprint,
+        "certificate_name": held.get("certificate_name") or certificate.certificate_name,
+        "thumbprint": held.get("thumbprint") or certificate.thumbprint,
+        "imported": held.get("imported"),
         "stdout": result.stdout.strip(),
         "stderr": result.stderr.strip(),
     }
+
+
+def _share_cert_path(config: BackupRestoreConfig, suffix: str) -> str:
+    """``<share>\\_cert\\<name>.<suffix>`` - where the backup job exports the pair."""
+    source = config.backup_certificate
+    name = source.name if source is not None else ""
+    return str(config.prod_backup_share).replace("/", "\\").rstrip("\\") + f"\\_cert\\{name}.{suffix}"
+
+
+def read_backup_certificate_pair(config: BackupRestoreConfig, *, logger: object | None = None) -> BackupCertificate:
+    """The pair dbabrain's backup job exported beside the backups, read into memory.
+
+    From the share first, with the same login the backups are copied with. A pair exported before
+    0.24.1 is readable by the SQL Server service account only, and the share refuses it - then
+    ``source_dir`` is read over the SOURCE host's own login (``run-cmd``), where an administrator's
+    session can. The thumbprint is the SHA-1 of the ``.cer``, so it is computed here, not asked for.
+    """
+    source = config.backup_certificate
+    if source is None:
+        raise RuntimeError(f"restore_id={config.restore_id}: no backup_certificate on this entry.")
+    password = resolve_password_ref(source.password_ref)
+    if not password:
+        raise RuntimeError(f"Password ref not found in environment or secret_text.json: {source.password_ref}")
+    try:
+        cer, pvk = _pair_from_share(config)
+        where = _share_cert_path(config, "cer")
+    except Exception as share_error:  # noqa: BLE001 - refused, missing, unreachable: all the same next step.
+        if not source.source_dir:
+            raise RuntimeError(
+                f"cannot read the backup certificate from {_share_cert_path(config, 'cer')}: {share_error}. "
+                "A pair exported before 0.24.1 is readable by the SQL Server service account only - run "
+                "the backup once on this version, or name source.backup_certificate.source_dir to read "
+                "it over the source host's login.") from share_error
+        if logger:
+            log_event(logger, level="logging", message=sanitize_text(
+                f"restore_id={config.restore_id} certificate share read refused ({share_error}); "
+                f"reading {source.source_dir} over the source host's login"))
+        cer, pvk = _pair_from_source_host(config)
+        where = source.source_dir
+    if logger:
+        log_event(logger, level="logging", message=sanitize_text(
+            f"restore_id={config.restore_id} certificate {source.name} read from {where}"))
+    return BackupCertificate(
+        certificate_name=source.name,
+        thumbprint=hashlib.sha1(cer).hexdigest(),  # noqa: S324 - SQL Server's thumbprint IS the SHA-1.
+        certificate_base64=base64.b64encode(cer).decode("ascii"),
+        private_key_base64=base64.b64encode(pvk).decode("ascii"),
+        private_key_password=password,
+    )
+
+
+def _pair_from_share(config: BackupRestoreConfig) -> tuple[bytes, bytes]:
+    from db_ops.backup_restore import share
+    from db_ops.backup_restore.copy_backup import copy_share_login_requests, store_share_logins
+
+    if sys.platform.startswith("win"):
+        # A UNC path on Windows opens with the login cmdkey holds - stored first, as the copy does.
+        store_share_logins(copy_share_login_requests(config))
+    password = resolve_password_ref(config.prod_smb_password_env) if config.prod_smb_password_env else ""
+    pair: list[bytes] = []
+    with tempfile.TemporaryDirectory(prefix="db_ops_cert_") as stage:
+        for suffix in ("cer", "pvk"):
+            local = Path(stage) / f"pair.{suffix}"
+            answer = share.get_file(
+                config.prod_backup_share, share.share_relative(config.prod_backup_share, _share_cert_path(config, suffix)),
+                local, username=config.prod_smb_username, password=password, timeout_seconds=120)
+            if int(answer.get("exit_code") or 0) != 0 or not local.is_file() or local.stat().st_size == 0:
+                raise RuntimeError(str(answer.get("detail") or f"smb-get exit {answer.get('exit_code')}"))
+            pair.append(local.read_bytes())
+    return pair[0], pair[1]
+
+
+def _pair_from_source_host(config: BackupRestoreConfig) -> tuple[bytes, bytes]:
+    from db_ops.lib.data_sources.request_fill import host_access
+    from db_ops.transport import common_cli
+
+    source = config.backup_certificate
+    access = host_access(config.source_id)
+    windows = str(access.get("platform") or "").lower() == "windows"
+    pair: list[bytes] = []
+    for suffix in ("cer", "pvk"):
+        if windows:
+            path = source.source_dir.rstrip("\\/") + f"\\{source.name}.{suffix}"
+            command = "[Convert]::ToBase64String([IO.File]::ReadAllBytes('" + path.replace("'", "''") + "'))"
+        else:
+            path = source.source_dir.rstrip("/") + f"/{source.name}.{suffix}"
+            command = "base64 -w0 " + shlex.quote(path)
+        ok, data, error = common_cli.run_allowing_failure("run-cmd", {
+            "access": access, "target": config.source_id, "command": command,
+            "timeout_seconds": 120, "confirm": True, "assume_yes": True})
+        if not ok or int(data.get("exit_code") or 0) != 0:
+            detail = (str(data.get("stderr") or "") or error).strip()[:300]
+            raise RuntimeError(f"cannot read {path} on {config.source_id}: {detail}")
+        pair.append(base64.b64decode("".join(str(data.get("stdout") or "").split())))
+    return pair[0], pair[1]
 
 
 def fetch_backup_certificate(config: BackupRestoreConfig) -> BackupCertificate:
@@ -112,41 +223,58 @@ def parse_backup_certificate(data: dict[str, object]) -> BackupCertificate:
     return certificate
 
 
-#: What the Windows target runs: write the certificate and its key into the import folder, then
-#: CREATE CERTIFICATE from them. The values are assigned at the top rather than passed as
-#: arguments, because the script travels in a run-cmd request on stdin - there is no argv.
+#: What the Windows target runs: write the certificate and its key into the import folder, import
+#: them with the one batch (its paths already in it), then remove the pair. The values are assigned
+#: at the top rather than passed as arguments, because the script travels in a run-cmd request on
+#: stdin - there is no argv.
 _WINDOWS_IMPORT_BODY = (
     "$ErrorActionPreference = 'Stop'",
-    "$certDir = Join-Path $CertRoot '__db_ops_cert'",
-    "Write-Output ('CERT_IMPORT: creating cert dir: ' + $certDir)",
-    "New-Item -ItemType Directory -Force -Path $certDir | Out-Null",
-    "$safeName = ($CerName -replace '[^A-Za-z0-9_.-]', '_')",
-    "$cerPath = Join-Path $certDir ($safeName + '.cer')",
-    "$pvkPath = Join-Path $certDir ($safeName + '.pvk')",
-    "Write-Output ('CERT_IMPORT: writing cer file: ' + $cerPath)",
-    "[IO.File]::WriteAllBytes($cerPath, [Convert]::FromBase64String($CerBase64))",
-    "Write-Output ('CERT_IMPORT: writing pvk file: ' + $pvkPath)",
-    "[IO.File]::WriteAllBytes($pvkPath, [Convert]::FromBase64String($PvkBase64))",
-    "$cerSqlPath = $cerPath.Replace(\"'\", \"''\")",
-    "$pvkSqlPath = $pvkPath.Replace(\"'\", \"''\")",
-    "$Sql = $Sql.Replace('__DB_OPS_CERT_FILE__', $cerSqlPath).Replace('__DB_OPS_PVK_FILE__', $pvkSqlPath)",
+    "Write-Output ('CERT_IMPORT: creating cert dir: ' + (Split-Path $CerPath))",
+    "New-Item -ItemType Directory -Force -Path (Split-Path $CerPath) | Out-Null",
+    "Write-Output ('CERT_IMPORT: writing cer file: ' + $CerPath)",
+    "[IO.File]::WriteAllBytes($CerPath, [Convert]::FromBase64String($CerBase64))",
+    "Write-Output ('CERT_IMPORT: writing pvk file: ' + $PvkPath)",
+    "[IO.File]::WriteAllBytes($PvkPath, [Convert]::FromBase64String($PvkBase64))",
     "Write-Output ('CERT_IMPORT: running sqlcmd against: ' + $SqlInstance)",
-    "& $SqlcmdPath -S $SqlInstance -C @SqlAuthArgs -b -Q $Sql",
-    "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }",
+    "try {",
+    "    & $SqlcmdPath -S $SqlInstance -C @SqlAuthArgs -b -Q $Sql",
+    "    $code = $LASTEXITCODE",
+    "} finally {",
+    "    Remove-Item -LiteralPath $CerPath, $PvkPath -Force -ErrorAction SilentlyContinue",
+    "}",
+    "if ($code -ne 0) { exit $code }",
     "Write-Output ('CERT_IMPORT: completed for certificate: ' + $CerName)",
 )
 
 
+def _safe_name(name: str) -> str:
+    return "".join(char if char.isalnum() or char in ("_", "-", ".") else "_" for char in name)
+
+
+def certificate_file_paths(certificate: BackupCertificate, config: BackupRestoreConfig) -> tuple[str, str]:
+    """Where the pair is written for the import - the target's staging folder, as the INSTANCE
+    reads it (``vm_import_local``; on Linux the import path, which a container binds at the same
+    path)."""
+    safe = _safe_name(certificate.certificate_name)
+    if config.is_linux:
+        cert_dir = str(config.vm_import_local).replace("\\", "/").rstrip("/") + "/__db_ops_cert"
+        return f"{cert_dir}/{safe}.cer", f"{cert_dir}/{safe}.pvk"
+    cert_dir = PureWindowsPath(str(config.vm_import_local)) / "__db_ops_cert"
+    return str(cert_dir / f"{safe}.cer"), str(cert_dir / f"{safe}.pvk")
+
+
 def build_add_certificate_script(*, certificate: BackupCertificate, config: BackupRestoreConfig) -> str:
     """The PowerShell a Windows restore target runs to import the certificate (``run-cmd``, WinRM)."""
+    cer_path, pvk_path = certificate_file_paths(certificate, config)
     values = {
         "SqlcmdPath": config.sqlcmd_path,
         "SqlInstance": config.restore_sql_instance_on_vm,
-        "Sql": build_add_certificate_sql(certificate),
+        "Sql": build_add_certificate_sql(certificate, cer_path=cer_path, pvk_path=pvk_path),
         "CerBase64": certificate.certificate_base64,
         "PvkBase64": certificate.private_key_base64,
         "CerName": certificate.certificate_name,
-        "CertRoot": str(config.vm_import_local),
+        "CerPath": cer_path,
+        "PvkPath": pvk_path,
     }
     lines = [f"${name} = {_ps_quote(str(value))}" for name, value in values.items()]
     lines.append(f"$sqlAuthArgs = @({_ps_array(_build_sqlcmd_auth_args(config))})")
@@ -158,13 +286,8 @@ def build_add_certificate_command(*, certificate: BackupCertificate, config: Bac
 
     A remote Windows target runs :func:`build_add_certificate_script` through ``run-cmd`` instead.
     """
-    sql = build_add_certificate_sql(certificate)
-    sql_auth_args = _build_sqlcmd_auth_args(config)
-    cert_dir = config.vm_import_local / "__db_ops_cert"
-    cert_dir.mkdir(parents=True, exist_ok=True)
-    safe_name = "".join(char if char.isalnum() or char in ("_", "-", ".") else "_" for char in certificate.certificate_name)
-    cer_path = cert_dir / f"{safe_name}.cer"
-    pvk_path = cert_dir / f"{safe_name}.pvk"
+    cer_path, pvk_path = (Path(path) for path in certificate_file_paths(certificate, config))
+    cer_path.parent.mkdir(parents=True, exist_ok=True)
     cer_path.write_bytes(base64.b64decode(certificate.certificate_base64))
     pvk_path.write_bytes(base64.b64decode(certificate.private_key_base64))
     return [
@@ -172,87 +295,50 @@ def build_add_certificate_command(*, certificate: BackupCertificate, config: Bac
         "-S",
         config.restore_sql_instance_on_vm,
         "-C",
-        *sql_auth_args,
+        *_build_sqlcmd_auth_args(config),
         "-b",
         "-Q",
-        sql.replace("__DB_OPS_CERT_FILE__", _escape_sql_string(str(cer_path))).replace(
-            "__DB_OPS_PVK_FILE__",
-            _escape_sql_string(str(pvk_path)),
-        ),
+        build_add_certificate_sql(certificate, cer_path=str(cer_path), pvk_path=str(pvk_path)),
     ]
 
 
-def build_add_certificate_sql(certificate: BackupCertificate) -> str:
-    thumbprint = certificate.thumbprint
-    if not thumbprint.lower().startswith("0x"):
-        thumbprint = f"0x{thumbprint}"
-    return f"""
-USE master;
+def build_add_certificate_sql(certificate: BackupCertificate, *, cer_path: str, pvk_path: str) -> str:
+    """The one batch (:mod:`db_ops.lib.sqlserver_certificate`): by thumbprint, never dropping.
 
--- A fresh target has no Database Master Key; importing a certificate with a
--- private key requires one. Create it (also protected by the Service Master Key,
--- so it opens automatically) when missing.
-IF NOT EXISTS (SELECT 1 FROM master.sys.symmetric_keys WHERE name = N'##MS_DatabaseMasterKey##')
-BEGIN
-    CREATE MASTER KEY ENCRYPTION BY PASSWORD = N'{_escape_sql_string(certificate.private_key_password)}';
-END;
-
-IF NOT EXISTS
-(
-    SELECT 1
-    FROM sys.certificates
-    WHERE name = N'{_escape_sql_string(certificate.certificate_name)}'
-       OR CONVERT(varchar(66), thumbprint, 1) = '{_escape_sql_string(thumbprint)}'
-)
-BEGIN
-    CREATE CERTIFICATE [{_escape_identifier(certificate.certificate_name)}]
-    FROM FILE = N'__DB_OPS_CERT_FILE__'
-    WITH PRIVATE KEY
-    (
-        FILE = N'__DB_OPS_PVK_FILE__',
-        DECRYPTION BY PASSWORD = N'{_escape_sql_string(certificate.private_key_password)}'
-    );
-END;
-""".strip()
+    This used to skip the import when a certificate of the same NAME existed - and a target with
+    its own ``db_ops_backup_cert`` then never received the source's, so its restore failed on the
+    thumbprint (2026-09-27, a lab VM).
+    """
+    return sqlserver_certificate.import_batch(
+        name=certificate.certificate_name, cer_path=cer_path, pvk_path=pvk_path,
+        password=certificate.private_key_password)
 
 
 def _run_add_certificate_linux_via_ssh(certificate: BackupCertificate, config: BackupRestoreConfig) -> subprocess.CompletedProcess[str]:
-    """Import the backup encryption certificate on a Linux SQL Server host via SSH+SFTP."""
+    """Import on a Linux target: the pair written into its staging folder, the batch run where the
+    SQL Server is (``run-sqlcmd`` - inside its container when the entry names one), the pair
+    removed again."""
     from db_ops.backup_restore.copy_backup import open_ssh_connection
+    from db_ops.backup_restore.restore_database import _run_sqlcmd_via_ssh, build_sqlcmd_query_command
 
-    sql = build_add_certificate_sql(certificate)
-    safe_name = "".join(char if char.isalnum() or char in ("_", "-", ".") else "_" for char in certificate.certificate_name)
-    linux_import = str(config.vm_import_local).replace("\\", "/")
-    cert_dir = f"{linux_import}/__db_ops_cert"
-    cer_path = f"{cert_dir}/{safe_name}.cer"
-    pvk_path = f"{cert_dir}/{safe_name}.pvk"
-    cer_bytes = base64.b64decode(certificate.certificate_base64)
-    pvk_bytes = base64.b64decode(certificate.private_key_base64)
-    sql_auth_args = _build_sqlcmd_auth_args(config)
-
+    cer_path, pvk_path = certificate_file_paths(certificate, config)
     with open_ssh_connection(config) as ssh:
         # Written on the target from memory - the private key never lands on this machine's disk.
-        ssh.put_bytes(cer_bytes, cer_path)
-        ssh.put_bytes(pvk_bytes, pvk_path)
-        final_sql = (
-            sql.replace("__DB_OPS_CERT_FILE__", _escape_sql_string(cer_path))
-               .replace("__DB_OPS_PVK_FILE__", _escape_sql_string(pvk_path))
-        )
-        auth_str = " ".join(shlex.quote(a) for a in sql_auth_args)
-        remote_cmd = (
-            "export PATH=$PATH:/opt/mssql-tools/bin:/opt/mssql-tools18/bin; "
-            f"{shlex.quote(config.sqlcmd_path)} "
-            f"-S {shlex.quote(config.restore_sql_instance_on_vm)} "
-            f"-C {auth_str} -b "
-            f"-Q {shlex.quote(final_sql)}"
-        )
-        answer = ssh.run(remote_cmd)
-        stdout_data, stderr_data, rc = answer.stdout, answer.stderr, answer.exit_code
+        ssh.put_bytes(base64.b64decode(certificate.certificate_base64), cer_path)
+        ssh.put_bytes(base64.b64decode(certificate.private_key_base64), pvk_path)
+        try:
+            result = _run_sqlcmd_via_ssh(
+                build_sqlcmd_query_command(
+                    sql=build_add_certificate_sql(certificate, cer_path=cer_path, pvk_path=pvk_path),
+                    config=config),
+                config)
+        finally:
+            ssh.run(f"rm -f {shlex.quote(cer_path)} {shlex.quote(pvk_path)}")
 
-    if rc != 0:
-        details = [f"Certificate import command failed with exit code {rc}."]
-        stdout_text = sanitize_text(stdout_data.strip())
-        stderr_text = sanitize_text(stderr_data.strip())
+    if result.returncode != 0:
+        details = [f"Certificate import command failed with exit code {result.returncode}."]
+        stdout_text = sanitize_text(str(result.stdout or "").strip())
+        stderr_text = sanitize_text(str(result.stderr or "").strip())
         if stdout_text:
             details.append(f"stdout:\n{stdout_text}")
         if stderr_text:
@@ -261,11 +347,7 @@ def _run_add_certificate_linux_via_ssh(certificate: BackupCertificate, config: B
             details.append("No stdout/stderr was returned by SSH sqlcmd.")
         raise RuntimeError("\n".join(details))
     return subprocess.CompletedProcess(
-        args=["__ssh_cert_import__"],
-        returncode=rc,
-        stdout=stdout_data,
-        stderr=stderr_data,
-    )
+        args=["__ssh_cert_import__"], returncode=0, stdout=result.stdout, stderr=result.stderr)
 
 
 def _run_add_certificate_command(

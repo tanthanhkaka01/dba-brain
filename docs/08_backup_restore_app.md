@@ -562,7 +562,13 @@ containerized SQL Server 2025 target):
   fetched, one `smb-get` each, each size checked against the listing. A `*.bak`/`*.trn` mask is
   **not** given to `smbclient`: with `recurse ON` it applies the mask to subdirectory names too and
   never descends into `FULL`/`LOG`.
-- When `database_mappings[]` is configured, only those `<db>` subdirectories are fetched.
+- When `database_mappings[]` is configured, only those `<db>` subdirectories are fetched - and since
+  0.24.1 the same holds on a **Windows** node, whose two copy paths (the UNC scan and `smb-list`)
+  read the whole share until then: an entry mapping two of a production server's databases would have staged
+  the third's 30 G full and a day of its logs into a lab VM with 17 G free (2026-09-27).
+- A copy that finds nothing in its window now says what the newest matching file IS and how long
+  before the window it was written - "selected no files" read like a window set too narrow, and
+  it meant a share nothing had written to for eight days.
 - `smbclient` does not preserve file mtimes, so each backup's real time is
   recovered from its filename (`..._YYYYMMDD_HHMMSS[Z]`). A trailing `Z` (what db_ops' own
   backup scripts write since 0.20.0) means UTC; a name without it, as other tools on the source
@@ -740,6 +746,45 @@ Database Master Key (DMK) in `master`. A freshly provisioned target has none, so
 `build_add_certificate_sql` now creates the DMK automatically (`CREATE MASTER KEY`)
 when it is missing, before `CREATE CERTIFICATE ... WITH PRIVATE KEY`. Existing
 targets that already have a DMK are unaffected.
+
+### By thumbprint, never by name (0.24.1)
+
+SQL Server reads an encrypted backup with whichever certificate has the right **thumbprint**. Every
+import - this app's SMB restore, `common.cli restore-key` for the script path, and the shell restore
+- now sends one batch (`lib.sqlserver_certificate`): the thumbprint is the SHA-1 of the `.cer`,
+read by the instance; one already there is left alone; a requested name that belongs to a different
+certificate becomes `<name>_<first 8 hex digits>`; nothing is dropped. Before, the SMB restore
+skipped the import when the name existed and the other two dropped the name and recreated it - and
+`db_ops_backup_cert` is the default everywhere, so a target dbabrain also backs up either never
+received the source's certificate or lost its own (2026-09-27, a lab VM).
+
+### The pair beside dbabrain's own backups: `source.backup_certificate` (0.24.1)
+
+Until 0.24.1 an SMB entry took its certificate only from `certificate_api_url` (Vault). dbabrain's
+own SQL Server backup job exports its certificate beside the backups instead
+(`<backup_dir>\_cert\<name>.cer` + `.pvk`, the key encrypted by the backup passphrase), so a share
+of dbabrain's own backups could not be restored onto an instance that did not already hold it:
+
+```json
+"source": {"backup_share": "\\\\192.0.2.250\\SQLBK_DBOPS", "...": "...",
+           "backup_certificate": {"name": "db_ops_backup_cert", "password_ref": "BACKUP_ENC_REF",
+                                  "source_dir": "D:\\SQLBK_DBOPS\\_cert"}}
+```
+
+The pair is read from the share with the backups' own login, into memory, and its thumbprint is
+computed here. **A pair exported before 0.24.1 is readable by the SQL Server service account only**
+(the engine writes it so), and the share refuses it - then `source_dir`, the same folder as the
+source host sees it, is read over that host's own login (`run-cmd`, the elevated session an
+administrator gets). The Windows backup job now gives the pair its folder's permissions on every
+run, so after one backup on 0.24.1 the share reads it and `source_dir` is not needed. On the target
+the pair is written into the staging folder, imported, and removed again.
+
+### `target.sql_container` - a target host with no `sqlcmd` (0.24.1)
+
+Every `sqlcmd` the restore runs - each RESTORE, the recovery, CHECKDB, the certificate import - runs
+inside that container (`common.cli run-sqlcmd`'s `container`) when the target names one. A lab VM
+with only Docker has no `sqlcmd` of its own. The container must bind the staging folder at the
+same path, so the staged path is the path RESTORE reads.
 
 ## SQLBK_IMPORT — What It Is and When It Is Created
 
@@ -976,9 +1021,14 @@ so no call site can publish a message without one:
   multi-entry workflow carries (`mappings`, `per_restore_results`). De-duplicated, joined
   with commas for a multi-entry run.
 - **Where it appears.** In the message text itself (so the `job_runs` row and the log line
-  carry it), then on its **own line** in the Telegram body — the JSON payload is truncated
-  at 3900 characters, so an id living only inside it would be cut off exactly on the
-  longest, most urgent messages. `telegram_send_messages.source_id` is
+  carry it), then on its **own line** in the Telegram body — an id living only inside the
+  JSON payload would land in whichever part of a long message it fell into.
+- **What the payload carries.** The run's *result*, not its work (`events.telegram_metadata`):
+  each source's verdict and per-database statuses and errors, and the file lists as counts -
+  never the statements or the files themselves, and never more than
+  `MAX_TELEGRAM_PAYLOAD_CHARS`. The whole output stays on the run's `job_runs` row. A
+  13-database `restore-latest` END once carried everything, 181,174 characters in 49 parts,
+  and the Telegram workflow timed out sending it (2026-09-26). `telegram_send_messages.source_id` is
   `<command>:<id>`, so a queued row is traceable without parsing the text.
 - **When it is missing.** The event says `restore_id=<unknown>` rather than omitting it.
   Silence is what let this go unnoticed: a message with no id looked perfectly normal.

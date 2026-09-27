@@ -23,6 +23,7 @@ class FakeSqlRunStore:
 
     def update_sql_run(self, **kwargs):
         self.updated.append(kwargs)
+        return True  # the store answers whether its write landed
 
 
 def make_target(database_name="db", db_type="sqlserver", service_name="svc", instance_name="inst"):

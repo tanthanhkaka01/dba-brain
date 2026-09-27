@@ -23,6 +23,7 @@ import shlex
 import stat as stat_mod
 import tarfile
 import tempfile
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -43,6 +44,17 @@ BATCH_FILE_LIMIT_BYTES = 8 * 1024 * 1024
 #: How much longer than the remote command the process around it may take: python starting, the SSH
 #: handshake, the answer. Only a stuck process meets it.
 PROCESS_MARGIN_SECONDS = 120
+
+#: How a ``run-cmd`` answer says the SSH session never opened - refused, reset, unreachable, timed
+#: out. ``common.ssh`` names these at connect time, before any command is sent, so trying again
+#: cannot run a command twice. An authentication failure is not one of them: it would only repeat
+#: the same wrong password.
+NEVER_CONNECTED = ("SSH connection to ", "SSH connect to ")
+
+#: Seconds to wait before each further attempt at a session that never opened. A lab VM dropped
+#: one connection in a burst on 2026-09-27 (``WinError 10054``) and that one failure failed a
+#: database's whole restore; a moment later the host answered every call.
+CONNECT_RETRY_DELAYS_SECONDS = (2, 5)
 
 
 class RemoteError(OSError):
@@ -172,9 +184,16 @@ class RemoteHost:
     def _run_cmd(self, request: dict[str, Any], timeout_seconds: int | None) -> RemoteRun:
         if timeout_seconds:
             request["timeout_seconds"] = int(timeout_seconds)
-        _success, data, error = self._invoke("run-cmd", request, timeout_seconds)
-        if "exit_code" not in data:
-            # No exit code is not a command that failed - it is a command that never ran.
+        delays = list(CONNECT_RETRY_DELAYS_SECONDS)
+        while True:
+            _success, data, error = self._invoke("run-cmd", request, timeout_seconds)
+            if "exit_code" in data:
+                break
+            # No exit code is not a command that failed - it is a command that never ran. When it
+            # never ran because the session never opened, it is safe to ask again.
+            if delays and any(marker in str(error or "") for marker in NEVER_CONNECTED):
+                time.sleep(delays.pop(0))
+                continue
             raise RemoteError(f"{self}: {error or 'run-cmd gave no answer'}")
         return RemoteRun(int(data.get("exit_code") or 0), str(data.get("stdout") or ""),
                          str(data.get("stderr") or ""))

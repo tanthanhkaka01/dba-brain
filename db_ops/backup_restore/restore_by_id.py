@@ -206,8 +206,9 @@ def _plan_sqlserver(job: Any, secrets: dict[str, str], *, point_in_time: str,
             "password": cert_password, "target": target}}
         # Imported NOW, before the listing below: RESTORE HEADERONLY cannot read an encrypted
         # backup on an instance without its certificate (Msg 33111), so a key step queued behind
-        # the listing never ran on a fresh target - the listing failed first. The import drops
-        # and recreates the certificate, so doing it on every run is safe. A dry run changes
+        # the listing never ran on a fresh target - the listing failed first. The import finds
+        # the certificate by thumbprint and never drops one, so doing it on every run is safe - and
+        # it no longer replaces a target's own certificate of the same name. A dry run changes
         # nothing, so there it stays a planned step - and its listing may fail for this reason.
         if not dry_run:
             _execute("restore-key", key_step["request"])

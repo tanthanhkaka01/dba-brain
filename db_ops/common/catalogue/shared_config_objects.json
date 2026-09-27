@@ -4761,7 +4761,7 @@
                 "id": "server_id",
                 "server_id": "server_id"
             },
-            "field_count": 7,
+            "field_count": 8,
             "required_field_count": 1,
             "fields": [
                 {
@@ -4860,6 +4860,21 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "Whether the certificate API's TLS certificate is verified."
+                },
+                {
+                    "field": "backup_certificate",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - absent when the backups are not dbabrain's own, or certificate_api_url is given",
+                    "range_text": "the pair dbabrain's backup job exports beside its backups",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "checked_by": "restore_backup_certificate"
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Where the certificate dbabrain's own encrypted backups need is read from: <share>\\_cert\\<name>.cer + .pvk.",
+                    "rule": "Read from the share first; when the share refuses it (a pair exported before 0.24.1 is readable by the SQL Server service account only), from source_dir over the source host's own login."
                 }
             ],
             "whole_record_note": "whole_record: every key on the record is this entry's business, so a key it does not describe is reported as unknown. Keys starting with '_' are the estate's own comments and are never reported."
@@ -4888,7 +4903,7 @@
                 "restore_sql_username": "sql_username",
                 "id": "target_server_id"
             },
-            "field_count": 18,
+            "field_count": 19,
             "required_field_count": 1,
             "fields": [
                 {
@@ -4994,6 +5009,21 @@
                     "measured_against": "not a time value",
                     "purpose": "That SQL login's password, by ref.",
                     "rule": "Only the ref is ever in a config file. restore-add encrypts a `password` given in the request and writes its ref here. Was `sql_password_env` until 0.22.0"
+                },
+                {
+                    "field": "sql_container",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The container the target's SQL Server runs in: every sqlcmd of the restore runs inside it (docker exec), for a target host with no sqlcmd of its own.",
+                    "rule": "Its backup folder must be bound at the same path inside, so a staged path is the path RESTORE reads."
                 },
                 {
                     "field": "restore_data_dir",
@@ -5147,6 +5177,72 @@
                     },
                     "measured_against": "seconds",
                     "purpose": "How long the RESTORE itself may run."
+                }
+            ],
+            "whole_record_note": "whole_record: every key on the record is this entry's business, so a key it does not describe is reported as unknown. Keys starting with '_' are the estate's own comments and are never reported."
+        },
+        {
+            "object": "restore_backup_certificate",
+            "kind": "field",
+            "required": false,
+            "one_line": "Where a SQL Server restore of dbabrain's OWN backups reads the certificate they were encrypted with.",
+            "parsed_in": "db_ops/backup_restore/config.py",
+            "shared_entry_point": "db_ops.backup_restore.config._parse_backup_certificate",
+            "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
+            "whole_record": true,
+            "used_in": [
+                {
+                    "file": "restore_config.json",
+                    "path": "backup_restore.restores[].source.backup_certificate",
+                    "note": "engine (SQL Server) entries restoring dbabrain's own encrypted backups"
+                }
+            ],
+            "legacy_fields": {},
+            "field_count": 3,
+            "required_field_count": 1,
+            "fields": [
+                {
+                    "field": "name",
+                    "type": "string",
+                    "required": false,
+                    "default": "db_ops_backup_cert",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The certificate's name, as the backup job exported it: <name>.cer + <name>.pvk."
+                },
+                {
+                    "field": "password_ref",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - required",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false,
+                        "allow_empty": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The backup passphrase, by secret ref: it decrypts the private key."
+                },
+                {
+                    "field": "source_dir",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The same _cert folder as the SOURCE host sees it, read over that host's login when the share refuses the pair.",
+                    "rule": "Needed only for a pair exported before 0.24.1; the backup job now leaves it as readable as the backups."
                 }
             ],
             "whole_record_note": "whole_record: every key on the record is this entry's business, so a key it does not describe is reported as unknown. Keys starting with '_' are the estate's own comments and are never reported."
@@ -11330,7 +11426,7 @@
                         "allow_empty": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The certificate."
+                    "purpose": "The certificate that holds the thumbprint now: the requested name, one already there, or <name>_<first 8 hex digits of the thumbprint> when the requested name belonged to another certificate."
                 },
                 {
                     "field": "thumbprint",
@@ -11357,7 +11453,7 @@
                         "nullable": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "It was imported."
+                    "purpose": "True when it was created, or its private key added. False: it was already there - nothing changed. Nothing is ever dropped."
                 },
                 {
                     "field": "statements",
@@ -18782,7 +18878,7 @@
             "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 6,
+            "field_count": 7,
             "required_field_count": 0,
             "fields": [
                 {
@@ -18798,6 +18894,20 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "The instance."
+                },
+                {
+                    "field": "sqlcmd",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Run it where the SQL Server is: the run-sqlcmd request without its sql - for an instance this machine cannot reach over a driver. Instead of target."
                 },
                 {
                     "field": "certificate_name",
@@ -19748,7 +19858,7 @@
             "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 10,
+            "field_count": 11,
             "required_field_count": 2,
             "fields": [
                 {
@@ -19792,6 +19902,21 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "The sqlcmd to run (default sqlcmd)."
+                },
+                {
+                    "field": "container",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The container the SQL Server runs in: its own sqlcmd runs the batch (docker exec), for a host with no sqlcmd of its own. ssh or local only.",
+                    "rule": "With a container, a sqlcmd_path left at sqlcmd means the image's /opt/mssql-tools18/bin/sqlcmd."
                 },
                 {
                     "field": "username",

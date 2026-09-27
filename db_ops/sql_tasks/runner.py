@@ -661,7 +661,10 @@ def mark_stale_running_sql_runs(
         message = (f"SQL task {row['sql_code']} stale running: {verdict.reason}. It started at "
                    f"{format_message_time(started)} with timeout_seconds={timeout_seconds} and was "
                    f"still 'running' {stale_minutes} minutes later.")
-        store.update_sql_run(
+        # Closed as a claim: ten scans run at once and each reads the same `running` row, so only
+        # the one whose close lands may report it - the others were each sending the same alert
+        # (three dead runs reported twice on 2026-09-26).
+        closed = store.update_sql_run(
             sql_run_id=int(row["sql_run_id"]),
             status="error",
             level="error",
@@ -669,7 +672,10 @@ def mark_stale_running_sql_runs(
             finished_at=utc_now_text(),
             error_text=message,
             metadata={"stale_running": True},
+            only_if_status="running",
         )
+        if not closed:
+            continue
         log_function_error(logger, function_name="sql_tasks.stale_running", error_text=message)
         # A target is how a run learns where to complain. Without one there is no notify block to
         # read, so the log line above is all this can be - the same fallback the timeout above uses.

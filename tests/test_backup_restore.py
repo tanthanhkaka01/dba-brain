@@ -1408,22 +1408,27 @@ def test_runtime_stdout_bridge_sanitizes_before_writing(tmp_path):
     assert "ConvertTo-SecureString '***'" in log_text
 
 
-def test_build_add_certificate_sql_checks_name_or_thumbprint_before_create():
+def test_the_smb_certificate_import_is_the_one_batch_that_works_by_thumbprint():
+    """It used to skip the import when the NAME existed, so a target with its own
+    db_ops_backup_cert never received the source's (lab-251, 2026-09-27)."""
     certificate = BackupCertificate(
         certificate_name="APPDB_PROD_2_250_2026",
-        thumbprint="0xFA247A43A377B01DD94EDA3CAF46CAD1FF68E019",
+        thumbprint="fa247a43a377b01dd94eda3caf46cad1ff68e019",
         certificate_base64="Y2VydA==",
         private_key_base64="cHZr",
         private_key_password="pass'word",
     )
 
-    sql = build_add_certificate_sql(certificate)
+    sql = build_add_certificate_sql(certificate, cer_path="/stage/__db_ops_cert/a.cer",
+                                    pvk_path="/stage/__db_ops_cert/a.pvk")
 
-    assert "FROM sys.certificates" in sql
-    assert "name = N'APPDB_PROD_2_250_2026'" in sql
-    assert "CONVERT(varchar(66), thumbprint, 1) = '0xFA247A43A377B01DD94EDA3CAF46CAD1FF68E019'" in sql
-    assert "CREATE CERTIFICATE [APPDB_PROD_2_250_2026]" in sql
-    assert "DECRYPTION BY PASSWORD = N'pass''word'" in sql
+    assert "HASHBYTES('SHA1', f.BulkColumn) FROM OPENROWSET(BULK N'/stage/__db_ops_cert/a.cer'" in sql
+    assert "WHERE thumbprint = @thumbprint" in sql
+    assert "DECLARE @name sysname = N'APPDB_PROD_2_250_2026'" in sql
+    assert "DROP CERTIFICATE" not in sql
+    assert "CREATE MASTER KEY ENCRYPTION BY PASSWORD = N'pass''word'" in sql
+    # Inside sp_executesql's statement the password is inside two literals, so escaped twice.
+    assert "DECRYPTION BY PASSWORD = N''pass''''word''" in sql
 
 
 def test_the_windows_certificate_script_writes_the_files_then_creates_the_certificate(tmp_path, monkeypatch):
@@ -1455,9 +1460,14 @@ def test_the_windows_certificate_script_writes_the_files_then_creates_the_certif
     # The values are assigned, not passed: the script travels in a run-cmd request on stdin.
     assert "$CerBase64 = 'Y2VydA=='" in script
     assert "param(" not in script and "Invoke-Command" not in script
-    assert "WriteAllBytes($cerPath, [Convert]::FromBase64String($CerBase64))" in script
+    # The paths are decided here and are already inside the batch the script runs.
+    assert r"$CerPath = 'E:\SQLBK_IMPORT\__db_ops_cert\APPDB_PROD_2_250_2026.cer'" in script
+    assert "WriteAllBytes($CerPath, [Convert]::FromBase64String($CerBase64))" in script
     assert "& $SqlcmdPath -S $SqlInstance -C @SqlAuthArgs -b -Q $Sql" in script
-    assert "CREATE CERTIFICATE [APPDB_PROD_2_250_2026]" in script
+    # The batch sits in a PowerShell single-quoted string, so its own quotes are doubled there.
+    assert "CREATE CERTIFICATE '' + QUOTENAME(@name)" in script
+    # The pair does not stay on the target once it is imported.
+    assert "Remove-Item -LiteralPath $CerPath, $PvkPath" in script
 
 
 def test_parse_backup_certificate_reads_vault_payload_data():
