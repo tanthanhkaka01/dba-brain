@@ -125,7 +125,7 @@ R38-R43 keep their numbers and stand with the other layer rules; R43 is R11's si
 | R32 | [The test suite is offline](#r32) | absolute | - |
 | R33 | [Every component has a doc, every doc a component](#r33) | absolute | - |
 | R34 | [A change updates its doc and `CHANGELOG.md` in the same change](#r34) | review | - |
-| R35 | [`AGENTS.md` names only real commands, never a secret on a command line](#r35) | absolute | - |
+| R35 | [`AGENTS.md` and the guides name only real commands, never a secret on a command line](#r35) | absolute | - |
 | R36 | [Everything written is English](#r36) | absolute | - |
 | R37 | [Comments say why; tests read as prose](#r37) | review | - |
 
@@ -613,11 +613,13 @@ A change to a component updates its doc in the same change, and a change a user 
 
 ### R35
 
-The agent guide (`AGENTS.md`) names only commands that exist, and never teaches a secret on a command line.
+The agent guide (`AGENTS.md`) names only commands that exist, and never teaches a secret on a command line. So do the README, `docs/` and the guides in `examples/` (0.24.0): every command they show is one this version has, and a request to a command that takes a login carries it - 0.24.0 moved `timezone` and made `common.cli` read no configuration, and three guides went on showing the old calls.
 
 **Guard:**
 
 - `tests/test_the_agent_guide_names_only_real_commands.py::test_every_subcommand_the_guide_names_exists`
+- `tests/test_every_command_a_guide_shows_would_run.py::test_every_command_a_guide_shows_exists`
+- `tests/test_every_command_a_guide_shows_would_run.py::test_a_request_that_needs_a_login_carries_one`
 
 **Mark:** absolute.
 

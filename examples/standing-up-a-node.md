@@ -235,11 +235,20 @@ Anything else in the object is passed through to the record: `cmd_access`, `sql_
 ```powershell
 db-ops check-credentials                     # every target resolves to a real login
 db-ops common check-secret '{}'              # each secret actually logs in
-'{"target": "ACME-192-0-2-10-SQL01", "sql_text": "SELECT @@VERSION"}' | db-ops common run-sql -
+$env:SQL01_MONITOR = "<password>"            # this shell only - never on a command line
+'{"target": "ACME-192-0-2-10-SQL01", "sql": "SELECT @@VERSION",
+  "connection": {"db_type": "sqlserver", "host": "192.0.2.10", "port": 1433,
+                 "username": "dbops_monitor", "password_ref": "SQL01_MONITOR"}}' | db-ops common run-sql -
 ```
 
 **Proves:** the credential resolves, the login works, and the driver can reach the instance. A target
 unreachable on the network is not a failure of this step; a target with no resolvable credential is.
+
+**`run-sql` takes the login, not the name.** `common.cli` reads no configuration (0.24.0), so from a
+shell the request states the connection itself; `password_ref` names an environment variable of
+this shell, and nothing else is looked up. The bot and the SQL tasks fill the login in from
+`server_id` for you - `/spbot_sql_export <server_id>` with the SQL attached as a file asks by
+name, and answers with the result as a file.
 
 Add the rest **one at a time**, and check each before the next. A file with twenty targets and one
 mistake takes longer to debug than twenty files with one target.
@@ -418,8 +427,11 @@ Get-Content logs\errors.log                  # only a header = nothing has faile
 db-ops db --config config.json ops-status '{}'   # which app failed, when, and whether it is overdue
 db-ops check-credentials                     # a target with no resolvable credential
 db-ops common self-status '{"format":"txt"}'  # what this node is, and the addresses it serves
-db-ops common db-status '{"target": "ACME-192-0-2-248"}'   # is one instance, database or schema up and usable
+db-ops common db-status @db_status.json   # is one instance, database or schema up and usable
 ```
+
+`db_status.json` is `{"target": "ACME-192-0-2-248", "connection": {...}}` - the same login
+`run-sql` takes in section 7, with its `password_ref` set in the shell.
 
 `db-status` answers at three depths — the instance, one database, one schema — for SQL Server,
 PostgreSQL and Oracle, and reports what that engine actually has rather than pretending the three

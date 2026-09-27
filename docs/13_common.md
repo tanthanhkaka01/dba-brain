@@ -637,7 +637,8 @@ between two lab hosts.
 
 ### `create-db-docker` / `move-db-docker` — a lab database built or moved, from a request
 
-Moved here from the `sre` app in 0.23.0 (`docker_db/`, with `cli_docker_db.py` in front), so the
+Moved here from the `sre` app in 0.23.0 (`docker_db/` - `provisioner.py`, `mover.py`, `compose.py`,
+`healthcheck.py`, `templates.py`, `remote_host.py` - with `cli_docker_db.py` in front), so the
 bot's `/spbot_create_db_docker` and the lab drills run the same `common.cli` path as everything
 else. In `sre` the provisioner decrypted its own password and wrote
 `data/docker_db_connections.json`, and the mover resolved both hosts out of `db_instances.json` and
@@ -670,7 +671,8 @@ would move. The fields are in the reference (`input_create_db_docker`, `output_c
 
 ### `run-sqlcmd` — one `sqlcmd` batch, run where the SQL Server is
 
-The SMB SQL Server restore's statements (1.38, 0.23.0). The `backup_restore` app decides what to
+The SMB SQL Server restore's statements (1.38, 0.23.0; `sqlcmd_run.py`, with `cli_sqlcmd.py` in
+front). The `backup_restore` app decides what to
 run and what the answer means; this runs it - `via` `local`, `ssh` (a Linux host) or `winrm` (a
 Windows host, through a local `Invoke-Command` built by `lib.powershell`) - with every value in the
 request, on **stdin only** because it carries a SQL password and a host password. Each is the app's
@@ -703,8 +705,8 @@ a driver; `sqlcmd` (as `restore-full` takes it) runs it where the SQL Server is.
 The SQL Server restore reached its backup shares itself until 0.24.0 - `smbclient` on a Linux worker,
 PowerShell `Get-ChildItem` / `Remove-Item` over a UNC path on a Windows master, `cmdkey` to store the
 login first: three ways in one app, and the next app to meet a share would have grown a fourth
-(rules R10; the operator, 2026-09-26: *every app reaches a host one way*). `common/smb.py` is the one
-way now, and the app keeps what is its own - which files, which window, what is obsolete.
+(rules R10; the operator, 2026-09-26: *every app reaches a host one way*). `common/smb.py`, with
+`cli_smb.py` in front, is the one way now, and the app keeps what is its own - which files, which window, what is obsolete.
 
 | Command | What it does |
 | --- | --- |
@@ -748,7 +750,7 @@ All three new ones are **stdin only**: their requests carry SSH passwords. A log
 
 ### `metric-batch` — one target's metrics, run one after another (0.24.0)
 
-The metrics app's execution. `metrics` decides what is due, which file fits the target, the
+The metrics app's execution (`metric_batch.py`, with `cli_metric_batch.py` in front). `metrics` decides what is due, which file fits the target, the
 environment a script gets, the password and the argv of a local script; this runs the items, in
 order, and answers for each - and `metrics` grades the answers (the JSON-rows contract, severity,
 overrides, the stored row). It was `metrics/executor.py` and the transports of
@@ -1121,13 +1123,20 @@ One contract for every operation that changes a host, so there is nothing per-co
 ```bash
 # what state is this host in (read-only)
 python -m db_ops.common.cli host-facts \
-  '{"target": "ACME-192-0-2-250", "services": ["MSSQL$APPDB"]}' --key-base64 "<b64>"
+  '{"target": "ACME-192-0-2-250", "services": ["MSSQL$APPDB"],
+    "access": {"method": "winrm", "host": "192.0.2.250", "port": 5985, "platform": "windows",
+               "username": "svc_dbops", "auth_type": "password", "password_ref": "HOST_250_ADMIN"}}'
 
 # restart it and wait for its services — Windows or Ubuntu, same request
 python -m db_ops.common.cli host-restart \
-  '{"target": "ACME-192-0-2-250", "services": ["MSSQL$APPDB", "SQLAgent$APPDB"],
-    "reason": "clear PendingFileRenameOperations before CU26", "confirm": true}' --key-base64 "<b64>"
+  '{"target": "ACME-192-0-2-250", "services": ["MSSQL$APPDB", "SQLAgent$APPDB"], "access": {...},
+    "reason": "clear PendingFileRenameOperations before CU26", "confirm": true}'
 ```
+
+**`access` is the host's login** (0.24.0): `common.cli` reads no configuration, so the request
+states it - its `password_ref` an environment variable of this shell, never the password itself on
+a command line. The bot and the apps fill it in from `server_id`
+(`lib.data_sources.request_fill.host_access`).
 
 Progress goes to **stderr**, the JSON gate report to **stdout**, so an operator can watch a
 30-minute restart while a caller still pipes the result into `jq`. Exit 0 unless a blocking
@@ -1384,6 +1393,8 @@ both ways out named in the message:
 
 ```bash
 python -m db_ops.common.cli run-sql '{"target": "ACME-192-0-2-136", "major_version": 8,
+  "connection": {"db_type": "oracle", "host": "192.0.2.136", "port": 1521, "service_name": "LEGACY",
+                 "username": "dbops", "password_ref": "ORA_136_DBOPS"},
   "sql_text": "select * from v$version"}'
 # Oracle 8 cannot be reached by python-oracledb in thin mode (it speaks 12.1 and newer).
 # Either route this target through the legacy bridge with sql_access {"method": "api", ...},
@@ -1647,10 +1658,13 @@ the `/spbot_*` commands, and each answered it its own way — which is how three
 notions of "online" and disagree about the same server on the same afternoon.
 
 ```bash
-python -m db_ops.common.cli db-status '{"target": "ACME-192-0-2-248"}'
-python -m db_ops.common.cli db-status '{"target": "ACME-192-0-2-248", "depth": "database"}'
+python -m db_ops.common.cli db-status '{"target": "ACME-192-0-2-248", "connection": {...}}'
+python -m db_ops.common.cli db-status '{"target": "ACME-192-0-2-248", "depth": "database", "connection": {...}}'
 python -m db_ops.common.cli db-status '@request.json'
 ```
+
+`connection` is the SQL login `run-sql` takes (0.24.0 - nothing is looked up): `db_type`, `host`,
+`port`, `username` and a password, or a `password_ref` naming an environment variable of this shell.
 
 ### Three depths, and which one is *correct* depends on the engine
 
@@ -2383,8 +2397,10 @@ outside db_ops, and every requirement below is something that cost time on that 
 
 ```bash
 python -m db_ops.common.cli copy-schema '{
-  "source":      {"target": "SRC-SERVER-ID", "database_name": "APPDB_TEST", "schema": "schedule"},
-  "destination": {"target": "DST-SERVER-ID", "database_name": "APPDB_PROD", "schema": "schedule"},
+  "source":      {"target": "SRC-SERVER-ID", "connection": {...},
+                  "database_name": "APPDB_TEST", "schema": "schedule"},
+  "destination": {"target": "DST-SERVER-ID", "connection": {...},
+                  "database_name": "APPDB_PROD", "schema": "schedule"},
   "assert_dest_instance": "APPHOST\INSTANCE",
   "exclude_tables": ["dataLock", "*Staging"],
   "with_data": ["sql", "sql_version", "CalendarDay"],
@@ -3010,17 +3026,19 @@ diffed, reviewed, and applied to a **newer** build, which is the actual requirem
 ```bash
 # Read the instance, write server/*.sql + manifest.json. Read-only.
 python -m db_ops.common.cli sqlserver-export-instance \
-  '{"target": "ACME-192-0-2-115", "output_dir": "runtime/instance_bundles/2-115"}'
+  '{"target": "ACME-192-0-2-115", "connection": {...}, "output_dir": "runtime/instance_bundles/2-115"}'
 
 # Apply a bundle to a target, in dependency order, with version/edition gates.
 python -m db_ops.common.cli sqlserver-replay-instance \
-  '{"target": "NEW-HOST", "bundle_dir": "runtime/instance_bundles/2-115",
+  '{"target": "NEW-HOST", "connection": {...}, "bundle_dir": "runtime/instance_bundles/2-115",
     "phase": "pre-database", "dry_run": true}'
 
 # Compare a target against a bundle. Read-only.
 python -m db_ops.common.cli sqlserver-verify-instance \
-  '{"target": "NEW-HOST", "bundle_dir": "runtime/instance_bundles/2-115"}'
+  '{"target": "NEW-HOST", "connection": {...}, "bundle_dir": "runtime/instance_bundles/2-115"}'
 ```
+
+Each carries the instance's SQL login as `connection` (0.24.0) - the shape `run-sql` takes.
 
 They share `_gate_command` with the `host-*` and `sqlserver-*` patch commands, so the contract is
 identical: one JSON object in, a `GateReport` dict out, progress on stderr, JSON on stdout, exit 0

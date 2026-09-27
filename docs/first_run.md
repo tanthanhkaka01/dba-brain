@@ -102,7 +102,7 @@ printed), and what a `time_window`'s `from_hour`/`to_hour` mean. Give it an IANA
 Stored timestamps are UTC and stay UTC either way.
 
 ```bash
-db-ops common timezone '{"format":"txt"}'    # what this node resolved
+db-ops db timezone --format txt              # what this node resolved (db.cli's since 0.24.0)
 ```
 
 **SQLite on a first run is a decision, not a convenience.** Expecting PostgreSQL would mean the

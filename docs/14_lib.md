@@ -132,6 +132,8 @@ differently in two places.
 | `report_links.py` | `page_relative` / `href_for_page` — turning an absolute report URL into a relative href when it is one of our own pages. The report text stays absolute for Telegram; the rendered page gets the relative form, which resolves against whatever host served it rather than the one that rendered it |
 | `page_banner.py` | the one head banner every published page leads with — product, page title, scope, `snapshot <time>`, and relative links to the sibling pages that **exist**. Pure: the stamp is passed in already rendered, so a page rebuilt for a past day says that day. `siblings_present(exists)` takes a predicate rather than a directory, because touching the filesystem is an operation. `snapshot_stamp(markup)` reads that stamp back out, so a page copied off a node can be named after the moment it states rather than the moment it was copied. `pick_index_usage(names)` + `siblings_present(..., index_usage=)` add the per-server index report to the head - it cannot be a `SIBLING_PAGES` entry because its file name is a `server_id`, so the href is the caller's and only the label lives here |
 | `pseudonym.py` | stable fake names for a real estate's identifiers — what each real term *becomes*, given that the caller decides which strings are terms. Hashed rather than counted, so two runs agree; shaped, so a `server_id` keeps its construction and an index keeps its `PK_`; and every fake address is RFC 5737, which is exactly what `identifier_scan.ALWAYS_ALLOWED` permits. `Mapping.apply` makes **one pass** over the text - a name is matched as a token and looked up, an address as a substring, a shorthand under its own boundary - because an estate's index report names 52,000 objects and a `re.sub` per term does not finish. `add(loose=True)` rewrites a term inside a longer name too, for what an operator names by hand; `add_pair` records a replacement the caller worked out, so a shorthand lands on the same fake machine the full address did. `inventory` renders by **shape** - address, `server_id`, or host name - because `collect_identifiers` reports a whole inventory under one kind, and falling through to `generic` made every address on a page read `redacted4187`; `procedure` keeps a `usp_`/`sp_` prefix the way `index` keeps `PK_`. Deliberately not reversible |
+| `levels.py` | the four severity levels every event, route and alert speaks in (`normalize_level`). A root module until 0.24.0, when the root package stopped holding anything of its own (R41) |
+| `sql_instance.py` | a SQL Server instance address - `host`, `host,port`, `host\instance` - read into a host and a port (`parse`), because a restore entry says `localhost,1453` and the driver that checks it wants the two apart |
 
 ### Reading a value that may not be what it claims
 
@@ -142,6 +144,9 @@ differently in two places.
 | `json_io.py` | reading a `data/*.json` the one way the whole tool reads them |
 | `text_format.py` | one-line text helpers more than one component must agree on — the stored timestamp (`format_utc`) and the `\|`-safe log value. `format_message_time` still lives here as the name producers import, but it is now one call into `timezone.py` rather than a second implementation |
 | `timezone.py` | **the one clock db_ops shows.** Parses `config.json`'s `timezone` (an IANA name or a fixed offset), resolves it, and renders every operator-facing time as `2026-09-07 07:32:56 +07`. Also `display_now()` — what a `time_window`'s `from_hour`/`to_hour` are compared against — `display_today()`, `file_stamp()`, `label_from_file_stamp()` and `format_display_text()` - plus the two inverses a file that leaves the estate needs: `parse_display()` reads a rendered stamp back into the moment it names (refusing one with no offset rather than guessing a zone) and `utc_file_stamp()` writes `20260912T0130Z`, which says which clock it is on. Bound once by `db_ops.config.parse_config`; see §Timezone below |
+| `secret_value.py` | a secret named in a JSON object, resolved: an explicit value, an environment variable, or a ref it was handed (`resolve_secret_value`). `common.remote_exec`'s until 0.24.0 - an app needs the same resolution and may not import `common` (R03) |
+| `credential_files.py` | `users.json`'s database and remote credential groups, read (`load_credentials_file`, `load_remote_credentials_file`) - moved out of `common` in 0.24.0 with the data-folder reader, which needs them |
+| `sql_task_catalog.py` | the SQL task configuration, read - `sql_commands.json` and `sql_targets.json` into `SqlCommand` / `SqlTarget`, decided once for the runner and the bot (0.24.0; the runner's until then) |
 
 
 ### Timezone — one clock, bound once
@@ -298,6 +303,9 @@ were valid, and nothing in the tree compared one against the other.
 | `telegram_severity.py` | the severity emoji, applied once at the send layer |
 | `powershell.py` | quoting, encoding, and the `Invoke-Command` wrapper |
 | `sql_text.py` | SQL text and result limits — the parts of running a query that are not the running |
+| `sqlserver_certificate.py` | **the one batch that makes a backup-encryption certificate available on SQL Server** (`import_batch`, and `parse_marker` for its answer): by thumbprint - the SHA-1 of the `.cer` - and never dropping one; a taken name becomes `<name>_<8 hex digits>`. `restore-key`, the SMB restore and (written out) the shell restore send it (0.24.0) |
+| `mssql_ddl.py` | SQL Server DDL rendered from catalogue rows - pure text in and out, no connection; the counterpart of `common.schema_catalog`, which reads `sys.*` |
+| `name_filter.py` | which names a request selected, and which of its patterns matched nothing (`select`, `unused_patterns`) - the third answer is the one that kept being forgotten |
 
 `telegram_text` and `telegram_severity` are order-dependent and the order is load-bearing:
 splitting must happen **before** decoration, because `telegram_severity` tells a first chunk from a
@@ -324,6 +332,8 @@ continuation by the `[part i/n]` marker that the splitter writes.
 | `config_bundle.py` | what a portable configuration bundle *is* — one JSON file that carries a whole estate to a machine that has never seen this project. See below |
 | `deploy_selection.py` | which files a *partial* deploy ships — the rules for `deploy --type/--file-name`, with no transport in them. See below |
 | `workflow_steps.py` | one step of a Telegram conversation: what may be answered, what may be skipped, where Back goes, and the keyboard the operator sees. See below |
+| `distribution.py` | what the public distribution contains and what stays behind (`is_public`, `public_package_globs`); `PUBLIC_VERSION`, the released number, edited by hand |
+| `packaging.py` | what to tell a reader to `pip install` when an optional driver is missing - the distribution name differs between the repository and the public package (`install_hint`) |
 
 #### `data_files.py` — the list every transfer reads first
 

@@ -176,7 +176,7 @@
                     "factor": 2.0,
                     "on_unknown": "refuse"
                 },
-                "note": "The drill. It restores yesterday's backup onto a disposable instance, verifies it, and drops the copy a day later. Scoped to the databases that matter - an empty list would go on restoring whatever it found, including files nobody produces any more.",
+                "note": "The drill. It restores yesterday's backup onto a disposable instance, verifies it, and drops the copy a day later. Scoped to the databases that matter - an empty list would go on restoring whatever it found, including files nobody produces any more. The backups are dbabrain's own and encrypted, so source.backup_certificate reads the certificate pair its backup job exports beside them (from the share, or from source_dir over the source host's login). The drill instance runs in a container on a host with no sqlcmd of its own: target.sql_container runs the container's, and the container binds the import path at the same path.",
                 "source": {
                     "backup_share": "\\\\192.0.2.10\\SQLBK\\APPDB",
                     "credential_target": "192.0.2.10",
@@ -197,6 +197,7 @@
                     "sql_username": "sa",
                     "sql_password_ref": "MSSQL_192_0_2_40_SA",
                     "restore_data_dir": "/var/opt/mssql/data",
+                    "sql_container": "MSSQL_DRILL_1433",
                     "vm_import_linux_path": "/opt/restore/import/ACME-192-0-2-10",
                     "vm_import_linux_log_path": "/opt/restore/import/ACME-192-0-2-10"
                 },
