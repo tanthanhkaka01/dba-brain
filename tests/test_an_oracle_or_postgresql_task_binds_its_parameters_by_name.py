@@ -73,7 +73,7 @@ def test_a_percent_is_doubled_for_pg8000_only_when_something_is_bound():
     """pg8000 reads ``%`` outside a literal in its ``format`` style - but only on the extended
     protocol, which it uses only when values are passed. A statement with nothing to bind goes as
     it is, where a doubled ``%`` would reach the server doubled."""
-    from pg8000.dbapi import convert_paramstyle
+    convert_paramstyle = pytest.importorskip("pg8000.dbapi").convert_paramstyle
 
     statement, values = sql_text.bind_named_values(
         "select a % 2, 'x%' from t where b = :b", {"b": 1}, db_type="postgresql", style="format")

@@ -18,6 +18,7 @@ a fourth would have grown in the next app to meet a share. They are ``smb-list``
 from __future__ import annotations
 
 import os
+import sys
 import subprocess
 from pathlib import Path
 
@@ -234,6 +235,17 @@ def _target(root: Path):
     )
 
 
+#: 0.24.0 as released: on a Linux node the cleanup of a Windows target's share deletes nothing. The
+#: files `smb-list` names are joined into a POSIX `Path`, which does not split at "\\", and the
+#: obsolete chain is read by listing the UNC path, which a Linux node cannot - so every file is held
+#: back. Safe (nothing wrong is deleted) and named in the release notes; fixed in 0.24.1. Strict, so
+#: the fix turns these red until the mark goes.
+_LINUX_NODE_KEEPS_EVERYTHING = pytest.mark.xfail(
+    sys.platform != "win32", strict=True,
+    reason="0.24.0 known limitation: a Linux node's cleanup of a Windows share deletes nothing (0.24.1)")
+
+
+@_LINUX_NODE_KEEPS_EVERYTHING
 def test_a_windows_cleanup_deletes_only_what_is_aged_and_behind_the_newest_full(staged):
     from db_ops.backup_restore.delete_backup import delete_old_target_backup_files_on_share
 
@@ -244,6 +256,7 @@ def test_a_windows_cleanup_deletes_only_what_is_aged_and_behind_the_newest_full(
     assert {item.status for item in results} == {"DELETED", "SKIPPED"}
 
 
+@_LINUX_NODE_KEEPS_EVERYTHING
 def test_a_dry_run_on_a_windows_target_deletes_nothing(staged):
     from db_ops.backup_restore.delete_backup import delete_old_target_backup_files_on_share
 

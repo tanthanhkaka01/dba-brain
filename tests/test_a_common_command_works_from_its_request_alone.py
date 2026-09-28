@@ -350,7 +350,11 @@ def test_an_operation_refuses_an_empty_request_without_opening_the_configuration
 @pytest.mark.parametrize("name", sorted(_cases(Path("."))))
 def test_an_operation_runs_from_a_complete_request_on_a_broken_configuration(answers, tmp_path, name):
     """The rule itself: everything in the request, nothing read - so the poison is never touched."""
-    command, _request, expected = _cases(tmp_path)[name]
+    command, request, expected = _cases(tmp_path)[name]
+    if "'method': 'ssh'" in repr(request):
+        # Without the [ssh] extra (the core install `ci` tests) an SSH operation stops at "paramiko
+        # is required" - its refusal of a missing driver, before the work this case proves.
+        pytest.importorskip("paramiko")
     result = answers[("case", name)]
     said = _said(result)
     assert result["body"] is not None, f"{command}: no envelope: {result['stderr'][-400:]}"
