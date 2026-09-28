@@ -27,6 +27,11 @@ do about it. Not the internal refactor that made it possible.
   instance that did not already hold it.
 - **`target.sql_container`, and `run-sqlcmd`'s `container`** - every `sqlcmd` of the restore runs
   inside the target's SQL Server container (`docker exec`), for a host with no `sqlcmd` of its own.
+- **`examples/docker-node/`: a node in Docker, installed and upgraded** - the published image under
+  `docker compose`, from `init` to a running node, then upgraded to the next release (back up, keep
+  the old image, `upgrade-config` in the new image while stopped) and rolled back. The compose file
+  pins the container's `hostname`: left to Docker it is the container id, so every upgrade was a new
+  node to the store, and the runs the old container left open waited out their timeouts.
 
 ### Changed
 

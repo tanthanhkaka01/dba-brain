@@ -1,0 +1,52 @@
+# DBA Brain in Docker - one node, run by `docker compose`.
+#
+# The walkthrough is README.md beside this file (examples/docker-node/). This file goes into the
+# tool root, next to what `db-ops init` writes there (config.json, data/, assets/, logs/, runtime/),
+# and nothing in it is edited to upgrade: the version is DBABRAIN_TAG in .env.
+services:
+  dbabrain:
+    image: ghcr.io/tanthanhkaka01/dbabrain:${DBABRAIN_TAG:-latest}
+    container_name: dbabrain
+    # A fixed name, not the container id Docker would give it. The store knows this node, and
+    # every run it has open, by its host name: a container recreated under a new one (every
+    # upgrade) finds its predecessor's open runs belonging to "another host" and waits out their
+    # timeouts, and the node list grows a row per upgrade. One name per node sharing a store.
+    hostname: dbabrain
+    restart: unless-stopped
+    # A PID 1 that reaps. Without it, the commands the bot starts in the background become zombies
+    # that still answer os.kill(pid, 0), and the bot reports a finished command as still running.
+    init: true
+    environment:
+      - DB_OPS_CONFIG=config.json
+      - DB_OPS_DAEMON_DELAY=2
+      # A daemon not told its role is "master", which schedules nothing and looks like a healthy,
+      # idle process. Every shipped app command runs on a worker.
+      - DB_OPS_NODE_ROLE=worker
+      # The passphrase of the secret store, taken from the shell that runs `docker compose up`.
+      # Never give it a value here or in .env: this file is not a secret, and the passphrase is.
+      - DB_OPS_SECRET_KEY
+    ports:
+      # The console (/db_ops/) and the report pages (/report_dba/), served by the scheduled web host.
+      - "8080:8080"
+    volumes:
+      - ./config.json:/app/tools/db_ops/config.json:ro
+      - ./data:/app/tools/db_ops/data
+      # Writable: registering a SQL task from the bot writes its .sql file here.
+      - ./assets:/app/tools/db_ops/assets
+      - ./logs:/app/tools/db_ops/logs
+      - ./runtime:/app/tools/db_ops/runtime
+      # Only for `sre create-db-docker` (lab databases on this host's Docker). The socket gives the
+      # container root on this host - leave both lines out unless you use it. The containers
+      # directory has to be the same absolute path inside and out.
+      # - /var/run/docker.sock:/var/run/docker.sock
+      # - /opt/db_ops/containers:/opt/db_ops/containers
+
+# A network of its own, on a /24 you chose. Left to Docker, a new network takes the next block of
+# its default pool - once a /16 that held a real database server, which this host could then no
+# longer reach ("No route to host" for a machine that was up). Pick a /24 no monitored machine is in.
+networks:
+  default:
+    name: dbabrain_default
+    ipam:
+      config:
+        - subnet: 172.30.240.0/24

@@ -3,12 +3,14 @@
 Worked configurations you can copy whole. A **quickstart directory** is a complete **tool root** —
 a `config.json` and a `data/` folder — so you can stand in it and run the toolkit against it without
 touching anything else. A **file** here is a walkthrough instead: commands to run against a root of
-your own, in order. And [`showcase/`](./showcase) is neither: it is output, not input — the pages a
-running estate actually publishes.
+your own, in order; [`docker-node/`](./docker-node) is one too, with the compose file it runs beside
+it. And [`showcase/`](./showcase) is neither: it is output, not input — the pages a running estate
+actually publishes.
 
 | Example | What it shows |
 | --- | --- |
 | [`telegram-commands.md`](./telegram-commands.md) | What the bot can be asked, with the answers it actually gives: the node's own state and published URLs, the targets, the scheduled SQL and its history, the backup and restore ids, your own command history — each with the clearance it needs and what its answer is good for. Includes why a secret must never be typed into a command line. |
+| [`docker-node/`](./docker-node) | **The same node in Docker, and how it is upgraded.** Pull the published image, `init` a tool root through it, hand the container the folders it writes, start it with the [`docker-compose.yml`](./docker-node/docker-compose.yml) beside the walkthrough — then upgrade it to the next release (back up, keep the old image, `upgrade-config` with the new one while stopped) and roll it back. Written from a rehearsal on a lab host: the install on 0.23.0 and on 0.24.0, the upgrade between them, a rollback and the upgrade again. Every line of the compose file says why it is there — the fixed `hostname` measured, the rest learned from a production worker. |
 | [`standing-up-a-node.md`](./standing-up-a-node.md) | **The whole path, start to finish:** `pip install` → `init` → prove every scheduled app runs with nothing configured → start the daemon → store the bot token and level your groups → register the first database → OS metrics and gateway targets → the pages it publishes. Written from a node actually stood up this way, with what each step proves, and a list of what bites people. **Read this if you are new.** |
 | [`lab-create-backup-restore.md`](./lab-create-backup-restore.md) | **A lab database, backed up and restored, for every engine.** `dbabrain sre create-db-docker` builds a throwaway SQL Server, PostgreSQL or Oracle in Docker on two machines. Then register it, back it up, restore it onto the other machine, and restore it to a moment in the past. Written from the 0.23.0 release drill, with the timings it measured. Also covers what Oracle XE and MySQL can and cannot do, and what bites people. |
 | [`lab-sql-tasks.md`](./lab-sql-tasks.md) | **Scheduled SQL on the lab databases, all three engines.** A 10-, a 5- and a 1-minute task on SQL Server, PostgreSQL and Oracle, each due again 10 s after it starts, so they overlap: how each engine splits a script, registering with `sql-command-add` and `sql-target-add`, what `max_parallel` does to nine long tasks (4 against 10, measured), the messages, and what a daemon restart leaves behind. Written from the 0.23.0 release drill. |

@@ -253,7 +253,9 @@ readable by a person, because until the console lands they do the same thing.
 ## From nothing to a running estate
 
 Every command below is real and in this release. The long form, with what each step proves and what
-bites people, is [`examples/standing-up-a-node.md`](./examples/standing-up-a-node.md).
+bites people, is [`examples/standing-up-a-node.md`](./examples/standing-up-a-node.md). **In Docker**,
+the published image under `docker compose`, installed and upgraded:
+[`examples/docker-node/`](./examples/docker-node).
 
 Two things belong in every shell that runs these:
 

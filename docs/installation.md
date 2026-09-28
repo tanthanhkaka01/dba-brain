@@ -29,7 +29,7 @@ python -m venv .venv
 From a checkout:
 
 ```bash
-git clone https://github.com/dba_userkaka01/dba-brain.git
+git clone https://github.com/tanthanhkaka01/dba-brain.git
 cd dba-brain
 python -m venv .venv
 .venv/bin/pip install -e '.[postgres,dev]'
@@ -146,6 +146,11 @@ forwarded to a small bridge process running beside a client that can. See
 The shipped image is Ubuntu with everything the awkward targets need already in it: both ODBC
 drivers, PowerShell for Windows targets, `openssh-client`, `rsync` and `smbclient` for copying
 backups, and the Docker client for provisioning lab databases.
+
+**Every release publishes it** as `ghcr.io/tanthanhkaka01/dbabrain:<version>`, and as `latest`.
+Installing it, running it under `docker compose` and upgrading it to the next release is
+[`examples/docker-node/`](../examples/docker-node) — a walkthrough rehearsed on a lab host, and the
+compose file it runs. What follows here is what the image is and how to build one yourself.
 
 ```bash
 docker build -t db_ops:local .
