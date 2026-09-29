@@ -17,7 +17,7 @@ import time
 
 import pytest
 
-from db_ops.config import DbOpsConfig
+from db_ops.lib.config import DbOpsConfig
 from db_ops.metrics.collector import collect_metrics
 from db_ops.metrics.definitions import load_max_parallel_servers
 from db_ops.metrics.models import MetricDefinition, MetricTarget

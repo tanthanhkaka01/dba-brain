@@ -19,9 +19,10 @@ from pathlib import Path
 DB_OPS = Path(__file__).resolve().parents[1] / "db_ops"
 ROOT_CLI = DB_OPS / "cli.py"
 
-#: What the root may hold: the package marker (re-exporting the version), the entry point, and
-#: the `db_ops.config` alias of `lib.config`.
-ROOT_MODULES = frozenset({"__init__.py", "cli.py", "config.py"})
+#: What the root may hold: the package marker (re-exporting the version) and the entry point. The
+#: `db_ops.config` alias of `lib.config` was the third until 2026-09-28, when its last importers
+#: moved to `db_ops.lib.config` and it was deleted.
+ROOT_MODULES = frozenset({"__init__.py", "cli.py"})
 ROOT_MODULES_LEFT: frozenset[str] = frozenset()
 
 #: `argv[0]` values the dispatcher answers without dispatching - asking for help or the version.
@@ -90,3 +91,44 @@ def test_the_baselines_only_shrink():
     stale = sorted(ROOT_COMMANDS_LEFT - _own_commands()) + sorted(ROOT_IMPORTS_LEFT - _outside_imports()) \
         + sorted(name for name in ROOT_MODULES_LEFT if not (DB_OPS / name).exists())
     assert not stale, f"gone - delete from the baselines: {stale}"
+
+
+# --------------------------------------------------------------------------- #
+# What the dispatcher imports by name (R41, R38)
+# --------------------------------------------------------------------------- #
+#: The dispatcher imports a component's entry point **by name, at dispatch**, and runs its `main`
+#: in the same process a person started - it does no work of its own, so routing `db-ops init`
+#: through a second process would buy nothing (the operator's decision D1, audits/
+#: 20260928_audit_rules_md_review.md). A static-import guard cannot see an import by string, so
+#: this one reads every `importlib.import_module` call and what it may name.
+def _import_module_arguments() -> list[ast.expr]:
+    return [node.args[0] for node in ast.walk(_tree())
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "import_module" and node.args]
+
+
+def _entry_points() -> set[str]:
+    from db_ops import cli
+
+    return set(cli.APPS.values())
+
+
+def test_every_table_entry_is_a_components_entry_point():
+    """What `APPS` names is a component's `cli` (or the daemon's), never a module inside one."""
+    wrong = sorted(name for name in _entry_points()
+                   if not (name.count(".") == 2 and name.startswith("db_ops.")
+                           and name.rsplit(".", 1)[1] in {"cli", "daemon"}))
+    assert not wrong, f"APPS names {wrong}; the dispatcher reaches a component only by its entry point"
+
+
+def test_the_dispatcher_imports_by_name_only_a_components_entry_point():
+    """Each `import_module` names a literal entry point from `APPS`, or looks one up in it."""
+    entry_points = _entry_points()
+    wrong = []
+    for argument in _import_module_arguments():
+        if isinstance(argument, ast.Constant):
+            if argument.value not in entry_points:
+                wrong.append(argument.value)
+        elif not isinstance(argument, ast.Subscript):
+            wrong.append(ast.unparse(argument))
+    assert not wrong, f"db_ops/cli.py imports {wrong} by name; it may import only what APPS lists"

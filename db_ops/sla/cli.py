@@ -7,7 +7,7 @@ from dataclasses import asdict
 from pathlib import Path
 from datetime import datetime, timezone
 
-from db_ops.config import load_config, resolve_config_path
+from db_ops.lib.config import load_config, resolve_config_path
 from db_ops.db import DbOpsStore
 from db_ops.logging_ops import log_event, log_function_call, log_function_error, setup_app_logger
 from db_ops.logging_ops.runtime_stdout import patch_stdout

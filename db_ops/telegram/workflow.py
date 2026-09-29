@@ -25,6 +25,8 @@ def run_bot_workflow(
     command_limit: int = 50,
     send_limit: int = 50,
     retry_count: int = 3,
+    send_per_chat: int = 5,
+    pauses_path: str | Path | None = None,
 ) -> dict[str, Any]:
     updates_result = fetch_and_save_updates(
         bot_token=bot_token,
@@ -60,6 +62,8 @@ def run_bot_workflow(
         timeout_seconds=timeout_seconds,
         limit=send_limit,
         retry_count=retry_count,
+        send_per_chat=send_per_chat,
+        pauses_path=pauses_path,
     )
     return {
         "ok": True,

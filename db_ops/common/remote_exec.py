@@ -52,8 +52,10 @@ import os
 import shlex
 import socket
 import subprocess
+import tempfile
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from typing import Any, Sequence
@@ -161,6 +163,16 @@ class RemoteConnectError(RemoteExecError):
 
 class RemoteTimeoutError(RemoteExecError):
     """Connect or command exceeded the configured timeout."""
+
+
+class RemoteCommandTimeoutError(RemoteTimeoutError):
+    """The command **started** and was cut off at its deadline - not a connect that timed out.
+
+    The two must not look the same to a caller: a RESTORE LOG cut off mid-way leaves a database
+    whose state has to be inspected, while a connect that never happened can simply be retried.
+    It carries what the command had printed (``stdout`` / ``stderr``). A :class:`RemoteTimeoutError`,
+    so every handler written for that one still catches it.
+    """
 
 
 # --------------------------------------------------------------------------- #
@@ -437,18 +449,61 @@ def shell_prelude(env: dict[str, str] | None, *, shell: str) -> str:
 
 
 def _script_to_command(script_text: str, *, shell: str) -> tuple[str, bytes | None]:
-    """Turn a script body into (remote command line, stdin bytes) for the target shell."""
+    """A ``cmd`` script as one command line - the only shell whose script is not a file.
+
+    cmd.exe has no script-from-stdin mode worth relying on and no reason to be handed a file, so
+    its lines are joined. bash and PowerShell scripts travel as a file (:func:`script_file_name`).
+    """
+    joined = " && ".join(line for line in str(script_text).splitlines() if line.strip())
+    return f"cmd.exe /c {joined}", None
+
+
+# --------------------------------------------------------------------------- #
+# A script is a FILE on the machine that runs it (0.25.0)
+# --------------------------------------------------------------------------- #
+#: Until 0.25.0 a bash script was the remote shell's **stdin** (``bash -s``). Any command in it that
+#: reads stdin - ``docker compose exec`` does, ``-i`` is its default - read the rest of the script
+#: instead, and the run ended early: exit 0, no error, the tail never run. A PowerShell script
+#: went as ``-EncodedCommand``, which runs out of command line past ~8 KB of script. So both are
+#: written to a file first, private to the login, run with stdin closed, and removed.
+SCRIPT_FILE_PREFIX = ".db_ops_script_"
+
+
+def script_file_name(shell: str) -> str:
+    """A name no other run can hold: the file goes in the login's home, beside nothing of ours."""
+    return f"{SCRIPT_FILE_PREFIX}{uuid.uuid4().hex}{'.ps1' if shell == SHELL_POWERSHELL else '.sh'}"
+
+
+def script_file_bytes(script_text: str, *, shell: str) -> bytes:
+    """The file's bytes. PowerShell's carry a BOM: without one Windows PowerShell 5.1 reads a
+    ``-File`` script in the ANSI codepage, and a non-ASCII path in it becomes a path nothing has."""
+    body = str(script_text).encode("utf-8")
+    return b"\xef\xbb\xbf" + body if shell == SHELL_POWERSHELL else body
+
+
+def script_file_command(path: str, *, shell: str) -> str:
+    """The command line that runs the file at ``path`` - stdin closed, the file gone afterwards.
+
+    For bash the file is removed by a ``trap`` in the same command, so it goes even when the
+    connection drops mid-run; the caller removes it again, which covers a run that never started.
+    """
     if shell == SHELL_POWERSHELL:
-        return (
-            "powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand "
-            + encode_powershell_command(script_text),
-            None,
-        )
-    if shell == SHELL_CMD:
-        # cmd.exe has no stdin-script mode worth relying on; join the lines it should run.
-        joined = " && ".join(line for line in str(script_text).splitlines() if line.strip())
-        return f"cmd.exe /c {joined}", None
-    return "bash -s", str(script_text).encode("utf-8")
+        return f"powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File {quote_powershell(path)}"
+    quoted = shlex.quote(path)
+    return f"trap {shlex.quote('rm -f ' + quoted)} EXIT; bash {quoted} < /dev/null"
+
+
+def windows_path(path: str) -> str:
+    """A path Windows OpenSSH's SFTP reported, as PowerShell needs it.
+
+    SFTP speaks POSIX there: ``normalize()`` answers ``/C:/Users/x/y.ps1``, and ``-File`` on that
+    fails with "The given path's format is not supported" - a message that reads like a
+    permissions or quoting problem and is neither.
+    """
+    text = str(path)
+    if len(text) > 2 and text[0] == "/" and text[2] == ":":
+        text = text[1:]
+    return text.replace("/", "\\")
 
 
 def _join_command(command: str | Sequence[str], *, cwd: str | None = None) -> str:
@@ -487,8 +542,14 @@ class RemoteSession:
         cwd: str | None = None,
         stdin: str | bytes | None = None,
         check: bool = False,
+        on_output: Any = None,
     ) -> RemoteResult:
-        """Run one command on the machine and return its rc/stdout/stderr."""
+        """Run one command on the machine and return its rc/stdout/stderr.
+
+        ``on_output`` is called with each stdout line as it arrives (local, SSH; WinRM when the
+        command ends). A command cut off at ``timeout_seconds`` raises
+        :class:`RemoteCommandTimeoutError` carrying what it had printed.
+        """
         raise NotImplementedError
 
     def run_script(
@@ -564,6 +625,7 @@ class LocalSession(RemoteSession):
         cwd: str | None = None,
         stdin: str | bytes | None = None,
         check: bool = False,
+        on_output: Any = None,
     ) -> RemoteResult:
         timeout = self._timeout(timeout_seconds)
         argv: list[str] | str
@@ -576,6 +638,10 @@ class LocalSession(RemoteSession):
         process_env = os.environ.copy()
         process_env.update({str(k): str(v) for k, v in (env or {}).items()})
         started = time.monotonic()
+        if on_output is not None:
+            result = self._run_streaming(argv, shown=shown, cwd=cwd, env=process_env, stdin=stdin,
+                                         timeout=timeout, on_output=on_output, started=started)
+            return result.check() if check else result
         try:
             completed = subprocess.run(
                 argv,
@@ -589,7 +655,7 @@ class LocalSession(RemoteSession):
                 input=stdin if isinstance(stdin, str) else (stdin.decode("utf-8") if stdin else None),
             )
         except subprocess.TimeoutExpired as exc:
-            raise RemoteTimeoutError(
+            raise RemoteCommandTimeoutError(
                 f"Local command timed out after {timeout} seconds.",
                 method=self.access.method,
                 command=shown,
@@ -602,6 +668,50 @@ class LocalSession(RemoteSession):
         result = self._result(shown, completed.returncode, completed.stdout or "", completed.stderr or "", started)
         return result.check() if check else result
 
+    def _run_streaming(self, argv: list[str] | str, *, shown: str, cwd: str | None, env: dict[str, str],
+                       stdin: str | bytes | None, timeout: int | None, on_output: Any,
+                       started: float) -> RemoteResult:
+        """``run`` with each stdout line handed to ``on_output`` as it arrives."""
+        try:
+            process = subprocess.Popen(
+                argv, shell=not isinstance(argv, list), cwd=cwd, env=env, text=True, encoding="utf-8",
+                errors="replace", stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL)
+        except FileNotFoundError as exc:
+            raise RemoteExecError(f"Command not found: {exc}", method=self.access.method, command=shown) from exc
+        lines: list[str] = []
+        errors: list[str] = []
+
+        def read_out() -> None:
+            assert process.stdout is not None
+            for line in process.stdout:
+                lines.append(line)
+                on_output(line)
+
+        def read_err() -> None:
+            assert process.stderr is not None
+            errors.append(process.stderr.read())
+
+        readers = [threading.Thread(target=read_out, daemon=True), threading.Thread(target=read_err, daemon=True)]
+        for reader in readers:
+            reader.start()
+        if stdin is not None and process.stdin is not None:
+            process.stdin.write(stdin if isinstance(stdin, str) else stdin.decode("utf-8"))
+            process.stdin.close()
+        try:
+            exit_code = process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            process.kill()
+            for reader in readers:
+                reader.join(timeout=5)
+            raise RemoteCommandTimeoutError(
+                f"Local command timed out after {timeout} seconds.", method=self.access.method, command=shown,
+                stdout="".join(lines), stderr="".join(errors),
+                duration_seconds=round(time.monotonic() - started, 3)) from exc
+        for reader in readers:
+            reader.join()
+        return self._result(shown, exit_code, "".join(lines), "".join(errors), started)
+
     def run_script(
         self,
         script: str | Path,
@@ -613,19 +723,26 @@ class LocalSession(RemoteSession):
     ) -> RemoteResult:
         target_shell = (shell or self.access.shell or SHELL_BASH).lower()
         text = self._script_text(script, shell=target_shell, env=env)
-        if target_shell == SHELL_POWERSHELL:
-            argv = [
-                powershell_executable(),
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-EncodedCommand",
-                encode_powershell_command(text),
-            ]
-            return self.run(argv, timeout_seconds=timeout_seconds, check=check)
         if target_shell == SHELL_CMD:
             return self.run(_script_to_command(text, shell=SHELL_CMD)[0], timeout_seconds=timeout_seconds, check=check)
-        return self.run(["bash", "-s"], timeout_seconds=timeout_seconds, stdin=text, check=check)
+        # mkstemp: created exclusively, readable by this user only - the env prelude can hold a
+        # passphrase. The run gets an empty stdin, never this process's own.
+        handle, path = tempfile.mkstemp(prefix=SCRIPT_FILE_PREFIX,
+                                        suffix=".ps1" if target_shell == SHELL_POWERSHELL else ".sh")
+        try:
+            with os.fdopen(handle, "wb") as file:
+                file.write(script_file_bytes(text, shell=target_shell))
+            if target_shell == SHELL_POWERSHELL:
+                argv = [powershell_executable(), "-NoProfile", "-NonInteractive", "-ExecutionPolicy",
+                        "Bypass", "-File", path]
+            else:
+                argv = ["bash", path]
+            return self.run(argv, timeout_seconds=timeout_seconds, stdin="", check=check)
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
 
 class SshSession(RemoteSession):
@@ -705,6 +822,7 @@ class SshSession(RemoteSession):
         cwd: str | None = None,
         stdin: str | bytes | None = None,
         check: bool = False,
+        on_output: Any = None,
     ) -> RemoteResult:
         timeout = self._timeout(timeout_seconds)
         text = _join_command(command, cwd=cwd)
@@ -712,6 +830,9 @@ class SshSession(RemoteSession):
             text = shell_prelude(env, shell=self.access.shell) + text
         client = self._connect()
         started = time.monotonic()
+        if on_output is not None:
+            result = self._run_streaming(client, text, timeout=timeout, on_output=on_output, started=started)
+            return result.check() if check else result
         try:
             stdin_ch, stdout_ch, stderr_ch = client.exec_command(text, timeout=timeout, get_pty=False)
             if stdin is not None:
@@ -727,7 +848,7 @@ class SshSession(RemoteSession):
             stderr = stderr_ch.read().decode("utf-8", errors="replace")
             exit_code = stdout_ch.channel.recv_exit_status()
         except (socket.timeout, TimeoutError) as exc:
-            raise RemoteTimeoutError(
+            raise RemoteCommandTimeoutError(
                 f"SSH command timed out after {timeout} seconds on {self.access.host}:{self.access.port}.",
                 method=self.access.method,
                 host=self.access.host,
@@ -745,6 +866,64 @@ class SshSession(RemoteSession):
         result = self._result(text, exit_code, stdout, stderr, started)
         return result.check() if check else result
 
+    def _run_streaming(self, client: Any, text: str, *, timeout: int | None, on_output: Any,
+                       started: float) -> RemoteResult:
+        """``run`` with each stdout line handed to ``on_output`` as it arrives.
+
+        A channel of its own, polled, because a whole-output read gives nothing until the command
+        ends - and a restore runs for an hour saying ``NN percent processed`` as it goes. The
+        deadline is the command's whole run, not a gap between two reads.
+        """
+        deadline = started + timeout if timeout else None
+        out, err = bytearray(), bytearray()
+        echoed = 0  # how much of `out` has been handed on, up to its last complete line
+
+        def take(chunk: bytes) -> None:
+            nonlocal echoed
+            out.extend(chunk)
+            end = out.rfind(b"\n") + 1
+            if end > echoed:
+                for line in bytes(out[echoed:end]).decode("utf-8", "replace").splitlines(keepends=True):
+                    on_output(line)
+                echoed = end
+
+        try:
+            channel = client.get_transport().open_session(timeout=self.access.timeout_seconds or None)
+            channel.exec_command(text)
+            timed_out = False
+            while not channel.exit_status_ready():
+                if channel.recv_ready():
+                    take(channel.recv(4096))
+                if channel.recv_stderr_ready():
+                    err.extend(channel.recv_stderr(4096))
+                if deadline is not None and time.monotonic() >= deadline:
+                    timed_out = True
+                    channel.close()
+                    break
+                time.sleep(0.05)
+            if not timed_out:
+                # A command that ends before the first poll leaves everything here - handed on too,
+                # or a quick run shows nothing at all (a 0.04 s RESTORE on the labs).
+                while channel.recv_ready():
+                    take(channel.recv(4096))
+                while channel.recv_stderr_ready():
+                    err.extend(channel.recv_stderr(4096))
+            if echoed < len(out):
+                on_output(bytes(out[echoed:]).decode("utf-8", "replace"))
+            exit_code = None if timed_out else channel.recv_exit_status()
+        except Exception as exc:  # noqa: BLE001 - channel/transport failures mid-command.
+            raise RemoteExecError(
+                f"SSH command execution error on {self.access.host}:{self.access.port}: {exc}",
+                method=self.access.method, host=self.access.host, command=text,
+                duration_seconds=round(time.monotonic() - started, 3)) from exc
+        stdout, stderr = bytes(out).decode("utf-8", "replace"), bytes(err).decode("utf-8", "replace")
+        if timed_out:
+            raise RemoteCommandTimeoutError(
+                f"SSH command timed out after {timeout} seconds on {self.access.host}:{self.access.port}.",
+                method=self.access.method, host=self.access.host, command=text, stdout=stdout, stderr=stderr,
+                duration_seconds=round(time.monotonic() - started, 3))
+        return self._result(text, exit_code, stdout, stderr, started)
+
     def run_script(
         self,
         script: str | Path,
@@ -756,8 +935,39 @@ class SshSession(RemoteSession):
     ) -> RemoteResult:
         target_shell = (shell or self.access.shell or SHELL_BASH).lower()
         text = self._script_text(script, shell=target_shell, env=env)
-        command, stdin_bytes = _script_to_command(text, shell=target_shell)
-        return self.run(command, timeout_seconds=timeout_seconds, stdin=stdin_bytes, check=check)
+        if target_shell == SHELL_CMD:
+            return self.run(_script_to_command(text, shell=SHELL_CMD)[0], timeout_seconds=timeout_seconds,
+                            check=check)
+        name, path = self._place_script(text, shell=target_shell)
+        try:
+            return self.run(script_file_command(path, shell=target_shell), timeout_seconds=timeout_seconds,
+                            check=check)
+        finally:
+            try:
+                self.sftp().remove(name)
+            except Exception:  # noqa: BLE001 - the trap removed it already; nothing to report.
+                pass
+
+    def _place_script(self, text: str, *, shell: str) -> tuple[str, str]:
+        """Write the script into the login's home: ``(name for SFTP, path for the command line)``.
+
+        A POSIX file is created exclusively and made private **before** a byte is written - the
+        env prelude can hold a passphrase. A Windows OpenSSH server keeps the home folder's ACL.
+        """
+        name = script_file_name(shell)
+        try:
+            sftp = self.sftp()
+            windows = shell == SHELL_POWERSHELL
+            with sftp.open(name, "w" if windows else "wx") as handle:
+                if not windows:
+                    sftp.chmod(name, 0o600)
+                handle.write(script_file_bytes(text, shell=shell))
+            placed = sftp.normalize(name)
+        except Exception as exc:  # noqa: BLE001 - reported as the session's own error.
+            raise RemoteExecError(
+                f"Could not place the script on {self.access.host}: {exc}",
+                method=self.access.method, host=self.access.host) from exc
+        return name, windows_path(placed) if windows else placed
 
     def run_sudo(
         self,
@@ -772,6 +982,17 @@ class SshSession(RemoteSession):
         wrapped = f"sudo -S -p '' sh -c {shlex.quote(str(command))}"
         stdin = f"{sudo_password}\n" if sudo_password else None
         return self.run(wrapped, timeout_seconds=timeout_seconds, stdin=stdin, check=check)
+
+    def open_stream(self, command: str, *, timeout_seconds: float | None = None):
+        """Start ``command`` and hand back its ``(stdin, stdout, stderr)`` - for a caller that pipes
+        bytes itself: a tar stream read from one host and written into another (``backup_copy``,
+        ``ssh_relay``). The caller reads, writes and waits for the exit status; the connection
+        stays this session's, and closes with it.
+
+        Those callers used to open their own paramiko clients - an executor of their own beside
+        this one. This is the one door (0.25.0, the operator: one way to run anything on a host).
+        """
+        return self._connect().exec_command(command, timeout=timeout_seconds)
 
     # -- files (SFTP) --------------------------------------------------- #
     def sftp(self):
@@ -884,13 +1105,19 @@ class WinrmSession(RemoteSession):
         cwd: str | None = None,
         stdin: str | bytes | None = None,
         check: bool = False,
+        on_output: Any = None,
     ) -> RemoteResult:
         text = _join_command(command, cwd=None)
         if cwd:
             text = f"Set-Location {quote_powershell(cwd)}; {text}"
         if self.access.shell == SHELL_CMD:
             text = f"& cmd.exe /c {quote_powershell(text)}"
-        return self.run_script(text, shell=SHELL_POWERSHELL, timeout_seconds=timeout_seconds, env=env, check=check)
+        result = self.run_script(text, shell=SHELL_POWERSHELL, timeout_seconds=timeout_seconds, env=env, check=check)
+        if on_output is not None:
+            # WinRM answers whole: the lines are handed on when the command ends.
+            for line in (result.stdout or "").splitlines(keepends=True):
+                on_output(line)
+        return result
 
     def run_script(
         self,
@@ -928,8 +1155,8 @@ class WinrmSession(RemoteSession):
             try:
                 client = client_cls(
                     access.host,
-                    username=self._winrm_username(),
-                    password=access.password,
+                    username=self._winrm_username() or None,
+                    password=access.password or None,
                     ssl=access.ssl,
                     port=access.port,
                     auth=access.winrm_auth,
@@ -957,7 +1184,7 @@ class WinrmSession(RemoteSession):
         worker.start()
         worker.join(timeout)
         if worker.is_alive():
-            raise RemoteTimeoutError(
+            raise RemoteCommandTimeoutError(
                 f"WinRM command timed out after {timeout} seconds on {access.host}.",
                 method=access.method,
                 host=access.host,
@@ -983,7 +1210,10 @@ class WinrmSession(RemoteSession):
         process table on this host.
         """
         access = self.access
-        wrapper = _INVOKE_COMMAND_WRAPPER.format(
+        # No username and no password is the current identity - the node's own Windows login,
+        # which is how a restore reached a Windows target with no host password stored.
+        integrated = not access.username and not access.password
+        wrapper = (_INVOKE_COMMAND_AS_CURRENT_USER if integrated else _INVOKE_COMMAND_WRAPPER).format(
             username=quote_powershell(self._winrm_username()),
             host=quote_powershell(access.host),
             port=access.port,
@@ -1011,7 +1241,7 @@ class WinrmSession(RemoteSession):
                 env=env,
             )
         except subprocess.TimeoutExpired as exc:
-            raise RemoteTimeoutError(
+            raise RemoteCommandTimeoutError(
                 f"WinRM command timed out after {timeout} seconds on {access.host}.",
                 method=access.method,
                 host=access.host,
@@ -1050,6 +1280,22 @@ $params = @{{
     Port = {port}
     Credential = $credential
     Authentication = {auth}
+}}
+if ({use_ssl}) {{
+    $params.UseSSL = $true
+    $params.SessionOption = New-PSSessionOption -SkipCACheck -SkipCNCheck -SkipRevocationCheck
+}}
+Invoke-Command @params -ScriptBlock $scriptBlock
+"""
+
+#: The same, as the identity this process runs under: no ``-Credential`` at all.
+_INVOKE_COMMAND_AS_CURRENT_USER = """
+$ErrorActionPreference = 'Stop'
+$scriptText = [System.Text.Encoding]::Unicode.GetString([System.Convert]::FromBase64String($env:DB_OPS_WINRM_SCRIPT_B64))
+$scriptBlock = [ScriptBlock]::Create($scriptText)
+$params = @{{
+    ComputerName = {host}
+    Port = {port}
 }}
 if ({use_ssl}) {{
     $params.UseSSL = $true

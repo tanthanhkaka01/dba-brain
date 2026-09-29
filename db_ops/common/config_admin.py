@@ -38,7 +38,8 @@ from db_ops.lib.json_io import (  # noqa: F401 - one definition, see that module
     looks_like_json_request,
 )
 
-from db_ops.lib.notify import NOTIFY_CHAT_LEVELS, NotifyConfigError, notify_rule_dict
+from db_ops.lib.notify import (DEFAULT_ERROR_LEVEL, DEFAULT_RUN_LEVEL, NOTIFY_CHAT_LEVELS,
+                               NotifyConfigError, known_chat_levels, notify_rule_dict)
 from db_ops.lib import task_output
 from db_ops.lib.sql_access import (  # noqa: F401 - one definition, see that module
     KNOWN_DB_TYPES,
@@ -50,7 +51,7 @@ from db_ops.lib.task_output import (  # noqa: F401 - one definition, see that mo
     TaskOutputError,
 )
 from db_ops.lib.time_window import (
-    MANUAL_ONLY, NEW_FIELDS as _TIME_WINDOW_FIELDS, WEEKDAYS_FIELD, parse_weekdays)
+    MANUAL_ONLY, NEW_FIELDS as _TIME_WINDOW_FIELDS, WEEKDAYS_FIELD, parse_time_window_config, window_of)
 from db_ops.lib.paths import DEFAULT_DATA_DIR, TOOL_ROOT  # noqa: F401 - one definition, see that module
 
 # The notify shape (levels, rule form, validation) is owned by db_ops.lib.notify — this
@@ -95,6 +96,20 @@ _DEFAULT_TIME_WINDOW = {
 # while `telegram_groups.json` also defines app-specific levels (sql, sla, backup, restore).
 SQL_TASK_NOTIFY_CHAT = "sql"
 _SQL_TASK_CHAT_CHOICES = tuple(dict.fromkeys((SQL_TASK_NOTIFY_CHAT, *NOTIFY_CHAT_LEVELS)))
+
+
+def default_sql_task_chats() -> tuple[str, str]:
+    """The (run, failure) levels a SQL task reports at when its request names none.
+
+    The dedicated `sql` group where this node has one, else `logging` / `error`, which every
+    install has. A level exists only while a group defines it (``lib.notify.known_chat_levels``),
+    and a fresh install defines none: defaulting to `sql` regardless made both registrars refuse
+    their own default, so neither `add-sql` nor `sql-target-add` could register a task on a new
+    install (0.25.0, 1.67).
+    """
+    if SQL_TASK_NOTIFY_CHAT in known_chat_levels():
+        return SQL_TASK_NOTIFY_CHAT, SQL_TASK_NOTIFY_CHAT
+    return DEFAULT_RUN_LEVEL, DEFAULT_ERROR_LEVEL
 
 # The schedule answer that means "never run this on a timer". It is expressed in the target's
 # own `time_window` as `repeat_interval = -1` (db_ops.lib.time_window.MANUAL_ONLY) rather
@@ -166,39 +181,27 @@ def next_target_no(targets: dict[str, Any], sql_id: int) -> int:
 
 
 def normalize_time_window(raw: dict[str, Any] | None) -> dict[str, Any]:
-    """Validate + fill a time-window dict; unknown keys rejected, negatives rejected.
+    """Validate + fill a time-window dict: this registrar's defaults, then the runtime's parser.
 
-    The one accepted negative is ``repeat_interval = -1`` (manual) — the same rule the runtime
-    parser applies in :mod:`db_ops.lib.time_window`, so a window this writes always survives
-    being read back.
+    What a registrar adds is its own policy - an unknown key is refused (the parser ignores one),
+    and a field left out takes :data:`_DEFAULT_TIME_WINDOW`. What a value *means* is
+    :mod:`db_ops.lib.time_window`'s (rules R20): until 0.25.0 this file validated integers, negatives
+    and the manual ``-1`` a second time, and a registrar that reads the rule twice is one edit away
+    from writing a window the scheduler refuses. So the window a registrar writes is the one the
+    scheduler parsed - always every field, ``weekdays`` a list because this goes to JSON.
     """
-    window = dict(_DEFAULT_TIME_WINDOW)
-    if raw:
-        for key, value in raw.items():
-            if key not in _TIME_WINDOW_KEYS:
-                raise ConfigAdminError(f"Unknown time_window field: {key}")
-            if key == WEEKDAYS_FIELD:
-                # The runtime's own parser, not a second reading of the same rule: a registrar that
-                # accepted a weekday set the scheduler would refuse is the drift this file exists
-                # to stop. A list rather than the parser's tuple, because this goes to JSON.
-                try:
-                    parsed = parse_weekdays(value, f"time_window.{key}")
-                except RuntimeError as exc:
-                    raise ConfigAdminError(str(exc)) from exc
-                window[key] = None if parsed is None else list(parsed)
-                continue
-            if value is None or value == "":
-                window[key] = None
-                continue
-            try:
-                ivalue = int(value)
-            except (TypeError, ValueError) as exc:
-                raise ConfigAdminError(f"time_window.{key} must be an integer, got {value!r}") from exc
-            if ivalue < 0 and not (key == "repeat_interval" and ivalue == MANUAL_ONLY):
-                suffix = f", or {MANUAL_ONLY} for manual" if key == "repeat_interval" else ""
-                raise ConfigAdminError(f"time_window.{key} must be >= 0{suffix}, got {ivalue}")
-            window[key] = ivalue
-    return window
+    raw = dict(raw or {})
+    unknown = sorted(key for key in raw if key not in _TIME_WINDOW_KEYS)
+    if unknown:
+        raise ConfigAdminError(f"Unknown time_window field: {unknown[0]}")
+    try:
+        parsed = parse_time_window_config(
+            {"time_window": {**_DEFAULT_TIME_WINDOW, **raw}}, context="time_window").time_window
+    except RuntimeError as exc:
+        # The parser names the field under its record (`<context>.time_window.<field>`); here the
+        # request *is* the window, so the message names it the way the request spells it.
+        raise ConfigAdminError(str(exc).replace("time_window.time_window.", "time_window.")) from exc
+    return parsed.to_dict()
 
 
 def add_sql_task(
@@ -220,8 +223,8 @@ def add_sql_task(
     active: bool = True,
     logging_on_run: bool = True,
     alert_on_error: bool = True,
-    logging_chat: str = SQL_TASK_NOTIFY_CHAT,
-    error_chat: str = SQL_TASK_NOTIFY_CHAT,
+    logging_chat: str | None = None,
+    error_chat: str | None = None,
     logging_chat_id: str | None = None,
     error_chat_id: str | None = None,
     version_from: str | None = None,
@@ -235,8 +238,11 @@ def add_sql_task(
     dict with the assigned ``sql_id``, ``sql_code``, and written ``script_path``.
     Raises :class:`ConfigAdminError` for any invalid input; on success the three
     writes (``.sql`` file, ``sql_commands.json``, ``sql_targets.json``) are applied
-    in order, each atomically.
+    in order, each atomically. A chat left out is :func:`default_sql_task_chats`'.
     """
+    default_run, default_error = default_sql_task_chats()
+    logging_chat = logging_chat or default_run
+    error_chat = error_chat or default_error
     db_type = str(db_type or "").strip().lower()
     if db_type not in SQL_TASK_DB_TYPES:
         raise ConfigAdminError(
@@ -344,6 +350,7 @@ def add_sql_task(
 
     targets["sql_targets"].append(target_entry)
     _atomic_write(targets_path, _dump_json(targets))
+    written = window_of(target_entry)  # what the scheduler will read back
 
     return {
         "ok": True,
@@ -355,8 +362,8 @@ def add_sql_task(
         "db_type": db_type,
         "server_id": server_id,
         "active": bool(active),
-        "manual_only": window["repeat_interval"] == MANUAL_ONLY,
-        "repeat_interval": window["repeat_interval"],
+        "manual_only": written.repeat_interval == MANUAL_ONLY,
+        "repeat_interval": written.repeat_interval,
         "output": output_format,
     }
 
@@ -725,10 +732,12 @@ def _build_parser() -> argparse.ArgumentParser:
     # Telegram routing for the run/error notifications (object-form logging_on_run/alert_on_error).
     add.add_argument("--notify-chat", choices=_SQL_TASK_CHAT_CHOICES,
                      help="Shortcut: route BOTH the run log and the error alert to this notify level.")
-    add.add_argument("--logging-chat", choices=_SQL_TASK_CHAT_CHOICES, default=SQL_TASK_NOTIFY_CHAT,
-                     help=f"Notify level for the run start/finish log (default: {SQL_TASK_NOTIFY_CHAT}).")
-    add.add_argument("--error-chat", choices=_SQL_TASK_CHAT_CHOICES, default=SQL_TASK_NOTIFY_CHAT,
-                     help=f"Notify level for the failure alert (default: {SQL_TASK_NOTIFY_CHAT}).")
+    add.add_argument("--logging-chat", choices=_SQL_TASK_CHAT_CHOICES, default=None,
+                     help=f"Notify level for the run start/finish log (default: {SQL_TASK_NOTIFY_CHAT} "
+                          f"where a group defines it, else {DEFAULT_RUN_LEVEL}).")
+    add.add_argument("--error-chat", choices=_SQL_TASK_CHAT_CHOICES, default=None,
+                     help=f"Notify level for the failure alert (default: {SQL_TASK_NOTIFY_CHAT} "
+                          f"where a group defines it, else {DEFAULT_ERROR_LEVEL}).")
     add.add_argument("--logging-chat-id", default=None,
                      help="Explicit chat_id override for the run log (wins over --logging-chat).")
     add.add_argument("--error-chat-id", default=None,
@@ -799,7 +808,19 @@ def _argv_from_request(parser: argparse.ArgumentParser, command: str, request: d
     if subparser is None:
         raise ConfigAdminError(f"Unknown command: {command}")
 
-    by_dest = {action.dest: action for action in subparser._actions if action.option_strings}  # noqa: SLF001
+    # A key is a flag's dest or any of its spellings. `add-sql`'s name is `--display-name` since
+    # 0.22.0 and its dest is still `sql_name`: keyed by dest alone, `display_name` - the field the
+    # reference documents and the Telegram command sends - was refused as unknown, and registering
+    # SQL from the bot failed every time (0.25.0, 1.66). A `--no-` spelling is not a key: it
+    # stores the opposite of the value it would be given.
+    by_dest: dict[str, argparse.Action] = {}
+    for action in subparser._actions:  # noqa: SLF001
+        if not action.option_strings:
+            continue
+        by_dest[action.dest] = action
+        for option in action.option_strings:
+            if option.startswith("--") and not option.startswith("--no-"):
+                by_dest.setdefault(option[2:].replace("-", "_"), action)
     argv: list[str] = [command]
     unknown: list[str] = []
     for raw_key, value in request.items():

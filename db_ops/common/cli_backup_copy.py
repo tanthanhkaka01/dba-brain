@@ -73,17 +73,23 @@ def _log(line: str) -> None:
 
 
 def _open(login: Any, *, role: str):
-    from db_ops.common.ssh import open_ssh_client
+    """A connected :mod:`remote_exec` SSH session - the one executor (0.25.0); this opened a
+    paramiko client of its own until then."""
+    from db_ops.common import remote_exec
 
     if not isinstance(login, dict) or not str(login.get("host") or "").strip():
         raise ValueError(f"{role} must be an object with host, username and a password or key_file.")
-    return open_ssh_client(
-        str(login["host"]).strip(), str(login.get("username") or "").strip(),
-        port=int(login.get("port") or 22),
-        password=login.get("password") or None,
-        key_filename=login.get("key_file") or None,
-        timeout=int(login.get("open_timeout_seconds") or 30),
-    )
+    key_file = str(login.get("key_file") or "").strip()
+    access: dict[str, Any] = {
+        "method": "ssh", "host": str(login["host"]).strip(), "port": int(login.get("port") or 22),
+        "username": str(login.get("username") or "").strip(), "password": str(login.get("password") or ""),
+        "auth_type": "key" if key_file else "password", "platform": "linux",
+        "timeout_seconds": int(login.get("open_timeout_seconds") or 30)}
+    if key_file:
+        access["key_file"] = key_file
+    session = remote_exec.open_session(access)
+    session.client  # connect now, so a refused login is this call's error, not a later one's
+    return session
 
 
 def _required(request: dict[str, Any], *names: str) -> None:
@@ -96,15 +102,15 @@ def _backup_chain(request: dict[str, Any]) -> dict[str, Any]:
     from db_ops.common import backup_copy
 
     _required(request, "db_type", "source_dir")
-    client = _open(request.get("source"), role="source")
+    session = _open(request.get("source"), role="source")
     try:
         include = backup_copy.chain_include(
-            str(request["db_type"]), client, source_dir=str(request["source_dir"]),
+            str(request["db_type"]), session, source_dir=str(request["source_dir"]),
             backup_dir=str(request.get("backup_dir") or ""),
             container=str(request.get("container") or ""),
             point_in_time=str(request.get("point_in_time") or ""), log=_log)
     finally:
-        client.close()
+        session.close()
     return {"include": list(include), "narrowed": bool(include)}
 
 
@@ -121,14 +127,12 @@ def _copy_backup_dir(request: dict[str, Any]) -> dict[str, Any]:
             # Readable at the moment of reading: a copy of a large set takes minutes, and the
             # archivelog job writes new 0640 pieces every 15 minutes - so a set fully readable when
             # the copy started can grow an unreadable file while it runs.
-            _in, out, _err = source.exec_command(
-                f"sudo chmod -R a+rX {shlex.quote(source_dir)} 2>/dev/null || true")
-            out.channel.recv_exit_status()
+            source.run(f"sudo chmod -R a+rX {shlex.quote(source_dir)} 2>/dev/null || true")
         target = _open(request.get("target"), role="target")
         try:
             result = backup_copy.sync_backup_dir(
-                source_client=source, source_dir=source_dir,
-                target_client=target, target_dir=target_dir,
+                source_session=source, source_dir=source_dir,
+                target_session=target, target_dir=target_dir,
                 include=tuple(str(item) for item in request.get("include") or ()), log=_log)
             opened = (backup_copy.open_for_the_engine(target, target_dir, log=_log)
                       if request.get("open_for_engine", True) else False)
@@ -143,12 +147,12 @@ def _prune_staged_backups(request: dict[str, Any]) -> dict[str, Any]:
     from db_ops.common import backup_copy
 
     _required(request, "target_dir")
-    client = _open(request.get("target"), role="target")
+    session = _open(request.get("target"), role="target")
     try:
         return backup_copy.prune_target_dir(
-            client, str(request["target_dir"]), int(request.get("cleanup_retention") or 0), log=_log)
+            session, str(request["target_dir"]), int(request.get("cleanup_retention") or 0), log=_log)
     finally:
-        client.close()
+        session.close()
 
 
 _WORK = {"backup-chain": _backup_chain, "copy-backup-dir": _copy_backup_dir,

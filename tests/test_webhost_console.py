@@ -395,8 +395,12 @@ def test_a_block_lists_the_config_it_owns_with_a_record_count(console: WebApp) -
     ],
 )
 def test_a_schedule_reads_the_way_an_operator_says_it(window: dict, expected: str) -> None:
-    """`repeat_interval: 0` means run-once-and-stay-up; "every 0 seconds" reads as a broken clock."""
-    assert _schedule_text(window) == expected
+    """`repeat_interval: 0` means run-once-and-stay-up; "every 0 seconds" reads as a broken clock.
+
+    The window goes through the scheduler's parser first, as the console reads it (rules R20)."""
+    from db_ops.lib.time_window import window_of
+
+    assert _schedule_text(window_of({"time_window": window})) == expected
 
 
 def test_an_app_page_renders_without_the_run_history(console: WebApp) -> None:

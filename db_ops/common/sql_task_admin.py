@@ -34,8 +34,8 @@ from db_ops.common.config_admin import (
     DEFAULT_DATA_DIR,
     KNOWN_DB_TYPES,
     MANUAL_ONLY,
-    SQL_TASK_NOTIFY_CHAT,
     TOOL_ROOT,
+    default_sql_task_chats,
     ConfigAdminError,
     _atomic_write,
     _dump_json,
@@ -54,6 +54,7 @@ from db_ops.lib.sql_text import NAMED_BIND_DB_TYPES, named_placeholders, sqlplus
 from db_ops.lib.sql_task_target import instance_matches, instance_not_found_message
 from db_ops.lib.task_input import TARGET_PLACEHOLDERS
 from db_ops.lib.task_output import TaskOutputError
+from db_ops.lib.time_window import window_of
 
 __all__ = [
     "USAGE_COMMAND",
@@ -546,8 +547,9 @@ def add_sql_target(request: dict[str, Any], *,
     window = normalize_time_window(request.get("time_window"))
     if request.get("manual_only"):
         window["repeat_interval"] = MANUAL_ONLY
-    logging_chat = str(request.get("logging_chat") or SQL_TASK_NOTIFY_CHAT)
-    error_chat = str(request.get("error_chat") or SQL_TASK_NOTIFY_CHAT)
+    default_run, default_error = default_sql_task_chats()
+    logging_chat = str(request.get("logging_chat") or default_run)
+    error_chat = str(request.get("error_chat") or default_error)
     output = _output_block(request, default_chat=logging_chat)
     entry: dict[str, Any] = {
         "sql_id": sql_id,
@@ -580,6 +582,7 @@ def add_sql_target(request: dict[str, Any], *,
     else:
         targets["sql_targets"].append(entry)
     _atomic_write(targets_path, _dump_json(targets))
+    written = window_of(entry)  # what the scheduler will read back
 
     return {
         "ok": True,
@@ -589,8 +592,8 @@ def add_sql_target(request: dict[str, Any], *,
         "database_name": entry["database_name"],
         "replaced": bool(existing),
         "active": entry["active"],
-        "manual_only": window["repeat_interval"] == MANUAL_ONLY,
-        "repeat_interval": window["repeat_interval"],
+        "manual_only": written.repeat_interval == MANUAL_ONLY,
+        "repeat_interval": written.repeat_interval,
         "output": output["format"],
         "files_written": ["sql_targets.json"],
         "next": [f"db-ops sql_tasks list-tasks --sql-id {sql_id}"],

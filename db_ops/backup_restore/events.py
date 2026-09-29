@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from db_ops.lib.notify import NotifyConfig
-from db_ops.config import DbOpsConfig
+from db_ops.lib.config import DbOpsConfig
 from db_ops.db.store import DbOpsStore, utc_now_text
 from db_ops.db.job_runs import JobRun
 from db_ops.lib.levels import normalize_level

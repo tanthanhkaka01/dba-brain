@@ -892,7 +892,6 @@ def _parse_moment(text: str) -> datetime:
 def host_facts(
     request: dict[str, Any],
     *,
-    data_dir: str | Path | None = None,
     echo: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Read-only: what state is this host in. Never changes anything.
@@ -901,7 +900,7 @@ def host_facts(
     a full system disk, a service that is not up. Read-only means these are warnings, not
     blockers — this command reports, the operation that follows decides.
     """
-    target, policy, overrides = _prepare(request, data_dir=data_dir)
+    target, policy, overrides = _prepare(request)
     services = _services_of(request)
     report = GateReport("facts", target=target.describe(), echo=echo)
     report.note("target", target.to_dict())
@@ -930,7 +929,6 @@ def host_facts(
 def service_control(
     request: dict[str, Any],
     *,
-    data_dir: str | Path | None = None,
     echo: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Start / stop / restart services on a host, and wait for the end state.
@@ -939,7 +937,7 @@ def service_control(
     ``confirm: true`` — the same contract as :func:`restart_host`, because stopping a database
     service is exactly as disruptive as restarting the machine it runs on.
     """
-    target, policy, overrides = _prepare(request, data_dir=data_dir)
+    target, policy, overrides = _prepare(request)
     services = _services_of(request)
     if not services:
         raise HostOpsError("services is required: a list of Windows service names or systemd units.")
@@ -1029,7 +1027,6 @@ def service_control(
 def restart_host(
     request: dict[str, Any],
     *,
-    data_dir: str | Path | None = None,
     echo: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Restart a host and prove it came back — Windows or Linux, same contract.
@@ -1042,7 +1039,7 @@ def restart_host(
     Needs ``confirm: true``. ``dry_run`` runs everything up to the restart and prints what it
     would do — the safe way to prove the target, the credential and the service list are right.
     """
-    target, policy, overrides = _prepare(request, data_dir=data_dir)
+    target, policy, overrides = _prepare(request)
     services = _services_of(request)
     reason = str(request.get("reason") or "db_ops planned restart").strip()
     report = GateReport("restart", target=target.describe(), echo=echo)
@@ -1258,9 +1255,7 @@ def resolve_stated_host(request: dict[str, Any], *, what: str = "this command") 
     return resolve_host(request, platform=str(request.get("platform") or ""))
 
 
-def _prepare(
-    request: dict[str, Any], *, data_dir: str | Path | None
-) -> tuple[HostTarget, dict[str, Any], list[str]]:
+def _prepare(request: dict[str, Any]) -> tuple[HostTarget, dict[str, Any], list[str]]:
     if not isinstance(request, dict):
         raise HostOpsError("request must be a JSON object.")
     target = resolve_stated_host(request)

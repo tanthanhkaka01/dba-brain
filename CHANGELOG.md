@@ -15,6 +15,64 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-09-29
+
+### Changed
+
+- **The Telegram send pass takes the oldest 5 messages of each chat** (`send_per_chat` in
+  `telegram_config.json`), every chat in turn, every second - not the oldest 50 of the whole queue.
+  One chat's backlog no longer holds any other chat, the bot's replies to its commands included.
+- **A Telegram rate limit (HTTP 429) pauses that chat, not the pass.** The row stays queued, the
+  pass carries on with the other chats, and the chat is left alone for the seconds Telegram asked
+  (kept in `runtime/telegram_chat_pauses.json`). A pass no longer sleeps out another chat's limit.
+- **One way to run anything on a host** (rules R44). `common.cli run-cmd`'s executor,
+  `remote_exec`, now runs every command, script, stream and file transfer on a host; the backup
+  scripts, `run-sqlcmd`, the restore staging copy and the file relay no longer carry SSH or
+  PowerShell executors of their own.
+- **`list-databases` on SQL Server says whether the login can open each database** (`has_access`,
+  from `HAS_DBACCESS`). The instance export, the patch gate, the restore check and the PostgreSQL
+  metrics now list databases through the same query, and a SQL task's "database does not open"
+  diagnosis asks `list-databases` instead of a query of its own.
+- **Every schedule shown is the one the scheduler reads.** The status page, the web console, the
+  bot's SQL task listing, `ops-status` and the server report read a `time_window` through the
+  scheduler's own parser: an older field name shows its value instead of nothing, and a window the
+  scheduler refuses is shown as unset (the bot says it is invalid) instead of as a schedule. The
+  bot's task listing now shows the `weekdays` a task is limited to. A registrar's refusal of a bad
+  `time_window` value is worded by that parser.
+- **`db_ops.config` is removed; import `db_ops.lib.config`.** It has been an alias of
+  `db_ops.lib.config` since 0.24.0, and nothing in DBA Brain imports it any more (rules R41: the
+  root package holds only its entry point). Code of yours that imports `db_ops.config` changes that
+  one line.
+- **The reference describes every key every `common.cli` command answers** (rules R16). Sixteen
+  were missing, among them `move-db-docker`'s `ok` and `copy-schema`'s `mode`; a script that reads
+  an answer can now look up each key it gets.
+
+### Fixed
+
+- **Registering SQL from the Telegram bot works again.** The bot sends the task's name as
+  `display_name`, the field `add-sql` documents, and `add-sql`'s JSON form refused it as an unknown
+  field: every registration from the bot failed. Every spelling of a flag is a key now, so
+  `display_name` and the older `sql_name` both name the task.
+- **`list-schemas` answers.** Since 0.22.0 every successful run came back as a failure,
+  `KeyError: 'database'`: its message still read the answer key 0.22.0 renamed to `database_name`.
+  The Telegram spreadsheet upload's schema prompt uses it.
+- **`add-sql` and `sql-target-add` register a task on a new install.** A task's chats defaulted to
+  the `sql` level, which exists only where a Telegram group defines it, so on a fresh install
+  both refused their own default. They default to `sql` where the group exists and to
+  `logging` / `error` otherwise.
+- **A script run on a host is a file, never the shell's stdin.** A command inside it that read
+  stdin - `docker compose exec` does by default - swallowed the rest of the script, and the run
+  ended with exit 0 and its tail never run. Scripts are now placed in the login's home, private,
+  run with stdin closed and removed; a PowerShell script is a `.ps1` run with `-File` instead of
+  `-EncodedCommand`, which ran out of command line past ~8 KB.
+- **`run-sqlcmd` over WinRM reports sqlcmd's own exit code.** Through pypsrp a failed batch could
+  read as a success: it reports only whether the error stream was written.
+- **A Linux node cleans a Windows target's import share.** In 0.24.0 it held every aged file back
+  as `still_needed` and deleted nothing (released as a known limitation). The chain is now read from
+  the share's own listing.
+- **A report file sent while its chat is rate-limited is no longer lost.** `sendDocument`'s 429 was
+  a plain error: three immediate retries, then the row failed. It is a pause now, as a message's is.
+
 ## [0.24.0] - 2026-09-26
 
 ### Added

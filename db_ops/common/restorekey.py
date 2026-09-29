@@ -67,6 +67,7 @@ def import_key(request: dict[str, Any]) -> dict[str, Any]:
     if not str(target.get("host") or "").strip():
         raise RestoreKeyError('target.host is required (or "sqlcmd": run it where the SQL Server is).')
 
+    from db_ops.common import sql_run
     from db_ops.common.db_connect import connect_engine
 
     connection = connect_engine(
@@ -76,29 +77,17 @@ def import_key(request: dict[str, Any]) -> dict[str, Any]:
         statement_timeout_seconds=0,
     )
     try:
-        cursor = connection.cursor()
-        cursor.execute(statements[0])
-        row = _last_row(cursor)
+        # The batch's one result set comes after the statements that return none; `query_rows`
+        # reads past those on either driver (rules R11).
+        rows = sql_run.query_rows(connection.cursor(), statements[0])
     finally:
         connection.close()
-    if row is None:
+    if not rows:
         raise RestoreKeyError("the import batch ran but answered nothing - the certificate's state is unknown.")
-    return {"certificate_name": str(row[0]), "thumbprint": str(row[1] or "").lower(),
-            "imported": bool(row[2]), "ok": True}
-
-
-def _last_row(cursor: Any) -> Any:
-    """The batch's one result set - after the statements that return none, on either driver."""
-    row = None
-    while True:
-        try:
-            fetched = cursor.fetchone()
-        except Exception:  # noqa: BLE001 - "no results" from a statement without a result set.
-            fetched = None
-        if fetched is not None:
-            row = fetched
-        if not cursor.nextset():
-            return row
+    row = rows[0]
+    return {"certificate_name": str(row["certificate_name"]),
+            "thumbprint": str(row["thumbprint"] or "").lower(),
+            "imported": bool(row["imported"]), "ok": True}
 
 
 def _through_sqlcmd(sqlcmd: dict[str, Any], batch: str) -> dict[str, Any]:

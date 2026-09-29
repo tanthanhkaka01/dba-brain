@@ -247,9 +247,11 @@ unknown number".
 
 Two halves to the fix, and both are needed:
 
-- `execute_cursor_batches` now fetches one row past the cap and reports `truncated` per result set
-  and overall; the metric executor logs a warning naming the metric and the cap. A future
-  truncation announces itself instead of quietly deleting findings.
+- The reader fetches one row past the cap and reports `truncated`; the metric executor logs a
+  warning naming the metric and the cap. A future truncation announces itself instead of quietly
+  deleting findings. The reader was `sql_execution.execute_cursor_batches` then; since 0.25.0 it is
+  `sql_run.execute_capture`, the one `run-sql` runs on (rules R11), read at the 100-row preview cap
+  unless the metric sets `max_rows`.
 - Metrics whose output is an inventory declare their own `max_rows` in
   `data/metric_definitions.json`: `MAINTENANCE_STATISTICS_AGE` 20000,
   `DATABASE_CONSTRAINT_HEALTH` / `STORAGE_FILE_PLACEMENT` / `MAINTENANCE_HEAP_FRAGMENTATION` 5000

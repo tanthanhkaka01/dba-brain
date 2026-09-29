@@ -11,7 +11,7 @@ would flatten.
 
 from datetime import datetime, timedelta, timezone
 
-from db_ops.common import restore_drill as rd
+from db_ops.db import restore_drill as rd
 
 NOW = datetime(2026, 8, 3, 12, 0, 0, tzinfo=timezone.utc)
 

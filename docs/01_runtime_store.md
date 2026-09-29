@@ -97,7 +97,7 @@ Which database the store uses is declared in one file:
 data/store_config.json
 ```
 
-`backend` is the switch — `sqlite` or `postgresql` — and the section it names carries the full connection details for that backend. `db_ops.config.load_config` parses it into `config.store` (a `StoreConfig`), and `python -m db_ops.jobs.status` reports the resolved backend so a node can be asked what it is actually writing to.
+`backend` is the switch — `sqlite` or `postgresql` — and the section it names carries the full connection details for that backend. `db_ops.lib.config.load_config` parses it into `config.store` (a `StoreConfig`), and `python -m db_ops.jobs.status` reports the resolved backend so a node can be asked what it is actually writing to.
 
 | Field | Meaning |
 | --- | --- |
@@ -638,6 +638,19 @@ What the shape guarantees:
   answerable from `job_runs` alone.
 - **It closes.** The daemon marks the request `done` as it reaps the process, and sweeps any left
   `started` by a daemon that was killed before it could.
+
+## The store read back for a person (`db.cli`)
+
+Three `db.cli` commands answer from the store for a person or a report, and the modules behind
+them live here with the store they read (0.25.0). They were `common`'s until the operator put `db`
+under rules R03 - *`db` does not import `common` either*; they import only `lib`, and nothing but
+`db.cli` uses them.
+
+| Module | Responsibility | Key public API |
+| --- | --- | --- |
+| `restore_drill.py` | Was a restore actually *proven* for this database inside its policy window — the question behind the `restore-drill-status` CLI. A backup that exists is not a backup that restores. | drill status per database |
+| `sql_run_history.py` | What the SQL task runner has actually been **doing** — `sql_runs` read back for a person, newest first, each run with the reason it failed. `sql_tasks` answers what is configured; this answers what ran, and the two never import each other. | `collect`, `render` |
+| `telegram_command_history.py` | What *you* last asked the bot, each command written back as the one line that runs it again. A command answered one prompt at a time is not one message — the message that started it says `/spbot_run_sql_task` and nothing else, and its arguments are separate messages further down — so the answers are joined back in argument order. Distinct by that line, with repeats counted. | `collect`, `rebuild_command`, `render` |
 
 ## Queries Used by Apps
 

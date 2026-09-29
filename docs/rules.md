@@ -20,6 +20,7 @@ be on that file's list of rules still owed one - which may only shrink.
 | --- | --- |
 | **absolute** | A guard test fails on any breach, and there is no exception. |
 | **baseline** | A guard fails on any *new* breach; the exceptions counted exist today and are debt, each to be removed - never a permission to add another. |
+| **absolute (code)** | Absolute for what the code does; a store or node made by an older version may still carry the old state, and the *Left* column names the command that brings it up to date. |
 | **none** | No guard yet. The rule still holds; the guard is owed. |
 | **review** | A judgement a test cannot make. Held in review. |
 
@@ -61,13 +62,13 @@ these, and the guards hold the same lists (`APPS` and `SHARED_LAYERS` in
 
 ### 1. Layers - who may import, run or reach whom
 
-R38-R43 keep their numbers and stand with the other layer rules; R43 is R11's sibling.
+R38-R45 keep their numbers and stand with the other layer rules; R43 is R11's sibling, R44 R10's, R45 R04's.
 
 | # | Rule | Mark | Left |
 | --- | --- | --- | --- |
-| R01 | [An app never imports another app, nor runs its CLI](#r01) | absolute | - |
+| R01 | [An app never imports another app](#r01) | absolute | - |
 | R02 | [A shared layer never imports an app](#r02) | absolute | - |
-| R03 | [An app never imports `common` - `control` included](#r03) | absolute | - |
+| R03 | [An app never imports `common` - `control` and `db` included](#r03) | absolute | - |
 | R04 | [`common` imports nothing but `common` and `lib`](#r04) | absolute | - |
 | R05 | [`common` never launches a CLI or a Python module](#r05) | absolute | - |
 | R06 | [`lib` imports nothing from `db_ops` outside `lib`](#r06) | absolute | - |
@@ -78,11 +79,13 @@ R38-R43 keep their numbers and stand with the other layer rules; R43 is R11's si
 | R11 | [One function, one place - no two apps implement the same operation](#r11) | absolute | - |
 | R12 | [Where a thing goes: value -> `lib`, operation -> `common.cli`, `data/` read -> the data reader](#r12) | review | - |
 | R38 | [`common.cli` and `db.cli` are started only through `transport`](#r38) | absolute | - |
-| R39 | [`transport` imports only `lib`; nothing below imports `transport`](#r39) | absolute | - |
+| R39 | [`transport` imports only `lib`; no shared layer imports `transport`](#r39) | absolute | - |
 | R40 | [One function in `transport` starts a process](#r40) | absolute | - |
 | R41 | [The root package only dispatches](#r41) | absolute | - |
 | R42 | [An app never runs another app's CLI from its code](#r42) | absolute | - |
 | R43 | [No two commands, in any CLI, do the same job](#r43) | absolute | - |
+| R44 | [One executor runs everything on a host: `remote_exec`](#r44) | absolute | - |
+| R45 | [`common` opens no runtime store - the store is `db`'s](#r45) | absolute | - |
 
 ### 2. The `common.cli` contract
 
@@ -91,7 +94,7 @@ R38-R43 keep their numbers and stand with the other layer rules; R43 is R11's si
 | R13 | [Every command takes one JSON object, never flags](#r13) | absolute | - |
 | R14 | [A request with a password comes on stdin only](#r14) | absolute | - |
 | R15 | [Every answer is one envelope, nothing else on stdout](#r15) | absolute | - |
-| R16 | [Every request and answer is described in the reference](#r16) | **baseline** | 61 commands' answers not yet run |
+| R16 | [Every request and answer is described in the reference](#r16) | absolute | - |
 
 ### 3. Configuration and data
 
@@ -102,7 +105,8 @@ R38-R43 keep their numbers and stand with the other layer rules; R43 is R11's si
 | R19 | [Configuration is data, never a literal in code](#r19) | review | - |
 | R20 | [A shared config object is parsed once, in `lib`](#r20) | absolute | - |
 | R21 | [`server_id` is the only key for a machine](#r21) | absolute | - |
-| R22 | [Every store table has its keys; config rows are switched off, never deleted](#r22) | absolute | a store made before 0.24.0: `db.cli archive-keys` |
+| R46 | [Group and join on `server_id`, never on an ip](#r46) | review | - |
+| R22 | [Every store table has its keys; config rows are switched off, never deleted](#r22) | absolute (code) | a store made before 0.24.0: `db.cli archive-keys` |
 | R23 | ["Not configured" is a state, not a failure](#r23) | absolute | - |
 
 ### 4. Behaviour every engine and app keeps
@@ -126,7 +130,7 @@ R38-R43 keep their numbers and stand with the other layer rules; R43 is R11's si
 | R33 | [Every component has a doc, every doc a component](#r33) | absolute | - |
 | R34 | [A change updates its doc and `CHANGELOG.md` in the same change](#r34) | review | - |
 | R35 | [`AGENTS.md` and the guides name only real commands, never a secret on a command line](#r35) | absolute | - |
-| R36 | [Everything written is English](#r36) | absolute | - |
+| R36 | [Everything written in the tree is English](#r36) | absolute | - |
 | R37 | [Comments say why; tests read as prose](#r37) | review | - |
 
 ---
@@ -135,13 +139,13 @@ R38-R43 keep their numbers and stand with the other layer rules; R43 is R11's si
 
 The components are listed, with their kind, in [The components](#the-components) above.
 
-**R03, R04, R09 and R16 are non-negotiable by the operator's word (2026-09-25):** `common` is the API, reached only as `python -m db_ops.common.cli <command> '<json>'`; a command works from its request alone; `common` imports nothing but `lib`. Where one of them is still marked *baseline*, the debt is the 0.24.0 work, not a permission.
+**R03, R04, R09 and R16 are non-negotiable by the operator's word (2026-09-25):** `common` is the API, reached only as `python -m db_ops.common.cli <command> '<json>'`; a command works from its request alone; `common` imports nothing but `lib`. All four are absolute since 0.25.0.
 
-R38-R43 were added after the list was numbered and keep their numbers; they are layer rules and stand here with the others.
+R38-R45 were added after the list was numbered and keep their numbers; they are layer rules and stand here with the others.
 
 ### R01
 
-An app never imports another app - nor runs its CLI (R42). What two apps share is a rule (`lib`) or an operation (`common`).
+An app never imports another app. What two apps share is a rule (`lib`) or an operation (`common`). Running another app's CLI is R42's, which names its two exceptions.
 
 **Guard:**
 
@@ -151,7 +155,7 @@ An app never imports another app - nor runs its CLI (R42). What two apps share i
 
 ### R02
 
-A shared layer (`common`, `lib`, `db`, `logging_ops`) never imports an app.
+A shared layer (`common`, `lib`, `db`, `logging_ops`, `transport`) never imports an app.
 
 **Guard:**
 
@@ -171,7 +175,7 @@ A shared layer (`common`, `lib`, `db`, `logging_ops`) never imports an app.
 
 - **`control` is an app like the others** (the operator, 2026-09-26): *control does not import `common` either - it runs `common.cli`*. It used to be left out of the guard as the deploy tool; it is not exempt.
 - The last seven, gone on 2026-09-26: the export's identifier scan runs `common.cli check-identifiers` (a refusal answers `refused`, so the export still says SKIPPED for it and stops for anything else); the config gate's prompt runs `common.cli ask`; and the SSH clients - `control`'s session to the worker and `backup_restore`'s to a Linux restore target - are a `lib.remote_host.RemoteHost`, whose every call is `run-cmd`, `push-file` or `pull-file`. Preflight's WinRM share is a `run-cmd` too.
-- **Open: `db/cli.py`** (5 imports: `common.cli` and four modules it answers from). `db` is not an app; whether R03 covers it is undecided.
+- **`db` is covered too** (the operator, 2026-09-28). Its last four imports went the same day: the three modules its commands answer from - `restore_drill`, `sql_run_history`, `telegram_command_history`, which import only `lib` and serve only `db.cli` - moved into `db`, and the request reader's answer to a bad request into `lib.json_io.read_json_request_answered`, which `common.cli` uses too.
 - Done in 0.24.0: `data_sources` moved to `lib` (eight apps imported it), `metrics`' four execution modules went behind `common.cli metric-batch`, `sre`'s last two went to `lib`; the root `db_ops/cli.py` imports only `lib` (R41).
 
 ### R04
@@ -293,22 +297,25 @@ Where a thing goes: a value or a rule -> `lib`; an operation -> a `common.cli` c
 
 `common.cli` and `db.cli` are started only through `transport` - never by an app, `lib` or `db` directly.
 
+**The root dispatcher is not a client** (2026-09-28): `db-ops init` runs `common.cli`'s `main` in the process a person started, because the dispatcher does no work of its own and a second process would buy nothing. It may import a component's entry point by name and nothing else (R41).
+
 **Guard:**
 
 - `tests/test_transport_is_the_only_client_of_common_and_db.py::test_nothing_outside_transport_starts_common_or_db_cli`
+- `tests/test_the_root_package_only_dispatches.py::test_the_dispatcher_imports_by_name_only_a_components_entry_point`
 
 **Mark:** absolute.
 
 ### R39
 
-`transport` imports only `lib`; `lib` and `common` never import `transport`.
+`transport` imports only `lib`; no shared layer - `lib`, `common`, `db`, `logging_ops` - imports `transport`. Only an app does.
 
 **Guard:**
 
 - `tests/test_transport_is_the_only_client_of_common_and_db.py::test_transport_imports_only_lib`
-- `tests/test_transport_is_the_only_client_of_common_and_db.py::test_lib_and_common_never_import_transport`
+- `tests/test_transport_is_the_only_client_of_common_and_db.py::test_no_shared_layer_imports_transport`
 
-**Mark:** absolute.
+**Mark:** absolute. Widened to `db` and `logging_ops` on 2026-09-28 (the operator: *db has no reason to import transport*): `db/queue_message.py` started `db.cli queue-telegram-message` through `transport` to reach the insert it called in-process whenever the process failed. It writes the row in-process now; `db.cli queue-telegram-message` stays for a person at a shell.
 
 ### R40
 
@@ -330,7 +337,10 @@ Inside `transport`, one function starts a process: `transport/process.py::execut
 - `tests/test_the_root_package_only_dispatches.py::test_the_root_cli_imports_only_lib`
 - `tests/test_the_root_package_only_dispatches.py::test_the_root_holds_only_its_entry_point`
 
-**Mark:** absolute. Absolute since 0.24.0. Moved out of the root: the five tool-root commands to `common/cli_tool_root.py`, `check-credentials` to `common/cli_check_credentials.py` (its loaders to `lib.data_sources`), `scaffold.py` and `agents_guide.md` to `common`, `levels.py` to `lib`.
+- `tests/test_the_root_package_only_dispatches.py::test_the_dispatcher_imports_by_name_only_a_components_entry_point`
+- `tests/test_the_root_package_only_dispatches.py::test_every_table_entry_is_a_components_entry_point`
+
+**Mark:** absolute. The dispatcher imports a component's entry point **by name, at dispatch** - `importlib.import_module` on what `APPS` lists and nothing else; a static-import guard could not see that, so the second guard reads the calls. **The `db_ops.config` module is gone** (2026-09-28): an alias that replaced itself with `db_ops.lib.config` in `sys.modules`, kept for 33 importers, which moved to `db_ops.lib.config` the same day; the root holds `__init__.py` and `cli.py` and nothing else. Absolute since 0.24.0 otherwise. Moved out of the root: the five tool-root commands to `common/cli_tool_root.py`, `check-credentials` to `common/cli_check_credentials.py` (its loaders to `lib.data_sources`), `scaffold.py` and `agents_guide.md` to `common`, `levels.py` to `lib`.
 
 ### R42
 
@@ -359,7 +369,35 @@ Inside `transport`, one function starts a process: `transport/process.py::execut
 - A test cannot read what a command does, so it holds what can be counted: every command name across every CLI - an argparse sub-command, one registered from a loop over a literal list (three hidden `backup_restore` commands were, unseen by the first scan), a JSON command in `db.cli`'s table, and `common.cli`'s contract list. A name in two CLIs is an app's **front door** to the `common.cli` command of that name - it finishes the request from the app's `data/` and hands it on, which the guard checks in the code (`sre`'s `create-db-docker`, `move-db-docker`) - or **two jobs sharing a word**, each named (`init`, `user-level`). Anything else is a duplicate.
 - **6 duplicates measured 2026-09-26, all resolved the same day** (the operator chose which stays): the inventory summary is `common`'s and the inventory workflow `reports`' (`control`'s two went); this node's clock is `db timezone` (`common`'s went); this node's status is `common self-status` (the bot states the last runs; `db`'s went); verifying a restore is `common verify-restore` (`backup_restore`'s went); and **a SQL Server RESTORE is written once**, in `common/restorestep/sqlserver.py` - `restore-latest` asks `restore-full` / `-diff` / `-log` for each step, the nightly's text byte for byte, and the extra routes went (`common restore-database`, `backup_restore`'s hidden step commands, `restore-by-id` for an SMB entry). `upgrade-config`'s `moved-commands` step rewrites a command line naming one that moved.
 - A duplicate under two different names is only found by a person: one found later goes into `DUPLICATES` with the decision it waits on, and the rule is baseline again until it is resolved.
-- Not a duplicate: `run-sql` and `run-sqlcmd` (a driver from this node / `sqlcmd` on the SQL Server host); `metric-batch` and `run-sql` (a batch of metric items, whose single-statement execution should share `run-sql`'s code - R11's question, not this rule's); `restore-latest` and `restore-by-id` (the chain of an SMB entry and of a script entry, both applied through the same `common` steps; `restore-workflow` runs either).
+- Not a duplicate: `run-sql` and `run-sqlcmd` (a driver from this node / `sqlcmd` on the SQL Server host); `metric-batch` and `run-sql` (a batch of metric items; each item's SQL is read by `run-sql`'s own `execute_capture` since 0.25.0 - R11's question, answered there); `restore-latest` and `restore-by-id` (the chain of an SMB entry and of a script entry, both applied through the same `common` steps; `restore-workflow` runs either).
+
+### R44
+
+**One executor runs everything on a host: `common/remote_exec.py`** (the operator, 2026-09-28: *one way to run anything on a host; no module runs its own*). A command, a script, a stream piped between two hosts, a file over SFTP - each is a `remote_exec` session's `run`, `run_script`, `open_stream` or `sftp`. `common/ssh.py` opens the connection, and only `remote_exec` calls it. R10 keeps the apps off the hosts; this keeps `common` to one way onto them. `common.cli run-cmd` is that executor's command.
+
+**Guard:**
+
+- `tests/test_one_executor_runs_everything_on_a_host.py::test_nothing_but_remote_exec_runs_anything_on_a_host`
+- `tests/test_one_executor_runs_everything_on_a_host.py::test_the_guard_sees_what_it_is_for`
+- `tests/test_one_executor_runs_everything_on_a_host.py::test_the_executor_is_where_the_primitives_are`
+
+**Mark:** absolute since 0.25.0.
+
+- **Five executors measured 2026-09-28, one left the same day:** `hostcmd` (its own paramiko client, a stdin-fed `bash -s`, a local `subprocess`, its own Windows file upload), `sqlcmd_run` (a local `Popen`, its own SSH channel, a local PowerShell `Invoke-Command`), `backup_copy` / `cli_backup_copy` (paramiko clients of their own), `ssh_relay` (a session's client reached through). `hostcmd` now names the host and steps into its runtime (`parse_host`, `wrap`); `sqlcmd_run` builds the `sqlcmd`; the copy and the relay pipe their bytes through `open_stream`.
+- **What the one executor learned from them:** a script travels as a **file** - private to the login, run with stdin closed, removed - never the shell's stdin, where a `docker compose exec` in it swallowed the rest of the script (1.65); output can be handed on line by line (`run(on_output=...)`, a restore's `NN percent processed`); a command cut off at its deadline is `RemoteCommandTimeoutError`, not a connect that never happened; WinRM with no login runs as the node's own identity.
+- A **local tool** is not a host reach and not this rule's: `smbclient` / `cmdkey` (`common/smb.py`), a metric's own script (`metric_batch`), the 8i bridge (`oracle_bridge`).
+
+### R45
+
+**`common` opens no runtime store** - the store is `db`'s (ORD 01). Every table `common` would want to write belongs to a command in `db.cli`; `common` reaches databases only as the *targets* a request names. It does write `data/store_config.json` when `init` scaffolds a node - a configuration file, not the store.
+
+**Guard:**
+
+- `tests/test_import_boundaries.py::test_common_imports_only_common_and_lib`
+- `tests/test_common_layers.py::test_a_common_module_reads_no_local_state_unless_it_is_listed`
+- `tests/test_a_common_command_works_from_its_request_alone.py::test_an_operation_runs_from_a_complete_request_on_a_broken_configuration`
+
+**Mark:** absolute. The first stops an import of `db`; the second lists every module that reads local state, the store's configuration included; the third runs every operation on a root whose `store_config.json` is present and unreadable. Carried here on 2026-09-28 from the old standing conformance report, whose rule 11 it was, when that file was retired.
 
 ## 2. The `common.cli` contract
 
@@ -408,12 +446,15 @@ Every `common` and `db` command answers in one envelope - `success`, `operation`
 - `tests/test_every_json_the_tool_reads_or_writes_is_described.py::test_every_key_a_request_parser_reads_is_a_described_field`
 - `tests/test_every_json_the_tool_reads_or_writes_is_described.py::test_every_described_field_is_a_key_its_module_names`
 - `tests/test_a_common_command_works_from_its_request_alone.py::test_every_key_a_successful_answer_carries_is_described`
+- `tests/test_an_answer_that_needs_a_server_is_checked_against_a_fake_one.py::test_every_command_named_answered_is_answered_by_a_test_here`
 
-**Mark:** baseline.
+**Mark:** absolute since 0.25.0 - the guard's `ANSWER_NOT_YET_SEEN` is empty (60 when 0.24.0 shipped).
 
-- **Requests: absolute.** Every key a parser reads is a described field, and every described field is a key its module names.
-- **Answers: 61 commands left, of 86.** Every key a real successful answer carries must be a described field. Only a real answer shows such a key, so the check runs on the answers R09's guard already produces: 25 commands answer there with nothing configured and nothing reachable. The other 61 answer only from a live database or host, or have no complete offline request yet - named in the guard's `ANSWER_NOT_YET_SEEN`, held equal to what the runs show; a command leaves it when a run answers it.
+- **Requests.** Every key a parser reads is a described field, and every described field is a key its module names.
+- **Answers: all 84 commands.** Every key a real successful answer carries must be a described field. Only a real answer shows such a key, so the check runs on real answers: the R09 guard's - with nothing configured, on a root `init` wrote (each on a copy of its own, after the steps that give it something to edit), or run here and as a dry run - and, for a command that needs a server, `tests/test_an_answer_that_needs_a_server_is_checked_against_a_fake_one.py`'s: in-process, every line of the command's own code, with only the driver's connection and the host session's transport faked (0.25.0). Every command answers through one or the other, so a new command comes with its run; the guard's `ANSWER_NOT_YET_SEEN` is empty and held equal to what the runs show, so a run that stops succeeding fails it.
+- A command whose job is the store (R09's first kind) is answered from a store of the test's own: `rotate-password` reads an inventory, `users.json` and an encrypted store written on the test's root, never the checkout's `data/`. A share (`smb-*`) is reached by this node's own `smbclient` / `cmdkey`, faked where `common.smb` starts them.
 - Found by the answer check in 0.24.0, and described: `check-references` answering `data_dir`, `list-backup-files` answering `unreadable`, `timezone` answering `config_error`.
+- Found by it in 0.25.0: 16 answer keys the reference did not describe (the ten of `backup-database`'s plan, three of `check-secret-literals`, `inventory-summary`'s `file`, `move-db-docker`'s `ok` and `copy-schema`'s `mode`), and three bugs a successful answer had never been run far enough to show.
 
 ## 3. Configuration and data
 
@@ -449,13 +490,15 @@ Configuration is data: a threshold, target, route, schedule or policy lives in `
 
 ### R20
 
-A shared config object (`time_window`, `notify`, `cleanup_retention`) is parsed once, in `lib`. A per-app copy is a bug.
+A shared config object (`time_window`, `notify`, `cleanup_retention`) is parsed once, in `lib`. A per-app copy is a bug - and so is a read of one of its fields straight from the JSON, which skips every default and meaning the parser holds (a missing `repeat_interval` is `None` instead of the default; `-1`, manual only, is a number like any other).
 
 **Guard:**
 
 - `tests/test_no_duplicate_definitions.py::test_no_new_definition_is_duplicated`
+- `tests/test_a_shared_config_object_is_read_only_through_lib.py::test_no_module_outside_lib_reads_a_time_window_field_it_did_not_already`
+- `tests/test_a_shared_config_object_is_read_only_through_lib.py::test_the_reads_left_only_shrink`
 
-**Mark:** absolute.
+**Mark:** absolute since 2026-09-28. The duplicate-name guard could not see a parse that is not a function; the field-read guard, written that day, measured **24 reads of a `time_window` field in 7 files outside `lib`** - displays and status reports (`self_status`, `webhost`, the bot's task listing, `ops_status`, `server_report`) and the two registrars' answers - plus two in the 0.22.0 inventory migration once `timeout` was counted. All go through `lib.time_window.window_of` now, and the registrars' own validator of the same rules (`config_admin.normalize_time_window`) asks `parse_time_window_config` instead of re-checking integers and the manual `-1` itself. A read on a window is counted; a dict a module built under the same key name, and a write, are not.
 
 ### R21
 
@@ -467,7 +510,15 @@ A shared config object (`time_window`, `notify`, `cleanup_retention`) is parsed 
 - `tests/test_instance_add.py::test_a_duplicate_server_id_is_refused_rather_than_overwritten`
 - `tests/test_metric_collection_parallelism.py::test_two_metrics_of_one_server_are_never_in_flight_at_the_same_time`
 
-**Mark:** absolute. Absolute for the inventory and the registrar (guarded since 0.24.0). *Never joining on an ip* is read in review: no test can see every join.
+**Mark:** absolute - for the inventory and the registrar (guarded since 0.24.0). *Never joining on an ip* is R46's, read in review.
+
+### R46
+
+Group and join on `server_id`, never on an ip: two instances share an address, and an address moves.
+
+**Guard:** review
+
+**Mark:** review - no test can see every join. Split from R21 on 2026-09-28, so that R21's mark says only what its guards hold.
 
 ### R22
 
@@ -479,7 +530,7 @@ Every runtime-store table has its keys - primary, foreign, unique. A configurati
 - `tests/test_store_tables_have_their_keys.py::test_no_code_deletes_a_configuration_row`
 - `tests/test_archive_tables_take_their_keys.py::test_a_new_store_declares_both_keys`
 
-**Mark:** absolute - for what the code creates and deletes. The guard's first run (0.24.0) found `job_runs_history` and `metric_results_archive` keyless; a store made since declares both, keyed by the id each row kept (`log_id`, `result_id`).
+**Mark:** absolute (code) - for what the code creates and deletes. The guard's first run (0.24.0) found `job_runs_history` and `metric_results_archive` keyless; a store made since declares both, keyed by the id each row kept (`log_id`, `result_id`).
 
 - **Left on a store made before 0.24.0:** both archives stay keyless until `python -m db_ops.db.cli archive-keys --apply` runs on it. `CREATE TABLE IF NOT EXISTS` changes nothing that exists, and no app does it on starting: a long-running store's archive is millions of rows, adding the key reads every one, and one duplicated id would fail it. The command reports first - rows, missing ids, duplicate ids - and keys only a table it found clean. See [`01_runtime_store.md`](./01_runtime_store.md).
 
@@ -625,7 +676,7 @@ The agent guide (`AGENTS.md`) names only commands that exist, and never teaches 
 
 ### R36
 
-Everything written is English - code, docs, tests, commit messages, and the `note` / `description` fields in `data/*.json`.
+Everything written in the tree is English - code, docs, tests, and the `note` / `description` fields in `data/*.json`. (A commit message is English too, but it is not in the tree and no test reads it: that is P12 of the maintainers' publishing rules.)
 
 **Guard:**
 
@@ -653,7 +704,12 @@ Comments say why, not what; tests read as prose, a docstring saying why the beha
   identifier, no secret, a named ship list - and the commit and release gates are the maintainers'
   own process, kept in their internal release checklist. They are rules for the people publishing,
   not properties of dbabrain.
-- **Open** (recorded 2026-09-25, brought up to date 2026-09-26): whether R03 covers `db`, which
-  imports `common` and is not an app; the remaining baselines of R16 (61 commands whose answers no
-  offline run produces).
+- **Open** (recorded 2026-09-25, brought up to date 2026-09-28): nothing - every rule is absolute or
+  review. Closed in 0.25.0: R03 covers `db` (the operator, 2026-09-28); R16's answer side, every
+  command answered by a run (`ANSWER_NOT_YET_SEEN` 60 -> 0); R20, every `time_window` read through
+  `lib` (24 -> 0); R39 covers `db` and `logging_ops`; R41's `db_ops.config` alias deleted (33
+  importers -> 0); R45 and R46 added.
+- **Retired 2026-09-28:** the maintainers' standing conformance report, which numbered 15
+  architecture rules of its own. Every one is here: its 1-15 are R01, R02, R04, R06, R08, R11 (both
+  halves), R03, R15, R13, **R45**, R05, R10, R33 and R07.
   Closed in 0.24.0: every rule has a guard or is marked review; R03, R04, R06, R07, R09, R10, R41, R42 and R43 are absolute.

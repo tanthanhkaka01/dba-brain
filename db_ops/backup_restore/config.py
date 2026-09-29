@@ -17,7 +17,7 @@ from db_ops.lib.notify import (
 )
 from db_ops.lib import cleanup_retention, field_names, restore_space
 from db_ops.lib.time_window import TimeWindow, parse_time_window_config
-from db_ops.config import DEFAULT_CONFIG_PATH
+from db_ops.lib.config import DEFAULT_CONFIG_PATH
 
 
 DEFAULT_RESTORE_CONFIG_PATH = DEFAULT_DATA_DIR / "restore_config.json"

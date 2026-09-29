@@ -87,9 +87,18 @@ def test_transport_imports_only_lib(path):
     assert not outside, f"{_relative(path)} imports {outside}; transport imports only lib"
 
 
-@pytest.mark.parametrize("path", _files(DB_OPS / "lib") + _files(DB_OPS / "common"), ids=_relative)
-def test_lib_and_common_never_import_transport(path):
-    """R39. `common` is what transport starts, and `lib` is what it builds from - neither reaches up."""
+#: Every shared layer but `transport` itself. `db` joined on 2026-09-28 (the operator: *db has no
+#: reason to import transport*): its Telegram writer started `db.cli` to reach the insert it then
+#: called in-process anyway, whenever the process failed.
+SHARED_LAYERS_BELOW_THE_APPS = ("lib", "common", "db", "logging_ops")
+
+
+@pytest.mark.parametrize("path", [path for layer in SHARED_LAYERS_BELOW_THE_APPS
+                                  for path in _files(DB_OPS / layer)], ids=_relative)
+def test_no_shared_layer_imports_transport(path):
+    """R39. `common` is what transport starts, `lib` what it builds from, `db` and `logging_ops` what
+    apps import beside it - none of them reaches up into the layer that starts processes; only an
+    app does."""
     reached = sorted(name for name in _db_ops_imports(_tree(path)) if name.startswith("db_ops.transport"))
     assert not reached, f"{_relative(path)} imports {reached}"
 

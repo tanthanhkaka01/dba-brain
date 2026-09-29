@@ -58,10 +58,52 @@ def _fake_paramiko(monkeypatch, *, stdout=b"", stderr=b"", exit_code=0, connect_
         def exec_command(self, command, **kwargs):
             captured.setdefault("commands", []).append(command)
             captured["command"] = command
+            # What the script file held at the moment it ran - it is removed afterwards.
+            captured["files_at_run"] = {name: dict(entry) for name, entry in files.items()}
             return _File(), _File(stdout), _File(stderr)
+
+        def open_sftp(self):
+            return _Sftp()
 
         def close(self):
             captured["closed"] = True
+
+    files: dict[str, dict] = captured.setdefault("files", {})
+
+    class _Handle:
+        def __init__(self, name: str):
+            self.name = name
+
+        def write(self, data: bytes) -> None:
+            files[self.name]["bytes"] += data
+            # A byte written while the file is still readable by others is the leak to catch.
+            files[self.name]["written_at_mode"] = files[self.name]["mode"]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info):
+            return None
+
+    class _Sftp:
+        def open(self, name, mode):
+            if "x" in mode and name in files:
+                raise OSError("exists")
+            files[name] = {"mode": 0o644, "bytes": b"", "open_mode": mode}
+            return _Handle(name)
+
+        def chmod(self, name, mode):
+            files[name]["mode"] = mode
+
+        def normalize(self, name):
+            return captured.get("home", "/home/u") + "/" + name
+
+        def remove(self, name):
+            captured.setdefault("removed", []).append(name)
+            files.pop(name, None)
+
+        def close(self):
+            return None
 
     ssh_exception = types.ModuleType("paramiko.ssh_exception")
     ssh_exception.NoValidConnectionsError = OSError
@@ -209,9 +251,12 @@ def test_an_argv_is_quoted_and_a_cwd_becomes_a_cd_prefix(monkeypatch):
     assert captured["command"] == "cd '/opt/db ops' && docker compose -f 'my file.yml' up"
 
 
-def test_a_bash_script_is_piped_over_stdin_and_carries_its_env(monkeypatch):
+def test_a_bash_script_is_a_private_file_run_with_stdin_closed_and_carries_its_env(monkeypatch):
     """Nothing of ours reaches the remote environment on its own — SSH does not forward env
-    vars — so collector inputs travel inside the script text."""
+    vars — so collector inputs travel inside the script text.
+
+    As a **file** since 0.25.0: fed to ``bash -s`` on stdin, any command in the script that reads
+    stdin read the rest of the script instead, and the run ended early with exit 0 (1.65)."""
     captured = _fake_paramiko(monkeypatch, stdout=b"[]")
 
     rx.run_script(
@@ -220,16 +265,23 @@ def test_a_bash_script_is_piped_over_stdin_and_carries_its_env(monkeypatch):
         env={"OS_SERVICE_NAMES": "It's here"},
     )
 
-    assert captured["command"] == "bash -s"
-    assert captured["stdin"] == b"export OS_SERVICE_NAMES='It'\\''s here'\necho hi"
+    [(name, placed)] = captured["files_at_run"].items()
+    path = f"/home/u/{name}"
+    assert name.startswith(rx.SCRIPT_FILE_PREFIX) and name.endswith(".sh")
+    assert placed["open_mode"] == "wx", "created exclusively - never another run's file"
+    assert placed["written_at_mode"] == 0o600, "private before a byte of it is written"
+    assert placed["bytes"] == b"export OS_SERVICE_NAMES='It'\\''s here'\necho hi"
+    assert captured["command"] == f"trap 'rm -f {path}' EXIT; bash {path} < /dev/null"
+    assert captured.get("stdin") is None, "the script is not the shell's stdin any more"
+    assert captured["removed"] == [name] and not captured["files"]
 
 
-def test_a_powershell_script_is_base64_encoded_not_written_to_a_file(monkeypatch):
-    """Encoding sidesteps every quoting layer between here and the remote shell, and keeps
-    the script body off the remote command line."""
-    import base64
-
+def test_a_powershell_script_is_a_file_run_with_file(monkeypatch):
+    """A file, not ``-EncodedCommand``: base64 of UTF-16 runs out of the 32,767-character command
+    line past ~8 KB of script, and stdin is read and silently ignored for anything multi-line.
+    Windows OpenSSH's SFTP answers a POSIX path, which ``-File`` refuses - it is turned back."""
     captured = _fake_paramiko(monkeypatch, stdout=b"[]")
+    captured["home"] = "/C:/Users/u"
 
     rx.run_script(
         {"method": "ssh", "host": "h", "username": "u", "auth_type": "password", "password": "pw",
@@ -237,11 +289,13 @@ def test_a_powershell_script_is_base64_encoded_not_written_to_a_file(monkeypatch
         "Get-Date",
     )
 
-    command = captured["command"]
-    assert command.startswith("powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ")
-    encoded = command.rsplit(" ", 1)[1]
-    assert base64.b64decode(encoded).decode("utf-16le") == "Get-Date"
+    [(name, placed)] = captured["files_at_run"].items()
+    assert name.endswith(".ps1")
+    assert placed["bytes"] == b"\xef\xbb\xbfGet-Date", "UTF-8 with a BOM, or PowerShell 5.1 reads ANSI"
+    assert captured["command"] == ("powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass "
+                                   f"-File 'C:\\Users\\u\\{name}'")
     assert captured.get("stdin") is None
+    assert captured["removed"] == [name]
 
 
 def test_a_command_is_unbounded_unless_the_caller_bounds_it(monkeypatch):

@@ -452,12 +452,12 @@ All three delete engines (local Python, SSH, PowerShell/UNC) apply it, and the v
 allow-list, because deciding inside the script would be a third copy of a rule that has to be one
 rule.
 
-**Known limitation of 0.24.0: on a Linux node the Windows engine deletes nothing.** Since 0.24.0 it
-lists the share with `smb-list` and joins the names into a `Path`, which on Linux does not split at
-`\`; and it reads the chain by listing the UNC path, which a Linux node cannot. Every aged file is
-then held back as `still_needed`. Nothing wrong is deleted, but the share grows until cleaned by
-hand. A Windows node is unaffected, and so is a Linux target (the SSH engine). Fixed in 0.24.1;
-`tests/test_a_share_is_reached_through_common.py` marks the two cases `xfail` off Windows until then.
+**The Windows engine reads the chain from the share's own listing** (0.25.0), and keeps its paths
+as Windows paths wherever it runs. In 0.24.0 it joined the `smb-list` names into a `Path` - on
+Linux one component, no split at `\` - and read the chain by walking the UNC path, which a Linux
+node cannot: every aged file was held back as `still_needed` and the share was never cleaned. Safe,
+but it filled. A Windows node was unaffected, and so was a Linux target (the SSH engine). Found by
+`ci` on the 0.24.0 release commit, whose runners are Linux.
 
 **A chain is per database, not per directory.** One staging directory holds every database copied
 from a source (`<source>/<database>/<FULL|LOG>/`), so "the newest full" has to be asked once per

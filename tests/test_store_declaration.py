@@ -25,7 +25,7 @@ import sqlite3
 
 import pytest
 
-from db_ops.config import PostgresStoreConfig, SqliteStoreConfig, StoreConfig
+from db_ops.lib.config import PostgresStoreConfig, SqliteStoreConfig, StoreConfig
 from db_ops.db import DbOpsStore, declaration
 
 

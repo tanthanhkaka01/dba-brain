@@ -29,8 +29,9 @@ RULES = REPO / "docs" / "rules.md"
 OWED_A_GUARD: frozenset[str] = frozenset()
 
 #: Rules no test can decide - where a thing belongs, what counts as configuration, whether a doc was
-#: updated, whether a comment says why.
-REVIEW_ONLY = frozenset({"R12", "R19", "R34", "R37"})
+#: updated, whether a comment says why, whether a join anywhere is made on an ip (R46, split from R21
+#: on 2026-09-28 so that R21's absolute mark says only what its guards hold).
+REVIEW_ONLY = frozenset({"R12", "R19", "R34", "R37", "R46"})
 
 #: The pages that explain rules in their own context. Each points at the list instead of keeping a
 #: second copy of it.

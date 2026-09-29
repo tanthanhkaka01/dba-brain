@@ -41,10 +41,13 @@ import pytest
 
 DB_OPS_ROOT = Path(__file__).resolve().parents[1] / "db_ops"
 
-#: Apps the rule applies to - every app. `control` joined on 2026-09-26 (the module docstring).
+#: Apps the rule applies to - every app. `control` joined on 2026-09-26 (the module docstring);
+#: `db` on 2026-09-28 (the operator: R03 covers `db` too) - its CLI answers from the store, and the
+#: three modules it answered from (`restore_drill`, `sql_run_history`, `telegram_command_history`)
+#: moved into it, the request reader into `lib.json_io`.
 APPS = frozenset({
     "jobs", "metrics", "sql_tasks", "reports", "telegram",
-    "backup_restore", "sla", "sre", "webhost", "control",
+    "backup_restore", "sla", "sre", "webhost", "control", "db",
 })
 
 #: `common` submodules an app may still import, exempt from the rule. Empty since 0.24.0:

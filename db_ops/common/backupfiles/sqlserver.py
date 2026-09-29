@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from db_ops.common import sql_run
 from db_ops.common.backupfiles import DIFF, FULL, LOG, BackupListError, row
 
 #: RESTORE HEADERONLY's BackupType codes, and the letters some tools report instead.
@@ -30,11 +31,6 @@ _BACKUP_SUFFIXES = (".bak", ".trn")
 _LIST = ("SELECT full_filesystem_path AS path, size_in_bytes AS size "
          "FROM sys.dm_os_enumerate_filesystem(N'{directory}', N'*') "
          "WHERE is_directory = 0")
-
-
-def _rows(cursor) -> list[dict[str, Any]]:
-    columns = [column[0] for column in cursor.description]
-    return [dict(zip(columns, r)) for r in cursor.fetchall()]
 
 
 def list_files(request: dict[str, Any], skipped: list[str] | None = None) -> list[dict[str, Any]]:
@@ -59,16 +55,15 @@ def list_files(request: dict[str, Any], skipped: list[str] | None = None) -> lis
         # ODBC stack can negotiate TLS with it and through pymssql when it cannot, and the
         # pymssql adapter takes the statement alone - `execute() takes 2 positional arguments
         # but 3 were given` on the first target that fell back. The value is ours, and escaped.
-        cursor.execute(_LIST.format(directory=directory.replace(chr(39), chr(39) * 2)))
-        found = _rows(cursor)
+        found = sql_run.query_rows(
+            cursor, _LIST.format(directory=directory.replace(chr(39), chr(39) * 2)))
 
         rows: list[dict[str, Any]] = []
         for item in sorted(found, key=lambda i: str(i.get("path") or "")):
             path = str(item.get("path") or "")
             escaped = path.replace("'", "''")
             try:
-                cursor.execute(f"RESTORE HEADERONLY FROM DISK = N'{escaped}'")
-                heads = _rows(cursor)
+                heads = sql_run.query_rows(cursor, f"RESTORE HEADERONLY FROM DISK = N'{escaped}'")
             except Exception as exc:  # noqa: BLE001 - sorted below: stray file, or a real failure.
                 # A file that is not a backup (the exported certificate beside the backups, a
                 # README) is skipped: SQL Server says so with 3241-3243. Anything else is a backup

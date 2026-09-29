@@ -154,7 +154,7 @@ def test_the_identity_only_comes_from_the_file_that_supplied_the_token():
     reports one bot and authenticates as the other."""
     from pathlib import Path
 
-    from db_ops.config import parse_config
+    from db_ops.lib.config import parse_config
 
     root = Path(__file__).resolve().parents[1]
     parsed = parse_config({"telegram": {"telegram_bot_token_ref": "PINNED_ELSEWHERE",

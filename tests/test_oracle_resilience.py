@@ -50,7 +50,7 @@ def test_oracle_timeout_sets_call_timeout_and_closes_connection(monkeypatch):
     def timeout_execute(*_args, **_kwargs):
         raise TimeoutError("Oracle query timed out")
 
-    monkeypatch.setattr(metric_batch, "execute_cursor_batches", timeout_execute)
+    monkeypatch.setattr(metric_batch.sql_run, "execute_capture", timeout_execute)
 
     # Every engine now reports a post-connect failure the same way. The driver's own message
     # has to survive the wrapping, or an operator loses the only clue about what timed out.
@@ -80,9 +80,11 @@ def test_oracle_success_uses_service_name_and_returns_first_result_set(monkeypat
     )
     monkeypatch.setitem(sys.modules, "oracledb", oracle_module)
     monkeypatch.setattr(
-        metric_batch,
-        "execute_cursor_batches",
-        lambda *_args, **_kwargs: {"result_sets": [{"columns": ["metric_item", "metric_value"], "rows": [["connected", "1"]]}]},
+        metric_batch.sql_run,
+        "execute_capture",
+        lambda *_args, **_kwargs: ([{"columns": ["metric_item", "metric_value"],
+                                     "rows": [["connected", "1"]], "row_count": 1,
+                                     "truncated": False}], 0, False),
     )
 
     rows = executor.execute_metric_sql(

@@ -20,8 +20,8 @@ from db_ops.common.sql_execution import (
     SQL_PARAMETER_TYPES,
     SqlParameterError,
     build_parameter_prelude,
-    execute_cursor_batches,
 )
+from db_ops.common.sql_run import execute_capture
 from db_ops.sql_tasks import runner
 
 
@@ -31,8 +31,8 @@ class _Cursor:
         self.description = None
         self.rowcount = 0
 
-    def execute(self, sql, *params):
-        self.calls.append((sql, params))
+    def execute(self, sql, params=()):
+        self.calls.append((sql, tuple(params)))
 
     def fetchmany(self, n):
         return []
@@ -40,13 +40,6 @@ class _Cursor:
     def nextset(self):
         return False
 
-
-class _Conn:
-    def cursor(self):
-        return _Cursor()
-
-    def commit(self):
-        pass
 
 
 # --------------------------------------------------------------------------------------
@@ -120,10 +113,10 @@ def test_a_task_with_no_parameters_produces_no_prelude():
 # --------------------------------------------------------------------------------------
 
 def test_every_batch_gets_the_declaration_because_a_variable_dies_at_go():
-    conn, cursor = _Conn(), _Cursor()
+    cursor = _Cursor()
 
-    execute_cursor_batches(conn, cursor, ["SELECT @spid;", "SELECT 2;"], commit=False,
-                           prelude="DECLARE @spid int = ?;\n", params=[505])
+    execute_capture(cursor, "SELECT @spid;\nGO\nSELECT 2;", prelude="DECLARE @spid int = ?;\n",
+                    params=[505])
 
     assert len(cursor.calls) == 2
     for sql, params in cursor.calls:
@@ -132,9 +125,9 @@ def test_every_batch_gets_the_declaration_because_a_variable_dies_at_go():
 
 
 def test_without_parameters_the_batch_is_passed_through_untouched():
-    conn, cursor = _Conn(), _Cursor()
+    cursor = _Cursor()
 
-    execute_cursor_batches(conn, cursor, ["SELECT 1;"], commit=False)
+    execute_capture(cursor, "SELECT 1;")
 
     assert cursor.calls == [("SELECT 1;", ())]
 

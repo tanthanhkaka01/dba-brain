@@ -30,6 +30,7 @@ import concurrent.futures
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -189,6 +190,43 @@ def _cases(work: Path) -> dict[str, tuple[str, dict, str]]:
         "relay-file": ("relay-file", {
             "source": {"target": "A", "access": _SSH, "path": "/tmp/a.tar"},
             "destination": {"target": "B", "access": _SSH, "path": "/tmp/b.tar"}}, _SSH_REACHED),
+        **_finished_offline(work),
+    }
+
+
+#: This machine, as a host block: a command run on it needs no login.
+_HERE = {"access": "local", "runtime": "windows" if os.name == "nt" else "linux"}
+
+
+def _finished_offline(work: Path) -> dict[str, tuple[str, dict, str]]:
+    """Operations that finish with no database and no remote host - here, or as a dry run - so
+    each gives a whole answer (0.25.0, R16's answer side). Each is what its app sends."""
+    junk = str(work / "junk.txt")
+    return {
+        "run-cmd-here": ("run-cmd", {"access": {"method": "local"}, "command": "echo guard",
+                                     **_CONFIRMED}, "ok"),
+        "prune-backup-files": ("prune-backup-files", {"db_type": "postgresql", "path": str(work / "backups"),
+                                                      "dry_run": True}, "ok"),
+        "delete-file": ("delete-file", {"host": _HERE, "path": junk, "must_be_under": str(work),
+                                        "dry_run": True}, "ok"),
+        "delete-files": ("delete-files", {"host": _HERE, "paths": [junk], "must_be_under": str(work),
+                                          "dry_run": True}, "ok"),
+        "backup-database": ("backup-database", {"db_type": "postgresql", "host": _HERE, "label": "guard",
+                                                "script": "echo backed-up", "dry_run": True}, "ok"),
+        "restore-key": ("restore-key", {"cer_path": "/c.cer", "pvk_path": "/c.pvk", "password": "pw",
+                                        "dry_run": True}, "ok"),
+        "restore-full": ("restore-full", {"db_type": "sqlserver", "target": {"host": "127.0.0.1"},
+                                          "backup_path": "/b/x.bak", "database_name": "d",
+                                          "dry_run": True}, "ok"),
+        "restore-diff": ("restore-diff", {"db_type": "sqlserver", "target": {"host": "127.0.0.1"},
+                                          "backup_path": "/b/x.dif", "database_name": "d",
+                                          "dry_run": True}, "ok"),
+        "restore-log": ("restore-log", {"db_type": "sqlserver", "target": {"host": "127.0.0.1"},
+                                        "backup_paths": ["/b/x.trn"], "database_name": "d",
+                                        "dry_run": True}, "ok"),
+        "restore-metadata": ("restore-metadata", {"target": {"host": "127.0.0.1"},
+                                                  "files": [str(work / "meta.sql")], "dry_run": True},
+                             "ok"),
     }
 
 
@@ -197,6 +235,12 @@ def _prepare_work(work: Path) -> None:
     (work / "backups").mkdir(exist_ok=True)
     (work / "rows.csv").write_text("a,b\n1,2\n", encoding="utf-8")
     (work / "outgoing.bkp").write_bytes(b"not a backup")
+    (work / "junk.txt").write_text("a file a dry run names", encoding="utf-8")
+    (work / "meta.sql").write_text("SELECT 1;\n", encoding="utf-8")
+    (work / "secrets.json").write_text(json.dumps({"LAB_PW": "not-a-real-password"}), encoding="utf-8")
+    (work / "inventory.json").write_text(json.dumps({"servers": []}), encoding="utf-8")
+    (work / "reports").mkdir(exist_ok=True)
+    (work / "reports" / "index.html").write_text("<html><body>a report</body></html>", encoding="utf-8")
 
 
 #: What a request states when its app has finished it (`lib.data_sources.request_fill`): a SQL login,
@@ -273,6 +317,9 @@ def _stated_cases(work: Path) -> dict[str, tuple[str, dict, str]]:
 #: root - the file it writes is created, or it answers that nothing is configured yet.
 _ON_AN_EMPTY_ROOT = {
     "sql-command-add": {"display_name": "count the drill", "db_type": "sqlserver", "sql_text": "select 1"},
+    # The field the Telegram command sends (0.25.0, 1.66), and the chats a new install has (1.67).
+    "add-sql": {"db_type": "sqlserver", "server_id": "LAB-192-0-2-10", "display_name": "count the drill",
+                "sql_text": "select 1"},
     "instance-add": {"server_id": "LAB-192-0-2-10", "db_type": "sqlserver", "ip": "192.0.2.10", "port": 1433},
     "remote-credential-add": {"server_id": "LAB-192-0-2-10", "username": "tuser",
                               "password_ref": "LAB_OS_PASSWORD", "host": "192.0.2.10"},
@@ -287,6 +334,75 @@ _ON_AN_EMPTY_ROOT = {
     "self-status": {},
 }
 _TEST_KEY = "a-throwaway-passphrase-for-this-test-only"
+
+_INSTANCE = {"server_id": "LAB-192-0-2-10", "db_type": "sqlserver", "ip": "192.0.2.10", "port": 1433}
+
+
+def _on_a_root_init_wrote(work: Path, root: Path) -> dict[str, list[tuple[str, dict]]]:
+    """Configuration commands on a root `init` wrote, each on a copy of its own - most of them
+    write - after the steps that give it something to work on: an instance, a stored secret, a SQL
+    task, a bundle. The last step of each is the command it is named for (0.25.0, R16)."""
+    return {
+        "check-identifiers": [("instance-add", _INSTANCE),
+                              ("check-identifiers", {"paths": ["assets/plain.txt"]})],
+        "check-secret-literals": [
+            ("encrypt-secret", {"source": str(work / "secrets.json"),
+                                "dest": str(root / "check-secret-literals" / "data" / "encrypted_secret_text.json")}),
+            ("check-secret-literals", {"paths": ["assets/plain.txt"]})],
+        "export-data": [("export-data", {"bundle": str(work / "bundle.zip")})],
+        "encrypt-secret": [("encrypt-secret", {"source": str(work / "secrets.json"),
+                                               "dest": str(work / "encrypted.json")})],
+        "app-command-set": [("app-command-set", {"app_code": "APP-REPORTS-CREATE", "active": False})],
+        "metric-toggle": [("instance-add", _INSTANCE),
+                          ("metric-toggle", {"server_id": _INSTANCE["server_id"], "scope": "all",
+                                             "state": "off"})],
+        "metric-severity": [("instance-add", _INSTANCE),
+                            ("metric-severity", {"server_id": _INSTANCE["server_id"],
+                                                 "metric_code": "BACKUP_AGE",
+                                                 "severity_map": {"CRITICAL": "WARNING"}})],
+        "sql-target-add": [("instance-add", _INSTANCE),
+                           ("sql-command-add", {"display_name": "count", "db_type": "sqlserver",
+                                                "sql_text": "select 1"}),
+                           ("sql-target-add", {"sql_id": 1, "server_id": _INSTANCE["server_id"]})],
+        "inventory-summary": [("inventory-summary", {"inventory": str(work / "inventory.json"),
+                                                     "output_dir": str(work / "summary")})],
+        "lift-example": [("instance-add", _INSTANCE),
+                         ("lift-example", {"source": "data/sla_policies.json"})],
+        "build-showcase": [("instance-add", _INSTANCE),
+                           ("build-showcase", {"source": str(work / "reports"),
+                                               "output": str(work / "showcase")})],
+    }
+
+
+#: A bundle is `import-data`'s input, and `export-data` writes it: run after the scenarios above.
+_AFTER_THE_EXPORT = {"import-data": [("import-data", {"bundle": "bundle.zip", "plan_only": True})]}
+
+
+def _seeded(base: Path, work: Path) -> dict:
+    """Every seeded run: ``init`` once, a copy per scenario, the scenarios in parallel."""
+    seed = base / "seed"
+    seed.mkdir()
+    _run(seed, "init", {"root": "root"}, key=_TEST_KEY)
+    copies = base / "seeded"
+    copies.mkdir()
+
+    def scenario(name: str, steps: list[tuple[str, dict]]) -> dict:
+        root = copies / name
+        shutil.copytree(seed / "root", root)
+        (root / "assets" / "plain.txt").write_text("nothing secret here\n", encoding="utf-8")
+        result = {}
+        for command, request in steps:
+            result = _run(root, command, request, key=_TEST_KEY)
+        return result
+
+    runs = _on_a_root_init_wrote(work, copies)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {name: pool.submit(scenario, name, steps) for name, steps in runs.items()}
+    answers = {("seeded", name): future.result() for name, future in futures.items()}
+    for name, steps in _AFTER_THE_EXPORT.items():
+        request = {**steps[0][1], "bundle": str(work / steps[0][1]["bundle"])}
+        answers[("seeded", name)] = scenario(name, [(steps[0][0], request)])
+    return answers
 
 
 @pytest.fixture(scope="module")
@@ -308,7 +424,9 @@ def answers(tmp_path_factory) -> dict:
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
         futures = {key: pool.submit(_run, root, command, request, key=secret)
                    for key, (root, command, request, secret) in jobs.items()}
-    return {key: future.result() for key, future in futures.items()}
+    answers = {key: future.result() for key, future in futures.items()}
+    answers.update(_seeded(base, work))
+    return answers
 
 
 # --------------------------------------------------------------------------- #
@@ -374,6 +492,17 @@ def test_a_command_that_edits_the_configuration_runs_on_an_empty_one(answers, co
         f"{command} refused an empty install: {_said(result)[:300]}")
 
 
+_SEEDED = sorted({*_on_a_root_init_wrote(Path("."), Path(".")), *_AFTER_THE_EXPORT})
+
+
+@pytest.mark.parametrize("command", _SEEDED)
+def test_a_configuration_command_works_on_a_root_init_wrote(answers, command):
+    """What a new install has is what these edit: an `init` root, and the steps before."""
+    result = answers[("seeded", command)]
+    assert result["body"] is not None and result["body"]["success"] is True, (
+        f"{command} on a root init wrote: {_said(result)[:300]}")
+
+
 @pytest.mark.parametrize("command", sorted(CONFIGURATION_IS_ITS_JOB))
 def test_an_empty_configuration_is_said_in_words_not_as_a_raw_error(answers, command):
     """On an empty root a refusal names what is missing - never a bare `[Errno 2]` or a traceback."""
@@ -386,24 +515,23 @@ def test_an_empty_configuration_is_said_in_words_not_as_a_raw_error(answers, com
 # --------------------------------------------------------------------------- #
 # What the answers carry (R16, the answer side)
 # --------------------------------------------------------------------------- #
-#: Commands no run above answers successfully - most need a live database or host, the rest have
-#: no complete request here yet - so their answer keys are checked by nothing. The debt of R16's
-#: answer side: a command gains a run that succeeds, and leaves the list. Held equal to what the runs
-#: show, so the count docs/rules.md carries is true, and a run that stops succeeding is noticed.
-ANSWER_NOT_YET_SEEN = frozenset({
-    "add-sql", "app-command-set", "backup-chain", "backup-database", "build-showcase",
-    "check-identifiers", "check-secret-literals", "copy-backup-dir", "copy-schema",
-    "create-table-from-xlsx", "delete-file", "delete-files", "disable-job",
-    "encrypt-secret", "export-data", "fetch-file", "host-facts", "host-restart", "host-service",
-    "import-data", "inventory-summary", "kill-spid", "lift-example", "list-databases", "list-jobs",
-    "list-schemas", "metric-severity", "metric-toggle", "move-db-docker", "pack-backup",
-    "pack-files", "prune-backup-files", "prune-staged-backups", "pull-file", "push-file",
-    "relay-file", "restore-diff", "restore-full", "restore-key", "restore-log",
-    "restore-metadata", "rotate-password", "run-cmd", "run-sql", "run-sqlcmd", "send-file",
-    "shrink-log", "smb-credential", "smb-delete", "smb-list", "sql-target-add", "sqlserver-apply-cu", "sqlserver-export-instance",
-    "sqlserver-precheck", "sqlserver-replay-instance", "sqlserver-verify-build",
-    "sqlserver-verify-instance", "start-job", "trace-session", "verify-restore"
-})
+#: Commands no run answers successfully - not a run above, and not the fake server's
+#: (`test_an_answer_that_needs_a_server_is_checked_against_a_fake_one.py`) - so their answer keys
+#: are checked by nothing. The debt of R16's answer side, paid in 0.25.0 (60 commands when 0.24.0
+#: shipped): every command now has a run that succeeds, so a new command comes with one, and a run
+#: that stops succeeding fails here. Held equal to what the runs show; it may only stay empty.
+ANSWER_NOT_YET_SEEN: frozenset[str] = frozenset()
+
+
+def _answered_with_a_fake_server() -> frozenset[str]:
+    """What `test_an_answer_that_needs_a_server_is_checked_against_a_fake_one.py` answers - in its
+    process, the driver and the host transport faked (0.25.0). Read when the check runs, not at
+    import, so neither file loads the other at collection."""
+    spec = importlib.util.spec_from_file_location(
+        "faked", REPO / "tests" / "test_an_answer_that_needs_a_server_is_checked_against_a_fake_one.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.ANSWERED_WITH_A_FAKE_SERVER
 
 
 def _answer_fields() -> dict[str, set[str]]:
@@ -439,7 +567,7 @@ def test_every_key_a_successful_answer_carries_is_described(answers, tmp_path):
         if extra:
             undescribed.setdefault(command, set()).update(extra)
     assert not undescribed, f"answer keys the reference does not describe: {undescribed}"
-    unseen = set(COMMANDS) - checked
+    unseen = set(COMMANDS) - checked - _answered_with_a_fake_server()
     assert not unseen - ANSWER_NOT_YET_SEEN, (
         "no run here answers these, so nothing checks their keys - add a case: "
         f"{sorted(unseen - ANSWER_NOT_YET_SEEN)}")

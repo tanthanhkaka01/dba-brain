@@ -22,7 +22,7 @@ import pytest
 from db_ops.backup_restore import cli as backup_cli
 from db_ops.backup_restore import restore_database as restore_module
 from db_ops.backup_restore.config import parse_restore_config
-from db_ops.config import DbOpsConfig
+from db_ops.lib.config import DbOpsConfig
 from db_ops.lib import shared_objects
 from test_backup_restore import make_config
 

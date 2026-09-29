@@ -690,22 +690,35 @@ def test_json_safe_result_converts_the_rows_inside_every_set():
 
 
 # --------------------------------------------------------------------------- #
-# execute_cursor_batches — the multi-result-set reader `metrics` runs on
+# The metrics reader is run-sql's
 # --------------------------------------------------------------------------- #
 #
-# Moved here from `tests/test_sql_tasks_runner.py` on 2026-08-16, when `sql_tasks` stopped
-# calling this function and started calling `common.cli run-sql`. The function is not dead —
-# `metrics/executor.py` is its caller now, and metrics is the one app exempt from the CLI rule
-# because it runs ~388 SQL executions per collect pass. Coverage of a `common` function had no
-# business hanging off an app's test file, where it would have been deleted along with it.
+# `metric-batch` read every metric through a second reader, `sql_execution.execute_cursor_batches`,
+# until 0.25.0 (rules R11); it reads through `execute_capture` now, as `run-sql` does. These held
+# the old reader to the two things a metric needs from it, and hold the one that replaced it.
 
 
 class BatchConn:
-    def __init__(self):
-        self.committed = False
+    def __init__(self, cursor):
+        self._cursor = cursor
+        self.closed = False
 
-    def commit(self):
-        self.committed = True
+    def cursor(self):
+        return self._cursor
+
+    def close(self):
+        self.closed = True
+
+
+def _metric_rows(monkeypatch, cursor, *, max_rows=0):
+    from db_ops.common import metric_batch
+
+    conn = BatchConn(cursor)
+    monkeypatch.setattr(metric_batch, "_connect", lambda *_a, **_k: conn)
+    rows, truncated = metric_batch._execute({"db_type": "sqlserver"}, "", "EXEC dbo.metric;",
+                                            timeout=5, max_rows=max_rows)
+    assert conn.closed
+    return rows, truncated
 
 
 class BatchCursor:
@@ -723,8 +736,10 @@ class BatchCursor:
         self._index = 0
         self._apply_current_set()
 
-    def fetchmany(self, _size):
-        return self._sets[self._index]["rows"]
+    def fetchmany(self, size):
+        current = self._sets[self._index]
+        taken, current["rows"] = current["rows"][:size], current["rows"][size:]
+        return taken
 
     def nextset(self):
         if self._index + 1 >= len(self._sets):
@@ -741,27 +756,16 @@ class BatchCursor:
 
 
 
-def test_execute_cursor_batches_reads_later_result_sets():
-    conn = BatchConn()
-    cursor = BatchCursor()
+def test_a_metric_reads_the_result_set_after_a_statement_with_none(monkeypatch):
+    rows, truncated = _metric_rows(monkeypatch, BatchCursor())
 
-    result = sql_execution.execute_cursor_batches(conn, cursor, ["batch"], commit=False)
-
-    assert result["row_count"] == 1
-    assert result["result_sets"] == [
-        {
-            "columns": ["metric_item", "metric_value"],
-            "rows": [["db:file", "99.9"]],
-            # A short result set was not cut by the cap, and now says so: a truncated set used to
-            # be indistinguishable from a complete one.
-            "truncated": False,
-        }
-    ]
-    assert result["truncated"] is False
-    assert conn.committed is False
+    assert rows == [{"metric_item": "db:file", "metric_value": "99.9"}]
+    # A short result set was not cut by the cap, and says so: a truncated set used to be
+    # indistinguishable from a complete one.
+    assert truncated is False
 
 
-def test_a_result_set_cut_by_the_cap_says_so():
+def test_a_result_set_cut_by_the_cap_says_so(monkeypatch):
     """Silent truncation is the defect, not the cap. STORAGE_FILE_PLACEMENT reporting exactly 100
     rows meant "the first 100 of an unknown number", and nothing in the result distinguished that
     from an instance that genuinely has 100 mis-placed files."""
@@ -783,12 +787,10 @@ def test_a_result_set_cut_by_the_cap_says_so():
         def nextset(self):
             return False
 
-    result = sql_execution.execute_cursor_batches(
-        BatchConn(), _Cursor(), ["batch"], commit=False, max_rows=100)
+    rows, truncated = _metric_rows(monkeypatch, _Cursor())
 
-    assert len(result["result_sets"][0]["rows"]) == 100
-    assert result["result_sets"][0]["truncated"] is True
-    assert result["truncated"] is True
+    assert len(rows) == 100, "a metric that sets no cap reads at the 100-row preview cap"
+    assert truncated is True
 
 
 # --------------------------------------------------------------------------- #

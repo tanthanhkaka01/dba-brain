@@ -65,6 +65,7 @@ def _sqlserver(request: dict[str, Any]) -> dict[str, Any]:
     wanted = [str(d).strip() for d in (request.get("database_names") or request.get("databases") or [])
               if str(d).strip()]
 
+    from db_ops.common import db_catalog, sql_run
     from db_ops.common.db_connect import connect_engine
 
     connection = connect_engine(
@@ -76,9 +77,8 @@ def _sqlserver(request: dict[str, Any]) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     try:
         cursor = connection.cursor()
-        cursor.execute("SELECT name, state_desc, recovery_model_desc FROM sys.databases "
-                       "WHERE database_id > 4")
-        found = [(r[0], r[1], r[2]) for r in cursor.fetchall()]
+        found = [(str(r["name"]), str(r.get("state") or ""), r.get("recovery_model"))
+                 for r in db_catalog.databases(cursor, "sqlserver") if not r.get("is_system")]
         for name, state, recovery in found:
             if wanted and name not in wanted:
                 continue
@@ -87,9 +87,9 @@ def _sqlserver(request: dict[str, Any]) -> dict[str, Any]:
                 try:
                     # A real query, not just the state column: a database can read ONLINE and still
                     # refuse one while it finishes an upgrade step.
-                    cursor.execute(
-                        f"SELECT COUNT(*) FROM [{name.replace(']', ']]')}].sys.tables")
-                    detail = f"{cursor.fetchone()[0]} user tables"
+                    tables = sql_run.query_rows(
+                        cursor, f"SELECT COUNT(*) AS n FROM [{name.replace(']', ']]')}].sys.tables")
+                    detail = f"{tables[0]['n']} user tables"
                     answered = True
                 except Exception as exc:  # noqa: BLE001 - a refusal is the finding.
                     detail = str(exc)[:200]

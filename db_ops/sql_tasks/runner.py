@@ -49,7 +49,7 @@ from db_ops.lib.telegram_route import telegram_groups
 from db_ops.lib.sql_text import DEFAULT_MAX_ROWS as SQL_RUN_MAX_ROWS
 from db_ops.lib import result_format
 from db_ops.db.queue_message import queue_message, store_block_from
-from db_ops.config import DEFAULT_CONFIG_PATH, load_config, resolve_config_path
+from db_ops.lib.config import DEFAULT_CONFIG_PATH, load_config, resolve_config_path
 from db_ops.lib import data_sources
 from db_ops.lib.data_sources import request_fill
 from db_ops.transport import common_cli
@@ -82,7 +82,7 @@ STORED_RESULT_MAX_ROWS = 100
 MAX_RESULT_ROWS = DEFAULT_INLINE_MAX_ROWS
 
 #: How many of a script's result sets are kept, for the store row and the Telegram table. Five,
-#: because that is what `execute_cursor_batches` kept before this app called `run-sql` instead and
+#: because that is what the app's own batch reader kept before it called `run-sql` instead and
 #: `sql_runs.result_json` is read against it. The rows of the sets beyond it are still *counted*
 #: into `row_count` — dropping them from the total would make a run look smaller than it was.
 MAX_STORED_RESULT_SETS = 5
@@ -2014,7 +2014,9 @@ def diagnose_connect_failure(*, target: SqlTarget, error: str,
 
     Connect first, ask on failure: the database list is read from the server only when the
     database could not be opened, so a working target costs nothing and a new database needs no
-    config change. The listing is a read of ``sys.databases`` in ``master`` with the same login.
+    config change. The listing is ``common.cli list-databases`` - in ``master``, with the same
+    login - the one command that answers it (rules R43); this app kept its own ``sys.databases``
+    query through ``run-sql`` until 0.25.0.
     """
     kind = sql_task_target.classify_connect_failure(error)
     if kind is None:
@@ -2034,18 +2036,19 @@ def diagnose_connect_failure(*, target: SqlTarget, error: str,
     if not connection:
         return (f"database '{database_name}' could not be opened on {instance}, and without the "
                 "login the server's databases could not be listed")
-    ok, answer, listing_error = common_cli.run_allowing_failure("run-sql", {
+    ok, answer, listing_error = common_cli.run_allowing_failure("list-databases", {
         "target": target.server_id,
         "connection": connection,
-        "database_name": "",
-        "sql_text": "SELECT name FROM sys.databases ORDER BY name;",
+        # Every database the server has, `master` included: the message names what exists.
+        "include_system": True,
         "timeout_seconds": 60,
         "sql_access": target.sql_access or {},
     })
     if not ok:
         return (f"database '{database_name}' could not be opened on {instance}, and the server's "
                 f"databases could not be listed either: {listing_error}")
-    names = [str(row[0]) for row in (answer or {}).get("rows") or [] if row]
+    names = [str(item.get("name")) for item in (answer or {}).get("databases") or []
+             if isinstance(item, dict) and item.get("name")]
     return sql_task_target.missing_database_message(database_name=database_name, where=instance,
                                                     existing=names)
 

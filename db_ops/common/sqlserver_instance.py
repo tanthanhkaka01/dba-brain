@@ -42,7 +42,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from db_ops.common import host_ops, sql_run
+from db_ops.common import db_catalog, host_ops, sql_run
 
 from db_ops.common.evidence import FAIL, OK, SKIP, WARN, GateReport
 from db_ops.lib.json_io import load_json_file
@@ -86,7 +86,7 @@ def load_policy(request: dict[str, Any]) -> dict[str, Any]:
 # Connection + instance facts
 # --------------------------------------------------------------------------- #
 
-def _connect(request: dict[str, Any], *, data_dir: str | Path | None, timeout_seconds: int = 30,
+def _connect(request: dict[str, Any], *, timeout_seconds: int = 30,
              autocommit: bool = False):
     """Connect to the instance's ``master`` as the login the request states in ``connection``.
 
@@ -111,12 +111,11 @@ def _connect(request: dict[str, Any], *, data_dir: str | Path | None, timeout_se
                                  autocommit=autocommit), resolved
 
 
-def _rows(cursor, sql: str, params: tuple = ()) -> list[dict[str, Any]]:
-    """Query -> list of dicts with raw driver values kept (bytes stay bytes: SIDs and password
-    hashes must be rendered as ``0x...`` literals, and stringifying them first destroys them)."""
-    cursor.execute(sql, params) if params else cursor.execute(sql)
-    columns = [column[0] for column in cursor.description]
-    return [dict(zip(columns, row)) for row in cursor.fetchall()]
+def _readable_user_databases(cursor) -> list[str]:
+    """The user databases this login can read right now - ONLINE and accessible. Both per-database
+    passes, the encryption inventory and the orphan check, walk exactly these."""
+    return [str(row["name"]) for row in db_catalog.databases(cursor, "sqlserver")
+            if not row.get("is_system") and row.get("state") == "ONLINE" and row.get("has_access")]
 
 
 # Every SERVERPROPERTY is CAST to NVARCHAR. It returns `sql_variant`, which the ODBC driver
@@ -142,7 +141,7 @@ def major_version(build: str) -> int:
 
 
 def server_info(cursor) -> dict[str, Any]:
-    info = _rows(cursor, _SERVER_INFO_SQL)[0]
+    info = sql_run.query_rows(cursor, _SERVER_INFO_SQL)[0]
     return {key: (None if value is None else str(value)) for key, value in info.items()}
 
 
@@ -281,7 +280,7 @@ def _export_logins(cursor, policy, info, prefix) -> str:
     keep_hash = bool(rule.get("preserve_password_hash", True))
 
     lines: list[str] = []
-    for row in _rows(cursor, _LOGINS_SQL):
+    for row in sql_run.query_rows(cursor, _LOGINS_SQL):
         name = str(row["name"])
         if name.lower() in skip_names or name.startswith(skip_prefixes):
             continue
@@ -340,7 +339,7 @@ def _export_server_roles(cursor, policy, info, prefix) -> str:
     skip_names = {str(name).lower() for name in (rule.get("skip_names") or ())}
     lines: list[str] = []
     created: set[str] = set()
-    for row in _rows(cursor, _SERVER_ROLES_SQL):
+    for row in sql_run.query_rows(cursor, _SERVER_ROLES_SQL):
         role = str(row["role_name"])
         if (not row["is_fixed_role"] and role.lower() not in _BUILT_IN_SERVER_ROLES
                 and role not in created):
@@ -375,7 +374,7 @@ SELECT pe.state_desc, pe.permission_name, pe.class_desc, pr.name AS grantee
 
 def _export_permissions(cursor, policy, info, prefix) -> str:
     lines: list[str] = []
-    for row in _rows(cursor, _PERMISSIONS_SQL):
+    for row in sql_run.query_rows(cursor, _PERMISSIONS_SQL):
         state = "GRANT" if str(row["state_desc"]) == "GRANT_WITH_GRANT_OPTION" else str(row["state_desc"])
         suffix = " WITH GRANT OPTION" if str(row["state_desc"]) == "GRANT_WITH_GRANT_OPTION" else ""
         lines.append(
@@ -393,7 +392,7 @@ SELECT name, credential_identity FROM sys.credentials ORDER BY name;
 def _export_credentials(cursor, policy, info, prefix) -> tuple[str, list[str]]:
     lines: list[str] = []
     refs: list[str] = []
-    for row in _rows(cursor, _CREDENTIALS_SQL):
+    for row in sql_run.query_rows(cursor, _CREDENTIALS_SQL):
         name = str(row["name"])
         ref = _secret_ref(policy, prefix, "credential", name)
         refs.append(ref)
@@ -426,7 +425,7 @@ SELECT s.name AS server_name, l.remote_name, l.uses_self_credential, p.name AS l
 def _export_linked_servers(cursor, policy, info, prefix) -> tuple[str, list[str]]:
     lines: list[str] = []
     refs: list[str] = []
-    for row in _rows(cursor, _LINKED_SERVERS_SQL):
+    for row in sql_run.query_rows(cursor, _LINKED_SERVERS_SQL):
         name = str(row["name"])
         lines.append(
             f"IF NOT EXISTS (SELECT 1 FROM sys.servers WHERE name = {_quote_string(name)} AND is_linked = 1)\n"
@@ -437,7 +436,7 @@ def _export_linked_servers(cursor, policy, info, prefix) -> tuple[str, list[str]
             + (f", @catalog = {_quote_string(row['catalog'])}" if row["catalog"] else "")
             + ";"
         )
-    for row in _rows(cursor, _LINKED_LOGINS_SQL):
+    for row in sql_run.query_rows(cursor, _LINKED_LOGINS_SQL):
         server = str(row["server_name"])
         local = row["local_login"]
         if row["uses_self_credential"]:
@@ -471,7 +470,7 @@ SELECT e.name, e.protocol_desc, e.type_desc, e.state_desc, t.port
 
 def _export_endpoints(cursor, policy, info, prefix) -> str:
     lines: list[str] = []
-    for row in _rows(cursor, _ENDPOINTS_SQL):
+    for row in sql_run.query_rows(cursor, _ENDPOINTS_SQL):
         name = str(row["name"])
         lines.append(
             f"-- endpoint {name}: {row['type_desc']} over {row['protocol_desc']}, port {row['port']}, "
@@ -505,7 +504,7 @@ def _export_sp_configure(cursor, policy, info, prefix) -> tuple[str, list[str]]:
     lines = ["EXEC sp_configure 'show advanced options', 1;", "RECONFIGURE;"]
     skipped: list[str] = []
     advanced_source_value = 0
-    for row in _rows(cursor, _CONFIG_SQL):
+    for row in sql_run.query_rows(cursor, _CONFIG_SQL):
         name = str(row["name"]).strip()
         value = row["value_in_use"]
         if name.lower() == "show advanced options":
@@ -553,7 +552,7 @@ _MODEL_SETTERS = {
 
 def _export_model_options(cursor, policy, info, prefix) -> str:
     portable = {str(name) for name in ((policy.get("model_options") or {}).get("portable") or ())}
-    rows = _rows(cursor, _MODEL_SQL)
+    rows = sql_run.query_rows(cursor, _MODEL_SQL)
     lines: list[str] = []
     for column, template in _MODEL_SETTERS.items():
         if column not in portable or not rows:
@@ -575,7 +574,7 @@ _OPERATORS_SQL = "SELECT name, enabled, email_address, pager_address, weekday_pa
 
 def _export_operators(cursor, policy, info, prefix) -> str:
     lines: list[str] = []
-    for row in _rows(cursor, _OPERATORS_SQL):
+    for row in sql_run.query_rows(cursor, _OPERATORS_SQL):
         name = str(row["name"])
         lines.append(
             f"IF NOT EXISTS (SELECT 1 FROM msdb.dbo.sysoperators WHERE name = {_quote_string(name)})\n"
@@ -596,7 +595,7 @@ SELECT p.name, p.enabled, c.name AS credential_name
 
 def _export_proxies(cursor, policy, info, prefix) -> str:
     lines: list[str] = []
-    for row in _rows(cursor, _PROXIES_SQL):
+    for row in sql_run.query_rows(cursor, _PROXIES_SQL):
         name = str(row["name"])
         lines.append(
             f"IF NOT EXISTS (SELECT 1 FROM msdb.dbo.sysproxies WHERE name = {_quote_string(name)})\n"
@@ -617,7 +616,7 @@ SELECT name, enabled, freq_type, freq_interval, freq_subday_type, freq_subday_in
 
 def _export_agent_schedules(cursor, policy, info, prefix) -> str:
     lines: list[str] = []
-    for row in _rows(cursor, _SCHEDULES_SQL):
+    for row in sql_run.query_rows(cursor, _SCHEDULES_SQL):
         name = str(row["name"])
         args = ", ".join(
             f"@{key} = {int(row[key] or 0)}"
@@ -673,14 +672,14 @@ def _export_agent_jobs(cursor, policy, info, prefix) -> str:
     skip_patterns = [str(pattern) for pattern in (rule.get("skip_categories") or ())]
 
     steps: dict[str, list[dict[str, Any]]] = {}
-    for row in _rows(cursor, _JOBSTEPS_SQL):
+    for row in sql_run.query_rows(cursor, _JOBSTEPS_SQL):
         steps.setdefault(str(row["job_id"]), []).append(row)
     schedules: dict[str, list[str]] = {}
-    for row in _rows(cursor, _JOBSCHEDULES_SQL):
+    for row in sql_run.query_rows(cursor, _JOBSCHEDULES_SQL):
         schedules.setdefault(str(row["job_id"]), []).append(str(row["schedule_name"]))
 
     lines: list[str] = []
-    for job in _rows(cursor, _JOBS_SQL):
+    for job in sql_run.query_rows(cursor, _JOBS_SQL):
         category = str(job["category_name"] or "")
         if any(_matches(category, pattern) for pattern in skip_patterns):
             lines.append(f"-- SKIPPED job {job['name']}: category {category} is not portable.")
@@ -752,7 +751,7 @@ SELECT a.name, a.enabled, a.message_id, a.severity, a.database_name, a.job_id,
 
 def _export_alerts(cursor, policy, info, prefix) -> str:
     lines: list[str] = []
-    for row in _rows(cursor, _ALERTS_SQL):
+    for row in sql_run.query_rows(cursor, _ALERTS_SQL):
         name = str(row["name"])
         args = [f"@name = {_quote_string(name)}", f"@enabled = {1 if row['enabled'] else 0}",
                 f"@message_id = {int(row['message_id'] or 0)}", f"@severity = {int(row['severity'] or 0)}"]
@@ -790,7 +789,7 @@ SELECT p.name AS profile_name, a.name AS account_name, pa.sequence_number
 def _export_db_mail(cursor, policy, info, prefix) -> tuple[str, list[str]]:
     lines: list[str] = []
     refs: list[str] = []
-    for row in _rows(cursor, _DBMAIL_ACCOUNT_SQL):
+    for row in sql_run.query_rows(cursor, _DBMAIL_ACCOUNT_SQL):
         name = str(row["name"])
         args = [
             f"@account_name = {_quote_string(name)}",
@@ -809,7 +808,7 @@ def _export_db_mail(cursor, policy, info, prefix) -> tuple[str, list[str]]:
             f"    EXEC msdb.dbo.sysmail_add_account_sp " + ", ".join(args) + ";"
         )
     seen: set[str] = set()
-    for row in _rows(cursor, _DBMAIL_PROFILE_SQL):
+    for row in sql_run.query_rows(cursor, _DBMAIL_PROFILE_SQL):
         profile = str(row["profile_name"])
         if profile not in seen:
             seen.add(profile)
@@ -892,25 +891,19 @@ def crypto_prerequisites(cursor) -> dict[str, Any]:
             {"name": str(row["name"]),
              "private_key_protected_by": str(row["pvt_key_encryption_type_desc"]),
              "expires": str(row["expiry_date"])}
-            for row in _rows(cursor, _TDE_CERTS_SQL)
+            for row in sql_run.query_rows(cursor, _TDE_CERTS_SQL)
         ]
         findings["tde_databases"] = [
             {"database": str(row["database_name"]), "state": str(row["encryption_state_desc"]),
              "certificate": str(row["certificate_name"])}
-            for row in _rows(cursor, _TDE_DATABASES_SQL)
+            for row in sql_run.query_rows(cursor, _TDE_DATABASES_SQL)
         ]
     except Exception as exc:  # noqa: BLE001 - a permission gap is a fact, not a crash.
         findings["error"] = str(exc)
 
-    databases = _rows(
-        cursor,
-        "SELECT name FROM sys.databases WHERE database_id > 4 AND state_desc = 'ONLINE' "
-        "AND HAS_DBACCESS(name) = 1 ORDER BY name;",
-    )
-    for row in databases:
-        name = str(row["name"])
+    for name in _readable_user_databases(cursor):
         try:
-            counts = _rows(cursor, _DB_CRYPTO_SQL.format(db=_quote_name(name)))[0]
+            counts = sql_run.query_rows(cursor, _DB_CRYPTO_SQL.format(db=_quote_name(name)))[0]
         except Exception as exc:  # noqa: BLE001
             findings["databases"].append({"database": name, "unreadable": str(exc)[:200]})
             continue
@@ -983,7 +976,6 @@ def render_crypto_notes(findings: dict[str, Any]) -> str:
 def export_instance(
     request: dict[str, Any],
     *,
-    data_dir: str | Path | None = None,
     echo: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Read one instance and write its ``server/`` artifact set. Changes nothing on the instance.
@@ -998,7 +990,7 @@ def export_instance(
     policy = load_policy(request)
     report = GateReport("sqlserver-export-instance", target=str(request.get("target") or ""), echo=echo)
 
-    connection, resolved = _connect(request, data_dir=data_dir)
+    connection, resolved = _connect(request)
     try:
         cursor = connection.cursor()
         info = server_info(cursor)
@@ -1153,7 +1145,6 @@ def resolve_secrets(text: str, secrets: dict[str, str]) -> tuple[str, list[str]]
 def replay_instance(
     request: dict[str, Any],
     *,
-    data_dir: str | Path | None = None,
     echo: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Apply a bundle to a target instance, in dependency order, with version/edition gates.
@@ -1191,7 +1182,7 @@ def replay_instance(
     # ("CONFIG statement cannot be used inside a user transaction", error 574) and the default
     # connection wraps every batch in one. Replay is a sequence of independently guarded,
     # idempotent statements, so there is no transaction to want here anyway.
-    connection, resolved = _connect(request, data_dir=data_dir, autocommit=True)
+    connection, resolved = _connect(request, autocommit=True)
     try:
         cursor = connection.cursor()
         info = server_info(cursor)
@@ -1501,7 +1492,6 @@ _COUNT_SQL = {
 def verify_instance(
     request: dict[str, Any],
     *,
-    data_dir: str | Path | None = None,
     echo: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Compare a live instance against a bundle. Read-only; changes nothing.
@@ -1516,7 +1506,7 @@ def verify_instance(
     report.note("bundle_dir", str(root))
     report.note("source", manifest.get("source"))
 
-    connection, _resolved = _connect(request, data_dir=data_dir)
+    connection, _resolved = _connect(request)
     try:
         cursor = connection.cursor()
         info = server_info(cursor)
@@ -1550,7 +1540,7 @@ def verify_instance(
             if name not in set(manifest.get("artifacts") or []):
                 continue
             try:
-                count = int(_rows(cursor, sql)[0]["n"])
+                count = int(sql_run.query_rows(cursor, sql)[0]["n"])
             except Exception as exc:  # noqa: BLE001 - a missing catalog is a fact, not a crash.
                 report.add(f"verify.{name}", WARN, f"could not read: {exc}", blocking=False)
                 continue
@@ -1568,16 +1558,10 @@ def verify_instance(
 
 def _orphans(cursor) -> list[dict[str, Any]]:
     """Per-database orphan counts, skipping databases that cannot be read right now."""
-    databases = _rows(
-        cursor,
-        "SELECT name FROM sys.databases WHERE database_id > 4 AND state_desc = 'ONLINE' "
-        "AND HAS_DBACCESS(name) = 1 ORDER BY name;",
-    )
     out: list[dict[str, Any]] = []
-    for row in databases:
-        name = str(row["name"])
+    for name in _readable_user_databases(cursor):
         try:
-            found = _rows(cursor, _ORPHANS_SQL.format(db=_quote_name(name)))
+            found = sql_run.query_rows(cursor, _ORPHANS_SQL.format(db=_quote_name(name)))
         except Exception as exc:  # noqa: BLE001
             # Unknown, not zero. Folding an unreadable database into the count is how a clean
             # verdict gets reported for a database nobody actually looked at.

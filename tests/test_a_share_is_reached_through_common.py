@@ -18,7 +18,6 @@ a fourth would have grown in the next app to meet a share. They are ``smb-list``
 from __future__ import annotations
 
 import os
-import sys
 import subprocess
 from pathlib import Path
 
@@ -235,17 +234,6 @@ def _target(root: Path):
     )
 
 
-#: 0.24.0 as released: on a Linux node the cleanup of a Windows target's share deletes nothing. The
-#: files `smb-list` names are joined into a POSIX `Path`, which does not split at "\\", and the
-#: obsolete chain is read by listing the UNC path, which a Linux node cannot - so every file is held
-#: back. Safe (nothing wrong is deleted) and named in the release notes; fixed in 0.24.1. Strict, so
-#: the fix turns these red until the mark goes.
-_LINUX_NODE_KEEPS_EVERYTHING = pytest.mark.xfail(
-    sys.platform != "win32", strict=True,
-    reason="0.24.0 known limitation: a Linux node's cleanup of a Windows share deletes nothing (0.24.1)")
-
-
-@_LINUX_NODE_KEEPS_EVERYTHING
 def test_a_windows_cleanup_deletes_only_what_is_aged_and_behind_the_newest_full(staged):
     from db_ops.backup_restore.delete_backup import delete_old_target_backup_files_on_share
 
@@ -256,7 +244,6 @@ def test_a_windows_cleanup_deletes_only_what_is_aged_and_behind_the_newest_full(
     assert {item.status for item in results} == {"DELETED", "SKIPPED"}
 
 
-@_LINUX_NODE_KEEPS_EVERYTHING
 def test_a_dry_run_on_a_windows_target_deletes_nothing(staged):
     from db_ops.backup_restore.delete_backup import delete_old_target_backup_files_on_share
 
@@ -264,3 +251,34 @@ def test_a_dry_run_on_a_windows_target_deletes_nothing(staged):
 
     assert staged["deleted"] == []
     assert sorted(item.status for item in results) == ["DRY_RUN", "DRY_RUN", "SKIPPED"]
+
+
+def test_the_chain_is_read_from_the_share_listing_never_by_walking_the_path(monkeypatch):
+    """0.24.0 as released: on a Linux node this deleted nothing. The chain was read by walking the
+    UNC path, which a Linux node cannot, and the listed names were joined into a `Path` - POSIX
+    there, no split at a backslash - so every aged file was held back as `still_needed` and the
+    share filled. `ci` found it (Linux runners; the soak node was Windows). Here the share is one
+    nothing on this machine serves, as it is for a Linux node: the listing is all there is, and it
+    is enough. (On Linux the two tests above also hold the separator.)"""
+    from db_ops.backup_restore import delete_backup, share
+
+    def walked(root):
+        raise AssertionError(f"the cleanup walked {root} instead of reading the share's listing")
+
+    listing = [
+        {"path": "APPDB\\FULL\\APPDB_FULL_20260601_010000.bak", "modified_epoch": 1_780_000_000.0, "size_bytes": 1},
+        {"path": "APPDB\\LOG\\APPDB_LOG_20260601_020000.trn", "modified_epoch": 1_780_000_060.0, "size_bytes": 1},
+        {"path": "APPDB\\FULL\\APPDB_FULL_20260620_010000.bak", "modified_epoch": 1_780_000_600.0, "size_bytes": 1},
+    ]
+    deleted: list[str] = []
+    monkeypatch.setattr(delete_backup, "_all_target_backup_files", walked)
+    monkeypatch.setattr(share, "list_files", lambda *args, **kwargs: listing)
+    monkeypatch.setattr(share, "delete_files", lambda root, paths, **kwargs: (
+        deleted.extend(paths) or {"results": [{"status": "DELETED", "bytes": 1} for _ in paths]}))
+
+    results = delete_backup.delete_old_target_backup_files_on_share(
+        _target(Path("\\\\192.0.2.40\\SQLBK_IMPORT\\APPDB_STAGE")), now=1_780_000_000.0 + 3 * 86400)
+
+    assert sorted(item.rsplit("\\", 1)[-1] for item in deleted) == [
+        "APPDB_FULL_20260601_010000.bak", "APPDB_LOG_20260601_020000.trn"]
+    assert {item.status for item in results} == {"DELETED", "SKIPPED"}

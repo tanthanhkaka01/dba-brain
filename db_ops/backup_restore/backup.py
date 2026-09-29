@@ -43,7 +43,7 @@ from db_ops.lib.ssh_errors import SshError
 from db_ops.lib.notify import NotifyConfig
 from db_ops.lib import cleanup_retention
 from db_ops.lib.time_window import TimeWindow, is_time_window_open, job_due, parse_time_window_config
-from db_ops.config import DbOpsConfig
+from db_ops.lib.config import DbOpsConfig
 from db_ops.db.job_runs import JobRun
 from db_ops.db.store import DbOpsStore, RunAlreadyClaimed, utc_now_text
 from db_ops.lib.paths import TOOL_ROOT  # noqa: F401 - one definition, see that module

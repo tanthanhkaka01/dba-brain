@@ -134,7 +134,15 @@ def send_message(
     reply_markup: dict[str, Any] | None = None,
     message_type: str | None = None,
     part_pause_seconds: float = PART_PAUSE_SECONDS,
+    wait_before_first_part: bool = True,
 ) -> dict[str, Any]:
+    """Send ``text`` to one chat, split into parts when it is longer than Telegram takes.
+
+    ``wait_before_first_part=False`` gives a 429 on the **first** part straight back as
+    :class:`TelegramRateLimited` instead of sleeping on it - nothing has been sent, so handing the
+    row back costs no duplicate, and the send pass that asks for it runs again a second later. A
+    later part still waits: part of the body has landed, and finishing it beats sending it twice.
+    """
     if not chat_id:
         raise RuntimeError("Telegram chat id is empty.")
     if not text:
@@ -183,6 +191,7 @@ def send_message(
             part_number=index + 1,
             part_count=len(parts),
             chat_id=str(chat_id),
+            wait=wait_before_first_part or index > 0,
         )
         # The first part's id is the one recorded against the queue row: it is where the output
         # starts, so a reply that quotes it quotes the beginning and not the tail.
@@ -200,6 +209,7 @@ def _send_part_honouring_rate_limit(
     part_number: int,
     part_count: int,
     chat_id: str,
+    wait: bool = True,
 ) -> dict[str, Any]:
     """One ``sendMessage``, waiting out a 429 the number of seconds Telegram asked for.
 
@@ -223,7 +233,11 @@ def _send_part_honouring_rate_limit(
                 timeout_seconds=timeout_seconds,
             )
         except TelegramRateLimited as exc:
-            wait = min(exc.retry_after, float(MAX_RATE_LIMIT_WAIT_SECONDS))
+            if not wait:
+                # The caller will come back itself (the send pass, a second later): no sleep, and
+                # no error line - nothing was lost, the row is simply not due yet.
+                raise
+            pause = min(exc.retry_after, float(MAX_RATE_LIMIT_WAIT_SECONDS))
             if attempt == RATE_LIMIT_ATTEMPTS or exc.retry_after > MAX_RATE_LIMIT_WAIT_SECONDS:
                 _log_delivery("error", (
                     f"telegram.send_message rate limited and NOT delivered: {where}, "
@@ -231,9 +245,9 @@ def _send_part_honouring_rate_limit(
                     "The message goes back to the queue."))
                 raise
             _log_delivery("warning", (
-                f"telegram.send_message rate limited: {where}, waiting {wait:.1f}s "
+                f"telegram.send_message rate limited: {where}, waiting {pause:.1f}s "
                 f"(attempt {attempt} of {RATE_LIMIT_ATTEMPTS})"))
-            time.sleep(wait)
+            time.sleep(pause)
     raise RuntimeError(f"Telegram send gave up on {where}.")  # unreachable; the loop returns or raises
 
 
@@ -300,6 +314,13 @@ def call_telegram_multipart_api(
             response_body = response.read().decode("utf-8")
     except error.HTTPError as exc:
         response_body = exc.read().decode("utf-8", errors="replace")
+        # The same 429 as call_telegram_api's. A document's used to arrive as a plain error, so the
+        # queue retried it three times within a second and marked the row failed - a report file
+        # lost to a limit that had only asked for a pause, which messages stopped doing on
+        # 2026-09-09 and documents never did.
+        if exc.code == 429:
+            raise TelegramRateLimited(
+                f"Telegram HTTP 429: {response_body}", _retry_after_seconds(response_body)) from exc
         raise RuntimeError(f"Telegram HTTP {exc.code}: {response_body}") from exc
     except error.URLError as exc:
         raise RuntimeError(f"Telegram request failed: {exc.reason}") from exc

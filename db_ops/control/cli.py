@@ -105,7 +105,7 @@ def _gate_config_drift(args, *, files: tuple[str, ...] | list[str] = (),
     rewrote ``data/`` or the store on its way to changing nothing would be a plan that lies.
     """
     try:
-        from db_ops.config import load_config
+        from db_ops.lib.config import load_config
         from db_ops.db.config_store import ConfigStore
         from db_ops.lib import secret_text
 

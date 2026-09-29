@@ -89,8 +89,11 @@ SQL_HOSTS: dict[str, Any] = {
 def _per_database(kwargs: dict) -> _Connection:
     database = kwargs.get("database") or ""
     if database in {"", "postgres"}:
-        # The listing connection: the first query asks pg_database.
-        return _Connection(_Cursor(["datname"], [("app1",), ("app2",), ("template1",)], None))
+        # The listing connection: the first query asks pg_database, in `db_catalog.databases`'
+        # shape since 0.25.0 - the caller filters on these two flags, not the query.
+        return _Connection(_Cursor(["name", "allow_connections", "is_template"],
+                                   [("app1", True, False), ("app2", True, False),
+                                    ("template1", True, True)], None))
     if database == "app2":
         return _Connection(_Cursor([], [], RuntimeError('permission denied for schema app2')))
     return _Connection(_Cursor(ROW_COLUMNS, [(f"{database} :: bloat", "3", "pct", "OK", "ok")], None))

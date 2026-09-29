@@ -70,7 +70,8 @@ _DATABASES_SQL = {
                d.compatibility_level AS compatibility_level,
                d.collation_name AS collation,
                CAST(d.is_read_only AS int) AS is_read_only,
-               CASE WHEN d.database_id <= 4 THEN 1 ELSE 0 END AS is_system
+               CASE WHEN d.database_id <= 4 THEN 1 ELSE 0 END AS is_system,
+               ISNULL(HAS_DBACCESS(d.name), 0) AS has_access
         FROM sys.databases d
         ORDER BY d.name
     """,
@@ -273,6 +274,34 @@ def _query(parsed: dict[str, Any], sql: str, *, database: str = "") -> list[dict
     return [dict(zip(columns, row)) for row in result.get("rows") or []]
 
 
+def _lower_keys(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Every key lower-case. SQL Server and PostgreSQL hand back the aliases as written; Oracle
+    upper-cases every unquoted identifier, so a caller reading ``row["name"]`` would find nothing
+    on one engine and everything on the others."""
+    return [{str(key).lower(): value for key, value in row.items()} for row in rows]
+
+
+def databases(cursor: Any, db_type: str) -> list[dict[str, Any]]:
+    """Every database on the server ``cursor`` is connected to, system ones included, in
+    ``list-databases``' shape - for a module of ``common`` that already holds a connection.
+
+    "Which databases are there" was written six times - the instance export and its orphan
+    check, the patch gate twice, the restore check, the PostgreSQL metric fan-out, each with its
+    own ``sys.databases`` or ``pg_database`` and its own idea of which columns matter. One query
+    per engine now, this module's; a caller filters the rows (``is_system``, ``state``,
+    ``has_access``, ``allow_connections``). Not Oracle: its containers need the fallbacks
+    :func:`list_databases` runs, and no caller with a cursor asks.
+    """
+    engine = str(db_type or "").strip().lower()
+    if engine not in _DATABASES_SQL:
+        raise DbCatalogError(f"databases() does not know engine {db_type!r}; supported: "
+                             f"{', '.join(sorted(_DATABASES_SQL))}.")
+    try:
+        return _lower_keys(sql_run.query_rows(cursor, _DATABASES_SQL[engine], db_type=engine))
+    except sql_run.SqlRunError as exc:
+        raise DbCatalogError(str(exc)) from exc
+
+
 def _is_system_database(db_type: str, row: dict[str, Any]) -> bool:
     name = str(row.get("name") or "")
     if db_type == "sqlserver":
@@ -386,10 +415,7 @@ def list_databases(request: Any) -> dict[str, Any]:
             f"{', '.join(sorted(set(_DATABASES_SQL) | {'oracle'}))}."
         )
 
-    # Normalize the key case once. SQL Server and PostgreSQL hand back the aliases as written;
-    # Oracle upper-cases every unquoted identifier, so a caller reading row["name"] would find
-    # nothing on one engine and everything on the others.
-    normalized = [{str(key).lower(): value for key, value in row.items()} for row in rows]
+    normalized = _lower_keys(rows)
     hidden = 0
     if not parsed["include_system"]:
         keep = [row for row in normalized if not _is_system_database(db_type, row)]

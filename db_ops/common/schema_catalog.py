@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Mapping, Sequence
 
+from db_ops.common import sql_run
 from db_ops.lib import mssql_ddl
 
 
@@ -36,28 +37,23 @@ class SchemaCatalogError(RuntimeError):
 
 
 def rows(cursor: Any, sql: str) -> list[dict[str, Any]]:
-    """Run one catalogue query and return its rows as dicts keyed by column name."""
+    """Run one catalogue query and return its rows as dicts keyed by column name.
+
+    The first result set *with rows*: a batch whose answer comes after an ``EXEC`` -
+    ``sp_getapplock`` then ``SELECT @rc`` - leaves the cursor on a rowset-less result first.
+    ``sql_run.query_rows`` reads past it (rules R11)."""
     try:
-        cursor.execute(sql)
-        # Skip forward to the first statement that actually returned rows. A batch whose answer
-        # comes after an `EXEC` — `sp_getapplock` then `SELECT @rc` — leaves the cursor on a
-        # rowset-less result, and reading `description` there answers "no rows" for a query that
-        # returned one.
-        while cursor.description is None:
-            if not (hasattr(cursor, "nextset") and cursor.nextset()):
-                return []
-        columns = [str(item[0]) for item in cursor.description]
-        return [dict(zip(columns, row)) for row in cursor.fetchall()]
+        return sql_run.query_rows(cursor, sql)
     except Exception as exc:  # noqa: BLE001 - a catalogue failure is an operator message.
         raise SchemaCatalogError(f"catalogue query failed: {exc}") from exc
 
 
 def scalar(cursor: Any, sql: str) -> Any:
     """The first column of the first row, or ``None``."""
-    result = rows(cursor, sql)
-    if not result:
-        return None
-    return next(iter(result[0].values()))
+    try:
+        return sql_run.query_value(cursor, sql)
+    except Exception as exc:  # noqa: BLE001 - a catalogue failure is an operator message.
+        raise SchemaCatalogError(f"catalogue query failed: {exc}") from exc
 
 
 def _s(value: Any) -> str:

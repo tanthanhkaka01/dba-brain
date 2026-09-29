@@ -52,6 +52,8 @@ class FakeSession:
 class FakeCursor:
     """Answers by SQL fragment, so a test states the fact and not the query text."""
 
+    rowcount = -1
+
     def __init__(self, answers):
         self._answers = answers
         self.description = []
@@ -61,12 +63,13 @@ class FakeCursor:
         for fragment, (columns, rows) in self._answers.items():
             if fragment in sql:
                 self.description = [(name,) for name in columns]
-                self._rows = rows
+                self._rows = list(rows)
                 return
         raise AssertionError(f"unexpected SQL in this test: {sql[:120]}")
 
-    def fetchall(self):
-        return list(self._rows)
+    def fetchmany(self, size):
+        taken, self._rows = self._rows[:size], self._rows[size:]
+        return taken
 
 
 class FakeConnection:
@@ -87,7 +90,7 @@ _SERVER_ROW = (
     [["APPDB-DB\\APPDB", "APPDB", "16.0.4265.3", "RTM", "CU26", "KB5093420",
       "Developer Edition (64-bit)", "0", "0"]],
 )
-_DATABASES = (["name", "state_desc"], [["master", "ONLINE"], ["APPDB_Prod", "ONLINE"]])
+_DATABASES = (["name", "state", "is_system"], [["master", "ONLINE", 1], ["APPDB_Prod", "ONLINE", 0]])
 
 
 def _probe(patch_level="16.0.4265.3", version="16.0.1000.6"):
@@ -240,7 +243,7 @@ def test_verify_build_compares_the_registry_patch_level_not_the_installed_versio
     on every successful CU on every instance, and made a clean run exit non-zero."""
     monkeypatch.setattr(
         patch, "_connect",
-        lambda request, *, data_dir=None, timeout_seconds=15: (
+        lambda request, *, timeout_seconds=15: (
             FakeConnection({"SERVERPROPERTY": _SERVER_ROW, "sys.databases": _DATABASES}),
             {"instance_name": "APPDB"},
         ),
@@ -250,7 +253,6 @@ def test_verify_build_compares_the_registry_patch_level_not_the_installed_versio
 
     result = patch.verify_build(
         _filled("sqlserver-verify-build", {"target": "TEST-10-0-0-5", "expected_build": "16.0.4265.3", "evidence": False}, data_dir),
-        data_dir=data_dir,
     )
 
     assert result["ok"] is True
@@ -264,7 +266,7 @@ def test_verify_build_compares_the_registry_patch_level_not_the_installed_versio
 def test_verify_build_fails_when_the_instance_is_on_another_build(data_dir, monkeypatch):
     monkeypatch.setattr(
         patch, "_connect",
-        lambda request, *, data_dir=None, timeout_seconds=15: (
+        lambda request, *, timeout_seconds=15: (
             FakeConnection({"SERVERPROPERTY": _SERVER_ROW, "sys.databases": _DATABASES}),
             {"instance_name": "APPDB"},
         ),
@@ -274,7 +276,6 @@ def test_verify_build_fails_when_the_instance_is_on_another_build(data_dir, monk
 
     result = patch.verify_build(
         _filled("sqlserver-verify-build", {"target": "TEST-10-0-0-5", "expected_build": "16.0.4900.1", "evidence": False}, data_dir),
-        data_dir=data_dir,
     )
 
     assert result["ok"] is False
@@ -286,7 +287,7 @@ def test_verify_build_fails_when_the_instance_is_on_another_build(data_dir, monk
 # precheck / apply-cu
 # ---------------------------------------------------------------------------
 def test_a_cumulative_update_is_refused_on_a_non_windows_target(data_dir):
-    result = patch.precheck(_filled("sqlserver-precheck", {"target": "TEST-LINUX", "evidence": False}, data_dir), data_dir=data_dir)
+    result = patch.precheck(_filled("sqlserver-precheck", {"target": "TEST-LINUX", "evidence": False}, data_dir))
 
     assert result["ok"] is False
     assert "host.platform" in result["blockers"]
@@ -297,7 +298,7 @@ def test_apply_cu_reruns_every_gate_and_stops_before_touching_the_host(data_dir,
     Update, so the gates run again inside apply-cu — and a blocker stops it there."""
     opened: list[str] = []
 
-    def blocking_precheck(request, *, data_dir=None, echo=None, report=None):
+    def blocking_precheck(request, *, echo=None, report=None):
         report.add("host.reboot_pending", FAIL, "307 pending file renames",
                    override="allow-pending-reboot")
         report.note("instance", {"instance_name": "APPDB", "current_build": "16.0.1000.6"})
@@ -315,7 +316,6 @@ def test_apply_cu_reruns_every_gate_and_stops_before_touching_the_host(data_dir,
             "confirm": True,
             "evidence": False,
         }, data_dir),
-        data_dir=data_dir,
     )
 
     assert result["ok"] is False
@@ -327,7 +327,7 @@ def test_apply_cu_will_not_run_unconfirmed(data_dir, monkeypatch):
     opened: list[str] = []
     monkeypatch.setattr(
         patch, "precheck",
-        lambda request, *, data_dir=None, echo=None, report=None: (
+        lambda request, *, echo=None, report=None: (
             report.add("sql.connect", OK, "16.0.1000.6"),
             report.note("instance", {"instance_name": "APPDB", "current_build": "16.0.1000.6"}),
             {},
@@ -342,7 +342,6 @@ def test_apply_cu_will_not_run_unconfirmed(data_dir, monkeypatch):
             "installer": r"D:\Softwares\SQLServer2022-KB5093420-x64.exe",
             "evidence": False,
         }, data_dir),
-        data_dir=data_dir,
     )
 
     assert result["ok"] is False
@@ -356,7 +355,7 @@ def test_the_patch_prompt_says_the_cu_cannot_be_uninstalled(data_dir, monkeypatc
     The run also proves exit 3010 is reported as a success with one outstanding action."""
     monkeypatch.setattr(
         patch, "precheck",
-        lambda request, *, data_dir=None, echo=None, report=None: (
+        lambda request, *, echo=None, report=None: (
             report.note("instance", {"instance_name": "APPDB", "current_build": "16.0.1000.6"}), {}
         )[-1],
     )
@@ -384,7 +383,6 @@ def test_the_patch_prompt_says_the_cu_cannot_be_uninstalled(data_dir, monkeypatc
             "confirm": True,
             "evidence": False,
         }, data_dir),
-        data_dir=data_dir,
     )
     shown = capsys.readouterr().err
 
@@ -398,7 +396,7 @@ def test_the_patch_prompt_says_the_cu_cannot_be_uninstalled(data_dir, monkeypatc
 
 def test_apply_cu_needs_an_installer_path(data_dir):
     with pytest.raises(patch.SqlServerPatchError) as excinfo:
-        patch.apply_cu(_filled("sqlserver-apply-cu", {"target": "TEST-10-0-0-5", "confirm": True}, data_dir), data_dir=data_dir)
+        patch.apply_cu(_filled("sqlserver-apply-cu", {"target": "TEST-10-0-0-5", "confirm": True}, data_dir))
 
     assert "installer is required" in str(excinfo.value)
 
@@ -407,7 +405,7 @@ def test_a_dry_run_prints_the_exact_command_it_would_execute(data_dir, monkeypat
     opened: list[str] = []
     monkeypatch.setattr(
         patch, "precheck",
-        lambda request, *, data_dir=None, echo=None, report=None: (
+        lambda request, *, echo=None, report=None: (
             report.note("instance", {"instance_name": "APPDB", "current_build": "16.0.1000.6"}), {}
         )[-1],
     )
@@ -423,7 +421,6 @@ def test_a_dry_run_prints_the_exact_command_it_would_execute(data_dir, monkeypat
             "confirm": True,
             "evidence": False,
         }, data_dir),
-        data_dir=data_dir,
     )
 
     dry_run = next(gate for gate in result["gates"] if gate["name"] == "patch.dry_run")

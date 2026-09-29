@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-import db_ops.config as config_module
-from db_ops.config import (
+import db_ops.lib.config as config_module
+from db_ops.lib.config import (
     DEFAULT_STORE_CONFIG_FILE,
     POSTGRESQL_BACKEND,
     SQLITE_BACKEND,

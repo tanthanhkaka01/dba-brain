@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import base64
 import shlex
-import subprocess
 from dataclasses import dataclass
 from typing import Any
 
@@ -170,8 +169,35 @@ def wrap(host: Host, command: str) -> str:
     return command
 
 
-def open_client(host: Host):
-    """A paramiko client to the host. The caller closes it.
+def access_for(host: Host) -> dict[str, Any]:
+    """The login :mod:`db_ops.common.remote_exec` opens for ``host`` - the one executor.
+
+    Stated, never looked up (this layer holds no credentials). A key file is the key; a password
+    without one is a password login - ``remote_exec`` defaults to key auth, so it is said.
+    """
+    shell = "powershell" if host.is_windows else "bash"
+    if host.is_local:
+        return {"method": "local", "shell": shell}
+    access: dict[str, Any] = {
+        "method": host.access,
+        "host": host.host,
+        "port": host.port,
+        "username": host.username,
+        "password": host.password,
+        "shell": shell,
+        "platform": "windows" if host.is_windows else "linux",
+    }
+    if host.access == WINRM:
+        access.update({"ssl": host.ssl, "auth": host.winrm_auth})
+    else:
+        access["auth_type"] = "key" if host.key_file else "password"
+        if host.key_file:
+            access["key_file"] = host.key_file
+    return access
+
+
+def open_session(host: Host):
+    """A :mod:`remote_exec` session to the host, connected. The caller closes it.
 
     Separate from :func:`run` because a file transfer holds one session open across many
     operations, and opening a connection per file is what made the old per-file copy measure
@@ -179,55 +205,36 @@ def open_client(host: Host):
     """
     if host.is_local:
         raise HostCommandError("no host given: there is nothing to connect to.")
-    from db_ops.common.ssh import open_ssh_client
+    from db_ops.common import remote_exec
 
     try:
-        return open_ssh_client(
-            host.host, host.username, port=host.port,
-            password=host.password or None, key_filename=host.key_file or None,
-            announce=False,
-        )
-    except Exception as exc:  # noqa: BLE001
+        session = remote_exec.open_session(access_for(host))
+        if isinstance(session, remote_exec.SshSession):
+            session.client  # connect now, so a refused login is this call's error, not a later one's
+        return session
+    except remote_exec.RemoteExecError as exc:
         raise HostCommandError(f"could not connect to {host.username}@{host.host}: {exc}") from exc
 
 
-def run(host: Host, command: str, *, timeout: int = 300, client: Any = None) -> dict[str, Any]:
+def run(host: Host, command: str, *, timeout: int = 300, session: Any = None) -> dict[str, Any]:
     """Run ``command`` and return ``{exit_code, stdout, stderr}``. Never raises on a non-zero exit.
 
     A non-zero exit is an answer — ``rman`` refusing, a directory that is not there — and the
     caller decides what it means. Only being unable to run at all raises.
 
-    ``client`` is an already-open connection from :func:`open_client`, for a caller running many
+    ``session`` is an already-open one from :func:`open_session`, for a caller running many
     commands against one host. Without it every call connects and disconnects, which is the same
     per-file cost that made the old copy measure 10 KB/s — deleting 200 backup pieces would open
-    200 SSH sessions. A borrowed client is never closed here: it belongs to whoever opened it.
+    200 SSH sessions. A borrowed session is never closed here: it belongs to whoever opened it.
+
+    **It runs through** :mod:`remote_exec`, **like every command on a host** (0.25.0): this module
+    had its own paramiko client and its own local ``subprocess`` - a second executor, with its own
+    ideas about timeouts and errors.
     """
-    if host.is_winrm:
-        # No wrap(): a WinRM session already lands in PowerShell on that host, and wrapping would
-        # start a second one inside it. remote_exec owns the protocol - it is what the metrics
-        # collectors have used against these same hosts for months.
-        return _via_remote_exec(host, command=command, timeout=timeout)
-
-    full = wrap(host, command)
-    if host.is_local:
-        try:
-            done = subprocess.run(full, shell=True, capture_output=True, text=True, timeout=timeout)
-        except Exception as exc:  # noqa: BLE001
-            raise HostCommandError(f"could not run locally: {exc}") from exc
-        return {"exit_code": done.returncode, "stdout": done.stdout, "stderr": done.stderr}
-
-    borrowed = client is not None
-    if not borrowed:
-        client = open_client(host)
-    try:
-        _stdin, stdout, stderr = client.exec_command(full, timeout=timeout)
-        out = stdout.read().decode("utf-8", "replace")
-        code = stdout.channel.recv_exit_status()
-        err = stderr.read().decode("utf-8", "replace")
-    finally:
-        if not borrowed:
-            client.close()
-    return {"exit_code": code, "stdout": out, "stderr": err}
+    # No wrap() over WinRM: a WinRM session already lands in PowerShell on that host, and
+    # wrapping would start a second one inside it.
+    full = command if host.is_winrm else wrap(host, command)
+    return _through_remote_exec(host, session, lambda live: live.run(full, timeout_seconds=timeout))
 
 
 def run_script(host: Host, script: str, *, env: dict[str, str] | None = None,
@@ -236,161 +243,36 @@ def run_script(host: Host, script: str, *, env: dict[str, str] | None = None,
 
     Not :func:`run` with a longer string. A backup script is a hundred lines and its own quoting;
     passing it as an argument means every character in it has to survive two shells, and a long one
-    eventually meets ``ARG_MAX``. Fed on stdin it survives verbatim.
+    eventually meets ``ARG_MAX``. :mod:`remote_exec` writes it to a private file on the host and
+    runs that with stdin closed (0.25.0) - fed on stdin, a ``docker exec -i`` in it ate the rest of
+    the script and the shell exited 0 having done nothing, which is why this layer checks a receipt
+    rather than an exit code.
 
     On the host, and deliberately not wrapped into the container: the scripts that use this do
     their own ``docker exec`` because they need to be on the host for the directory the backup is
     written to. ``runtime`` still decides the interpreter — a Windows host gets PowerShell — but
     ``docker``/``k8s`` mean "the host that runs it", not "inside it".
-
-    **A ``docker exec`` inside such a script must close its own stdin** (no ``-i``). The script is
-    the shell's stdin, so a container that reads stdin eats the rest of the script and the shell
-    then runs out of work: exit 0, no output, nothing done. That is the failure this layer checks
-    a receipt for rather than trusting an exit code.
     """
-    if host.is_winrm:
-        return _via_remote_exec(host, script=script, env=env, timeout=timeout)
-
-    prelude = "".join(f"export {name}={shlex.quote(str(value))}\n"
-                      for name, value in sorted((env or {}).items()))
-    if host.runtime == WINDOWS:
-        # PowerShell reads `-Command -` from stdin; env goes in as assignments for the same reason.
-        prelude = "".join(f"$env:{name} = {_ps_literal(str(value))}\n"
-                          for name, value in sorted((env or {}).items()))
-        interpreter = "powershell -NoProfile -NonInteractive -Command -"
-    else:
-        interpreter = "bash -s"
-    payload = prelude + script
-
-    if host.is_local:
-        try:
-            done = subprocess.run(interpreter, shell=True, input=payload,
-                                  capture_output=True, text=True, timeout=timeout)
-        except Exception as exc:  # noqa: BLE001
-            raise HostCommandError(f"could not run locally: {exc}") from exc
-        return {"exit_code": done.returncode, "stdout": done.stdout, "stderr": done.stderr}
-
-    if host.runtime == WINDOWS:
-        # PowerShell will not take a real script on stdin. `-Command -` reads it, returns 0, and
-        # produces nothing: a here-string or a `function` block silently yields no output at all,
-        # which for a backup script means "did nothing, reported success" — the exact failure the
-        # RESULT=ok receipt exists to catch. `-EncodedCommand` is not the way out either: the
-        # SQL Server script is 15 KB, which is ~41 KB of base64 against a 32767-character Windows
-        # command line. So the script is written to a file on the host and run with `-File`.
-        return _run_windows_script_file(host, payload, timeout=timeout)
-
-    client = open_client(host)
-    try:
-        stdin, stdout, stderr = client.exec_command(interpreter, timeout=timeout or None)
-        stdin.write(payload)
-        stdin.flush()
-        # Without this the interpreter waits for more input forever: it has no way to know the
-        # script ended, and the call hangs until the timeout rather than running anything.
-        stdin.channel.shutdown_write()
-        out = stdout.read().decode("utf-8", "replace")
-        code = stdout.channel.recv_exit_status()
-        err = stderr.read().decode("utf-8", "replace")
-    finally:
-        client.close()
-    return {"exit_code": code, "stdout": out, "stderr": err}
+    return _through_remote_exec(
+        host, None, lambda live: live.run_script(script, env=env, timeout_seconds=timeout))
 
 
-def _ps_literal(value: str) -> str:
-    return "'" + value.replace("'", "''") + "'"
+def _through_remote_exec(host: Host, session: Any, call: Any) -> dict[str, Any]:
+    """``call(session)`` on the host's :mod:`remote_exec` session, answered as this module answers.
 
-
-def _windows_path(path: str) -> str:
-    """A path SFTP reported, as PowerShell needs to see it.
-
-    Windows OpenSSH's SFTP speaks POSIX: ``sftp.normalize()`` answers ``/C:/Users/x/y.ps1``, and
-    ``-File`` on that fails with "The given path's format is not supported" — a message that reads
-    like a permissions or quoting problem and is neither.
-    """
-    text = str(path)
-    if len(text) > 2 and text[0] == "/" and text[2] == ":":
-        text = text[1:]
-    return text.replace("/", "\\")
-
-
-def _run_windows_script_file(host: Host, payload: str, *, timeout: int | None) -> dict[str, Any]:
-    """Upload the script over SFTP, run it with ``-File``, delete it.
-
-    A file, because the two ways of passing a script on the command line both fail here: stdin is
-    read and silently ignored for anything multi-line, and ``-EncodedCommand`` runs out of command
-    line. A file has neither limit and is also what the script would look like if a DBA ran it by
-    hand, which makes a failure reproducible.
-
-    Written UTF-8 **with a BOM**: without one, Windows PowerShell 5.1 reads a `-File` script as the
-    system ANSI codepage, and any non-ASCII character in a path or a message becomes mojibake that
-    surfaces much later as a file the restore cannot find.
-
-    The file is removed in ``finally`` — it carries the environment prelude, and that includes
-    the backup encryption passphrase.
-    """
-    import uuid
-
-    remote_name = f"db_ops_{uuid.uuid4().hex}.ps1"
-    client = open_client(host)
-    try:
-        sftp = client.open_sftp()
-        try:
-            with sftp.file(remote_name, "wb") as handle:
-                handle.write(b"\xef\xbb\xbf" + payload.encode("utf-8"))
-            remote_path = _windows_path(sftp.normalize(remote_name))
-        finally:
-            sftp.close()
-
-        command = (f"powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass "
-                   f"-File {_ps_literal(remote_path)}")
-        _stdin, stdout, stderr = client.exec_command(command, timeout=timeout or None)
-        out = stdout.read().decode("utf-8", "replace")
-        code = stdout.channel.recv_exit_status()
-        err = stderr.read().decode("utf-8", "replace")
-    finally:
-        try:
-            sftp = client.open_sftp()
-            try:
-                sftp.remove(remote_name)
-            finally:
-                sftp.close()
-        except Exception:  # noqa: BLE001 - a leftover temp script must not mask the real result.
-            pass
-        client.close()
-    return {"exit_code": code, "stdout": out, "stderr": err}
-
-
-def _via_remote_exec(host: Host, *, command: str = "", script: str = "",
-                     env: dict[str, str] | None = None,
-                     timeout: int | None = None) -> dict[str, Any]:
-    """WinRM, delegated rather than reimplemented.
-
-    :mod:`db_ops.common.remote_exec` already speaks it — negotiate/basic auth, the PowerShell
-    encoding, the error classification — and has run against these Windows hosts on every metrics
-    cycle for months. A second WinRM client here would be a second set of quoting bugs to find, on
-    the machines where being wrong means a production SQL Server.
-
-    The values are passed, never looked up: this layer holds no credentials, so ``data_dir`` and
-    ``secrets`` are deliberately not offered to ``remote_exec`` here.
+    Could-not-run is :class:`HostCommandError`, whichever transport produced it, so a caller does
+    not have to know which one it was.
     """
     from db_ops.common import remote_exec
 
-    access = {
-        "method": remote_exec.METHOD_WINRM,
-        "host": host.host,
-        "port": host.port,
-        "username": host.username,
-        "password": host.password,
-        "ssl": host.ssl,
-        "auth": host.winrm_auth,
-        "platform": "windows",
-    }
+    borrowed = session is not None
     try:
-        if script:
-            result = remote_exec.run_script(access, script, env=env, timeout_seconds=timeout)
-        else:
-            result = remote_exec.run_command(access, command, timeout_seconds=timeout)
+        live = session if borrowed else remote_exec.open_session(access_for(host))
+        try:
+            result = call(live)
+        finally:
+            if not borrowed:
+                live.close()
     except remote_exec.RemoteExecError as exc:
-        # Could not run at all. Same distinction the SSH path makes, so a caller does not have to
-        # know which transport produced the failure.
         raise HostCommandError(str(exc)) from exc
     return {"exit_code": result.exit_code, "stdout": result.stdout, "stderr": result.stderr}

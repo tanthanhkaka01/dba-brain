@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import pytest
 
-from db_ops.common import sql_execution, sql_run
+from db_ops.common import sql_run
 from db_ops.lib import driver_warnings
 from db_ops.lib.telegram_severity import classify_message
 from db_ops.sql_tasks import runner
@@ -140,22 +140,18 @@ def test_a_run_with_no_warning_answers_an_empty_list(monkeypatch):
 # --------------------------------------------------------------------------- #
 # The metrics reader
 # --------------------------------------------------------------------------- #
-def test_the_metrics_reader_does_not_fail_on_a_warning():
-    cursor = RaisingCursor([FIRST_SET, SECOND_SET], error=WARNING_8153)
+def test_a_metric_past_a_warning_keeps_what_came_before_it(monkeypatch):
+    """A metric reads through `run-sql`'s reader since 0.25.0 and never commits: the rows before the
+    warning are its answer, and the warning does not fail it."""
+    from db_ops.common import metric_batch
 
-    result = sql_execution.execute_cursor_batches(FakeConn(cursor), cursor, ["batch"], commit=False)
+    conn = FakeConn(RaisingCursor([FIRST_SET, SECOND_SET], error=WARNING_8153))
+    monkeypatch.setattr(metric_batch, "_connect", lambda *_a, **_k: conn)
 
-    assert result["result_sets"][0]["rows"] == [[1]]
-    assert len(result["warnings"]) == 1
+    rows, truncated = metric_batch._execute({"db_type": "sqlserver"}, "", "EXEC dbo.metric;",
+                                            timeout=5, max_rows=0)
 
-
-def test_the_metrics_reader_does_not_commit_past_a_warning():
-    cursor = RaisingCursor([FIRST_SET, SECOND_SET], error=WARNING_8153)
-    conn = FakeConn(cursor)
-
-    with pytest.raises(RuntimeError, match="nothing was committed"):
-        sql_execution.execute_cursor_batches(conn, cursor, ["batch"], commit=True)
-    assert conn.committed is False
+    assert rows == [{"n": 1}] and truncated is False
 
 
 # --------------------------------------------------------------------------- #

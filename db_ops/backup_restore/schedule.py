@@ -108,7 +108,7 @@ def run_time(row: Any) -> datetime | None:
 
 
 # `_parse_utc` is `db_ops.lib.coerce.as_utc_datetime` since 2026-08-16 — the same nine lines
-# also lived in `common/restore_drill.py`, one deciding whether a backup is due and the other
+# also lived in `common/restore_drill.py` (`db/restore_drill.py` since 0.25.0), one deciding whether a backup is due and the other
 # whether a drill counts, which is not a rule that should have had two copies.
 
 

@@ -168,24 +168,39 @@ def test_an_unknown_access_is_refused_by_name():
         parse_host({"runtime": WINDOWS, "access": "telnet", "host": "h"})
 
 
+class _Session:
+    """A `remote_exec` session that records what it was asked to run."""
+
+    def __init__(self, access, captured):
+        self.access, self.captured = access, captured
+
+    def run_script(self, script, *, env=None, timeout_seconds=None):
+        from db_ops.common import remote_exec
+
+        self.captured.update({"access": self.access, "script": script, "env": env})
+        return remote_exec.RemoteResult(method=self.access["method"], host=self.access.get("host", ""),
+                                        command="<script>", exit_code=0, stdout="RESULT=ok\n", stderr="",
+                                        duration_seconds=0.1)
+
+    def close(self):
+        self.captured["closed"] = True
+
+
+def _record(monkeypatch):
+    from db_ops.common import remote_exec
+
+    captured: dict = {}
+    monkeypatch.setattr(remote_exec, "open_session", lambda access: _Session(access, captured))
+    return captured
+
+
 def test_winrm_delegates_to_remote_exec_rather_than_speaking_it_here(monkeypatch):
     """A second WinRM client would be a second set of quoting bugs to find, on the machines where
     being wrong means a production SQL Server. remote_exec has run against these same hosts on
     every metrics cycle for months."""
-    from db_ops.common import hostcmd, remote_exec
+    from db_ops.common import hostcmd
 
-    captured = {}
-
-    class _Result:
-        exit_code, stdout, stderr = 0, "RESULT=ok\n", ""
-
-    def fake_run_script(access, script, *, env=None, timeout_seconds=None):
-        captured.update({"access": access, "script": script, "env": env})
-        return _Result()
-
-    monkeypatch.setattr(remote_exec, "run_script", fake_run_script)
-    monkeypatch.setattr(hostcmd, "open_client",
-                        lambda host: pytest.fail("WinRM must not open an SSH client"))
+    captured = _record(monkeypatch)
 
     host = parse_host({"runtime": WINDOWS, "access": "winrm", "host": "192.0.2.115",
                        "username": "u", "password": "p"})
@@ -198,38 +213,53 @@ def test_winrm_delegates_to_remote_exec_rather_than_speaking_it_here(monkeypatch
     # that host, and wrapping would start a second one inside it.
     assert captured["script"] == "'hi'"
     assert result["stdout"] == "RESULT=ok\n"
+    assert captured["closed"] is True
 
 
 # --------------------------------------------------------------------------- #
-# Running a real script on a Windows host
+# Running a real script on a host
 # --------------------------------------------------------------------------- #
-def test_a_windows_script_is_not_fed_on_stdin(monkeypatch):
+def test_every_script_runs_through_remote_exec_the_one_executor(monkeypatch):
+    """This module had its own paramiko client, its own stdin-fed ``bash -s`` and its own Windows
+    file upload - a second executor beside ``remote_exec`` (0.25.0, the operator: one way to run
+    anything on a host). It names the host now and hands the script over whole; ``remote_exec``
+    writes it to a private file there and runs it with stdin closed."""
+    from db_ops.common import hostcmd
+
+    captured = _record(monkeypatch)
+
+    host = parse_host({"runtime": "docker", "container": "pg", "host": "192.0.2.31",
+                       "username": "u", "key_file": "/keys/id"})
+    hostcmd.run_script(host, "docker exec pg pg_basebackup", env={"A": "1"})
+
+    assert captured["access"] == {"method": "ssh", "host": "192.0.2.31", "port": 22, "username": "u",
+                                  "password": "", "shell": "bash", "platform": "linux",
+                                  "auth_type": "key", "key_file": "/keys/id"}
+    assert captured["script"] == "docker exec pg pg_basebackup", "on the host, not wrapped into the container"
+    assert captured["env"] == {"A": "1"}
+
+
+def test_a_windows_script_over_ssh_is_powershell_and_never_stdin(monkeypatch):
     """`powershell -Command -` reads a script from stdin, returns 0, and produces nothing for
     anything multi-line: a here-string or a `function` block yields no output at all. For a backup
     script that is "did nothing, reported success" - the exact failure the RESULT=ok receipt exists
     to catch. Measured against 192.0.2.250 on 2026-08-07, both forms: exit 0, empty stdout.
 
-    `-EncodedCommand` is not the way out either. The SQL Server backup script is 15 KB, which is
-    ~41 KB of base64 against a 32767-character Windows command line.
+    `-EncodedCommand` is not the way out either: the SQL Server backup script is 15 KB, ~41 KB of
+    base64 against a 32767-character Windows command line. ``remote_exec`` places it as a ``.ps1``
+    and runs it with ``-File`` (``test_common_remote_exec.py``).
     """
     from db_ops.common import hostcmd
 
-    called = {}
+    captured = _record(monkeypatch)
 
-    def fake_file_run(host, payload, *, timeout=None):
-        called.update({"payload": payload, "timeout": timeout})
-        return {"exit_code": 0, "stdout": "RESULT=ok\n", "stderr": ""}
-
-    monkeypatch.setattr(hostcmd, "_run_windows_script_file", fake_file_run)
-    monkeypatch.setattr(hostcmd, "open_client",
-                        lambda host: pytest.fail("a Windows script must not be fed over exec_command"))
-
-    host = parse_host({"runtime": WINDOWS, "host": "192.0.2.250", "username": "u",
-                       "password": "p"})
+    host = parse_host({"runtime": WINDOWS, "host": "192.0.2.250", "username": "u", "password": "p"})
     result = hostcmd.run_script(host, '$x = @"\nmulti\nline\n"@\n"RESULT=ok"', env={"A": "1"})
 
+    assert (captured["access"]["method"], captured["access"]["shell"]) == ("ssh", "powershell")
+    assert captured["access"]["auth_type"] == "password"
+    assert captured["env"] == {"A": "1"}, "the env prelude is remote_exec's, in the script's own shell"
     assert result["stdout"] == "RESULT=ok\n"
-    assert "$env:A = '1'" in called["payload"], "the env prelude travels with the script"
 
 
 @pytest.mark.parametrize("reported,expected", [
@@ -241,6 +271,6 @@ def test_an_sftp_path_is_translated_for_powershell(reported, expected):
     """Windows OpenSSH's SFTP speaks POSIX: `normalize()` answers `/C:/Users/x/y.ps1`, and `-File`
     on that fails with "The given path's format is not supported" - a message that reads like a
     permissions or quoting problem and is neither."""
-    from db_ops.common.hostcmd import _windows_path
+    from db_ops.common.remote_exec import windows_path
 
-    assert _windows_path(reported) == expected
+    assert windows_path(reported) == expected

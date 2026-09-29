@@ -200,8 +200,10 @@ def _list(command: str, request: dict[str, Any]) -> int:
             message += (f" {data['disabled_hidden']} disabled hidden "
                         f'(set "enabled_only": false to show them).')
     else:
+        # `database_name` since 0.22.0 renamed the answer's key; this line kept the old one, and
+        # every list-schemas that succeeded answered `KeyError: 'database'` instead (0.25.0, 1.68).
         message = (f"{data['count']} schema{'' if data['count'] == 1 else 's'} in "
-                   f"{data['database']} on {data['server_id']}.")
+                   f"{data['database_name']} on {data['server_id']}.")
     if data.get("system_hidden"):
         message += f" {data['system_hidden']} system entries hidden (include_system: true)."
     if data.get("note"):

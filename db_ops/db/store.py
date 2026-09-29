@@ -9,7 +9,7 @@ from typing import Any
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from db_ops.config import StoreConfig
+from db_ops.lib.config import StoreConfig
 from db_ops.db.job_runs import JobRun
 from db_ops.lib.rows import row_value
 from db_ops.lib import run_claim
@@ -1721,13 +1721,19 @@ class DbOpsStore:
             ).fetchone()
         return dict(row) if row else None
 
-    def fetch_pending_telegram_send_messages(self, limit: int = 50) -> list[sqlite3.Row]:
+    def fetch_pending_telegram_send_messages(
+        self, limit: int = 50, *, per_chat: int | None = None,
+    ) -> list[sqlite3.Row]:
+        """The unsent rows one send pass takes, oldest first.
+
+        ``per_chat`` takes the oldest *n* of **each** chat and interleaves them - every chat's first
+        row, then every chat's second - so no chat waits behind another. Without it the pass took
+        the oldest rows of the whole queue: on 2026-09-28 one chat's ~46,000 lab alerts held every
+        other chat behind them, the bot's replies to its own commands included. ``limit`` still
+        caps the pass.
+        """
         self.initialize()
-        with self.connect() as conn:
-            return list(
-                conn.execute(
-                    """
-                    SELECT
+        columns = """
                         send_tlgmsg_id,
                         row_ins_date,
                         tlgchat_id,
@@ -1745,7 +1751,33 @@ class DbOpsStore:
                         source_type,
                         source_id,
                         metadata_json,
-                        message_type
+                        message_type"""
+        with self.connect() as conn:
+            if per_chat is not None:
+                return list(
+                    conn.execute(
+                        f"""
+                        SELECT {columns}
+                        FROM (
+                            SELECT {columns},
+                                ROW_NUMBER() OVER (
+                                    PARTITION BY tlgchat_id
+                                    ORDER BY row_ins_date ASC, send_tlgmsg_id ASC
+                                ) AS chat_rank
+                            FROM telegram_send_messages
+                            WHERE send_status = 0
+                        ) pending
+                        WHERE chat_rank <= ?
+                        ORDER BY chat_rank ASC, row_ins_date ASC, send_tlgmsg_id ASC
+                        LIMIT ?;
+                        """,
+                        (max(1, int(per_chat)), limit),
+                    )
+                )
+            return list(
+                conn.execute(
+                    f"""
+                    SELECT {columns}
                     FROM telegram_send_messages
                     WHERE send_status = 0
                     ORDER BY row_ins_date ASC, send_tlgmsg_id ASC

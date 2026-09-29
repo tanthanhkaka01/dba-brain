@@ -13,7 +13,6 @@ from typing import Any
 # not SQL-specific. It now lives in common/json_io.py as the tool's single JSON reader.
 from db_ops.lib.inventory_file import (  # noqa: F401 - moved to lib in 0.24.0
     load_database_inventory, load_database_inventory_without_yaml, parse_yaml_scalar)
-from db_ops.lib.driver_warnings import read_next_set
 from db_ops.lib.packaging import install_hint
 from db_ops.lib.json_io import load_json_file  # noqa: F401 - re-exported for compatibility
 from db_ops.lib.credential_files import (  # noqa: F401 - re-exported for compatibility
@@ -204,7 +203,7 @@ class PymssqlCursorAdapter:
     """Give a pymssql cursor the attributes result-set walking relies on.
 
     pymssql updates ``description``/``rowcount`` differently from pyodbc, so code that steps
-    through result sets (``execute_cursor_batches``, ``sql_run.execute_capture_first``) needs
+    through result sets (``sql_run.execute_capture``) needs
     them refreshed on ``execute``. Without this a pymssql fallback silently returns nothing.
     """
 
@@ -421,80 +420,6 @@ def decode_timestampoffset(raw: Any) -> Any:
         nanoseconds // 1000,
         _datetime.timezone(_datetime.timedelta(hours=tz_hour, minutes=tz_minute)),
     )
-
-
-
-
-
-
-
-
-
-
-
-def execute_cursor_batches(
-    conn: Any, cursor: Any, batches: list[str], *, commit: bool,
-    max_rows: int = MAX_RESULT_ROWS,
-    prelude: str = "", params: "list[Any] | None" = None,
-) -> dict[str, Any]:
-    """Run ``batches`` and capture up to ``max_rows`` rows of each result set.
-
-    ``truncated`` in the returned dict (and per result set) says whether the cap actually cut
-    anything, which is the difference between "this instance has 100 mis-placed files" and "this
-    instance has at least 100". It is detected by fetching one row past the cap and discarding it.
-
-    The default is the 100-row **preview** cap: what a scheduled task stores in
-    ``sql_runs.result_json`` and pastes into a Telegram message, where more would bloat the
-    store and blow past the 4096-char message limit. A caller that is *exporting* the rows
-    (a target with ``output.format = "xlsx"``) has to raise it, or the workbook silently
-    contains the first 100 rows of a 5000-row answer and looks complete.
-    """
-    result_sets = []
-    total_row_count = 0
-    truncated = False
-    # A driver warning ends the reading of a batch without failing it (lib/driver_warnings.py).
-    warnings: list[str] = []
-    for batch in batches:
-        # The prelude re-declares the script's parameters in front of every batch, because a T-SQL
-        # variable does not survive a GO, and the same values are bound again with it.
-        if params:
-            cursor.execute(prelude + batch, *params)
-        else:
-            cursor.execute(prelude + batch if prelude else batch)
-        while True:
-            columns = [col[0] for col in cursor.description] if cursor.description else []
-            if columns:
-                rows = cursor.fetchmany(max_rows)
-                # Truncation used to be invisible: a result set cut at the cap looked exactly like
-                # a complete one, so nobody could tell that STORAGE_FILE_PLACEMENT reporting
-                # "100 files" meant "the first 100 of an unknown number". The only way to know is
-                # to ask for one more row than we keep.
-                was_truncated = False
-                if len(rows) == max_rows:
-                    was_truncated = bool(cursor.fetchmany(1))
-                    truncated = truncated or was_truncated
-                result_sets.append({
-                    "columns": columns,
-                    "rows": [make_json_safe(list(row)) for row in rows],
-                    "truncated": was_truncated,
-                })
-                total_row_count += len(rows)
-            elif cursor.rowcount and cursor.rowcount > 0:
-                total_row_count += int(cursor.rowcount)
-
-            if not read_next_set(cursor, warnings):
-                break
-    if commit:
-        if warnings:
-            # The same rule as run-sql: past a warning the driver shows nothing, not even an error,
-            # so a caller that asked for a commit cannot be told the whole batch succeeded.
-            raise RuntimeError(
-                "stopped reading at a SQL Server warning, and nothing after it could be checked, "
-                f"so nothing was committed: {warnings[0]}"
-            )
-        conn.commit()
-    return {"row_count": total_row_count, "result_sets": result_sets[:5], "truncated": truncated,
-            "warnings": warnings}
 
 
 def make_json_safe(value: Any) -> Any:

@@ -267,7 +267,7 @@ def test_a_binary_attachment_is_carried_as_base64_not_decoded_as_text(monkeypatc
             resolved_bot_token = "t"
             api_url = "https://example.invalid"
 
-    monkeypatch.setattr("db_ops.config.load_config", lambda path: _Config)
+    monkeypatch.setattr("db_ops.lib.config.load_config", lambda path: _Config)
 
     encoded = command_processor._download_document_base64(
         {"file_id": "AAA"}, config_path=tmp_path / "config.json")
@@ -285,7 +285,7 @@ def test_an_empty_attachment_is_refused_rather_than_loaded_as_an_empty_table(mon
             resolved_bot_token = "t"
             api_url = "https://example.invalid"
 
-    monkeypatch.setattr("db_ops.config.load_config", lambda path: _Config)
+    monkeypatch.setattr("db_ops.lib.config.load_config", lambda path: _Config)
 
     with pytest.raises(RuntimeError, match="empty"):
         command_processor._download_document_base64(

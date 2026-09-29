@@ -76,7 +76,7 @@ class _FakeClient:
         self.listing = listing
         self.commands = []
 
-    def exec_command(self, command):
+    def open_stream(self, command, timeout_seconds=None):
         self.commands.append(command)
         return None, _FakeStdout(self.listing), None
 
@@ -160,7 +160,7 @@ class _OracleClient:
         self.preview, self.handles = preview, handles
         self.commands = []
 
-    def exec_command(self, command, timeout=None):
+    def open_stream(self, command, timeout_seconds=None):
         self.commands.append(command)
         payload = self.preview if "rman target" in command else self.handles
         return None, _FakeStdout(payload), None

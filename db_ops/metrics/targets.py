@@ -3,7 +3,7 @@
 The loader answers "what is configured", which is ``lib.data_sources``' question, and
 ``common.cli check-credentials`` needs it - ``common`` may import only ``lib`` (rules R04, R41). The
 module object itself is replaced, so both names are one module and a patch through either is seen
-by both, as ``db_ops.config`` is ``db_ops.lib.config``.
+by both.
 """
 
 import sys

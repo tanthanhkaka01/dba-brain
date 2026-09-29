@@ -5,7 +5,7 @@ import json
 import sys
 from pathlib import Path
 
-from db_ops.config import load_config, resolve_config_path
+from db_ops.lib.config import load_config, resolve_config_path
 from db_ops.lib import secret_text
 from db_ops.logging_ops import log_function_call, log_function_error, setup_app_logger
 from db_ops.logging_ops.runtime_stdout import patch_stdout

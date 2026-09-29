@@ -7,7 +7,7 @@ import re
 import subprocess
 import sys
 
-from db_ops.config import load_config, resolve_config_path
+from db_ops.lib.config import load_config, resolve_config_path
 from db_ops.logging_ops import (
     LOG_SCOPE_ENV_VAR,
     build_log_paths,

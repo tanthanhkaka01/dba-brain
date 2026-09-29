@@ -73,9 +73,10 @@ def test_the_queued_row_keeps_the_summary_and_the_run_keeps_the_whole_output():
 
 class _Queue:
     def __init__(self, rows: int) -> None:
-        self.rows = [{"send_tlgmsg_id": number} for number in range(1, rows + 1)]
+        self.rows = [{"send_tlgmsg_id": number, "tlgchat_id": f"-100{number}"}
+                     for number in range(1, rows + 1)]
 
-    def fetch_pending_telegram_send_messages(self, limit: int):
+    def fetch_pending_telegram_send_messages(self, limit: int, *, per_chat: int | None = None):
         return self.rows[:limit]
 
 
@@ -86,7 +87,7 @@ def test_a_pass_stops_starting_messages_before_the_daemon_would_kill_it(monkeypa
     def send_one(**kwargs):
         sent.append(kwargs["send_tlgmsg_id"])
         now[0] += 100  # one throttled multi-part message
-        return {"sent": 1, "failed": 0}
+        return {"send_tlgmsg_id": kwargs["send_tlgmsg_id"], "sent": 1, "failed": 0, "status": "sent"}
 
     monkeypatch.setattr(send_queue, "DbOpsStore", lambda path: _Queue(rows=5))
     monkeypatch.setattr(send_queue, "send_one_message", send_one)
@@ -94,5 +95,5 @@ def test_a_pass_stops_starting_messages_before_the_daemon_would_kill_it(monkeypa
     counts = send_queue.send_pending_messages(sqlite_path="x", bot_token="t", clock=lambda: now[0])
 
     assert sent == [1, 2]
-    assert counts == {"read": 5, "sent": 2, "failed": 0, "deferred": 3}
+    assert counts == {"read": 5, "sent": 2, "failed": 0, "deferred": 3, "paused_chats": 0}
     assert send_queue.SEND_BUDGET_SECONDS < 300

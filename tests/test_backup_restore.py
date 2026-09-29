@@ -74,7 +74,7 @@ from db_ops.backup_restore.restore_database import (
     vm_unc_to_local_path,
 )
 from db_ops.backup_restore.sanitize import sanitize_text, sanitize_value
-from db_ops.config import DbOpsConfig, TelegramConfig
+from db_ops.lib.config import DbOpsConfig, TelegramConfig
 from db_ops.db import DbOpsStore
 
 

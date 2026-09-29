@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
-from db_ops.config import PostgresStoreConfig
+from db_ops.lib.config import PostgresStoreConfig
 from db_ops.db.postgres_store import (
     PostgresStoreError,
     connect,

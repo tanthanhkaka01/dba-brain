@@ -71,7 +71,7 @@ def known_chat_levels() -> tuple[str, ...]:
     ``notify_level: "sla"`` and that level exists. Hardcoding the list here would mean a code
     edit and an image rebuild for every new group, and the config would be rejected in between.
 
-    Read straight from :mod:`db_ops.config` — a shared module, not an app — rather than through
+    Read straight from :mod:`db_ops.lib.config` — this layer's own parser — rather than through
     the routing CLI. This is *validation*, not delivery: it runs while a ``notify`` block is being
     parsed, which happens on every config load, and paying a subprocess there to learn a list of
     words was the wrong trade. Delivery is the path that must go through the Telegram app

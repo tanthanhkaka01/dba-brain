@@ -458,7 +458,7 @@ def authorize_operation(
 
 
 def authorize_request(
-    request: dict[str, Any], *, data_dir: str | Path | None = None,
+    request: dict[str, Any], *,
     echo: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """``common.cli authorize`` — the gate on its own, for work ``common`` does not perform.
@@ -473,9 +473,8 @@ def authorize_request(
 
     The caller reaches this through ``db_ops.transport.common_cli``, which captures both streams, so the
     prompt goes to the controlling terminal (:func:`open_terminal_write`) rather than to stderr.
-    ``data_dir`` is accepted for the CLI family's shared signature and deliberately unused: how
-    hard an operation is to confirm is the request's ``rules`` - its caller read them from the
-    node's ladder - else the ladder this package ships (:func:`rules_for`).
+    How hard an operation is to confirm is the request's ``rules`` - its caller read them from the
+    node's ladder - else the ladder this package ships (:func:`rules_for`); nothing is read here.
     """
     operation = str(request.get("operation") or "").strip()
     if not operation:
@@ -500,7 +499,7 @@ def authorize_request(
     return report.to_dict()
 
 
-def ask_request(request: dict[str, Any], *, data_dir: str | Path | None = None,
+def ask_request(request: dict[str, Any], *,
                 echo: Callable[[str], None] | None = None) -> dict[str, Any]:
     """``common.cli ask`` - one question on the controlling terminal, for a caller that asks it.
 
@@ -515,8 +514,7 @@ def ask_request(request: dict[str, Any], *, data_dir: str | Path | None = None,
 
     ``answer`` in the request is a reply already collected - held to ``choices`` exactly as a typed
     one is, so an unattended caller and a person answer from the same list. An empty typed answer,
-    or none before the deadline, is ``""``: never a choice made for the person. ``data_dir`` is the
-    CLI family's shared signature; nothing is read.
+    or none before the deadline, is ``""``: never a choice made for the person. Nothing is read.
     """
     prompt = str(request.get("prompt") or "")
     if not prompt.strip():

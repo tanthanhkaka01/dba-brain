@@ -22,7 +22,7 @@ from db_ops.lib.shell import is_powershell_executable, powershell_executable
 from db_ops.backup_restore.events import emit_backup_restore_event
 from db_ops.backup_restore.history import BackupRestoreHistory
 from db_ops.backup_restore.sanitize import compact_log_value, sanitize_text, sanitize_value
-from db_ops.config import DbOpsConfig, load_config
+from db_ops.lib.config import DbOpsConfig, load_config
 from db_ops.db.store import utc_now_text
 from db_ops.logging_ops import log_event
 

@@ -27,7 +27,7 @@ COLLECTED_AT = "2026-08-14T09:00:00Z"
 
 
 class _FakeCursor:
-    """Just enough of a DB-API cursor for ``execute_cursor_batches``."""
+    """Just enough of a DB-API cursor for ``sql_run.execute_capture``, the metrics reader."""
 
     def __init__(self, *, rows, columns, execute_error=None):
         self._rows = list(rows)

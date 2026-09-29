@@ -27,8 +27,7 @@ def spawn(command: str, request: dict[str, Any], *, module: str = DEFAULT_MODULE
           stream_stderr: bool = False) -> tuple[ProcessResult | None, str]:
     """Start the command and return ``(result, "")``, or ``(None, why)`` when it could not run.
 
-    Public because ``db/queue_message.py`` needs the start without the reading: it falls back to an
-    in-process insert when the process cannot deliver, which is a policy only it can hold.
+    The start without the reading, for a caller whose answer is not the response envelope.
     """
     result = execute(build_command(command, request, module=module,
                                    timeout_seconds=timeout_seconds, stream_stderr=stream_stderr))

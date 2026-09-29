@@ -50,6 +50,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from db_ops.lib.time_window import window_of
+
 #: Statuses ``job_runs`` writes for a run that did not work.
 FAILED_STATUSES = {"error", "failed", "timeout"}
 
@@ -120,22 +122,15 @@ def load_app_commands(data_dir: Path) -> list[dict[str, Any]]:
 
 
 def _interval_seconds(command: dict[str, Any]) -> int:
-    window = command.get("time_window") if isinstance(command.get("time_window"), dict) else {}
-    try:
-        return int(window.get("repeat_interval") or 0)
-    except (TypeError, ValueError):
-        return 0
+    # Read through the scheduler's own parser (rules R20): a window it refuses has no interval here
+    # either, rather than one this module guessed.
+    window = window_of(command, context=str(command.get("app_code") or "app_command"))
+    return int(window.repeat_interval or 0) if window else 0
 
 
 def _window_hours(command: dict[str, Any]) -> tuple[int | None, int | None]:
-    window = command.get("time_window") if isinstance(command.get("time_window"), dict) else {}
-    def _hour(name: str) -> int | None:
-        value = window.get(name)
-        try:
-            return int(value) if value is not None else None
-        except (TypeError, ValueError):
-            return None
-    return _hour("from_hour"), _hour("to_hour")
+    window = window_of(command, context=str(command.get("app_code") or "app_command"))
+    return (window.from_hour, window.to_hour) if window else (None, None)
 
 
 #: The SQL predicate for "this run failed", kept next to :func:`run_failed` so the database and

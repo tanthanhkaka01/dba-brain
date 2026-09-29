@@ -12,7 +12,7 @@ import base64
 import json
 import sqlite3
 
-from db_ops.common import telegram_command_history as history
+from db_ops.db import telegram_command_history as history
 from db_ops.db import DbOpsStore
 from db_ops.telegram import command_processor
 

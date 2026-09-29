@@ -867,6 +867,47 @@ def execute_capture_first(
     return first["columns"], first["rows"], affected_rows, first["truncated"]
 
 
+#: How many rows :func:`query_rows` reads before it refuses. A read that answers as dicts is a
+#: catalogue read - databases, logins, jobs, the files in a folder - and one past a million rows is
+#: reading the wrong thing; handing back the first million of an unknown number would hide that.
+QUERY_ROWS_CEILING = 1_000_000
+
+
+def query_rows(cursor: Any, sql_text: str, *, params: "Sequence[Any] | None" = None,
+               db_type: str = "sqlserver") -> list[dict[str, Any]]:
+    """The first result set of ``sql_text`` as dicts keyed by column name - **every** row, each
+    value as the driver returned it.
+
+    The one way a module of ``common`` that holds a connection reads rows (rules R11). Six modules
+    had each written it again around their own cursor - ``execute``, ``description``,
+    ``fetchall`` - and drifted: one skipped a result set with no rows in front of the answer (an
+    ``EXEC`` before the ``SELECT``) and five did not; one turned every value into text. Built on
+    :func:`execute_capture`, so a batch is split and bound the way ``run-sql`` does it.
+
+    Values are not made JSON-safe: a SID or a password hash is ``bytes`` and has to stay bytes to be
+    written back as a ``0x...`` literal. A caller that wants text converts what it reads.
+    """
+    result_sets, _affected, _ = execute_capture(
+        cursor, sql_text, max_rows=QUERY_ROWS_CEILING, db_type=db_type, params=params)
+    if not result_sets:
+        return []
+    first = result_sets[0]
+    if first["truncated"]:
+        raise SqlRunError(f"the query answered more than {QUERY_ROWS_CEILING} rows; this reads a "
+                          "catalogue, not a table - narrow it.")
+    columns = first["columns"]
+    return [dict(zip(columns, row)) for row in first["rows"]]
+
+
+def query_value(cursor: Any, sql_text: str, *, params: "Sequence[Any] | None" = None,
+                db_type: str = "sqlserver") -> Any:
+    """The first column of the first row :func:`query_rows` reads, or ``None`` when there is none -
+    a ``COUNT(*)``, an existence check. By position, not by name: an unnamed column is ``""`` on
+    one driver and ``COUNT(*)`` on another."""
+    rows = query_rows(cursor, sql_text, params=params, db_type=db_type)
+    return next(iter(rows[0].values()), None) if rows else None
+
+
 def _positive_int(value: Any, default: int, name: str, *, allow_zero: bool = False) -> int:
     if value is None or value == "":
         return default

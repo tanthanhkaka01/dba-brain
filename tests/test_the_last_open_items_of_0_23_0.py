@@ -65,6 +65,8 @@ def test_the_sql_task_says_the_lookups_reason_not_just_the_name():
 # 1.23
 # --------------------------------------------------------------------------- #
 class _Cursor:
+    rowcount = -1
+
     def __init__(self):
         self.description, self._rows = [("path",), ("size",)], []
 
@@ -73,8 +75,9 @@ class _Cursor:
             raise RuntimeError("The media family on device is incorrectly formed. (3241)")
         self._rows = [("/in/DB/FULL/newest.bak", 10), ("/in/_cert/key.cer", 1)]
 
-    def fetchall(self):
-        return self._rows
+    def fetchmany(self, size):
+        taken, self._rows = self._rows[:size], self._rows[size:]
+        return taken
 
 
 def test_a_piece_named_like_a_backup_that_is_not_one_is_reported(monkeypatch):

@@ -88,7 +88,7 @@ READS_LOCAL_CONFIG: dict[str, str] = {
     # store. `common` writes to no database now, so it needs no entry for one.
     # "notify.py" left this list on 2026-08-15 when it moved to db_ops/lib/: apps parse notify
     # blocks in-process, so it could not be a CLI call. Its one config read (the notify-level
-    # vocabulary) is lazy and fails open, and db_ops.config is a root module, not a component.
+    # vocabulary) is lazy and fails open, and the parser is lib's own (db_ops.lib.config).
     "password_rotation.py": "changes a password on the server AND in the secret store; the store "
                             "is half the operation.",
     # "remote_exec.py" and "ssh.py" left in 0.24.0 (R09): a bare key name was found under
@@ -110,7 +110,6 @@ READS_LOCAL_CONFIG: dict[str, str] = {
 #: the form the boundary was actually crossed in: a module-level constant pointing at this repo's
 #: data folder, used as a default argument.
 _MARKERS = {
-    "db_ops.config": "imports db_ops.config",
     # The same parser under its 0.24.0 address: moving it into `lib` made the import legal for
     # `common` (R04), not the read (R09).
     "db_ops.lib.config": "imports the configuration parser (db_ops.lib.config)",
@@ -154,7 +153,7 @@ def _lib_reads(dotted: str, seen: frozenset[str] = frozenset()) -> bool:
         return False
     imported = _lib_imports(path)
     if any(name.split(".")[-1] == "data_sources" or name.startswith("db_ops.lib.data_sources")
-           or name.startswith("db_ops.lib.config") or name.startswith("db_ops.config")
+           or name.startswith("db_ops.lib.config")
            for name in imported):
         return True
     return any(_lib_reads(name, seen | {dotted}) for name in imported

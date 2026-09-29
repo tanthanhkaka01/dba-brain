@@ -4,7 +4,7 @@ import json
 import sqlite3
 from pathlib import Path
 
-from db_ops.config import StoreConfig
+from db_ops.lib.config import StoreConfig
 from db_ops.db.sla_results import SlaPolicyResult, SlaValidationSummary, state_key
 from db_ops.db import backend as backend_mod
 from db_ops.db.backend import StoreTarget

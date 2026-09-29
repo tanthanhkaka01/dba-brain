@@ -84,7 +84,7 @@ def test_postgresql_statement_timeout_is_set(monkeypatch):
     package = types.ModuleType("pg8000")
     package.dbapi = dbapi
     monkeypatch.setitem(sys.modules, "pg8000", package)
-    monkeypatch.setattr("db_ops.common.metric_batch.execute_cursor_batches", lambda *_args, **_kwargs: {"result_sets": []})
+    monkeypatch.setattr("db_ops.common.sql_run.execute_capture", lambda *_args, **_kwargs: ([], 0, False))
     from db_ops.common import metric_batch
 
     # The per-engine connect moved to db_ops.common.db_connect, so the metrics app has one

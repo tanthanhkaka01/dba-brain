@@ -36,8 +36,8 @@ with *Target database not found in database-inventory.json*, a file that was nev
 - an instance the server's record does not have fails naming the ones it has (*`ACME-…-11` has no
   sqlserver instance 'APPINST' in db_instances.json - it has: MSSQLSERVER*); `sql-target-add` refuses
   it at registration, the same way, when the inventory has records;
-- a database that does not open (4060) is diagnosed by asking the server - `SELECT name FROM
-  sys.databases` in `master`, same login: *does not exist … did you mean 'APPDB_Testing'?*, *the
+- a database that does not open (4060) is diagnosed by asking the server - `common.cli
+  list-databases` in `master`, same login: *does not exist … did you mean 'APPDB_Testing'?*, *the
   server has 'APPDB_Prod' - use that spelling*, or *exists, but this login cannot open it*; a login
   refused (18456) and an instance not reached are named as such; the driver's own words follow;
 - messages and log lines name a SQL Server target as `server/instance.database` - `master` when no
@@ -431,7 +431,7 @@ python -m db_ops.db.cli sql-run-history '{"limit": 20, "sql_id": 28}'
 
 It lives in `db.cli` rather than here for the reason `restore-drill-status` does: the question is
 asked **by** operators and reports, not by the app that performs the work. `sql_tasks` runs tasks
-and records them in `sql_runs`; `db_ops.common.sql_run_history` reads that record, and the two never
+and records them in `sql_runs`; `db_ops.db.sql_run_history` reads that record, and the two never
 import each other. `/spbot_list_sql_runs` is the same command from Telegram.
 
 The output is lines rather than JSON because its first reader is a person who has just been paged.
@@ -565,9 +565,17 @@ python -m db_ops.common.cli add-sql '{"db_type": "sqlserver",
 ```
 
 The flag form (`add-sql --db-type ... --sql-file ...`) is still accepted so pasted runbook lines
-keep working; every flag is the same key without the dashes. `"inactive": true` registers without
+keep working; every flag is the same key without the dashes - each of its spellings, so
+`display_name` and the older `sql_name` both name the task. Until 0.25.0 only a flag's argparse
+dest was a key, and `display_name` (dest `sql_name`) was refused: this example, and every
+registration from the Telegram bot, failed (1.66). `"inactive": true` registers without
 enabling, `"manual_only": true` is a shortcut for `"repeat_interval": -1`, and
 `"output": "none|plain|xlsx|csv|txt|xml"` sets the delivery format.
+
+A task reports its runs and its failures at the `sql` level where a Telegram group defines one,
+else at `logging` / `error`, which every install has; `logging_chat` / `error_chat` name another.
+`sql-target-add` defaults the same way (`config_admin.default_sql_task_chats`). Until 0.25.0 both
+asked for `sql` regardless, and a new install - no such group - refused its own default (1.67).
 
 **Both forms answer in the standard response envelope** (`success` / `operation` / `message` /
 `error` / `data` / `metrics`), and invalid input — unknown `db_type`, empty name, bad time window,

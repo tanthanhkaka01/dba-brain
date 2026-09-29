@@ -52,15 +52,15 @@ class _Out:
 
 
 class _Client:
-    """Records exec_command calls; serves a fixed payload as the source."""
+    """Records open_stream calls; serves a fixed payload as the source."""
     def __init__(self, payload=b"", rc=0, sftp=None):
         self.payload, self.rc, self.commands = payload, rc, []
         self._sftp = sftp
         self.stdin = _In()
-    def exec_command(self, command, timeout=None):
+    def open_stream(self, command, timeout_seconds=None):
         self.commands.append(command)
         return self.stdin, _Out(self.payload, self.rc), _Out(b"", 0)
-    def open_sftp(self):
+    def sftp(self):
         return self._sftp
 
 
@@ -102,7 +102,7 @@ def test_only_the_named_files_are_streamed():
     target = _Client()
 
     ok = transfer._stream_files(
-        source_client=source, source_dir="/src", target_client=target, target_dir="/dst",
+        source_session=source, source_dir="/src", target_session=target, target_dir="/dst",
         files=[("base/a", 10), ("wal/b", 20)],
     )
 
@@ -118,7 +118,7 @@ def test_a_failing_tar_reports_failure_so_the_caller_can_fall_back():
     target = _Client()
 
     assert transfer._stream_files(
-        source_client=source, source_dir="/src", target_client=target, target_dir="/dst",
+        source_session=source, source_dir="/src", target_session=target, target_dir="/dst",
         files=[("a", 1)],
     ) is False
 
@@ -131,8 +131,8 @@ def test_nothing_is_transferred_when_the_target_already_has_it(monkeypatch):
     called = []
     monkeypatch.setattr(transfer, "_stream_files", lambda **kw: called.append(kw) or True)
 
-    result = transfer.sync_backup_dir(source_client=source, source_dir="/src",
-                                      target_client=target, target_dir="/dst")
+    result = transfer.sync_backup_dir(source_session=source, source_dir="/src",
+                                      target_session=target, target_dir="/dst")
 
     assert (result.copied, result.skipped) == (0, 1)
     assert called == [], "a file already present must not be streamed again"
@@ -146,8 +146,8 @@ def test_only_the_new_files_are_streamed_on_a_repeat_run(monkeypatch):
     seen = {}
     monkeypatch.setattr(transfer, "_stream_files", lambda **kw: seen.update(kw) or True)
 
-    result = transfer.sync_backup_dir(source_client=source, source_dir="/src",
-                                      target_client=target, target_dir="/dst")
+    result = transfer.sync_backup_dir(source_session=source, source_dir="/src",
+                                      target_session=target, target_dir="/dst")
 
     assert [rel for rel, _ in seen["files"]] == ["new.bak"]
     assert (result.copied, result.skipped, result.bytes_copied) == (1, 1, 200)
@@ -160,8 +160,8 @@ def test_a_changed_size_is_re_sent():
     source = _Client(sftp=_Sftp(tree_src), payload=b"X")
     target = _Client(sftp=_Sftp(tree_dst))
 
-    result = transfer.sync_backup_dir(source_client=source, source_dir="/src",
-                                      target_client=target, target_dir="/dst")
+    result = transfer.sync_backup_dir(source_session=source, source_dir="/src",
+                                      target_session=target, target_dir="/dst")
 
     assert (result.copied, result.skipped) == (1, 0)
 
@@ -181,8 +181,8 @@ def test_a_staging_dir_the_ssh_user_cannot_write_fails_before_anything_is_sent(m
     monkeypatch.setattr(transfer, "_stream_files", lambda **kw: streamed.append(kw) or True)
 
     with pytest.raises(PermissionError, match="not writable by the SSH user"):
-        transfer.sync_backup_dir(source_client=source, source_dir="/src",
-                                 target_client=target, target_dir="/dst")
+        transfer.sync_backup_dir(source_session=source, source_dir="/src",
+                                 target_session=target, target_dir="/dst")
 
     assert streamed == [], "nothing may be streamed into a directory that refuses it"
 
@@ -194,8 +194,8 @@ def test_the_probe_file_is_cleaned_up_on_a_writable_target(monkeypatch):
     target = _Client(sftp=target_sftp)
     monkeypatch.setattr(transfer, "_stream_files", lambda **kw: True)
 
-    transfer.sync_backup_dir(source_client=source, source_dir="/src",
-                             target_client=target, target_dir="/dst")
+    transfer.sync_backup_dir(source_session=source, source_dir="/src",
+                             target_session=target, target_dir="/dst")
 
     assert target_sftp.probed == ["/dst/.db_ops_write_probe"]
 
@@ -210,8 +210,8 @@ def test_stderr_is_drained_while_the_stream_runs(monkeypatch):
     monkeypatch.setattr(transfer, "_drain",
                         lambda handle: drained.append(handle) or real_drain(handle))
 
-    transfer._stream_files(source_client=source, source_dir="/src",
-                           target_client=target, target_dir="/dst", files=[("a", 1)])
+    transfer._stream_files(source_session=source, source_dir="/src",
+                           target_session=target, target_dir="/dst", files=[("a", 1)])
 
     assert len(drained) == 2, "both ends' stderr must be drained, not just the source's"
 
@@ -227,7 +227,7 @@ class _CapturingClient:
         self.command = None
         self._stdout, self._exit = stdout, exit_status
 
-    def exec_command(self, command, timeout=None):  # noqa: ARG002 - signature parity
+    def open_stream(self, command, timeout_seconds=None):  # noqa: ARG002 - signature parity
         self.command = command
         channel = type("C", (), {"recv_exit_status": lambda _self: self._exit})()
         out = type("O", (), {"read": lambda _self: self._stdout.encode(), "channel": channel})()
@@ -294,7 +294,7 @@ def test_the_prune_shell_command_really_keeps_the_piece_and_drops_the_husk(tmp_p
     subprocess.run(["bash", "-lc", layout], check=True, capture_output=True)
 
     class ShellClient(_CapturingClient):
-        def exec_command(self, command, timeout=None):
+        def open_stream(self, command, timeout_seconds=None):
             self.command = command
             done = subprocess.run(["bash", "-lc", command], capture_output=True, text=True)
             channel = type("C", (), {"recv_exit_status": lambda _s: done.returncode})()
@@ -334,8 +334,8 @@ def test_the_staging_copy_mirrors_the_source_and_drops_what_it_no_longer_has(mon
     target_sftp = _RemovingSftp(tree_dst)
     monkeypatch.setattr(transfer, "_stream_files", lambda **kw: True)
 
-    result = transfer.sync_backup_dir(source_client=_Client(sftp=_Sftp(tree_src)), source_dir="/src",
-                                      target_client=_Client(sftp=target_sftp), target_dir="/dst")
+    result = transfer.sync_backup_dir(source_session=_Client(sftp=_Sftp(tree_src)), source_dir="/src",
+                                      target_session=_Client(sftp=target_sftp), target_dir="/dst")
 
     assert target_sftp.removed == ["/dst/old_life.bkp"]
     assert result.as_dict()["removed_absent_at_source"] == 1
@@ -349,8 +349,8 @@ def test_a_file_the_source_still_has_stays_even_when_this_run_does_not_copy_it(m
     target_sftp = _RemovingSftp(tree_dst)
     monkeypatch.setattr(transfer, "_stream_files", lambda **kw: True)
 
-    transfer.sync_backup_dir(source_client=_Client(sftp=_Sftp(tree_src)), source_dir="/src",
-                             target_client=_Client(sftp=target_sftp), target_dir="/dst",
+    transfer.sync_backup_dir(source_session=_Client(sftp=_Sftp(tree_src)), source_dir="/src",
+                             target_session=_Client(sftp=target_sftp), target_dir="/dst",
                              include=("full_new",))
 
     assert target_sftp.removed == []

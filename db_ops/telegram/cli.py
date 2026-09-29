@@ -9,7 +9,7 @@ from typing import Any
 from pathlib import Path
 
 from db_ops.lib.secret_text import add_key_argument, set_key_env
-from db_ops.config import (
+from db_ops.lib.config import (
     DEFAULT_CONFIG_PATH,
     DbOpsConfig,
     load_config,
@@ -23,7 +23,7 @@ from db_ops.telegram.command_processor import (
     process_pending_conversation_messages,
 )
 from db_ops.telegram.commands import save_command_messages_from_messages
-from db_ops.telegram.send_queue import send_one_message, send_pending_messages
+from db_ops.telegram.send_queue import PAUSES_FILE_NAME, send_one_message, send_pending_messages
 from db_ops.telegram import bot_info, get_updates, send_message
 from db_ops.telegram.updates import add_group, set_group_level, set_user_level
 from db_ops.telegram.updates import fetch_and_save_updates
@@ -214,6 +214,10 @@ def call_telegram_function(
         # class, so it must follow data/store_config.json rather than pinning SQLite.
         "sqlite_path": config.store,
         "telegram_groups": config.telegram.level_chat_map,
+        # The send pass: each chat's oldest rows, and the pauses Telegram imposed kept between
+        # passes (each pass is a process of its own).
+        "send_per_chat": config.telegram.send_per_chat,
+        "pauses_path": Path(config.runtime_dir) / PAUSES_FILE_NAME,
     }
     function_params = inspect.signature(telegram_function).parameters
     function_args = {

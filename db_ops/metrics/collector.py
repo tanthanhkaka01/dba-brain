@@ -24,7 +24,7 @@ from db_ops.lib.event_policy import (
 from db_ops.lib.target_profile import TargetProfile, candidate_variants, select_variant, version_matches
 from db_ops.lib.time_window import is_time_window_open, job_due
 from db_ops.lib.timezone import to_display
-from db_ops.config import DbOpsConfig
+from db_ops.lib.config import DbOpsConfig
 from db_ops.metrics.definitions import DEFAULT_DEFINITIONS_PATH, load_max_parallel_servers, load_metric_definitions
 from db_ops.metrics import batch
 from db_ops.metrics.batch import Prepared

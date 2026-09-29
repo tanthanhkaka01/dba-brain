@@ -28,15 +28,15 @@ def ran(monkeypatch):
     calls = []
     answers = {}
 
-    def fake_run(host, command, *, timeout=300, client=None):
-        calls.append({"command": command, "client": client})
+    def fake_run(host, command, *, timeout=300, session=None):
+        calls.append({"command": command, "session": session})
         for needle, token in answers.items():
             if needle in command:
                 return {"exit_code": 0, "stdout": token, "stderr": ""}
         return {"exit_code": 0, "stdout": "DELETED 100", "stderr": ""}
 
     class _Client:
-        """Stands in for the paramiko client, and records that the batch closed what it opened."""
+        """Stands in for the `remote_exec` session, and records that the batch closed what it opened."""
 
         closed = False
 
@@ -44,10 +44,10 @@ def ran(monkeypatch):
             type(self).closed = True
 
         def __repr__(self):
-            return "SHARED-CLIENT"
+            return "SHARED-SESSION"
 
     monkeypatch.setattr(deletefiles, "run", fake_run)
-    monkeypatch.setattr(deletefiles, "open_client", lambda host: _Client())
+    monkeypatch.setattr(deletefiles, "open_session", lambda host: _Client())
     return {"calls": calls, "answers": answers, "client": _Client}
 
 
@@ -205,7 +205,7 @@ def test_the_batch_opens_one_connection_and_lends_it_to_every_file(ran):
         "host": {"runtime": "linux", "host": "10.0.0.1", "username": "u"},
     })
 
-    clients = [call["client"] for call in ran["calls"]]
+    clients = [call["session"] for call in ran["calls"]]
     assert len(set(id(client) for client in clients)) == 1, "one connection, lent to every file"
     # And handed back: a batch that leaks the session leaks one per retention run.
     assert ran["client"].closed is True
@@ -214,7 +214,7 @@ def test_the_batch_opens_one_connection_and_lends_it_to_every_file(ran):
 def test_a_local_batch_opens_no_connection_at_all(ran, monkeypatch):
     """`host` omitted means this machine. Opening an SSH client to nowhere is how the worker's own
     filesystem became unreachable from a command written for remote hosts."""
-    monkeypatch.setattr(deletefiles, "open_client",
+    monkeypatch.setattr(deletefiles, "open_session",
                         lambda host: pytest.fail("a local host must not be connected to"))
 
     result = deletefiles.delete_files({"paths": ["/backup/a.bkp"]})

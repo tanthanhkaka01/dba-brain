@@ -115,6 +115,9 @@ class TelegramConfig:
     bot_token: str = ""
     api_url: str = "https://api.telegram.org"
     timeout_seconds: int = 20
+    # How many of each chat's oldest unsent messages one send pass takes (0.25.0). Per chat, so a
+    # flooded chat never holds another behind it - see `telegram.send_queue.SEND_PER_CHAT`.
+    send_per_chat: int = 5
     update_offset: int | None = None
     groups_file: Path | None = None
     # level -> chat_id. **The** routing table: a level with a chat sends there, a level with
@@ -533,6 +536,7 @@ def parse_config(raw: dict[str, Any], *, base_dir: Path) -> DbOpsConfig:
         bot_token=str(telegram_raw.get("bot_token", "")),
         api_url=str(telegram_raw.get("api_url", "https://api.telegram.org")),
         timeout_seconds=int(telegram_raw.get("timeout_seconds", 20)),
+        send_per_chat=_send_per_chat(telegram_raw.get("send_per_chat")),
         update_offset=_parse_optional_int(telegram_raw.get("update_offset")),
         groups_file=groups_file,
         level_chat_map=level_chat_map,
@@ -798,6 +802,18 @@ def _load_telegram_bot_config(path: Path | None) -> dict[str, Any]:
     return data
 
 
+def _send_per_chat(value: Any) -> int:
+    """``send_per_chat``, or 5. A value that is not a whole number of 1 or more keeps the default:
+    one bad setting must not stop the node reading the rest of its configuration."""
+    if value is None or value == "":
+        return 5
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return 5
+    return number if number >= 1 else 5
+
+
 def _parse_optional_int(value: Any) -> int | None:
     if value is None or str(value).strip() == "":
         return None
@@ -819,7 +835,7 @@ def _load_telegram_groups_file(path: Path | None) -> dict[str, str]:
     if path is None or not path.exists():
         return {}
 
-    # Lazy, like the two secret_text imports above: db_ops.config is imported by every component
+    # Lazy, like the two secret_text imports above: this parser is imported by every component
     # in the tree, and this branch is dormant unless `telegram.groups_file` is set. The records
     # come from the one reader of telegram_groups.json (2026-08-15) so this is not a fifth parse
     # of that file; `level_chat_map` is read here because it is config wiring, not a group record.

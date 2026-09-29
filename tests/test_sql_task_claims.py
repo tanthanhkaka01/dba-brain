@@ -658,7 +658,7 @@ def _history_row(**over):
 def test_a_run_line_leads_with_the_status_because_that_is_what_is_scanned_for():
     """Read on a phone by whoever just got an alert. Everything else on the line is context for
     the one word they came for."""
-    from db_ops.common import sql_run_history
+    from db_ops.db import sql_run_history
 
     text = sql_run_history.render([_history_row()])
 
@@ -672,7 +672,7 @@ def test_a_run_line_leads_with_the_status_because_that_is_what_is_scanned_for():
 def test_a_failed_run_carries_its_reason_so_the_store_need_not_be_opened():
     """The trip to the store is exactly what this command exists to save. A listing that says
     ERROR and stops has not saved it."""
-    from db_ops.common import sql_run_history
+    from db_ops.db import sql_run_history
 
     text = sql_run_history.render([_history_row(
         status="error", duration_ms=None, row_count=None,
@@ -686,7 +686,7 @@ def test_a_failed_run_carries_its_reason_so_the_store_need_not_be_opened():
 def test_a_successful_run_does_not_repeat_a_stale_error_column():
     """`error_text` outlives the row it belonged to in some shapes; printing it beside DONE would
     report a failure that did not happen."""
-    from db_ops.common import sql_run_history
+    from db_ops.db import sql_run_history
 
     text = sql_run_history.render([_history_row(error_text="an error from a previous attempt")])
 
@@ -703,7 +703,7 @@ def test_a_long_listing_is_sent_whole_in_parts_not_cut_short():
     the parts against the rate limit — a listing solving that again solved it worse. This test is
     the sql_runs half of the pair; `test_telegram_command_history` holds the other.
     """
-    from db_ops.common import sql_run_history
+    from db_ops.db import sql_run_history
     from db_ops.lib.telegram_text import split_telegram_message
 
     rows = [_history_row(sql_run_id=n, sql_code="SQLSERVER-%03d-A-RATHER-LONG-TASK-NAME" % n)
@@ -723,14 +723,14 @@ def test_a_long_listing_is_sent_whole_in_parts_not_cut_short():
 
 
 def test_an_empty_history_says_so_rather_than_printing_a_bare_header():
-    from db_ops.common import sql_run_history
+    from db_ops.db import sql_run_history
 
     assert sql_run_history.render([]) == "No SQL task runs recorded yet."
     assert sql_run_history.render([], sql_id=28) == "No SQL task runs recorded for sql_id 28 yet."
 
 
 def test_the_limit_is_bounded_so_a_typo_cannot_ask_for_the_whole_table():
-    from db_ops.common import sql_run_history
+    from db_ops.db import sql_run_history
 
     asked = []
 

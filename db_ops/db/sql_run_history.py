@@ -8,7 +8,7 @@ query, which is the shape of a missing command.
 
 This module is only the reading and the rendering. It does not run tasks and does not know how to:
 that is ``sql_tasks``' job, and the two never import each other. Same split as
-:mod:`db_ops.common.restore_drill`, for the same reason — the question is asked *by* operators and
+:mod:`db_ops.db.restore_drill`, for the same reason — the question is asked *by* operators and
 reports, not by the app that performs the work.
 
 The output is lines rather than JSON on purpose. Its first caller is a Telegram command, read on a

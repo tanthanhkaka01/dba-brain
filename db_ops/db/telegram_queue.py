@@ -36,7 +36,9 @@ __all__ = [
     "MESSAGE_TYPES",
     "PLAIN",
     "message_type_for",
+    "queue_from_request",
     "queue_telegram_message",
+    "resolved_message_type",
 ]
 
 
@@ -201,9 +203,7 @@ def queue_telegram_message(
     status at all (a command reply, a listing): that suppresses the header guess, so a listing
     whose text happens to contain "error" is not tagged as a failure.
     """
-    resolved = normalize_message_type(message_type)
-    if not resolved:
-        resolved = normalize_message_type(message_type_for(level=level, phase=phase, status=status))
+    resolved = resolved_message_type(message_type=message_type, level=level, phase=phase, status=status)
     return store.insert_telegram_send_message(
         tlgchat_id=chat_id,
         message_text=text,
@@ -214,4 +214,57 @@ def queue_telegram_message(
         source_id=source_id,
         metadata=metadata,
         message_type=resolved or None,
+    )
+
+
+def resolved_message_type(*, message_type: str | None = None, level: str | None = None,
+                          phase: str | None = None, status: str | None = None) -> str:
+    """The display type a message is stored with: ``message_type`` when it is a known one, else
+    what ``level`` / ``phase`` / ``status`` map to, else ``""`` (the send layer reads the header)."""
+    return (normalize_message_type(message_type)
+            or normalize_message_type(message_type_for(level=level, phase=phase, status=status)))
+
+
+def queue_from_request(request: dict[str, Any], *, store: Any = None, config_path: str | None = None,
+                       source_type: str | None = None) -> int:
+    """Queue the message a request object describes and return its ``send_tlgmsg_id``.
+
+    The one path from a request to a row, for both doors: an app's
+    :func:`db_ops.db.queue_message.queue_message` and a shell's ``db.cli queue-telegram-message``.
+    Until 0.25.0 each chose the store and mapped the eleven fields itself - two copies that only
+    had to drift once for an app's message and a script's to be stored differently.
+
+    The store is ``store`` when the caller holds one, else the request's ``store`` block (a
+    declaration: :mod:`db_ops.db.declaration`), else ``config_path``'s. ``source_type`` is the
+    default when the request names none. Raises ``ValueError`` without a chat or a text, and
+    whatever the store raises; the caller decides what a failure means.
+    """
+    chat_id = str(request.get("chat_id") or "").strip()
+    text = str(request.get("text") or "")
+    if not chat_id or not text:
+        raise ValueError("chat_id and text are required.")
+    if store is None:
+        from db_ops.db import DbOpsStore
+
+        if request.get("store"):
+            from db_ops.db.declaration import parse as parse_store
+
+            store = DbOpsStore(parse_store(request["store"]))
+        else:
+            from db_ops.lib.config import load_config
+
+            store = DbOpsStore.from_config(load_config(config_path))
+    return queue_telegram_message(
+        store=store,
+        chat_id=chat_id,
+        text=text,
+        message_type=request.get("message_type"),
+        level=request.get("level"),
+        phase=request.get("phase"),
+        status=request.get("status"),
+        note=str(request.get("note") or ""),
+        source_type=request.get("source_type") or source_type,
+        source_id=request.get("source_id"),
+        reply_message_id=request.get("reply_message_id"),
+        metadata=request.get("metadata"),
     )

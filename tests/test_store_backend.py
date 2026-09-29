@@ -53,7 +53,7 @@ def test_sqlite_backend_creates_the_parent_directory(tmp_path):
 
 
 def test_open_connection_routes_on_the_declared_backend(tmp_path):
-    from db_ops.config import SqliteStoreConfig, StoreConfig
+    from db_ops.lib.config import SqliteStoreConfig, StoreConfig
 
     store = StoreConfig(backend="sqlite", sqlite=SqliteStoreConfig(path=tmp_path / "s.sqlite"))
     conn = backend.open_connection(store)
@@ -64,7 +64,7 @@ def test_open_connection_routes_on_the_declared_backend(tmp_path):
 
 
 def test_unknown_backend_is_refused(tmp_path):
-    from db_ops.config import StoreConfig
+    from db_ops.lib.config import StoreConfig
 
     with pytest.raises(backend.StoreBackendError, match="Unknown store backend"):
         backend.open_connection(StoreConfig(backend="mysql"))
@@ -282,7 +282,7 @@ def test_a_bare_path_always_means_sqlite(tmp_path):
 
 
 def test_from_config_follows_the_declared_backend(tmp_path):
-    from db_ops.config import PostgresStoreConfig, StoreConfig
+    from db_ops.lib.config import PostgresStoreConfig, StoreConfig
     from db_ops.db.backend import StoreTarget
 
     store = StoreConfig(
@@ -303,7 +303,7 @@ def test_from_config_rejects_something_that_is_not_a_config():
 
 def test_prepare_creates_the_directory_only_for_sqlite(tmp_path):
     """PostgreSQL needs no directory; creating one would leave a stray runtime/ folder behind."""
-    from db_ops.config import PostgresStoreConfig, StoreConfig
+    from db_ops.lib.config import PostgresStoreConfig, StoreConfig
     from db_ops.db.backend import StoreTarget
 
     sqlite_target = StoreTarget.coerce(tmp_path / "nested" / "db_ops.sqlite")
@@ -394,7 +394,7 @@ def test_explicit_sqlite_path_keeps_the_store_declaration_in_sync(tmp_path):
     directly-constructed DbOpsConfig defaulted them independently - so DbOpsStore.from_config()
     silently opened the tool's default database instead of the path the caller asked for. That is
     exactly how the first PostgreSQL cutover ended up still writing to SQLite."""
-    from db_ops.config import DbOpsConfig
+    from db_ops.lib.config import DbOpsConfig
     from db_ops.db import DbOpsStore
 
     target = tmp_path / "custom" / "db_ops.sqlite"
@@ -406,7 +406,7 @@ def test_explicit_sqlite_path_keeps_the_store_declaration_in_sync(tmp_path):
 
 def test_a_postgres_declaration_is_not_overwritten_by_the_path(tmp_path):
     """On a PostgreSQL store the path is informational, so it must not clobber the declaration."""
-    from db_ops.config import DbOpsConfig, PostgresStoreConfig, StoreConfig
+    from db_ops.lib.config import DbOpsConfig, PostgresStoreConfig, StoreConfig
 
     store = StoreConfig(backend="postgresql",
                         postgresql=PostgresStoreConfig(host="h", database="db_ops", username="u"))
@@ -431,7 +431,7 @@ def test_from_config_follows_a_postgres_declaration(store_class_path):
     """The flip is only real if the store classes act on it."""
     import importlib
 
-    from db_ops.config import DbOpsConfig, PostgresStoreConfig, StoreConfig
+    from db_ops.lib.config import DbOpsConfig, PostgresStoreConfig, StoreConfig
 
     module_name, class_name = store_class_path
     store_class = getattr(importlib.import_module(module_name), class_name)
@@ -444,7 +444,7 @@ def test_from_config_follows_a_postgres_declaration(store_class_path):
 def test_a_helper_handed_the_store_declaration_uses_it():
     """The reports/telegram CLIs inject `sqlite_path` into any helper that names it. Those helpers
     pass it straight to a store class, so handing them config.store must select PostgreSQL."""
-    from db_ops.config import PostgresStoreConfig, StoreConfig
+    from db_ops.lib.config import PostgresStoreConfig, StoreConfig
     from db_ops.db import DbOpsStore
 
     store = StoreConfig(backend="postgresql",

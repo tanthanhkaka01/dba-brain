@@ -9,7 +9,7 @@ from db_ops.lib.timezone import format_display_text
 from db_ops.lib.secret_text import add_key_argument, set_key_env
 from db_ops.db.metric_definitions import definition_supports_db_type
 from db_ops.db.metric_results import rows_by_target
-from db_ops.config import DEFAULT_CONFIG_PATH, load_config, resolve_config_path
+from db_ops.lib.config import DEFAULT_CONFIG_PATH, load_config, resolve_config_path
 from db_ops.logging_ops import log_event, log_function_call, log_function_error, setup_app_logger
 from db_ops.logging_ops.runtime_stdout import patch_stdout
 from db_ops.metrics.collector import collect_metrics

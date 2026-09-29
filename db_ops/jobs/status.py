@@ -17,7 +17,7 @@ import sys
 from datetime import datetime, timezone
 
 from db_ops.lib import secret_text
-from db_ops.config import load_config, resolve_config_path
+from db_ops.lib.config import load_config, resolve_config_path
 from db_ops.db import DbOpsStore
 from db_ops.db.metric_store import MetricStore
 from db_ops.jobs.daemon import (

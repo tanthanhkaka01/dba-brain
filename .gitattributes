@@ -42,3 +42,8 @@ docker/**       text eol=lf
 # the fix is one line. Pinned here so reverting any of the three cannot break the other two.
 shared_config_objects.json              text eol=lf
 shared_config_objects.example.json      text eol=lf
+
+# Built executables a SQL task runs (ORD 309 zk_attendance). The Linux one has no extension, and
+# `text=auto` guesses from the content; stated here so no checkout can ever rewrite its bytes.
+assets/tasks/bin/**/zk_attendance       binary
+assets/tasks/bin/**/*.exe               binary

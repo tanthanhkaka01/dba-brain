@@ -129,10 +129,10 @@ def relay(source, destination, source_path: str, dest_path: str, *, overwrite: b
     directory = str(PurePosixPath(dest_path).parent)
     prefix = f"mkdir -p {shlex.quote(directory)} && " if make_dirs else ""
 
-    src_in, src_out, src_err = source.client.exec_command(
-        f"cat {shlex.quote(source_path)}", timeout=None)
-    dst_in, dst_out, dst_err = destination.client.exec_command(
-        f"{prefix}cat > {shlex.quote(staged)}", timeout=None)
+    src_in, src_out, src_err = source.open_stream(
+        f"cat {shlex.quote(source_path)}")
+    dst_in, dst_out, dst_err = destination.open_stream(
+        f"{prefix}cat > {shlex.quote(staged)}")
     src_errors, dst_errors = _Drained(src_err), _Drained(dst_err)
     moved = 0
     try:

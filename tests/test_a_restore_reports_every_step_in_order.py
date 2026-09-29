@@ -277,7 +277,10 @@ def test_the_copy_is_two_common_commands_and_the_delete_a_third(monkeypatch):
 def test_a_point_in_time_copies_the_whole_directory_without_asking_the_source():
     """The narrowings take the NEWEST chain; a moment before the newest full needs an older one."""
     class _NoTouch:
-        def exec_command(self, *_a, **_k):
+        def open_stream(self, *_a, **_k):
+            raise AssertionError("the source was asked about a chain it cannot choose")
+
+        def run(self, *_a, **_k):
             raise AssertionError("the source was asked about a chain it cannot choose")
 
     for engine in ("postgresql", "oracle"):
@@ -369,7 +372,7 @@ def test_a_refused_id_is_named_in_the_refusal(empty_root, monkeypatch, argv, key
     """The bot's refusal cases read `backup_id=<unknown>` - the one message that most needs to
     name the id it was given (2026-09-25)."""
     from db_ops.backup_restore import cli
-    from db_ops.config import DbOpsConfig
+    from db_ops.lib.config import DbOpsConfig
 
     emitted = []
     monkeypatch.setattr(cli, "load_config", lambda _path: DbOpsConfig(

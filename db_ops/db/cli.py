@@ -34,8 +34,8 @@ from db_ops.lib.timezone import display_now
 # One request parser for the whole tool. The JSON-object contract is `common`'s to define; this
 # module is a caller of it, not a second implementation — two would drift on `@file` and stdin.
 from db_ops.lib import data_sources
-from db_ops.common.cli import _read_json_request
-from db_ops.config import DEFAULT_CONFIG_PATH, load_config, resolve_config_path
+from db_ops.lib.json_io import read_json_request_answered
+from db_ops.lib.config import DEFAULT_CONFIG_PATH, load_config, resolve_config_path
 from db_ops.db import declaration
 from db_ops.db import postgres_store
 from db_ops.db import sqlite_to_postgres as migration
@@ -613,8 +613,9 @@ def _handle_export_schema(args) -> int:
 # true. The scheduled entry in ``data/app_commands.json`` calls this module now.
 #
 # They keep the JSON-object contract: one object in on argv/@file/stdin, one JSON object out. The
-# request parser itself stays in `common` (``_read_json_request``) so the whole tool has one, not
-# two that drift on `@file` or stdin handling.
+# request parser is `lib.json_io.read_json_request_answered`, the one `common.cli` uses too, so the
+# whole tool has one, not two that drift on `@file` or stdin handling (`common`'s until 0.25.0,
+# when `db` stopped importing `common` - R03).
 
 QUEUE_TELEGRAM_USAGE = (
     "usage: python -m db_ops.db.cli queue-telegram-message <json>|@<file>|- "
@@ -652,9 +653,7 @@ def _queue_telegram_message_command(argv: list[str]) -> int:
     dash without any shell quoting games.
     """
     from db_ops.lib.secret_text import set_key_env
-    from db_ops.db.telegram_queue import queue_telegram_message
-    from db_ops.config import load_config
-    from db_ops.db import DbOpsStore
+    from db_ops.db.telegram_queue import queue_from_request, resolved_message_type
 
     source = ""
     config_path = "config.json"
@@ -687,61 +686,26 @@ def _queue_telegram_message_command(argv: list[str]) -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
-    request, code = _read_json_request(source, QUEUE_TELEGRAM_USAGE)
+    request, code = read_json_request_answered(source)
     if request is None:
         return code
 
     from db_ops.lib import response
 
     chat_id = str(request.get("chat_id") or "").strip()
-    text = str(request.get("text") or "")
-    if not chat_id or not text:
-        return response.emit(response.fail(
-            "queue-telegram-message", "chat_id and text are required."))
-
     try:
-        # The store travels in the request when the caller states it: backend, host, database,
-        # login and the already-resolved password. That is the model everything else here follows
-        # - `run-sql` has always been handed its target - and it is what lets a caller name a store
-        # that is not this node's own, which an in-process call could do and a subprocess could
-        # not. Falling back to config.json keeps the bare `queue-telegram-message '{...}'` form
-        # working for shell callers that have no store to state.
-        if request.get("store"):
-            from db_ops.db.declaration import parse as parse_store
-
-            store = DbOpsStore(parse_store(request["store"]))
-        else:
-            store = DbOpsStore.from_config(load_config(config_path))
-        send_tlgmsg_id = queue_telegram_message(
-            store=store,
-            chat_id=chat_id,
-            text=text,
-            message_type=request.get("message_type"),
-            level=request.get("level"),
-            phase=request.get("phase"),
-            status=request.get("status"),
-            note=str(request.get("note") or ""),
-            source_type=request.get("source_type") or "common_cli",
-            source_id=request.get("source_id"),
-            reply_message_id=request.get("reply_message_id"),
-            metadata=request.get("metadata"),
-        )
+        # The store travels in the request when the caller states it (backend, host, database,
+        # login, the resolved password), which lets a caller name a store that is not this node's
+        # own; a bare request falls back to --config's, so a shell with no store to state still
+        # queues. The same path an app's message takes (db.telegram_queue.queue_from_request).
+        send_tlgmsg_id = queue_from_request(request, config_path=config_path, source_type="common_cli")
     except Exception as exc:  # noqa: BLE001 - report as a response like every other command.
         return response.emit(response.fail("queue-telegram-message", str(exc)))
 
     # Echo the type that was actually stored: the caller passed a level or a status and needs to
     # see what it resolved to, rather than reading the row back to find out.
-    from db_ops.lib.telegram_severity import normalize_message_type
-
-    resolved = normalize_message_type(request.get("message_type"))
-    if not resolved:
-        from db_ops.db.telegram_queue import message_type_for
-
-        resolved = normalize_message_type(
-            message_type_for(
-                level=request.get("level"), phase=request.get("phase"), status=request.get("status")
-            )
-        )
+    resolved = resolved_message_type(message_type=request.get("message_type"), level=request.get("level"),
+                                     phase=request.get("phase"), status=request.get("status"))
     return response.emit(response.ok(
         "queue-telegram-message",
         message=f"queued send_tlgmsg_id {send_tlgmsg_id} to {chat_id} as {resolved or 'plain'}.",
@@ -775,7 +739,7 @@ def _restore_drill_command(argv: list[str]) -> int:
     operators, not by the app that performs the restores: ``backup_restore`` runs drills and
     records them, ``common`` reads them, and the two never import each other.
     """
-    from db_ops.common import restore_drill
+    from db_ops.db import restore_drill
 
     source = ""
     config_path = None
@@ -793,11 +757,11 @@ def _restore_drill_command(argv: list[str]) -> int:
             print(f"Unexpected argument: {token}\n\n{RESTORE_DRILL_USAGE}", file=sys.stderr)
             return 2
 
-    request, code = _read_json_request(source or "{}", RESTORE_DRILL_USAGE)
+    request, code = read_json_request_answered(source or "{}")
     if request is None:
         return code
 
-    from db_ops.config import load_config, resolve_config_path
+    from db_ops.lib.config import load_config, resolve_config_path
     from db_ops.db import DbOpsStore
 
     try:
@@ -861,7 +825,7 @@ def _sql_run_history_command(argv: list[str]) -> int:
     ``sql_tasks`` runs tasks and records them; this reads the record, and the two never import
     each other.
     """
-    from db_ops.common import sql_run_history
+    from db_ops.db import sql_run_history
 
     source = ""
     config_path = None
@@ -879,11 +843,11 @@ def _sql_run_history_command(argv: list[str]) -> int:
             print(f"Unexpected argument: {token}\n\n{SQL_RUN_HISTORY_USAGE}", file=sys.stderr)
             return 2
 
-    request, code = _read_json_request(source or "{}", SQL_RUN_HISTORY_USAGE)
+    request, code = read_json_request_answered(source or "{}")
     if request is None:
         return code
 
-    from db_ops.config import load_config, resolve_config_path
+    from db_ops.lib.config import load_config, resolve_config_path
     from db_ops.db import DbOpsStore
 
     # `0 means "unset"` on both, because the caller that matters cannot express "absent".
@@ -943,7 +907,7 @@ def _telegram_command_history_command(argv: list[str]) -> int:
     writes to no database. The Telegram app reaches it as a subprocess like any other CLI - it
     does not import this, and this does not know what a bot is.
     """
-    from db_ops.common import telegram_command_history
+    from db_ops.db import telegram_command_history
 
     source = ""
     config_path = None
@@ -962,11 +926,11 @@ def _telegram_command_history_command(argv: list[str]) -> int:
                   file=sys.stderr)
             return 2
 
-    request, code = _read_json_request(source or "{}", TELEGRAM_COMMAND_HISTORY_USAGE)
+    request, code = read_json_request_answered(source or "{}")
     if request is None:
         return code
 
-    from db_ops.config import load_config, resolve_config_path
+    from db_ops.lib.config import load_config, resolve_config_path
     from db_ops.db import DbOpsStore
 
     user_id = str(request.get("user_id") or "").strip()
@@ -1051,7 +1015,7 @@ def _ops_status_command(argv: list[str]) -> int:
     from db_ops.db import ops_status as ops
     from db_ops.lib.secret_text import set_key_env
     from db_ops.db.telegram_queue import queue_telegram_message
-    from db_ops.config import chat_id_for_level, load_config
+    from db_ops.lib.config import chat_id_for_level, load_config
     from db_ops.db import DbOpsStore
 
     source = ""
@@ -1084,7 +1048,7 @@ def _ops_status_command(argv: list[str]) -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
-    request, code = _read_json_request(source, OPS_STATUS_USAGE)
+    request, code = read_json_request_answered(source)
     if request is None:
         return code
 
@@ -1323,7 +1287,7 @@ def _sync_config_command(argv: list[str]) -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
-    request, code = _read_json_request(source, SYNC_CONFIG_USAGE)
+    request, code = read_json_request_answered(source)
     if request is None:
         return code
 
@@ -1377,7 +1341,7 @@ def _config_items_command(argv: list[str]) -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
-    request, code = _read_json_request(source, CONFIG_ITEMS_USAGE)
+    request, code = read_json_request_answered(source)
     if request is None:
         return code
 
@@ -1465,7 +1429,7 @@ def _export_config_command(argv: list[str]) -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
-    request, code = _read_json_request(source, EXPORT_CONFIG_USAGE)
+    request, code = read_json_request_answered(source)
     if request is None:
         return code
     try:
@@ -1525,7 +1489,7 @@ def _run_app_command(argv: list[str]) -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
-    request, code = _read_json_request(source, RUN_APP_USAGE)
+    request, code = read_json_request_answered(source)
     if request is None:
         return code
     try:

@@ -260,7 +260,7 @@ def test_a_store_the_bot_cannot_read_costs_the_column_never_the_reply(monkeypatc
 
 
 def _no_config(monkeypatch):
-    import db_ops.config as db_ops_config
+    import db_ops.lib.config as db_ops_config
     from db_ops.common import cli as common_cli
     from db_ops.lib import config as lib_config
 

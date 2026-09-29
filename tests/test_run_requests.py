@@ -26,7 +26,7 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.config import DbOpsConfig
+from db_ops.lib.config import DbOpsConfig
 from db_ops.db import DbOpsStore
 from db_ops.db.run_requests import (
     STATUS_CANCELLED,

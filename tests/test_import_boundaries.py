@@ -309,7 +309,7 @@ def test_the_shared_layers_do_not_import_each_other_both_ways() -> None:
     reasoned about, packaged, or imported first without the other coming along.
 
     It was closed by moving the four store modules into `db`, which is where ORD 01 owns them
-    anyway. What is left is one arrow, and this test is what keeps it one.
+    anyway. One arrow was left, `db` -> `common`, and since 2026-09-28 not even that (the next test).
     """
     lower, upper = SHARED_LAYER_ORDER
     offenders = sorted(
@@ -325,21 +325,24 @@ def test_the_shared_layers_do_not_import_each_other_both_ways() -> None:
     )
 
 
-def test_the_allowed_direction_is_actually_used() -> None:
-    """The rule above is only meaningful while the arrow it permits exists.
+def test_db_does_not_import_common_either() -> None:
+    """The two shared layers are independent both ways (rules R03, the operator, 2026-09-28).
 
-    If `db` ever stopped importing `common`, the two would be independent and the ordering above
-    would be a rule about nothing — worth deleting rather than leaving as decoration.
+    This test used to hold that `db` -> `common` was the one arrow left, and said to drop or
+    restate it the day `db` stopped importing `common`. That day came: the three modules `db.cli`
+    answered from moved into `db`, and the request reader into `lib.json_io`. So it is restated -
+    `db` reaches `common` the way every app does, through `common.cli`, or not at all.
     """
     lower, upper = SHARED_LAYER_ORDER
-    used = any(
-        _top_package(name) == lower
+    offenders = sorted(
+        f"{_relative(path)} -> {name}"
         for path in _files_under(frozenset({upper}))
         for name in _imported_db_ops_modules(path)
+        if _top_package(name) == lower
     )
-    assert used, (
-        f"`{upper}` no longer imports `{lower}`; the two layers are independent, so "
-        "SHARED_LAYER_ORDER no longer describes anything. Drop it or restate it."
+    assert not offenders, (
+        f"`{upper}` imports `{lower}`: {offenders}. Neither shared layer imports the other (R03, R04); "
+        f"what `{upper}` needs from `{lower}` is a `common.cli` command, or it belongs in `lib`."
     )
 
 

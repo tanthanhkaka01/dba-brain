@@ -33,7 +33,7 @@ from __future__ import annotations
 import shlex
 from typing import Any
 
-from db_ops.common.hostcmd import WINDOWS, Host, HostCommandError, open_client, parse_host, run
+from db_ops.common.hostcmd import WINDOWS, Host, HostCommandError, open_session, parse_host, run
 
 #: Per-file outcomes. ``deleted`` and ``not_found`` are both success — see the module docstring.
 DELETED = "deleted"
@@ -86,17 +86,17 @@ def delete_files(request: dict[str, Any]) -> dict[str, Any]:
 
     # One connection for the batch; `run` borrows it and leaves it open. Reconnecting per file is
     # the cost this layer already learned about the hard way with per-file SFTP.
-    client = None if host.is_local else open_client(host)
+    session = None if host.is_local else open_session(host)
     rows: list[dict[str, Any]] = []
     try:
         for path in paths:
-            row = _delete_one(host, path, dry_run=dry_run, client=client)
+            row = _delete_one(host, path, dry_run=dry_run, session=session)
             rows.append(row)
             if stop_on_error and row["status"] == FAILED:
                 break
     finally:
-        if client is not None:
-            client.close()
+        if session is not None:
+            session.close()
 
     return {"files": rows, **_totals(rows), "dry_run": dry_run,
             # Stated rather than inferred from len(files) != len(paths): a caller reading a stored
@@ -105,7 +105,7 @@ def delete_files(request: dict[str, Any]) -> dict[str, Any]:
             "stopped_early": len(rows) < len(paths)}
 
 
-def _delete_one(host: Host, path: str, *, dry_run: bool, client: Any = None) -> dict[str, Any]:
+def _delete_one(host: Host, path: str, *, dry_run: bool, session: Any = None) -> dict[str, Any]:
     """Check and delete in one command, because two round trips can disagree.
 
     Statting first and deleting second is a race with whatever else writes to a backup directory,
@@ -115,7 +115,7 @@ def _delete_one(host: Host, path: str, *, dry_run: bool, client: Any = None) -> 
     command = _windows_command(path, dry_run=dry_run) if host.is_windows \
         else _posix_command(path, dry_run=dry_run)
     try:
-        result = run(host, command, timeout=120, client=client)
+        result = run(host, command, timeout=120, session=session)
     except HostCommandError as exc:
         return _row(path, FAILED, reason=str(exc))
 

@@ -195,9 +195,8 @@ def _table_exists(cursor: Any, db_type: str, schema: str, table: str, style: str
         params = (table.upper(), (schema or "").upper())
     else:
         raise TableLoadError(f"No existence check for engine {db_type!r}.")
-    cursor.execute(sql, params)
-    row = cursor.fetchone()
-    return bool(row and int(row[0]) > 0)
+    count = sql_run.query_value(cursor, sql, params=params, db_type=db_type)
+    return bool(count and int(count) > 0)
 
 
 def _check_lengths(columns: list[str], rows: list[list[str]], limit: int) -> None:
@@ -486,8 +485,9 @@ def _assert_columns_match(cursor: Any, db_type: str, schema: str, table: str,
         sql = (f"SELECT column_name FROM information_schema.columns "
                f"WHERE table_name = {first} AND table_schema = {second}")
         params = (table, schema)
-    cursor.execute(sql, params)
-    existing = {str(row[0]).strip().lower() for row in cursor.fetchall()}
+    # By position: the column is `column_name` on one engine and `COLUMN_NAME` on another.
+    existing = {str(next(iter(row.values()))).strip().lower()
+                for row in sql_run.query_rows(cursor, sql, params=params, db_type=db_type)}
     wanted = {name.strip().lower() for name in columns}
     missing = sorted(wanted - existing)
     if missing:

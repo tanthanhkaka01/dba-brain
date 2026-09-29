@@ -5427,8 +5427,8 @@
             "kind": "field",
             "required": true,
             "one_line": "Which database db_ops keeps its own runtime data in.",
-            "parsed_in": "db_ops/config.py",
-            "shared_entry_point": "db_ops.config.parse_store_config",
+            "parsed_in": "db_ops/lib/config.py",
+            "shared_entry_point": "db_ops.lib.config.parse_store_config",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "used_in": [
@@ -5502,8 +5502,8 @@
             "kind": "field",
             "required": true,
             "one_line": "The SQLite runtime store: one file.",
-            "parsed_in": "db_ops/config.py",
-            "shared_entry_point": "db_ops.config",
+            "parsed_in": "db_ops/lib/config.py",
+            "shared_entry_point": "db_ops.lib.config",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "used_in": [
@@ -5568,8 +5568,8 @@
             "kind": "field",
             "required": true,
             "one_line": "The PostgreSQL runtime store: where it is and how db_ops logs in.",
-            "parsed_in": "db_ops/config.py",
-            "shared_entry_point": "db_ops.config._parse_postgres_store",
+            "parsed_in": "db_ops/lib/config.py",
+            "shared_entry_point": "db_ops.lib.config._parse_postgres_store",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "used_in": [
@@ -5772,8 +5772,8 @@
             "kind": "field",
             "required": true,
             "one_line": "How db_ops talks to Telegram: whether it does, which bot, which API, where chats are.",
-            "parsed_in": "db_ops/config.py",
-            "shared_entry_point": "db_ops.config.parse_config",
+            "parsed_in": "db_ops/lib/config.py",
+            "shared_entry_point": "db_ops.lib.config.parse_config",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "used_in": [
@@ -5786,7 +5786,7 @@
             "legacy_fields": {
                 "groups": "level_chat_map"
             },
-            "field_count": 14,
+            "field_count": 15,
             "required_field_count": 0,
             "fields": [
                 {
@@ -5906,6 +5906,21 @@
                     "purpose": "How long one API call may take."
                 },
                 {
+                    "field": "send_per_chat",
+                    "type": "integer",
+                    "required": false,
+                    "default": "5",
+                    "range_text": "messages, 1 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 1
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "How many of each chat's oldest unsent messages one send pass takes. The pass runs every second; every chat gets its own share, so a flooded chat never holds another behind it.",
+                    "rule": "Per chat since 0.25.0 - a pass took the oldest 50 of the whole queue, and one chat's backlog held every other chat's messages, the bot's replies included"
+                },
+                {
                     "field": "update_offset",
                     "type": "integer",
                     "required": false,
@@ -6004,8 +6019,8 @@
             "kind": "field",
             "required": true,
             "one_line": "Which bot db_ops speaks as: its token by ref, its id and its name.",
-            "parsed_in": "db_ops/config.py",
-            "shared_entry_point": "db_ops.config._load_telegram_bot_config",
+            "parsed_in": "db_ops/lib/config.py",
+            "shared_entry_point": "db_ops.lib.config._load_telegram_bot_config",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "used_in": [
@@ -6497,7 +6512,7 @@
             "kind": "field",
             "required": true,
             "one_line": "How old a successful restore drill may be and still count as proof.",
-            "parsed_in": "db_ops/common/restore_drill.py",
+            "parsed_in": "db_ops/db/restore_drill.py",
             "shared_entry_point": "db_ops.common.restore_drill",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
@@ -6534,7 +6549,7 @@
             "kind": "field",
             "required": true,
             "one_line": "The same limit for one database.",
-            "parsed_in": "db_ops/common/restore_drill.py",
+            "parsed_in": "db_ops/db/restore_drill.py",
             "shared_entry_point": "db_ops.common.restore_drill",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
@@ -11658,7 +11673,7 @@
             "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 8,
+            "field_count": 18,
             "required_field_count": 0,
             "fields": [
                 {
@@ -11771,6 +11786,145 @@
                     },
                     "measured_against": "milliseconds of wall clock the command took",
                     "purpose": "How long it took."
+                },
+                {
+                    "field": "db_type",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The engine the backup is for."
+                },
+                {
+                    "field": "label",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The backup's label, as the request named it."
+                },
+                {
+                    "field": "level",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "full / diff / log, or that the script decides."
+                },
+                {
+                    "field": "script",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Where the script came from: its path, or <inline>."
+                },
+                {
+                    "field": "script_lines",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "How many lines the script has."
+                },
+                {
+                    "field": "host",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The host it runs on, or (this machine)."
+                },
+                {
+                    "field": "runtime",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "linux or windows: how the host runs a script."
+                },
+                {
+                    "field": "container",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The container it steps into, if any."
+                },
+                {
+                    "field": "env_names",
+                    "type": "array",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The names of the values it is given - never the values."
+                },
+                {
+                    "field": "timeout",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "seconds",
+                    "purpose": "How long the script may run."
                 }
             ]
         },
@@ -12060,9 +12214,22 @@
             "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 13,
+            "field_count": 14,
             "required_field_count": 0,
             "fields": [
+                {
+                    "field": "ok",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The verdict: the work did what it was asked. `success` in the envelope says the COMMAND ran; `ok` says what it found."
+                },
                 {
                     "field": "instance",
                     "type": "object",
@@ -14501,7 +14668,8 @@
             "one_line": "The estate's inventory, summarised.",
             "parsed_in": "db_ops/common/cli.py",
             "produced_in": [
-                "db_ops/common/cli.py"
+                "db_ops/common/cli.py",
+                "db_ops/lib/inventory_render.py"
             ],
             "commands": [
                 "inventory-summary"
@@ -14509,7 +14677,7 @@
             "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 1,
+            "field_count": 2,
             "required_field_count": 0,
             "fields": [
                 {
@@ -14525,6 +14693,20 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "The summary."
+                },
+                {
+                    "field": "file",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The summary it wrote."
                 }
             ]
         },
@@ -14940,7 +15122,8 @@
             "parsed_in": "db_ops/common/identifier_scan.py",
             "produced_in": [
                 "db_ops/common/identifier_scan.py",
-                "db_ops/common/cli.py"
+                "db_ops/common/cli.py",
+                "db_ops/common/secret_literals.py"
             ],
             "commands": [
                 "check-identifiers",
@@ -14949,7 +15132,7 @@
             "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 15,
+            "field_count": 18,
             "required_field_count": 0,
             "fields": [
                 {
@@ -15152,6 +15335,47 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "Set on a failed answer when the scan refused rather than broke: nothing to search for, or nothing to read. A caller says SKIPPED for this and stops for anything else."
+                },
+                {
+                    "field": "secrets_searched",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "check-secret-literals: how many stored secret values were looked for."
+                },
+                {
+                    "field": "findings",
+                    "type": "array",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "check-secret-literals: each file that holds one, and where."
+                },
+                {
+                    "field": "store",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "check-secret-literals: the encrypted secret store it read the values from."
                 }
             ]
         },
@@ -15493,9 +15717,23 @@
             "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 6,
+            "field_count": 7,
             "required_field_count": 0,
             "fields": [
+                {
+                    "field": "mode",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "What the run was: plan (read the source, wrote nothing) or apply."
+                },
                 {
                     "field": "plan",
                     "type": "object",

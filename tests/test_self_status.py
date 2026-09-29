@@ -223,7 +223,7 @@ def test_self_status_answers_from_a_directory_with_no_config(tmp_path, monkeypat
     so the failing path was never taken. Only the public suite saw it. This runs from a directory
     that has none.
     """
-    import db_ops.config as db_ops_config
+    import db_ops.lib.config as db_ops_config
     from db_ops.common import cli as common_cli
 
     # The config *load* has to fail, which is the condition being described. Pointing the command
@@ -251,7 +251,7 @@ def test_the_store_line_names_the_schema_so_two_nodes_in_one_database_differ(mon
     reading `postgresql postgres@...:5433/db_ops` over Telegram could not tell which of the three
     schemas in that database the node was writing to — and only one of them was live.
     """
-    import db_ops.config as db_ops_config
+    import db_ops.lib.config as db_ops_config
     from db_ops.common import cli as common_cli
 
     class _Postgres:
@@ -274,7 +274,7 @@ def test_the_store_line_names_the_schema_so_two_nodes_in_one_database_differ(mon
 
 def test_a_sqlite_store_line_gains_no_empty_schema(monkeypatch, capsys):
     """SQLite has no schema, and `schema=` with nothing after it reads as a missing value."""
-    import db_ops.config as db_ops_config
+    import db_ops.lib.config as db_ops_config
     from db_ops.common import cli as common_cli
 
     class _Sqlite:

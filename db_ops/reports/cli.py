@@ -8,7 +8,7 @@ from collections.abc import Callable
 from typing import Any
 
 from db_ops.lib.telegram_route import telegram_groups
-from db_ops.config import DEFAULT_CONFIG_PATH, DbOpsConfig, load_config, resolve_config_path
+from db_ops.lib.config import DEFAULT_CONFIG_PATH, DbOpsConfig, load_config, resolve_config_path
 from db_ops.logging_ops import log_function_call, log_function_error, setup_app_logger
 from db_ops.logging_ops.runtime_stdout import patch_stdout
 from db_ops.reports.metrics_reports import (

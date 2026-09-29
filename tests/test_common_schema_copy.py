@@ -250,6 +250,8 @@ class FakeCursor:
     query edit look like a behaviour change.
     """
 
+    rowcount = -1
+
     def __init__(self, answers: list[tuple[str, list[dict]]]) -> None:
         self.answers = answers
         self.description = None
@@ -269,6 +271,10 @@ class FakeCursor:
 
     def fetchall(self):
         return [tuple(row.values()) for row in self._rows]
+
+    def fetchmany(self, size):
+        taken, self._rows = self._rows[:size], self._rows[size:]
+        return [tuple(row.values()) for row in taken]
 
     def nextset(self):
         return False

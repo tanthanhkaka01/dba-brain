@@ -47,7 +47,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
-from db_ops.config import StoreConfig
+from db_ops.lib.config import StoreConfig
 from db_ops.db import backend as backend_mod
 from db_ops.db.backend import StoreTarget
 # One clock and one timestamp format for the whole store. web_auth_store spelled these first;

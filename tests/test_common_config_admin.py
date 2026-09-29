@@ -157,6 +157,34 @@ def test_add_sql_answers_in_the_response_envelope(tmp_path, monkeypatch, capsys)
     assert answer["data"]["script_path"].endswith("_nightly.sql")
 
 
+def test_the_display_name_the_bot_sends_is_the_tasks_name(tmp_path, monkeypatch, capsys):
+    """`display_name` is the field since 0.22.0 - the reference documents it and the Telegram
+    command sends it - yet the JSON form was keyed by the flag's dest, `sql_name`, and refused
+    `display_name` as unknown: registering SQL from the bot failed every time (0.25.0, 1.66)."""
+    data = _seed(tmp_path)
+    code, answer = _run_cli(monkeypatch, capsys, [
+        "add-sql",
+        json.dumps({"db_type": "sqlserver", "server_id": "s1", "display_name": "nightly",
+                    "sql_text": "SELECT 1;", "data_dir": str(data)}),
+    ], data_dir=data)
+
+    assert code == 0 and answer["success"] is True, answer["error"]
+    assert answer["data"]["script_path"].endswith("_nightly.sql")
+
+
+def test_a_fresh_install_registers_a_task_at_the_levels_it_has(monkeypatch):
+    """`sql` is a level only while a Telegram group defines it, and a fresh install defines none:
+    defaulting to it regardless made `add-sql` and `sql-target-add` refuse their own default there,
+    so no task could be registered on a new install (0.25.0, 1.67)."""
+    from db_ops.lib.notify import NOTIFY_CHAT_LEVELS
+
+    monkeypatch.setattr(config_admin, "known_chat_levels", lambda: NOTIFY_CHAT_LEVELS)
+    assert config_admin.default_sql_task_chats() == ("logging", "error")
+
+    monkeypatch.setattr(config_admin, "known_chat_levels", lambda: (*NOTIFY_CHAT_LEVELS, "sql"))
+    assert config_admin.default_sql_task_chats() == ("sql", "sql")
+
+
 def test_a_refused_add_sql_is_a_response_not_an_exit_code(tmp_path, monkeypatch, capsys):
     data = _seed(tmp_path)
     code, answer = _run_cli(monkeypatch, capsys, [

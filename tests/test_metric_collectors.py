@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.config import DbOpsConfig
+from db_ops.lib.config import DbOpsConfig
 from db_ops.metrics.collector import (
     CommandExecution,
     _apply_metric_result_overrides,
@@ -710,7 +710,43 @@ def _make_fake_paramiko(monkeypatch, *, stdout_data: bytes = b"", exit_code: int
 
         def exec_command(self, command, **kwargs):
             captured["command"] = command
+            captured["placed"] = dict(placed)
             return _FakeFile(), _FakeFile(stdout_data), _FakeFile()
+
+        def open_sftp(self):
+            return _FakeSftp()
+
+        def close(self):
+            pass
+
+    placed: dict[str, bytes] = {}
+
+    class _FakeHandle:
+        def __init__(self, name: str):
+            self.name = name
+
+        def write(self, data: bytes) -> None:
+            placed[self.name] = placed.get(self.name, b"") + data
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info):
+            return None
+
+    class _FakeSftp:
+        def open(self, name, mode):
+            placed[name] = b""
+            return _FakeHandle(name)
+
+        def chmod(self, name, mode):
+            pass
+
+        def normalize(self, name):
+            return captured.get("home", "/home/ops") + "/" + name
+
+        def remove(self, name):
+            placed.pop(name, None)
 
         def close(self):
             pass
@@ -729,8 +765,10 @@ def _make_fake_paramiko(monkeypatch, *, stdout_data: bytes = b"", exit_code: int
     return captured
 
 
-def test_ssh_windows_ps1_uses_encoded_command(tmp_path, monkeypatch):
-    """SSH to Windows sends PS1 content as -EncodedCommand base64, never as a file path."""
+def test_ssh_windows_ps1_runs_as_a_file_placed_on_the_target(tmp_path, monkeypatch):
+    """SSH to Windows places the PS1's content on the target and runs it with ``-File`` - never
+    this machine's path, which the target does not have, and not ``-EncodedCommand``, which runs
+    out of command line past ~8 KB of script (0.25.0)."""
     from db_ops.metrics.collector import execute_ssh
 
     script = tmp_path / "metric.ps1"
@@ -738,17 +776,21 @@ def test_ssh_windows_ps1_uses_encoded_command(tmp_path, monkeypatch):
 
     ok_json = b'[{"metric_item":"t","metric_value":"1","metric_unit":"u","status":"OK","message":"ok"}]'
     captured = _make_fake_paramiko(monkeypatch, stdout_data=ok_json)
+    captured["home"] = "/C:/Users/ops"
 
     target = _target(platform="windows", method="ssh")
     result = execute_ssh(script, target=target, secrets={}, timeout_seconds=10)
 
-    assert "-EncodedCommand" in captured["command"]
-    assert str(script) not in captured["command"], "file path must not appear in SSH command"
+    [(name, body)] = captured["placed"].items()
+    assert body.endswith(b"Get-Date")
+    assert f"-File 'C:\\Users\\ops\\{name}'" in captured["command"]
+    assert str(script) not in captured["command"], "this machine's path means nothing on the target"
     assert result.rows[0]["status"] == "OK"
 
 
-def test_ssh_linux_sh_uses_bash_stdin(tmp_path, monkeypatch):
-    """SSH to Linux pipes .sh content via bash -s stdin instead of sending a file path."""
+def test_ssh_linux_sh_runs_as_a_file_placed_on_the_target_with_stdin_closed(tmp_path, monkeypatch):
+    """SSH to Linux places the .sh's content on the target and runs it with stdin closed. As
+    ``bash -s`` stdin, a command in the script that read stdin swallowed the rest (0.25.0)."""
     from db_ops.metrics.collector import execute_ssh
 
     script = tmp_path / "metric.sh"
@@ -760,8 +802,10 @@ def test_ssh_linux_sh_uses_bash_stdin(tmp_path, monkeypatch):
     target = _target(platform="linux", method="ssh")
     execute_ssh(script, target=target, secrets={}, timeout_seconds=10)
 
-    assert captured["command"] == "bash -s"
-    assert captured.get("stdin_written") == b"echo hi"
+    [(name, body)] = captured["placed"].items()
+    assert body == b"echo hi"
+    assert captured["command"] == f"trap 'rm -f /home/ops/{name}' EXIT; bash /home/ops/{name} < /dev/null"
+    assert captured.get("stdin_written") is None
 
 
 def test_ssh_uses_port_22_by_default(tmp_path, monkeypatch):

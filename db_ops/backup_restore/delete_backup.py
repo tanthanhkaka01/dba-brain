@@ -31,7 +31,7 @@ import stat
 import sys
 import time
 import re
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 from db_ops.backup_restore.config import BackupRestoreConfig, load_restore_config, validate_restore_target_is_not_source
@@ -226,15 +226,25 @@ def delete_old_target_backup_files_on_share(
     cutoff = _cutoff_timestamp(config.cleanup_retention, now=now)
     password = resolve_password_ref(config.vm_password_env) if config.vm_password_env else ""
     root = str(config.vm_import_unc).replace("/", "\\").rstrip("\\")
-    aged: list[tuple[float, Path]] = []
+    # A share's paths are Windows paths wherever this runs. As `Path` they were POSIX paths on a
+    # Linux node - one component, no split at "\\" - and the chain was read by walking the UNC path,
+    # which a Linux node cannot: every aged file was held back and the share was never cleaned
+    # (0.24.0, found by `ci`). The listing below is the whole share, and it is all this reads.
+    listed: list[tuple[PureWindowsPath, float | None, int]] = []
     for item in share.list_files(config.vm_import_unc, username=config.vm_username or "",
                                  password=password, suffixes=(".bak", ".trn")):
         modified = item.get("modified_epoch")
-        if modified is None or (cutoff is not None and float(modified) > cutoff):
-            continue
-        aged.append((float(modified), Path(root + "\\" + str(item["path"]))))
-    aged_paths = [path for _, path in sorted(aged, key=lambda item: (item[0], str(item[1]).lower()))]
-    deletable, held_back = _split_by_obsolete(aged_paths, root=config.vm_import_unc)
+        listed.append((PureWindowsPath(root + "\\" + str(item["path"]).replace("/", "\\")),
+                       None if modified is None else float(modified), int(item.get("size_bytes") or 0)))
+    aged = sorted(((modified, path) for path, modified, _size in listed
+                   if modified is not None and (cutoff is None or modified <= cutoff)),
+                  key=lambda item: (item[0], str(item[1]).lower()))
+    aged_paths = [path for _, path in aged]
+    # The chain over the WHOLE share, not the aged part - see `_all_target_backup_files`.
+    obsolete = obsolete_only([(path, _backup_timestamp(path, fallback_mtime=modified or 0.0), size)
+                              for path, modified, size in listed])
+    deletable = [path for path in aged_paths if str(path) in obsolete]
+    held_back = [path for path in aged_paths if str(path) not in obsolete]
     results: list[DeleteBackupFileResult] = [
         DeleteBackupFileResult(target_file=path, status="SKIPPED", bytes=0, reason="still_needed")
         for path in held_back

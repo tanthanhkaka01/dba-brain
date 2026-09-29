@@ -60,7 +60,6 @@ def _literal(value: str) -> str:
 def disable_job(
     request: dict[str, Any],
     *,
-    data_dir: str | Path | None = None,
     echo: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Disable one scheduled job by name, after confirming what it is.

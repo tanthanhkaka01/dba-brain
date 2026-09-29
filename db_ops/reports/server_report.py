@@ -58,6 +58,14 @@ from db_ops.reports import workload_attribution  # noqa: E402 - same reason
 from db_ops.lib.paths import DEFAULT_DATA_DIR
 from db_ops.lib import page_banner
 from db_ops.lib.timezone import format_offset, offset_minutes
+from db_ops.lib.time_window import window_of
+
+
+def _cadence(definition: dict, code: str) -> int | None:
+    """A metric definition's collection interval, as the scheduler reads it (rules R20)."""
+    window = window_of(definition, context=code or "metric_definition")
+    return window.repeat_interval if window else None
+
 
 TEMPLATE_HTML = Path(__file__).resolve().parent / "templates" / "server_report.html"
 
@@ -592,7 +600,7 @@ def metric_intervals(path: Path | None = None) -> dict[str, int]:
         definitions = data_sources.load_metric_definition_records(source)
         for definition in definitions:
             code = str(definition.get("metric_code") or "")
-            every = (definition.get("time_window") or {}).get("repeat_interval")
+            every = _cadence(definition, code)
             if code and isinstance(every, (int, float)) and every > 0:
                 intervals[code] = int(every)
     except (OSError, ValueError, AttributeError):
@@ -688,7 +696,7 @@ def metric_catalog(path: Path | None = None) -> list[dict]:
                 "active": bool(definition.get("active", True)),
                 "collector_type": str(definition.get("collector_type") or ""),
                 "db_types": sorted(db_types),
-                "cadence": (definition.get("time_window") or {}).get("repeat_interval"),
+                "cadence": _cadence(definition, code),
             })
     except (OSError, ValueError, AttributeError):
         catalog = []

@@ -55,7 +55,7 @@ def test_a_count_above_the_cap_is_clamped_not_refused():
 
 def test_the_chat_cap_is_below_the_api_ceiling():
     """`sql_run_history.MAX_LIMIT` still bounds a direct API caller; the chat's cap is its own."""
-    from db_ops.common import sql_run_history
+    from db_ops.db import sql_run_history
 
     assert REQUEST_LISTING_MAX < sql_run_history.MAX_LIMIT
 

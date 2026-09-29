@@ -177,7 +177,7 @@ def test_download_document_text(monkeypatch):
         class telegram:
             resolved_bot_token = "tok"
             api_url = "https://api.telegram.org"
-    monkeypatch.setattr("db_ops.config.load_config", lambda *_a, **_k: _Cfg())
+    monkeypatch.setattr("db_ops.lib.config.load_config", lambda *_a, **_k: _Cfg())
     text = cp._download_document_text({"file_id": "F1", "file_name": "x.sql"}, config_path="config.json")
     assert text == "SELECT 1;"  # BOM stripped, trailing newline trimmed
 
@@ -189,6 +189,6 @@ def test_download_document_text_rejects_empty(monkeypatch):
         class telegram:
             resolved_bot_token = "tok"
             api_url = "https://api.telegram.org"
-    monkeypatch.setattr("db_ops.config.load_config", lambda *_a, **_k: _Cfg())
+    monkeypatch.setattr("db_ops.lib.config.load_config", lambda *_a, **_k: _Cfg())
     with pytest.raises(RuntimeError):
         cp._download_document_text({"file_id": "F1"}, config_path="config.json")

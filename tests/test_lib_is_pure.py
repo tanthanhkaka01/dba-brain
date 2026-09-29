@@ -17,10 +17,9 @@ config, a store connection, or an app behind it. Then "apps do not import ``comm
 routed around rather than kept.
 
 The single exception is ``notify``, and it is named here rather than left to be discovered: it
-reads the configured notify-level vocabulary from ``db_ops.config``, lazily and failing open,
-because that vocabulary is data an operator adds by registering a Telegram group. ``db_ops.config``
-is a root module — config parsing, imported by everything, owning nothing — so this does not point
-the layer at anything above it. Any *second* exception should be argued as hard as this one was.
+reads the configured notify-level vocabulary from ``db_ops.lib.config``, lazily and failing open,
+because that vocabulary is data an operator adds by registering a Telegram group. The parser is
+``lib``'s own since 0.24.0, so this does not point the layer at anything above it. Any *second* exception should be argued as hard as this one was.
 """
 
 from __future__ import annotations

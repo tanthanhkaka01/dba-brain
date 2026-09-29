@@ -62,8 +62,8 @@ ALLOWED_DB_OPS_IMPORTS = {}
 ```
 
 There were two - `notify.py` and `telegram_route.py`, each reading `db_ops.config`. The
-configuration parser moved into this layer (`lib/config.py`; `db_ops.config` is now an alias of
-it), so both read a sibling and the rule is absolute (R06). So are the data-folder reader
+configuration parser moved into this layer (`lib/config.py`; the `db_ops.config` alias it left
+behind was deleted in 0.25.0), so both read a sibling and the rule is absolute (R06). So are the data-folder reader
 (`lib/data_sources/`) and the version (`lib/version.py`), which moved in with it: `common` reads
 them from here, because `common` may import nothing but `lib` (R04).
 
@@ -165,7 +165,7 @@ Two halves, split along the `lib`/`common` line:
 | The operation | `python -m db_ops.db.cli timezone` | reads this node's config and says what it resolved - `node_id` and `listing` here are its rules. Opens no store unless asked to record, so it answers when the store is down (0.24.0: `common.cli timezone` did this, and went - rules R43) |
 | The record | `python -m db_ops.db.cli timezone --record` | upserts this node's row in `runtime_nodes`. In `db.cli` because `common` may not import `db` |
 
-**Bound once, in `db_ops.config.parse_config`.** Producers deep in the reports and telegram apps
+**Bound once, in `db_ops.lib.config.parse_config`.** Producers deep in the reports and telegram apps
 call `format_display()` without being handed a timezone they have no other reason to know about —
 the plumbing alternative always misses one, and the one it misses prints a second clock. No app
 parses the field. `DB_OPS_TIMEZONE` overrides it per node, exactly like `DB_OPS_NODE_ROLE`.
@@ -187,7 +187,7 @@ verdict; none of them reads a file.
 | Module | Question it answers |
 | --- | --- |
 | `policy_engine.py` | how does one metric row classify — the per-row hot path |
-| `json_io.py` | reading and writing this project's JSON one way — including `read_json_request`, the `<json>` / `@file` / `-` contract every "one JSON object in" command takes. It is here rather than in `common/cli.py`, where it began, because an app CLI may not import `common` and needed the same three forms |
+| `json_io.py` | reading and writing this project's JSON one way — including `read_json_request`, the `<json>` / `@file` / `-` contract every "one JSON object in" command takes, and `read_json_request_answered`, the answer to one it cannot read (a missing `@file`: stderr, exit 2; not a JSON object: the envelope, exit 1). Both are here rather than in `common/cli.py`, where they began, because an app CLI - and since 0.25.0 `db.cli` - may not import `common` and needed the same forms |
 | `backup_policy.py` | is each database actually protected, per database and per backup type — and `policy_is_configured`, because "no rule requires this" and "there is no policy" must not produce the same verdict |
 | `backupfiles_retention.py` | which backups the retention window no longer covers. Reasons in whole days — the seconds from `cleanup_retention` are converted by each caller at its own edge |
 | `capacity_forecast.py` | when does this run out |
@@ -266,6 +266,11 @@ were valid, and nothing in the tree compared one against the other.
   schedulers through one `if` in `time_window_closed_reason`, because `is_time_window_open` is that
   function negated — which is why the dimension the scripts used to carry could be added without
   touching an app.
+  **A reader that only shows a window reads it through `window_of(record)`** (0.25.0, rules R20):
+  the parsed `TimeWindow`, or `None` when the record's window does not parse - a listing never fails
+  on a record the scheduler refuses. The status page, the console, the bot's task listing,
+  `ops-status`, the server report and the registrars' answers each read `repeat_interval` or
+  `from_hour` straight from the JSON until then, blind to a legacy field name.
   **Every interval is measured from the previous run's start**, and one function decides it for all
   four schedulers: `due_from_row` (row in, verdict out), with `run_anchor` the only code that picks
   the anchor column and `explain_due` producing the verdict and its reason together. `sql_tasks`
@@ -650,8 +655,9 @@ it: `create-db-docker` runs for minutes - an Oracle first start creates the data
 person watching `sre.cli`, or the Telegram chat relaying it, saw nothing until the end once that
 work moved into `common`. stdout is still the answer, and still captured.
 
-`spawn` carries a `module` parameter so `db/queue_message.py` can reach the `db` CLI through the
-same transport instead of keeping its own subprocess copy.
+`spawn` carries a `module` parameter so a caller can reach the `db` CLI through the same transport
+instead of keeping its own subprocess copy. (`db/queue_message.py` did until 0.25.0; it writes the
+row in-process now, because `db` does not import `transport` - R39.)
 
 There was briefly a third reader, `run_ok`, for the old `{"ok": …}` shape. It was **deleted** when
 the last command moved to the envelope — one response shape means one pair of readers, and a third

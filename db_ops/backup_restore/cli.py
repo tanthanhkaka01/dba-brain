@@ -43,7 +43,7 @@ from db_ops.backup_restore.restore_database import (
 from db_ops.backup_restore.sanitize import sanitize_text, sanitize_value
 from db_ops.lib.notify import NotifyConfig
 from db_ops.lib.secret_text import add_key_argument, set_key_env
-from db_ops.config import DEFAULT_CONFIG_PATH, load_config, resolve_config_path
+from db_ops.lib.config import DEFAULT_CONFIG_PATH, load_config, resolve_config_path
 from db_ops.db.store import utc_now_text
 from db_ops.logging_ops import LOG_SCOPE_ENV_VAR, log_event, log_function_call, setup_app_logger
 from db_ops.logging_ops.runtime_stdout import patch_stdout

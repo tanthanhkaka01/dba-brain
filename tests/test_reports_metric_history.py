@@ -18,7 +18,7 @@ def _sqlite_store_config(sqlite_path):
     """SQLite store declaration for a test config stand-in (mirrors DbOpsConfig.store)."""
     from pathlib import Path as _Path
 
-    from db_ops.config import SqliteStoreConfig, StoreConfig
+    from db_ops.lib.config import SqliteStoreConfig, StoreConfig
 
     return StoreConfig(sqlite=SqliteStoreConfig(path=_Path(str(sqlite_path))))
 

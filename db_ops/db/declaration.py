@@ -33,12 +33,12 @@ class StoreDeclarationError(ValueError):
 
 
 def describe(config: Any, *, key: str | None = None, password: str | None = None) -> dict[str, Any]:
-    """Serialise a :class:`~db_ops.config.StoreConfig` (or a ``DbOpsConfig``) into a request block.
+    """Serialise a :class:`~db_ops.lib.config.StoreConfig` (or a ``DbOpsConfig``) into a request block.
 
     ``password`` overrides the lookup; otherwise a PostgreSQL store resolves its own
     ``password_ref`` here, on the app side, so the other end never touches the secret store.
     """
-    from db_ops.config import StoreConfig
+    from db_ops.lib.config import StoreConfig
 
     store = getattr(config, "store", config)
     if not isinstance(store, StoreConfig):
@@ -93,7 +93,7 @@ def parse(raw: Any) -> StoreTarget:
         return StoreTarget.for_sqlite(path)
 
     if backend in {"postgresql", "postgres"}:
-        from db_ops.config import PostgresStoreConfig, StoreConfig
+        from db_ops.lib.config import PostgresStoreConfig, StoreConfig
 
         block = raw.get("postgresql") or {}
         # `database_name` since 0.22.0, the name the store file uses; a block sent by an older
@@ -169,7 +169,7 @@ def _repoint_postgres(section: dict[str, Any], overrides: dict[str, Any]) -> dic
         # two names, and the stale one is what an older reader would take.
         updated.pop("database", None)
     if str(updated.get("connection_string") or "").strip():
-        from db_ops.config import PostgresStoreConfig
+        from db_ops.lib.config import PostgresStoreConfig
 
         updated["connection_string"] = PostgresStoreConfig(
             host=str(updated.get("host") or ""), port=int(updated.get("port") or 5432),

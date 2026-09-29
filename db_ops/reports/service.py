@@ -9,7 +9,7 @@ from typing import Any
 
 from db_ops.lib.telegram_route import telegram_groups
 from db_ops.lib.data_sources import DEFAULT_DATA_DIR, resolve_config_metric_target
-from db_ops.config import DbOpsConfig
+from db_ops.lib.config import DbOpsConfig
 from db_ops.db import DbOpsStore
 
 

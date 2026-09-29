@@ -30,8 +30,8 @@ class _Config:
 
     @property
     def store(self):
-        """SQLite store declaration matching this fake's sqlite_path (see db_ops.config)."""
-        from db_ops.config import SqliteStoreConfig, StoreConfig
+        """SQLite store declaration matching this fake's sqlite_path (see db_ops.lib.config)."""
+        from db_ops.lib.config import SqliteStoreConfig, StoreConfig
         from pathlib import Path as _Path
 
         return StoreConfig(sqlite=SqliteStoreConfig(path=_Path(str(self.sqlite_path))))

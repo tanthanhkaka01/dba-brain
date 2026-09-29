@@ -102,7 +102,7 @@ def public_package_globs() -> tuple[str, ...]:
 def is_public(module: str) -> bool:
     """True when *module* — ``db_ops.metrics.cli``, say — belongs to the thin distribution.
 
-    A bare ``db_ops`` or one of its loose modules (``db_ops.config``, ``db_ops.levels``) is public:
+    A bare ``db_ops`` or one of its loose modules (``db_ops.cli``) is public:
     those are the package's own roots, and every entry point goes through them.
     """
     parts = module.split(".")
@@ -301,4 +301,4 @@ PRIVATE_TESTS: dict[str, str] = {
 #: version is immutable** — it cannot be re-uploaded after deletion, so the mistake is permanent.
 #: The public tree starts where a first release starts.
 PUBLIC_DISTRIBUTION_NAME = "dbabrain"
-PUBLIC_VERSION = "0.24.0"
+PUBLIC_VERSION = "0.25.0"

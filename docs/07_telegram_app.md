@@ -58,7 +58,7 @@ Severity emoji: `db_ops.telegram.api.send_message` prefixes every outgoing body 
 > still delivers), which is why nothing failed loudly. Regression test:
 > `tests/test_telegram_severity_emoji.py::test_a_queued_row_keeps_its_declared_message_type_when_it_is_read_back`.
 
-Every app queues through **`db_ops.common.telegram_queue.queue_telegram_message`** - one entry point, so the vocabulary cannot fork per app. Callers rarely hold a display type; they hold a `level` (`logging`/`warning`/`error`/`critical`) and often a `phase` (`START`/`END`/`ERROR`) or a status, and `message_type_for()` maps those once. `DbOpsStore.insert_telegram_send_message` stays public for the store's own use and for tests; application code should not call it directly.
+Every app queues through **`db_ops.db.queue_message.queue_message`**, which writes the row in the app's own process (0.25.0: it no longer starts `db.cli` for it) - one entry point, so the vocabulary cannot fork per app. It and the CLI below take **one path from a request to a row**, `db_ops.db.telegram_queue.queue_from_request`: the store (the caller's, the request's `store` block, or `config.json`'s), the eleven fields, and the type through `queue_telegram_message` - so a script's message is stored exactly as an app's. Callers rarely hold a display type; they hold a `level` (`logging`/`warning`/`error`/`critical`) and often a `phase` (`START`/`END`/`ERROR`) or a status, and `message_type_for()` maps those once. `DbOpsStore.insert_telegram_send_message` stays public for the store's own use and for tests; application code should not call it directly.
 
 Two rules decide the mapping, and both exist because of a way it went wrong:
 
@@ -150,6 +150,29 @@ it, and what is left stays at `send_status = 0` for the next pass, a second late
 order (`deferred` in the step's answer). The daemon kills the whole workflow at its 300 s
 timeout: on 2026-09-26 one 49-part message waited out the chat's limit past it, and the pass was
 killed between two rows with every message behind it still queued.
+
+## Every chat gets its own share of a pass (0.25.0)
+
+**A pass takes the oldest `send_per_chat` rows of each chat (5, from `telegram_config.json`), every
+chat in turn** - each chat's oldest first, then each chat's second - and it runs every second. Until
+0.25.0 it took the oldest 50 rows of the whole queue. On 2026-09-28 six failing lab drills sent
+~3,600 messages an hour into one group, which Telegram drains at ~1,250 an hour. Every other chat
+waited behind that group's backlog, the bot's replies to `/spbot_self_status` included: they were
+created, then queued behind ~46,000 lab alerts.
+
+**A 429 pauses that chat, not the pass.** The row goes back to `send_status = 0` unchanged and the
+pass moves on to the next chat without sleeping. The chat's pause (Telegram's `retry_after`) is kept
+in `runtime/telegram_chat_pauses.json` for the passes that follow - each pass is a process of its
+own - and the chat is left alone until it is over. A message's *first* part is handed back that way,
+since nothing of it has been sent; a later part still waits, because part of the body has landed.
+Sleeping out a 429 inside the pass is what grew it from 11.5 s to 143.5 s on average during that
+flood, and the bot reads its commands once per pass.
+
+`send-one` still waits a limit out: it is a person sending one row.
+
+**A document's 429 is a pause too.** `sendDocument` answered it as a plain error until 0.25.0, so a
+report file met three immediate retries and a terminal `send_status = -1` - the fault messages lost
+on 2026-09-09, never fixed for documents.
 
 ## How to Run
 
@@ -364,7 +387,7 @@ asking.
 
 One person's own last 10 distinct commands, each written back as the single line that runs it
 again. Runs `db-ops db telegram-command-history` like any other `cli_execute` command, and the
-work — the join, the rebuild, the rendering — is `db_ops.common.telegram_command_history`, which
+work — the join, the rebuild, the rendering — is `db_ops.db.telegram_command_history`, which
 does not know what a bot is.
 
 The reason it is not simply "the last ten messages" is the [prompt

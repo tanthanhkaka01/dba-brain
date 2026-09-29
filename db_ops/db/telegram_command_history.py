@@ -20,7 +20,7 @@ listing says how many, because hiding without accounting is indistinguishable fr
 
 Reading and rendering only. It does not run commands and does not know how to: that is the
 Telegram app's job, and the two never import each other — the same split as
-:mod:`db_ops.common.sql_run_history`, whose question ("what did the SQL tasks do") this one
+:mod:`db_ops.db.sql_run_history`, whose question ("what did the SQL tasks do") this one
 mirrors for the person side.
 """
 

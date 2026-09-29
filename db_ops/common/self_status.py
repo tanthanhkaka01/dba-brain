@@ -37,7 +37,7 @@ from typing import Any
 from db_ops.lib import node_role as node_role_rule
 from db_ops.lib import run_mode as run_mode_lib
 from db_ops.lib import timezone as display_timezone
-from db_ops.lib.time_window import weekdays_text
+from db_ops.lib.time_window import TimeWindow, weekdays_text, window_of
 from db_ops.lib.timezone import format_display_text
 
 #: cgroup v2, then v1. A container that was given no limit reports "max" in v2 and a number near
@@ -566,7 +566,8 @@ def summarize_apps(commands: list[dict[str, Any]] | None, *, node_role: str,
         code = str(command.get("app_code") or command.get("app_command_id") or "").strip()
         if not code:
             continue
-        window = command.get("time_window") if isinstance(command.get("time_window"), dict) else {}
+        # The scheduler's own reading of the window (rules R20); one it refuses shows as unset.
+        window = window_of(command, context=code) or TimeWindow()
         try:
             mode = run_mode_lib.parse(command)
             mode_text = (mode.mode if mode.mode == run_mode_lib.SYNC
@@ -584,10 +585,9 @@ def summarize_apps(commands: list[dict[str, Any]] | None, *, node_role: str,
             "runs_here": node_role_rule.runs_on(command.get("node_role"), role, default="all"),
             "node_role": str(command.get("node_role") or "all"),
             "run_mode": mode_text,
-            "repeat_interval": window.get("repeat_interval"),
+            "repeat_interval": window.repeat_interval,
             "hours": _hours_text(window),
-            "weekdays": (None if window.get("weekdays") is None
-                         else weekdays_text(window.get("weekdays"))),
+            "weekdays": None if window.weekdays is None else weekdays_text(window.weekdays),
             "last_status": str(last.get("status") or "").lower() if last else "",
             "last_started_at": str(last.get("started_at") or ""),
             "age_seconds": int((moment - started).total_seconds()) if started else None,
@@ -609,10 +609,9 @@ def _parse_moment(value: Any) -> datetime | None:
     return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
 
 
-def _hours_text(window: dict[str, Any]) -> str:
-    start, end = window.get("from_hour"), window.get("to_hour")
-    start = 0 if start is None else int(start)
-    end = 23 if end is None else int(end)
+def _hours_text(window: TimeWindow) -> str:
+    start = 0 if window.from_hour is None else window.from_hour
+    end = 23 if window.to_hour is None else window.to_hour
     return f"{start:02d}-{end:02d}h"
 
 

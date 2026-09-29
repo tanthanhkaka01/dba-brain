@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from db_ops.config import load_config
+from db_ops.lib.config import load_config
 from db_ops.lib.levels import ERROR, LOGGING, WARNING, normalize_level
 from db_ops.metrics.health import load_instances
 from db_ops.metrics.message import build_metrics_message

@@ -114,7 +114,7 @@ def as_utc_datetime(value: Any) -> "datetime | None":
     reads was written as UTC, and treating one as local silently shifts a backup's age by the
     host's offset, which is how a stale backup passes a freshness check.
 
-    Was ``backup_restore.schedule._parse_utc`` and ``common.restore_drill._epoch``, byte for byte,
+    Was ``backup_restore.schedule._parse_utc`` and ``db.restore_drill._epoch`` (``common``'s until 0.25.0), byte for byte,
     until 2026-08-16 — one on the path that decides whether a backup is due, the other on the path
     that decides whether a restore drill counts.
     """

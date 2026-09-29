@@ -1,7 +1,7 @@
 """PostgreSQL side of the db_ops runtime store.
 
 The store db_ops writes its own data to is declared in ``data/store_config.json``
-(:class:`db_ops.config.StoreConfig`). This module is what turns that declaration into a live
+(:class:`db_ops.lib.config.StoreConfig`). This module is what turns that declaration into a live
 PostgreSQL connection, and what provisions the database/schema the declaration points at.
 
 Provisioning is deliberately separate from ``backend: postgresql`` being live: you create and
@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from db_ops.lib.packaging import install_hint
-from db_ops.config import PostgresStoreConfig
+from db_ops.lib.config import PostgresStoreConfig
 
 # A maintenance database always exists and is never the one being created, so CREATE DATABASE
 # is issued while connected here.

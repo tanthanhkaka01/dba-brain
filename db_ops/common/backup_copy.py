@@ -167,9 +167,9 @@ def _drain(handle) -> _Drained:
 
 def _stream_files(
     *,
-    source_client,
+    source_session,
     source_dir: str,
-    target_client,
+    target_session,
     target_dir: str,
     files: list[tuple[str, int]],
     log: Any = None,
@@ -189,11 +189,11 @@ def _stream_files(
 
     quoted_src = shlex.quote(source_dir)
     quoted_dst = shlex.quote(target_dir)
-    src_in, src_out, src_err = source_client.exec_command(
-        f"tar -cf - -C {quoted_src} --ignore-failed-read -T -", timeout=None
+    src_in, src_out, src_err = source_session.open_stream(
+        f"tar -cf - -C {quoted_src} --ignore-failed-read -T -"
     )
-    dst_in, dst_out, dst_err = target_client.exec_command(
-        f"mkdir -p {quoted_dst} && tar -xf - -C {quoted_dst}", timeout=None
+    dst_in, dst_out, dst_err = target_session.open_stream(
+        f"mkdir -p {quoted_dst} && tar -xf - -C {quoted_dst}"
     )
     # Drain both stderr streams while the copy runs. Nothing read them until after
     # recv_exit_status(), which cannot be reached while the transfer is still going - so a tar
@@ -241,7 +241,7 @@ def _stream_files(
     return True
 
 
-def prune_target_dir(client, target_dir: str, older_than_seconds: int, *, log: Any = None) -> dict[str, Any]:
+def prune_target_dir(session, target_dir: str, older_than_seconds: int, *, log: Any = None) -> dict[str, Any]:
     """Delete files under ``target_dir`` older than ``older_than_seconds``. 0 disables it.
 
     The staging directory on the restore target only ever grew: the transfer adds what the source
@@ -286,7 +286,7 @@ def prune_target_dir(client, target_dir: str, older_than_seconds: int, *, log: A
         f"_ {{}} \\; 2>/dev/null"
     )
     command = f"if [ -d {quoted} ]; then {prune_files}; {drop_husks}; else echo 0; fi"
-    _in, out, _err = client.exec_command(command, timeout=None)
+    _in, out, _err = session.open_stream(command)
     text = out.read().decode("utf-8", errors="replace").strip()
     exit_status = out.channel.recv_exit_status()
     if exit_status != 0:
@@ -303,9 +303,9 @@ def prune_target_dir(client, target_dir: str, older_than_seconds: int, *, log: A
 
 def sync_backup_dir(
     *,
-    source_client,
+    source_session,
     source_dir: str,
-    target_client,
+    target_session,
     target_dir: str,
     include: tuple[str, ...] = (),
     log: Any = None,
@@ -316,101 +316,94 @@ def sync_backup_dir(
     restore can pull only the parts of a backup directory it needs.
     """
     result = TransferResult()
-    source_sftp = source_client.open_sftp()
-    target_sftp = target_client.open_sftp()
-    try:
-        source_mtimes: dict[str, int] = {}
-        files, dirs = _walk_remote(source_sftp, source_dir, source_mtimes)
-        at_source = {rel.replace("\\", "/") for rel, _size in files}
-        if include:
-            files = [(rel, size) for rel, size in files if rel.replace("\\", "/").startswith(include)]
-            dirs = [rel for rel in dirs if rel.replace("\\", "/").startswith(include)]
-        # Created before it is walked. The walk refuses a directory it cannot list - rightly, on
-        # the source - and a target folder a first run has not made yet is exactly that, so every
-        # new cross-machine restore failed its first run with "[Errno 2] No such file".
-        _mkdirs(target_sftp, target_dir)
-        _assert_writable(target_sftp, target_dir)
-        target_mtimes: dict[str, int] = {}
-        existing_files, _ = _walk_remote(target_sftp, target_dir, target_mtimes)
-        existing = {rel: size for rel, size in existing_files}
-
-        # A mirror, not an accumulation: what the source no longer has goes here too. The copy
-        # only ever added, so a source rebuilt under the same name left its previous life's pieces
-        # beside the new ones - and a gvenzl Oracle lab has the image's DBID and incarnation in
-        # every life, so RMAN could not tell them apart: a point-in-time duplicate followed the old
-        # life's logs and asked for a sequence the database never reached (RMAN-06054, the
-        # point-in-time drill, 2026-09-25). Judged against the WHOLE source listing, not the
-        # `include`d part - an older point in time may need pieces a newest-chain copy skips.
-        for rel in sorted(existing):
-            if rel.replace("\\", "/") in at_source:
-                continue
-            try:
-                target_sftp.remove(posixpath.join(target_dir, rel.replace("\\", "/")))
-            except OSError:
-                continue
-            existing.pop(rel)
-            result.removed += 1
-        if result.removed and log:
-            log(f"removed {result.removed} staged file(s) the source no longer has")
-
-        # Every directory is recreated, including the empty ones a file-only copy would drop.
-        for rel in sorted(dirs):
-            _mkdirs(target_sftp, posixpath.join(target_dir, rel.replace("\\", "/")))
-
-        pending: list[tuple[str, int]] = []
-        for rel, size in sorted(files):
-            # Size is the only cheap identity check available over SFTP. A backup piece that
-            # changed content but kept its exact size would be missed - which is why backup
-            # pieces are written under unique names and never rewritten in place.
-            #
-            # Same size is not enough when the target copy is OLDER than the source file. A
-            # rebuilt source cluster starts its WAL names again at ...0001 - 16 MB each, the
-            # size of the previous cluster's files still staged here - and skipping them
-            # replayed the old cluster's WAL: "WAL file is from different database system",
-            # a target crash-looping (2026-09-24). The tar stream keeps each file's time, so a
-            # repeat run still skips what it sent before.
-            if existing.get(rel) == size and not _older(target_mtimes.get(rel), source_mtimes.get(rel)):
-                result.skipped += 1
-                continue
-            pending.append((rel, size))
-
-        # Nothing new: the common case for a repeated drill, and it costs two directory walks
-        # rather than a transfer.
-        if pending:
-            streamed = _stream_files(
-                source_client=source_client, source_dir=source_dir,
-                target_client=target_client, target_dir=target_dir,
-                files=pending, log=log,
-            )
-            if streamed:
-                result.copied += len(pending)
-                result.bytes_copied += sum(size for _rel, size in pending)
-            else:
-                # tar missing or refused on either end: fall back to the per-file copy, which
-                # is slow over a high-latency link but always works.
+    # The sessions own their SFTP channels and close them with themselves.
+    source_sftp = source_session.sftp()
+    target_sftp = target_session.sftp()
+    source_mtimes: dict[str, int] = {}
+    files, dirs = _walk_remote(source_sftp, source_dir, source_mtimes)
+    at_source = {rel.replace("\\", "/") for rel, _size in files}
+    if include:
+        files = [(rel, size) for rel, size in files if rel.replace("\\", "/").startswith(include)]
+        dirs = [rel for rel in dirs if rel.replace("\\", "/").startswith(include)]
+    # Created before it is walked. The walk refuses a directory it cannot list - rightly, on
+    # the source - and a target folder a first run has not made yet is exactly that, so every
+    # new cross-machine restore failed its first run with "[Errno 2] No such file".
+    _mkdirs(target_sftp, target_dir)
+    _assert_writable(target_sftp, target_dir)
+    target_mtimes: dict[str, int] = {}
+    existing_files, _ = _walk_remote(target_sftp, target_dir, target_mtimes)
+    existing = {rel: size for rel, size in existing_files}
+    # A mirror, not an accumulation: what the source no longer has goes here too. The copy
+    # only ever added, so a source rebuilt under the same name left its previous life's pieces
+    # beside the new ones - and a gvenzl Oracle lab has the image's DBID and incarnation in
+    # every life, so RMAN could not tell them apart: a point-in-time duplicate followed the old
+    # life's logs and asked for a sequence the database never reached (RMAN-06054, the
+    # point-in-time drill, 2026-09-25). Judged against the WHOLE source listing, not the
+    # `include`d part - an older point in time may need pieces a newest-chain copy skips.
+    for rel in sorted(existing):
+        if rel.replace("\\", "/") in at_source:
+            continue
+        try:
+            target_sftp.remove(posixpath.join(target_dir, rel.replace("\\", "/")))
+        except OSError:
+            continue
+        existing.pop(rel)
+        result.removed += 1
+    if result.removed and log:
+        log(f"removed {result.removed} staged file(s) the source no longer has")
+    # Every directory is recreated, including the empty ones a file-only copy would drop.
+    for rel in sorted(dirs):
+        _mkdirs(target_sftp, posixpath.join(target_dir, rel.replace("\\", "/")))
+    pending: list[tuple[str, int]] = []
+    for rel, size in sorted(files):
+        # Size is the only cheap identity check available over SFTP. A backup piece that
+        # changed content but kept its exact size would be missed - which is why backup
+        # pieces are written under unique names and never rewritten in place.
+        #
+        # Same size is not enough when the target copy is OLDER than the source file. A
+        # rebuilt source cluster starts its WAL names again at ...0001 - 16 MB each, the
+        # size of the previous cluster's files still staged here - and skipping them
+        # replayed the old cluster's WAL: "WAL file is from different database system",
+        # a target crash-looping (2026-09-24). The tar stream keeps each file's time, so a
+        # repeat run still skips what it sent before.
+        if existing.get(rel) == size and not _older(target_mtimes.get(rel), source_mtimes.get(rel)):
+            result.skipped += 1
+            continue
+        pending.append((rel, size))
+    # Nothing new: the common case for a repeated drill, and it costs two directory walks
+    # rather than a transfer.
+    if pending:
+        streamed = _stream_files(
+            source_session=source_session, source_dir=source_dir,
+            target_session=target_session, target_dir=target_dir,
+            files=pending, log=log,
+        )
+        if streamed:
+            result.copied += len(pending)
+            result.bytes_copied += sum(size for _rel, size in pending)
+        else:
+            # tar missing or refused on either end: fall back to the per-file copy, which
+            # is slow over a high-latency link but always works.
+            if log:
+                log("tar stream unavailable; falling back to per-file SFTP copy")
+            for rel, size in pending:
+                rel_posix = rel.replace("\\", "/")
+                remote_path = posixpath.join(target_dir, rel_posix)
+                _mkdirs(target_sftp, posixpath.dirname(remote_path))
+                with source_sftp.open(posixpath.join(source_dir, rel_posix), "rb") as reader:
+                    reader.prefetch(size)
+                    target_sftp.putfo(reader, remote_path, file_size=size)
+                result.copied += 1
+                result.bytes_copied += size
                 if log:
-                    log("tar stream unavailable; falling back to per-file SFTP copy")
-                for rel, size in pending:
-                    rel_posix = rel.replace("\\", "/")
-                    remote_path = posixpath.join(target_dir, rel_posix)
-                    _mkdirs(target_sftp, posixpath.dirname(remote_path))
-                    with source_sftp.open(posixpath.join(source_dir, rel_posix), "rb") as reader:
-                        reader.prefetch(size)
-                        target_sftp.putfo(reader, remote_path, file_size=size)
-                    result.copied += 1
-                    result.bytes_copied += size
-                    if log:
-                        log(f"copied {rel_posix} ({size} bytes)")
-    finally:
-        source_sftp.close()
-        target_sftp.close()
+                    log(f"copied {rel_posix} ({size} bytes)")
     return result
 
 
 # --------------------------------------------------------------------------- #
 # Which files a restore needs (moved here from backup_restore.restore_script with the copy, 0.23.0)
 # --------------------------------------------------------------------------- #
-def open_for_the_engine(target_client, directory: str, *, log: Any = None) -> bool:
+def open_for_the_engine(target_session, directory: str, *, log: Any = None) -> bool:
     """Make the staged pieces readable by the database engine that restores them.
 
     The copy lands owned by the SSH user with the source's mode - `0660` for a SQL Server backup -
@@ -420,7 +413,7 @@ def open_for_the_engine(target_client, directory: str, *, log: Any = None) -> bo
     fatal when it fails - a piece left from an older run may belong to another user - but said,
     because the engine's own error then names the file.
     """
-    _stdin, out, err = target_client.exec_command(f"chmod -R a+rX {shlex.quote(directory)}")
+    _stdin, out, err = target_session.open_stream(f"chmod -R a+rX {shlex.quote(directory)}")
     code = out.channel.recv_exit_status()
     if code != 0 and log:
         log(f"could not open every staged piece to the engine under {directory} (chmod exit "
@@ -428,7 +421,7 @@ def open_for_the_engine(target_client, directory: str, *, log: Any = None) -> bo
     return code == 0
 
 
-def chain_include(db_type: str, source_client, *, source_dir: str, backup_dir: str = "",
+def chain_include(db_type: str, source_session, *, source_dir: str, backup_dir: str = "",
                   container: str = "", point_in_time: str = "", log: Any = None) -> tuple[str, ...]:
     """Which parts of the source backup directory a restore needs, as path prefixes.
 
@@ -452,14 +445,14 @@ def chain_include(db_type: str, source_client, *, source_dir: str, backup_dir: s
                 "needs may start before the newest full")
         return ()
     if engine in {"postgresql", "postgres"}:
-        return postgresql_chain_include(source_client, source_dir=source_dir, log=log)
+        return postgresql_chain_include(source_session, source_dir=source_dir, log=log)
     if engine == "oracle" and container:
-        return oracle_chain_include(source_client, backup_dir=backup_dir or source_dir,
+        return oracle_chain_include(source_session, backup_dir=backup_dir or source_dir,
                                     container=container, log=log)
     return ()
 
 
-def postgresql_chain_include(source_client, *, source_dir: str, log: Any = None) -> tuple[str, ...]:
+def postgresql_chain_include(source_session, *, source_dir: str, log: Any = None) -> tuple[str, ...]:
     """``("base/<newest _FULL>", "base/<each _INCR after it>", "wal/")``.
 
     The restore combines exactly this set (``pg_combinebackup`` over the newest ``_FULL`` plus
@@ -472,7 +465,7 @@ def postgresql_chain_include(source_client, *, source_dir: str, log: Any = None)
     """
     base = f"{source_dir.rstrip('/')}/base"
     command = f"ls -1d {shlex.quote(base)}/*_FULL {shlex.quote(base)}/*_INCR 2>/dev/null | sort"
-    _stdin, stdout, _stderr = source_client.exec_command(command)
+    _stdin, stdout, _stderr = source_session.open_stream(command)
     names = [line.strip().rsplit("/", 1)[-1]
              for line in stdout.read().decode("utf-8", "replace").splitlines() if line.strip()]
     fulls = [name for name in names if name.endswith("_FULL")]
@@ -514,7 +507,7 @@ EXIT;
 """
 
 
-def oracle_chain_include(source_client, *, backup_dir: str, container: str,
+def oracle_chain_include(source_session, *, backup_dir: str, container: str,
                          log: Any = None) -> tuple[str, ...]:
     """The basenames of every backup piece from the newest level 0 onward.
 
@@ -538,14 +531,14 @@ def oracle_chain_include(source_client, *, backup_dir: str, container: str,
     bandwidth, while a narrowed one that guessed wrong costs the restore.
     """
     directory = backup_dir.rstrip("/")
-    handles = _oracle_preview_handles(source_client, container, log=log)
+    handles = _oracle_preview_handles(source_session, container, log=log)
     if not handles:
         if log:
             log("RMAN preview named no backup pieces; copying the whole backup directory")
         return ()
 
     quoted = ", ".join("'" + h.replace("'", "''") + "'" for h in handles)
-    rows = _oracle_sql(source_client, container, _ORACLE_CHAIN_SQL.format(handles=quoted))
+    rows = _oracle_sql(source_session, container, _ORACLE_CHAIN_SQL.format(handles=quoted))
     names: list[str] = []
     for line in rows:
         line = line.strip()
@@ -562,10 +555,10 @@ def oracle_chain_include(source_client, *, backup_dir: str, container: str,
     return tuple(sorted(set(names)))
 
 
-def _oracle_preview_handles(source_client, container: str, *, log: Any = None) -> list[str]:
+def _oracle_preview_handles(source_session, container: str, *, log: Any = None) -> list[str]:
     """The datafile piece handles from ``RESTORE DATABASE PREVIEW`` - RMAN's own answer."""
     out = _run_in_container(
-        source_client, container,
+        source_session, container,
         f"printf {shlex.quote(_ORACLE_PREVIEW)} | rman target / log /dev/stdout 2>&1",
     )
     handles = []
@@ -578,20 +571,20 @@ def _oracle_preview_handles(source_client, container: str, *, log: Any = None) -
     return handles
 
 
-def _oracle_sql(source_client, container: str, script: str) -> list[str]:
+def _oracle_sql(source_session, container: str, script: str) -> list[str]:
     out = _run_in_container(
-        source_client, container,
+        source_session, container,
         f"printf {shlex.quote(script)} | sqlplus -s -L / as sysdba 2>&1",
     )
     return [line for line in out.splitlines() if line.strip()]
 
 
-def _run_in_container(source_client, container: str, command: str) -> str:
+def _run_in_container(source_session, container: str, command: str) -> str:
     """Run a read-only query inside the source database container over the host's SSH access."""
     from db_ops.lib.shell import docker_cli
 
     # Plain docker first, sudo only as the fallback (db_ops.lib.shell.docker_cli): `sudo` alone fails
     # where sudo wants a password, and the SSH user is usually in the docker group.
     inner = f"{docker_cli(True)} exec -i {shlex.quote(container)} bash -lc {shlex.quote(command)}"
-    _stdin, stdout, _stderr = source_client.exec_command(inner)
+    _stdin, stdout, _stderr = source_session.open_stream(inner)
     return stdout.read().decode("utf-8", "replace")

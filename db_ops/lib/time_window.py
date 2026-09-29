@@ -317,6 +317,25 @@ def parse_time_window_config(
     return ParsedTimeWindow(time_window=TimeWindow(**values), warnings=tuple(warnings))
 
 
+def window_of(record: Any, *, context: str = "time_window") -> TimeWindow | None:
+    """The window a record carries (its ``time_window`` object), parsed - for a reader that shows or
+    compares a schedule rather than runs one: a listing, a status page, a registrar's answer.
+
+    Every such reader used to take ``repeat_interval`` or ``from_hour`` straight out of the JSON
+    (rules R20), which skips what only this module knows: a legacy field name, a blank that means
+    unset, the weekday set, the refusal of a value the scheduler would never run. Parsed here, a
+    listing shows what the scheduler will do. ``None`` when the record has no object or the window
+    does not parse - a display never fails on a record the scheduler refuses; the scheduler says
+    why, once, where it runs.
+    """
+    if not isinstance(record, dict):
+        return None
+    try:
+        return parse_time_window_config(record, context=context).time_window
+    except RuntimeError:
+        return None
+
+
 def is_time_window_open(time_window: TimeWindow | None, current: datetime) -> bool:
     return not time_window_closed_reason(time_window, current)
 

@@ -48,6 +48,7 @@ from urllib.parse import parse_qs, quote
 
 from db_ops.lib import field_names
 from db_ops.lib import web_auth
+from db_ops.lib.time_window import TimeWindow, window_of
 from db_ops.lib.timezone import format_display
 from db_ops.webhost import pages
 
@@ -754,7 +755,8 @@ class WebApp:
                     # a block quietly losing its schedule is how "why is nothing running" starts.
                     entries.append({"app_command_id": code, "missing": True})
                     continue
-                window = command.get("time_window") or {}
+                # The scheduler's own reading (rules R20); a window it refuses shows as unset.
+                window = window_of(command, context=code) or TimeWindow()
                 entries.append({
                     "app_command_id": code,
                     # Which block owns it, so the Run button can send the operator back to the
@@ -764,11 +766,11 @@ class WebApp:
                     "active": bool(command.get("active", True)),
                     "node_role": command.get("node_role") or "",
                     "command_text": command.get("command_text") or "",
-                    "repeat_interval": window.get("repeat_interval"),
-                    "retry_interval": window.get("retry_interval"),
-                    "timeout": window.get("timeout"),
-                    "from_hour": window.get("from_hour"),
-                    "to_hour": window.get("to_hour"),
+                    "repeat_interval": window.repeat_interval,
+                    "retry_interval": window.retry_interval,
+                    "timeout": window.timeout,
+                    "from_hour": window.from_hour,
+                    "to_hour": window.to_hour,
                     "schedule_text": _schedule_text(window),
                     "status": status_by_code.get(code, {}),
                     "queued": queued.get(code),
@@ -969,17 +971,16 @@ def _dashboard_notice(query: dict[str, str]) -> str:
     return ""
 
 
-def _schedule_text(window: dict[str, Any]) -> str:
+def _schedule_text(window: TimeWindow) -> str:
     """A schedule in the words an operator uses: "every 10s", "runs once and stays up".
 
     ``repeat_interval: 0`` genuinely means run-once-and-stay-up (the web host itself), and
     ``-1`` means manual only. Rendering either as "every 0 seconds" is how a reader concludes the
     scheduler is broken.
     """
-    interval = window.get("repeat_interval")
+    interval = window.repeat_interval
     if interval is None:
         return "no schedule"
-    interval = int(interval)
     if interval < 0:
         return "manual only"
     if interval == 0:
@@ -992,7 +993,7 @@ def _schedule_text(window: dict[str, Any]) -> str:
         base = f"every {interval // 60}m"
     else:
         base = f"every {interval}s"
-    from_hour, to_hour = window.get("from_hour"), window.get("to_hour")
-    if from_hour is not None and to_hour is not None and not (int(from_hour) == 0 and int(to_hour) == 23):
-        base += f", {int(from_hour):02d}:00-{int(to_hour):02d}:59"
+    from_hour, to_hour = window.from_hour, window.to_hour
+    if from_hour is not None and to_hour is not None and not (from_hour == 0 and to_hour == 23):
+        base += f", {from_hour:02d}:00-{to_hour:02d}:59"
     return base

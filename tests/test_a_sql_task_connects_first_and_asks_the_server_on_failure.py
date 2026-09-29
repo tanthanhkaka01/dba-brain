@@ -110,8 +110,8 @@ def _run(tmp_path, monkeypatch, *, target, inventory=None, execute=None, listing
     asked = []
 
     def run_allowing_failure(command, request):
-        asked.append(request)
-        return listing if listing is not None else (True, {"rows": []}, "")
+        asked.append((command, request))
+        return listing if listing is not None else (True, {"databases": []}, "")
 
     monkeypatch.setattr(runner.common_cli, "run_allowing_failure", run_allowing_failure)
     sent = []
@@ -153,9 +153,11 @@ def test_a_database_that_does_not_open_is_diagnosed_by_asking_the_server(tmp_pat
 
     final, _, asked = _run(tmp_path, monkeypatch, target=sql_target(database_name="APPDB_PROD"),
                            execute=cannot_open,
-                           listing=(True, {"rows": [["APPDB_Prod"], ["master"]]}, ""))
+                           listing=(True, {"databases": [{"name": "APPDB_Prod"}, {"name": "master"}]}, ""))
 
-    assert asked and asked[0]["database_name"] == "" and "sys.databases" in asked[0]["sql_text"]
+    command, request = asked[0]
+    assert command == "list-databases" and request["include_system"] is True
+    assert "database" not in request["connection"], "the listing lands in master, not the missing one"
     assert "'APPDB_Prod'" in final["error_text"] and "use that spelling" in final["error_text"]
     assert "(4060)" in final["error_text"], "the driver's own words are kept after the explanation"
 

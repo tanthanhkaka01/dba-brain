@@ -64,7 +64,7 @@ def _require_name(value: Any, field: str) -> str:
     return text
 
 
-def _connect(request: dict[str, Any], *, data_dir: str | Path | None, database: str = ""):
+def _connect(request: dict[str, Any], *, database: str = ""):
     """Open one connection to the database the request states, reusing the ``run-sql`` path.
 
     The login is the request's ``connection`` block - this process reads no configuration (rules
@@ -132,7 +132,6 @@ def _finish(report: GateReport, request: dict[str, Any]) -> dict[str, Any]:
 def shrink_log(
     request: dict[str, Any],
     *,
-    data_dir: str | Path | None = None,
     echo: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """``DBCC SHRINKFILE`` one database's log down to ``size_mb``.
@@ -154,7 +153,7 @@ def shrink_log(
     if size_mb < 1:
         raise EmergencyError("size_mb must be at least 1.")
 
-    resolved, connection = _connect(request, data_dir=data_dir, database=database)
+    resolved, connection = _connect(request, database=database)
     target_id = str(resolved.get("server_id") or request.get("target"))
     report = GateReport("shrink-log", target=f"{target_id}/{database}", echo=echo)
     report.note("target", {"server_id": target_id, "ip": resolved.get("ip"),
@@ -234,7 +233,6 @@ def shrink_log(
 def kill_spid(
     request: dict[str, Any],
     *,
-    data_dir: str | Path | None = None,
     echo: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """``KILL`` one session, after showing whose it is and what it is holding.
@@ -253,7 +251,7 @@ def kill_spid(
     if spid <= 50:
         raise EmergencyError(f"spid={spid} is a system session; refusing.")
 
-    resolved, connection = _connect(request, data_dir=data_dir)
+    resolved, connection = _connect(request)
     target_id = str(resolved.get("server_id") or request.get("target"))
     report = GateReport("kill-spid", target=f"{target_id}/SPID={spid}", echo=echo)
     report.note("target", {"server_id": target_id, "ip": resolved.get("ip"), "spid": spid})
@@ -343,7 +341,6 @@ def kill_spid(
 def start_job(
     request: dict[str, Any],
     *,
-    data_dir: str | Path | None = None,
     echo: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Start a SQL Server Agent job by name, now.
@@ -357,7 +354,7 @@ def start_job(
     """
     job = _require_name(request.get("job_name") or request.get("job"), "job_name")
 
-    resolved, connection = _connect(request, data_dir=data_dir, database="msdb")
+    resolved, connection = _connect(request, database="msdb")
     target_id = str(resolved.get("server_id") or request.get("target"))
     report = GateReport("start-job", target=f"{target_id}/{job}", echo=echo)
     report.note("target", {"server_id": target_id, "ip": resolved.get("ip"), "job_name": job})

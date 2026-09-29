@@ -19,7 +19,7 @@ from typing import Any, IO
 
 from db_ops.lib.json_io import load_json_file
 from db_ops.lib.secret_text import SECRET_KEY_ENV_VAR, resolve_cli_key
-from db_ops.config import DEFAULT_CONFIG_PATH, DbOpsConfig, load_config, resolve_config_path
+from db_ops.lib.config import DEFAULT_CONFIG_PATH, DbOpsConfig, load_config, resolve_config_path
 from db_ops.lib.time_window import (
     DueVerdict,
     TimeWindow,

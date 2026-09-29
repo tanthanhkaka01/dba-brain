@@ -34,6 +34,7 @@ from db_ops.lib import config_references, shared_objects
 from db_ops.lib.json_io import atomic_write_text, indent_of
 from db_ops.lib.moved_commands import MOVED_COMMANDS
 from db_ops.lib.paths import PACKAGED_CATALOGUE
+from db_ops.lib.time_window import window_of
 
 USAGE = """\
 Usage: python -m db_ops.common.cli upgrade-config '<json>'|@file|-
@@ -119,12 +120,15 @@ def _inventory_into_reports(root: Path, *, dry_run: bool, before_write: Any) -> 
                       "changes": [{"field": "reports[]", "to": INVENTORY_REPORT, "action": "added"}]})
     reports_app = next((r for r in rows if isinstance(r, dict) and r.get("app_code") == REPORTS_APP), None)
     changes = [{"field": INVENTORY_APP, "to": "reports_config.json:" + INVENTORY_REPORT, "action": "removed"}]
-    if reports_app is not None and window.get("timeout"):
+    # Both timeouts as the scheduler reads them (rules R20): a legacy spelling of either still adds.
+    moved = window_of(app, context=INVENTORY_APP)
+    if reports_app is not None and moved is not None and moved.timeout:
         # The reports pass now builds the inventory too, and a timeout is the budget for the WHOLE
         # pass: kept as it was, the first inventory build would be killed at the old limit.
         own = dict(reports_app.get("time_window") or {})
-        before = int(own.get("timeout") or 0)
-        own["timeout"] = before + int(window["timeout"])
+        current = window_of(reports_app, context=REPORTS_APP)
+        before = (current.timeout if current is not None else None) or 0
+        own["timeout"] = before + moved.timeout
         reports_app["time_window"] = own
         changes.append({"field": REPORTS_APP + ".time_window.timeout", "to": own["timeout"],
                         "action": f"raised from {before}"})

@@ -2,7 +2,7 @@
 
 Reading a command message and writing one back are the same rule seen from two sides, and both
 are pure text — no store, no config, no Telegram. They lived in the Telegram app because only the
-dispatcher needed them; then :mod:`db_ops.common.telegram_command_history` needed to *rebuild* a
+dispatcher needed them; then :mod:`db_ops.db.telegram_command_history` needed to *rebuild* a
 command line from what a person typed, and `common` may not import an app. So the rule moved here
 and the app re-exports it, the same shape as ``telegram_severity``.
 

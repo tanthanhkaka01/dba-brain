@@ -66,6 +66,24 @@ def read_json_request(source: str) -> dict[str, Any]:
     return request
 
 
+
+def read_json_request_answered(source: str) -> tuple[dict[str, Any] | None, int]:
+    """:func:`read_json_request`, with the answer a command gives to a request it cannot read.
+
+    A missing ``@file`` is the caller's typo: stderr, exit 2. A payload that is not a JSON object
+    is the request itself, and comes back as the JSON envelope every caller parses: exit 1. Here
+    since 0.25.0 - it was ``common/cli.py``'s, and ``db.cli`` imported it from there, which R03
+    forbids.
+    """
+    try:
+        return read_json_request(source), 0
+    except FileNotFoundError as exc:
+        print(str(exc), file=sys.stderr)
+        return None, 2
+    except ValueError as exc:
+        print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
+        return None, 1
+
 def looks_like_json_request(argument: str) -> bool:
     """Is this CLI argument the JSON-request form (``<json>`` / ``@file`` / ``-``)?
 

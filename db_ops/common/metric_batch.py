@@ -28,11 +28,12 @@ import time
 from pathlib import Path
 from typing import Any
 
-from db_ops.common import db_connect, oracle_bridge, remote_exec
-from db_ops.common.sql_execution import execute_cursor_batches, split_sql_batches
+from db_ops.common import db_catalog, db_connect, oracle_bridge, remote_exec, sql_run
+from db_ops.common.sql_execution import make_json_safe
 from db_ops.lib import sql_access as sql_access_rules
 from db_ops.lib.coerce import as_text
 from db_ops.lib.event_policy import PHASE_CONNECT, PHASE_EXECUTE
+from db_ops.lib.sql_text import MAX_RESULT_ROWS
 
 DEFAULT_CONNECT_TIMEOUT_SECONDS = 5
 
@@ -148,19 +149,31 @@ def _connect(target: dict[str, Any], database: str, *, timeout: int) -> Any:
 
 def _execute(target: dict[str, Any], database: str, sql_text: str, *, timeout: int,
              max_rows: int) -> tuple[list[dict[str, Any]], bool]:
-    """Connect, run the SQL, return the first result set as dict rows and whether it was cut."""
+    """Connect, run the SQL, return the first result set as dict rows and whether it was cut.
+
+    Read by ``sql_run.execute_capture``, the reader ``run-sql`` runs on (rules R11) - the batches
+    split and an Oracle statement's ``;`` dropped as ``run-sql`` does it. Until 0.25.0 every metric
+    went through a second one, ``sql_execution.execute_cursor_batches``.
+    """
     connection = _connect(target, database, timeout=timeout)
     try:
-        result = execute_cursor_batches(
-            connection, connection.cursor(), split_sql_batches(sql_text), commit=False,
-            # 0 = "not set by this metric", so the shared default still applies.
-            **({"max_rows": int(max_rows)} if max_rows else {}),
+        result_sets, _affected, _ = sql_run.execute_capture(
+            connection.cursor(), sql_text,
+            # 0 = "not set by this metric": the preview cap a metric reads at, 100 rows.
+            max_rows=int(max_rows) or MAX_RESULT_ROWS,
+            db_type=str(target.get("db_type") or ""),
         )
     except Exception as exc:  # noqa: BLE001 - report post-connect SQL failures accurately.
         raise ItemFailure(f"SQL execution failed: {exc}", phase=PHASE_EXECUTE, kind="execute") from exc
     finally:
         connection.close()
-    return _first_result_set_rows(result), bool(result.get("truncated"))
+    if not result_sets:
+        return [], False
+    first = result_sets[0]
+    columns = [str(column).lower() for column in first["columns"]]
+    # JSON-safe here, as it always was: the answer goes back to the metrics app on stdout.
+    return ([dict(zip(columns, make_json_safe(row))) for row in first["rows"]],
+            bool(first["truncated"]))
 
 
 def _list_databases(target: dict[str, Any], *, timeout: int) -> list[str]:
@@ -169,12 +182,8 @@ def _list_databases(target: dict[str, Any], *, timeout: int) -> list[str]:
     current = str(target.get("database") or "")
     connection = _connect(target, current, timeout=timeout)
     try:
-        cursor = connection.cursor()
-        cursor.execute(
-            "SELECT datname FROM pg_database "
-            "WHERE datallowconn AND NOT datistemplate ORDER BY datname")
-        names = [str(row[0]) for row in cursor.fetchall()]
-        cursor.close()
+        names = [str(row["name"]) for row in db_catalog.databases(connection.cursor(), "postgresql")
+                 if row.get("allow_connections") and not row.get("is_template")]
     except Exception as exc:  # noqa: BLE001 - listing failed: nothing can be collected per database.
         raise ItemFailure(f"Could not list databases: {exc}", phase=PHASE_EXECUTE, kind="execute") from exc
     finally:
@@ -202,15 +211,6 @@ def _per_database(item: dict[str, Any], target: dict[str, Any], *, sql_text: str
         except ItemFailure as failure:
             visited.append({"name": name, "error": failure.to_dict()})
     return {"databases": visited, "database_count": len(databases), "skipped": databases[cap:]}
-
-
-def _first_result_set_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
-    sets = result.get("result_sets") or []
-    if not sets:
-        return []
-    first = sets[0]
-    columns = [str(col).lower() for col in first.get("columns", [])]
-    return [dict(zip(columns, row)) for row in first.get("rows", [])]
 
 
 # --------------------------------------------------------------------------- #

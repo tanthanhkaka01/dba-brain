@@ -62,8 +62,8 @@ def test_the_first_run_creates_the_target_folder_before_looking_in_it(monkeypatc
     target_sftp = _FreshTarget({})
     monkeypatch.setattr(transfer, "_stream_files", lambda **kw: True)
 
-    result = transfer.sync_backup_dir(source_client=source, source_dir="/src",
-                                      target_client=_Client(sftp=target_sftp), target_dir="/dst")
+    result = transfer.sync_backup_dir(source_session=source, source_dir="/src",
+                                      target_session=_Client(sftp=target_sftp), target_dir="/dst")
 
     assert "/dst" in target_sftp.made
     assert result.copied == 1
@@ -74,8 +74,8 @@ def test_an_unreadable_source_still_stops_the_copy():
     source = _Client(sftp=_FreshTarget({}))
 
     with pytest.raises(PermissionError, match="could not be read by the SSH user"):
-        transfer.sync_backup_dir(source_client=source, source_dir="/src",
-                                 target_client=_Client(sftp=_Sftp({})), target_dir="/dst")
+        transfer.sync_backup_dir(source_session=source, source_dir="/src",
+                                 target_session=_Client(sftp=_Sftp({})), target_dir="/dst")
 
 
 # --------------------------------------------------------------------------- #
@@ -175,6 +175,8 @@ def test_a_step_run_while_planning_is_recorded_not_repeated(monkeypatch):
 # 1.15 - a backup that cannot be read is not a stray file
 # --------------------------------------------------------------------------- #
 class _Cursor:
+    rowcount = -1
+
     def __init__(self, error):
         self.error, self.description, self._rows = error, [("path",), ("size",)], []
 
@@ -183,8 +185,9 @@ class _Cursor:
             raise RuntimeError(self.error)
         self._rows = [("/in/DB/FULL/f.bak", 10)]
 
-    def fetchall(self):
-        return self._rows
+    def fetchmany(self, size):
+        taken, self._rows = self._rows[:size], self._rows[size:]
+        return taken
 
 
 class _Conn:

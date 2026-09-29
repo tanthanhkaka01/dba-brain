@@ -8,7 +8,7 @@ answering "run this SELECT on that PostgreSQL box" meant writing the connect aga
 implementations of the same thing, disagreeing on which engines exist.
 
 What lives here is the **connection** only. Running the SQL is already shared:
-``sql_execution.execute_cursor_batches`` handles batches and result capture for every engine.
+``sql_run.execute_capture`` handles batches and result capture for every engine.
 
 Each engine gets its timeout enforced *inside the server* as well as on the socket, because a
 socket that stays healthy while a relation is locked is exactly the case a connect timeout does

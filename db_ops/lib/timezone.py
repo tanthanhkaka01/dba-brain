@@ -20,7 +20,7 @@ rendered format::
     2026-09-07 06:02:56 +05:30     Asia/Kolkata - minutes appear only when they are not zero
 
 This module is :mod:`db_ops.lib` and therefore pure: it imports nothing from ``db_ops``, is never a
-CLI, and holds no config-file knowledge. :mod:`db_ops.config` parses the field and calls
+CLI, and holds no config-file knowledge. :mod:`db_ops.lib.config` parses the field and calls
 :func:`bind_display_timezone` once; the operation that *records* the resolved zone in the store is
 ``python -m db_ops.common.cli timezone``. Apps call :func:`display_now` and :func:`format_display`
 and never learn where the value came from — the same shape as ``node_role``.
@@ -202,7 +202,7 @@ def zone_abbreviation(zone: Any = None, *, at: datetime | None = None) -> str:
 # --------------------------------------------------------------------------------------------- #
 # The process-wide display zone
 #
-# One binding, set by db_ops.config when the config file is read, because the alternative is
+# One binding, set by db_ops.lib.config when the config file is read, because the alternative is
 # threading a timezone through forty producers that have no other reason to know about one - and
 # the producer that gets missed is the one that prints a second clock. Apps never call
 # bind_display_timezone; they call display_now/format_display and get whatever config resolved.
@@ -215,7 +215,7 @@ _display_zone: Any = timezone.utc
 def bind_display_timezone(declaration: Any, *, context: str = "config.json:timezone") -> str:
     """Set the zone every later :func:`display_now` / :func:`format_display` renders in.
 
-    Called once, from :func:`db_ops.config.parse_config`. Raises on a bad declaration: a config
+    Called once, from :func:`db_ops.lib.config.parse_config`. Raises on a bad declaration: a config
     error must stop the process at the point the config is read, not produce forty timestamps in
     the wrong clock and be discovered from a report.
     """

@@ -21,7 +21,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from db_ops.config import DEFAULT_CONFIG_PATH, load_config
+from db_ops.lib.config import DEFAULT_CONFIG_PATH, load_config
 from db_ops.lib.paths import TOOL_ROOT
 from db_ops.lib.remote_host import RemoteError, RemoteHost
 

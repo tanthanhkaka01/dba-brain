@@ -33,7 +33,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Iterator, Sequence
 
-from db_ops.config import POSTGRESQL_BACKEND, SQLITE_BACKEND, StoreConfig
+from db_ops.lib.config import POSTGRESQL_BACKEND, SQLITE_BACKEND, StoreConfig
 
 # SQLite's UTC-now expression and the PostgreSQL expression that renders the identical string.
 # The store writes timestamps as ISO-8601 UTC text (``utc_now_text()``), so both engines must
@@ -688,7 +688,7 @@ class StoreTarget:
 
     @classmethod
     def for_sqlite(cls, sqlite_path: str | Path) -> "StoreTarget":
-        from db_ops.config import SqliteStoreConfig
+        from db_ops.lib.config import SqliteStoreConfig
 
         return cls(
             StoreConfig(backend=SQLITE_BACKEND, sqlite=SqliteStoreConfig(path=Path(sqlite_path)))
@@ -696,7 +696,7 @@ class StoreTarget:
 
     @classmethod
     def from_config(cls, config: Any, *, key: str | None = None, password: str | None = None) -> "StoreTarget":
-        """Build from a :class:`~db_ops.config.DbOpsConfig` (or a bare :class:`StoreConfig`)."""
+        """Build from a :class:`~db_ops.lib.config.DbOpsConfig` (or a bare :class:`StoreConfig`)."""
         store = getattr(config, "store", config)
         if not isinstance(store, StoreConfig):
             raise StoreBackendError(

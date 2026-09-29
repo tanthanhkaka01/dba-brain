@@ -1645,21 +1645,12 @@ def _read_json_request(source: str, usage: str) -> tuple[dict | None, int]:
     Shared by the JSON-request commands so ``run-sql``, ``queue-telegram-message`` and
     ``rotate-password`` all accept the same three forms and report a bad payload identically.
     """
-    from db_ops.lib.json_io import read_json_request
+    from db_ops.lib.json_io import read_json_request_answered
 
-    # The three forms and their two failure shapes moved to `lib.json_io` on 2026-09-14, when the
-    # app CLIs needed the same reader and could not import this one - `common` is below them, and
-    # an app may not reach into it. What stays here is this layer's *answer* to a bad request: a
-    # missing @file is the caller's typo and goes to stderr with exit 2, a payload that is not a
-    # JSON object is the request itself and comes back as the JSON envelope every caller parses.
-    try:
-        return read_json_request(source), 0
-    except FileNotFoundError as exc:
-        print(str(exc), file=sys.stderr)
-        return None, 2
-    except ValueError as exc:
-        print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
-        return None, 1
+    # The three forms moved to `lib.json_io` on 2026-09-14, when the app CLIs needed the same
+    # reader; the answer to a bad one followed in 0.25.0, when `db.cli` stopped importing this
+    # module (R03). Same exit codes, same envelope, one place.
+    return read_json_request_answered(source)
 
 
 def _read_key_flags(rest: list[str], usage: str, command: str) -> tuple[str | None, str | None, int]:
@@ -2097,7 +2088,6 @@ def _gate_command(argv: list[str], usage: str, runner_name: str) -> int:
     # request states the host, the login, the policy and the rules. `--config` is still accepted
     # so a command line written before 0.24.0 keeps parsing.
     _ = config_path
-    data_dir = None
 
     from db_ops.common import (confirm as confirm_gate, host_ops, job_control,
                                sqlserver_emergency, sqlserver_instance, sqlserver_patch)
@@ -2122,7 +2112,7 @@ def _gate_command(argv: list[str], usage: str, runner_name: str) -> int:
 
     try:
         outcome = runners[runner_name](
-            request, data_dir=data_dir, echo=lambda line: print(line, file=sys.stderr, flush=True)
+            request, echo=lambda line: print(line, file=sys.stderr, flush=True)
         )
     except Exception as exc:  # noqa: BLE001 - report as a response like every other command.
         return response.emit(response.fail(runner_name, str(exc)))

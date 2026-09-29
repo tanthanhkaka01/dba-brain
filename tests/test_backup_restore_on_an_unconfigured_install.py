@@ -158,7 +158,7 @@ def test_a_manual_command_with_nothing_configured_says_so_rather_than_index_erro
     `KeyError: 'prod_backup_share'` would have turned it into `IndexError: list index out of
     range`, equally silent about what is missing. It must fail, and name the file."""
     from db_ops.backup_restore import cli
-    from db_ops.config import DbOpsConfig
+    from db_ops.lib.config import DbOpsConfig
 
     monkeypatch.setattr(cli, "load_config", lambda _path: DbOpsConfig(
         log_dir=empty_root / "logs", runtime_dir=empty_root / "runtime",

@@ -4,7 +4,7 @@ import pytest
 
 from db_ops.lib import data_sources
 from db_ops.lib import secret_text
-from db_ops.config import TelegramConfig
+from db_ops.lib.config import TelegramConfig
 
 
 KEY = "Ahdsf#hsdf$%238Hfs#"

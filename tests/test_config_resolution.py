@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.config import (
+from db_ops.lib.config import (
     APP_CONFIG_ENV_VARS,
     APP_CONFIG_NAMES,
     DEFAULT_CONFIG_PATH,
@@ -231,7 +231,7 @@ def test_nested_config_finds_telegram_settings_via_tool_root_fallback(tmp_path):
     the path to data/data/telegram_config.json, found nothing, and silently produced empty
     telegram settings — the reason that file used to restate the whole telegram block inline.
     """
-    from db_ops.config import load_config, resolve_telegram_config_path
+    from db_ops.lib.config import load_config, resolve_telegram_config_path
 
     root = tmp_path
     data = root / "data"
@@ -246,7 +246,7 @@ def test_nested_config_finds_telegram_settings_via_tool_root_fallback(tmp_path):
     nested = data / "restore_config.json"
     nested.write_text('{"app_name": "nested"}', encoding="utf-8")
 
-    import db_ops.config as config_module
+    import db_ops.lib.config as config_module
 
     original = config_module.TOOL_ROOT
     config_module.TOOL_ROOT = root
@@ -262,7 +262,7 @@ def test_nested_config_finds_telegram_settings_via_tool_root_fallback(tmp_path):
 
 def test_config_at_tool_root_still_uses_its_own_folder_first(tmp_path):
     """The fallback must not shadow a path that already resolves next to the config."""
-    from db_ops.config import load_config
+    from db_ops.lib.config import load_config
 
     root = tmp_path
     data = root / "data"
@@ -273,7 +273,7 @@ def test_config_at_tool_root_still_uses_its_own_folder_first(tmp_path):
     main = root / "config.json"
     main.write_text('{"app_name": "root"}', encoding="utf-8")
 
-    import db_ops.config as config_module
+    import db_ops.lib.config as config_module
 
     original = config_module.TOOL_ROOT
     config_module.TOOL_ROOT = root
@@ -297,8 +297,8 @@ def _telegram_root(tmp_path, settings: str, groups: str = "") -> "Path":
 
 
 def _load_at(root):
-    from db_ops.config import load_config
-    import db_ops.config as config_module
+    from db_ops.lib.config import load_config
+    import db_ops.lib.config as config_module
 
     original = config_module.TOOL_ROOT
     config_module.TOOL_ROOT = root

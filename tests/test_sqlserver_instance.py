@@ -37,6 +37,8 @@ def _instance_policy(estate):
 class _FakeCursor:
     """Returns canned rows per SQL fragment, so an exporter can be run with no database."""
 
+    rowcount = -1
+
     def __init__(self, answers: dict[str, list[dict]]):
         self._answers = answers
         self._rows: list[dict] = []
@@ -56,6 +58,10 @@ class _FakeCursor:
 
     def fetchall(self):
         return [tuple(row.values()) for row in self._rows]
+
+    def fetchmany(self, size):
+        taken, self._rows = self._rows[:size], self._rows[size:]
+        return [tuple(row.values()) for row in taken]
 
     def nextset(self):
         return False
@@ -517,7 +523,8 @@ def test_a_database_that_cannot_be_read_is_unknown_not_zero():
             self.description = (("orphan_count",),)
             return self
 
-    cursor = _Partial({"sys.databases": [{"name": "ok_db"}, {"name": "locked"}]})
+    readable = {"state": "ONLINE", "is_system": 0, "has_access": 1}
+    cursor = _Partial({"sys.databases": [{"name": "ok_db", **readable}, {"name": "locked", **readable}]})
 
     found = {row["database_name"]: row for row in si._orphans(cursor)}
 

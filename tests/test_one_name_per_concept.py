@@ -314,7 +314,7 @@ def test_an_sla_policy_reads_its_title_and_synonyms_under_the_standard_names_fir
 
 
 def test_the_store_reads_its_database_under_either_name():
-    from db_ops.config import _parse_postgres_store
+    from db_ops.lib.config import _parse_postgres_store
 
     for spelling in ("database_name", "database"):
         store = _parse_postgres_store({"host": "h", spelling: "db_ops"}, store_dir=Path("."))

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 
-from db_ops.common import telegram_command_history as history
+from db_ops.db import telegram_command_history as history
 from db_ops.lib.telegram_command_text import render_command_line
 
 

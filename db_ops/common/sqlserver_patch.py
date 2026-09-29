@@ -45,7 +45,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from db_ops.common import host_ops, sql_run
+from db_ops.common import db_catalog, host_ops, sql_run
 from db_ops.common.evidence import FAIL, OK, WARN, GateReport
 from db_ops.common.remote_exec import quote_powershell
 
@@ -245,15 +245,20 @@ _SERVER_INFO_SQL = (
 
 
 def _rows(cursor, sql: str) -> list[dict[str, Any]]:
-    cursor.execute(sql)
-    columns = [column[0] for column in cursor.description]
-    return [
-        dict(zip(columns, [None if value is None else str(value) for value in row]))
-        for row in cursor.fetchall()
-    ]
+    """The rows as text: a gate compares and prints what it reads - ``"0"``, a build number - and
+    its evidence is JSON. ``sql_run.query_rows`` does the reading (rules R11)."""
+    return [{key: None if value is None else str(value) for key, value in row.items()}
+            for row in sql_run.query_rows(cursor, sql)]
 
 
-def _connect(request: dict[str, Any], *, data_dir: str | Path | None, timeout_seconds: int):
+def _database_states(cursor) -> list[dict[str, Any]]:
+    """Every database and its state, system ones included: a patch starts and ends with all of
+    them ONLINE. ``db_catalog`` asks (rules R11)."""
+    return [{"name": str(row["name"]), "state": str(row.get("state") or "")}
+            for row in db_catalog.databases(cursor, "sqlserver")]
+
+
+def _connect(request: dict[str, Any], *, timeout_seconds: int):
     """Connect to the instance as the login the request states in its ``connection`` - this
     process reads no configuration (rules R09); the host itself is the request's ``access``."""
     try:
@@ -269,14 +274,14 @@ def _connect(request: dict[str, Any], *, data_dir: str | Path | None, timeout_se
     return sql_run.connect_target(resolved, timeout_seconds=timeout_seconds), resolved
 
 
-def _wait_for_sql(request, *, data_dir, timeout_seconds: int, poll_seconds: int = 15,
+def _wait_for_sql(request, *, timeout_seconds: int, poll_seconds: int = 15,
                   sleep: Callable[[float], None] = time.sleep):
     """Retry the connection until the instance accepts one, or the budget expires."""
     deadline = time.monotonic() + max(1, int(timeout_seconds))
     last_error: Exception | None = None
     while True:
         try:
-            return _connect(request, data_dir=data_dir, timeout_seconds=15)
+            return _connect(request, timeout_seconds=15)
         except (SqlServerPatchError, sql_run.SqlRunError) as exc:
             last_error = exc
             if time.monotonic() >= deadline:
@@ -336,8 +341,8 @@ def _gate_sql(
             "(setup runs the post-patch upgrade scripts as this account)",
         )
 
-    databases = _rows(cursor, "SELECT name, state_desc FROM sys.databases ORDER BY database_id")
-    offline = [db["name"] for db in databases if db["state_desc"] != "ONLINE"]
+    databases = _database_states(cursor)
+    offline = [db["name"] for db in databases if db["state"] != "ONLINE"]
     report.add(
         "sql.databases_online",
         OK if not offline else FAIL,
@@ -403,7 +408,6 @@ def _gate_sql(
 def precheck(
     request: dict[str, Any],
     *,
-    data_dir: str | Path | None = None,
     echo: Callable[[str], None] | None = None,
     report: GateReport | None = None,
 ) -> dict[str, Any]:
@@ -413,7 +417,7 @@ def precheck(
     time to clear them, and again inside the window. ``apply_cu`` runs the same gates itself
     before touching anything, which is the safety property the CU26 report asked to keep.
     """
-    target, policy, overrides = host_ops._prepare(request, data_dir=data_dir)  # noqa: SLF001
+    target, policy, overrides = host_ops._prepare(request)  # noqa: SLF001
     own_report = report is None
     report = report or GateReport("sqlserver-precheck", target=target.describe(), echo=echo)
     if own_report:
@@ -434,7 +438,7 @@ def precheck(
         report, request.get("window"), ignore=bool(request.get("ignore_window"))
     )
 
-    connection, resolved = _connect(request, data_dir=data_dir, timeout_seconds=15)
+    connection, resolved = _connect(request, timeout_seconds=15)
     try:
         info = _gate_sql(
             report, connection.cursor(), policy=policy,
@@ -599,7 +603,6 @@ def _gate_installer(
 def apply_cu(
     request: dict[str, Any],
     *,
-    data_dir: str | Path | None = None,
     echo: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Run the unattended patch, then verify what it produced.
@@ -611,7 +614,7 @@ def apply_cu(
     Needs ``confirm: true``. Exit code ``3010`` is reported as success-with-restart-required;
     the caller then runs ``restart`` and ``verify-build``.
     """
-    target, policy, overrides = host_ops._prepare(request, data_dir=data_dir)  # noqa: SLF001
+    target, policy, overrides = host_ops._prepare(request)  # noqa: SLF001
     installer = str(request.get("installer") or "").strip()
     if not installer:
         raise SqlServerPatchError("installer is required: the full path of the staged CU .exe on the target.")
@@ -619,7 +622,7 @@ def apply_cu(
     report.note("target", target.to_dict())
     report.note("kb", str(request.get("kb") or ""))
 
-    precheck(request, data_dir=data_dir, echo=echo, report=report)
+    precheck(request, echo=echo, report=report)
     blockers = report.blockers(overrides)
     if blockers:
         report.add(
@@ -711,7 +714,6 @@ def patch_exit_verdict(exit_code: int, *, log_root: str = "") -> tuple[str, str]
 def verify_build(
     request: dict[str, Any],
     *,
-    data_dir: str | Path | None = None,
     echo: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Assert the instance is on the expected build. Read-only, and safe to run any time.
@@ -721,14 +723,14 @@ def verify_build(
     install patched to CU26 keeps ``Version = 16.0.1000.6`` forever, which is correct and is why
     the previous implementation of this gate failed every successful CU.
     """
-    target, policy, overrides = host_ops._prepare(request, data_dir=data_dir)  # noqa: SLF001
+    target, policy, overrides = host_ops._prepare(request)  # noqa: SLF001
     expected_build = str(request.get("expected_build") or "").strip()
     report = GateReport("sqlserver-verify-build", target=target.describe(), echo=echo)
     report.note("target", target.to_dict())
 
     report.say("Waiting for the instance to accept connections...")
     connection, resolved = _wait_for_sql(
-        request, data_dir=data_dir, timeout_seconds=int(policy["sql_reconnect_timeout_seconds"]),
+        request, timeout_seconds=int(policy["sql_reconnect_timeout_seconds"]),
         poll_seconds=int(policy["poll_seconds"]),
     )
     try:
@@ -744,8 +746,8 @@ def verify_build(
             + (f", expected {expected_build}" if expected_build else ""),
             data=info,
         )
-        databases = _rows(cursor, "SELECT name, state_desc FROM sys.databases ORDER BY database_id")
-        offline = [db["name"] for db in databases if db["state_desc"] != "ONLINE"]
+        databases = _database_states(cursor)
+        offline = [db["name"] for db in databases if db["state"] != "ONLINE"]
         report.add(
             "post.databases_online",
             OK if not offline else FAIL,

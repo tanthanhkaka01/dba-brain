@@ -293,7 +293,7 @@ def test_pruning_is_skipped_when_retention_is_zero():
     from db_ops.common.backup_copy import prune_target_dir
 
     class _Client:
-        def exec_command(self, *a, **k):
+        def open_stream(self, *a, **k):
             raise AssertionError("no command should be sent when retention is disabled")
 
     assert prune_target_dir(_Client(), "/stage", 0)["pruned"] == 0
@@ -312,7 +312,7 @@ def test_pruning_deletes_by_age_and_reports_the_count():
         def read(self): return b"7\n"
 
     class _Client:
-        def exec_command(self, command, **k):
+        def open_stream(self, command, **k):
             sent["command"] = command
             return None, _Out(), None
 

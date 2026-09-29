@@ -37,7 +37,7 @@ directory under `db_ops/` with its own `cli.py`; every component has exactly one
 The root package `db_ops` is **not** a component and holds nothing of its own (R41): `db_ops/cli.py`
 is the `db-ops` / `dbabrain` entry point and only dispatches - `db-ops <component> ...` to that
 component's CLI, and `init`, `guide`, `encrypt-secret`, `export-data`, `import-data` to the
-`common.cli` commands of those names; `db_ops/config.py` is an alias of `lib/config.py`;
+`common.cli` commands of those names (its `db_ops.config` alias of `db_ops.lib.config` was deleted in 0.25.0);
 `db_ops/__init__.py` re-exports the version from `lib/version.py`. The last command the root
 answered itself, `check-credentials`, is a `common.cli` command since 0.24.0 - the target loader and
 the Telegram resolver it asks moved to `lib.data_sources` - and `db-ops check-credentials` is an
@@ -161,9 +161,9 @@ component imports in-process quietly starts pulling configuration, a store conne
 behind it. Then "apps do not import `common`" has been routed around rather than kept.
 
 One exception, named at the guard: `notify` reads the notify-level vocabulary from
-`db_ops.config`, lazily and failing open, because that vocabulary is data an operator adds by
-registering a chat. `db_ops.config` is a root module — configuration parsing, imported by
-everything, owning nothing — so this does not point the layer at anything above it. Any *second*
+`db_ops.lib.config`, lazily and failing open, because that vocabulary is data an operator adds by
+registering a chat. The parser is `lib`'s own, so this does not point the layer at anything above
+it. Any *second*
 exception should be argued as hard as this one was.
 
 ---
@@ -260,9 +260,10 @@ run reproducible by hand: the request is a value you can copy.
 
 ```
 app  → lib.telegram_route.telegram_route(level)      # the route, read from config in-process
-app  → db.cli queue-telegram-message -           # complete request, on stdin
+app  → db.queue_message.queue_message(request)    # in-process: apps import db (0.25.0)
          {"store": {...}, "chat_id": ..., "text": ..., "level": ..., "phase": ...}
-           → the store CLI connects with what it was handed, and inserts
+           → the store named by the request (or the caller's own) takes the insert
+shell → db.cli queue-telegram-message -           # the same insert, for a person or a script
 ```
 
 The corollary, and it is a house rule rather than a nicety: **if you had to write a throwaway

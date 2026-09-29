@@ -18,7 +18,7 @@ property is the whole reason this package exists and it would erode one convenie
 time.
 
 The one exception is spelled out where it lives: ``notify`` reads the configured notify-level
-vocabulary from ``db_ops.config``, lazily and failing open, because the vocabulary is data an
-operator adds by registering a Telegram group. ``db_ops.config`` is a root module, not a
-component, so this does not point the layer at anything above it.
+vocabulary from ``db_ops.lib.config``, lazily and failing open, because the vocabulary is data an
+operator adds by registering a Telegram group. The parser is ``lib``'s own, so this does not point
+the layer at anything above it.
 """

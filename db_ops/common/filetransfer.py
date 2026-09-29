@@ -22,7 +22,7 @@ import shlex
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
-from db_ops.common.hostcmd import WINDOWS, Host, HostCommandError, open_client, parse_host, run
+from db_ops.common.hostcmd import WINDOWS, Host, HostCommandError, open_session, parse_host, run
 
 TAR = "tar"
 ZIP = "zip"
@@ -149,15 +149,11 @@ def pull(request: dict[str, Any]) -> dict[str, Any]:
     expected_hash = expected[0].lower() if expected else ""
 
     Path(local).parent.mkdir(parents=True, exist_ok=True)
-    client = open_client(host)
+    session = open_session(host)
     try:
-        sftp = client.open_sftp()
-        try:
-            sftp.get(remote, local)
-        finally:
-            sftp.close()
+        session.sftp().get(remote, local)
     finally:
-        client.close()
+        session.close()
 
     actual = _sha256_local(local)
     _verify(expected_hash, actual, where=f"pulling {remote}")
@@ -176,20 +172,16 @@ def push(request: dict[str, Any]) -> dict[str, Any]:
         raise FileTransferError(f"local_path does not exist: {local}")
 
     expected = _sha256_local(local)
-    client = open_client(host)
+    session = open_session(host)
     try:
-        sftp = client.open_sftp()
-        try:
-            # The destination directory has to exist; SFTP will not make it, and the failure it
-            # gives ("No such file") names the file rather than the directory that is missing.
-            parent = remote.rsplit("\\", 1)[0] if host.runtime == WINDOWS else remote.rsplit("/", 1)[0]
-            if parent and parent != remote:
-                _ensure_dir(host, parent)
-            sftp.put(local, remote)
-        finally:
-            sftp.close()
+        # The destination directory has to exist; SFTP will not make it, and the failure it
+        # gives ("No such file") names the file rather than the directory that is missing.
+        parent = remote.rsplit("\\", 1)[0] if host.runtime == WINDOWS else remote.rsplit("/", 1)[0]
+        if parent and parent != remote:
+            _ensure_dir(host, parent)
+        session.sftp().put(local, remote)
     finally:
-        client.close()
+        session.close()
 
     landed = run(host, _hash_command(host, remote))["stdout"].strip().split()
     _verify(expected, landed[0] if landed else "", where=f"pushing to {remote}")

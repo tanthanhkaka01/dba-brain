@@ -1,22 +1,21 @@
 """Run one ``sqlcmd`` batch where the SQL Server is: here, on a Linux host over SSH, or on a Windows
-host through ``Invoke-Command``.
+host over WinRM.
 
 The SMB restore - the nightly SQL Server restore from a backup share onto another instance - built
-this command in the ``backup_restore`` app and ran it there too: its own SSH channel for a Linux
-target, a local PowerShell for a Windows one, a local ``sqlcmd`` otherwise. The operator's rule for
-0.23.0 is that a restore runs through ``common.cli`` (1.38). The app still decides everything a
-restore decides - which files, which statements, what an interruption means, when to retry - and
-this runs what it decided, with every value in the request: the instance, the SQL login, the host
-login, the timeouts. It reads nothing.
+this command in the ``backup_restore`` app and ran it there too. The operator's rule for 0.23.0 is
+that a restore runs through ``common.cli`` (1.38). The app still decides everything a restore
+decides - which files, which statements, what an interruption means, when to retry - and this runs
+what it decided, with every value in the request: the instance, the SQL login, the host login, the
+timeouts. It reads nothing.
 
-The three ways are the app's own, moved and not rewritten, because the nightly restore of a
-production estate depends on them behaving exactly as they did: the same PATH for the Linux tools,
-the same ``-C -b`` and timeouts, the same ``Invoke-Command`` wrapper with its credential and session
-options (:mod:`db_ops.lib.powershell`, which the app already used).
+**It builds the command; :mod:`remote_exec` runs it** (0.25.0). Until then this module had three
+executors of its own - a local ``Popen``, its own SSH channel, a local PowerShell ``Invoke-Command``
+- beside the one every other command uses. The operator's rule: one way to run anything on a host.
+The command line is unchanged: the same PATH for the Linux tools, the same ``-C -b`` and timeouts.
 
-**Every stdout line is echoed to stderr as it arrives.** A restore runs for an hour, and ``sqlcmd``
-reports ``NN percent processed`` as it goes; the caller streams stderr to whoever is watching, and
-stdout of this process is the JSON answer.
+**Every stdout line is echoed to stderr as it arrives** (over WinRM, when the batch ends). A restore
+runs for an hour, and ``sqlcmd`` reports ``NN percent processed`` as it goes; the caller streams
+stderr to whoever is watching, and stdout of this process is the JSON answer.
 
 **A timeout is an answer, not an error.** ``timed_out`` true, with what had been read, because the
 caller must tell "the command never started" from "it started and was cut off" - a RESTORE LOG cut
@@ -26,9 +25,7 @@ off mid-way leaves a database whose state has to be inspected, not retried blind
 from __future__ import annotations
 
 import shlex
-import subprocess
 import sys
-import threading
 import time
 from typing import Any
 
@@ -87,111 +84,119 @@ def _answer(via: str, started: float, *, exit_code, stdout: str, stderr: str,
             "timed_out": timed_out, "duration_ms": int((time.monotonic() - started) * 1000)}
 
 
+#: The last line of the Windows script: sqlcmd's own exit code. WinRM through pypsrp reports only
+#: whether the error stream was written, and a sqlcmd that fails with -b writes its error to
+#: stdout - a failed RESTORE would read as a success. Read back and removed from the output.
+EXIT_MARKER = "DB_OPS_SQLCMD_EXIT="
+
+#: "No deadline" over WinRM: its backends need a number, and the connect timeout they would fall
+#: back to cuts a one-hour restore off at 30 s. The old Invoke-Command's own maximum, in seconds.
+_WINRM_UNBOUNDED_SECONDS = 2_147_483
+
+
 def _run_local(argv: list[str], *, via: str, timeout: int, started: float) -> dict[str, Any]:
-    """Run ``argv`` here, stdout and stderr together, each line echoed as it arrives."""
-    process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                               encoding="utf-8", errors="replace")
-    lines: list[str] = []
-
-    def read() -> None:
-        assert process.stdout is not None
-        for line in process.stdout:
-            lines.append(line)
-            _echo(line)
-
-    reader = threading.Thread(target=read, daemon=True)
-    reader.start()
-    try:
-        exit_code = process.wait(timeout=timeout) if timeout > 0 else process.wait()
-    except subprocess.TimeoutExpired:
-        process.kill()
-        reader.join(timeout=5)
-        return _answer(via, started, exit_code=None, stdout="".join(lines), stderr="", timed_out=True)
-    reader.join()
-    return _answer(via, started, exit_code=exit_code, stdout="".join(lines), stderr="")
+    """Run ``argv`` here, each line echoed as it arrives; stderr follows stdout in the answer."""
+    return _run({"method": "local"}, argv, via=via, timeout=timeout, started=started, merge=True)
 
 
-def _run_ssh(request: dict[str, Any], host: dict[str, Any], *, timeout: int,
-             started: float) -> dict[str, Any]:
-    from db_ops.common.hostcmd import open_client, parse_host
-
-    target = parse_host({"runtime": "linux", "access": "ssh", "host": host.get("host"),
-                         "port": host.get("port") or 22, "username": host.get("username"),
-                         "password": host.get("password") or "", "key_file": host.get("key_file") or ""})
-    remote = (_LINUX_TOOL_PATH
-              + " ".join(shlex.quote(word) for word in sqlcmd_words(request)) + " "
-              + f"-S {shlex.quote(str(request['instance']))} "
-              + "-C " + " ".join(shlex.quote(arg) for arg in _auth_args(request)) + " "
-              + " ".join(_timeout_args(request)) + " -b "
-              + f"-Q {shlex.quote(str(request['sql']))}")
-    client = open_client(target)
-    try:
-        channel = client.get_transport().open_session(
-            timeout=int(host.get("open_timeout_seconds") or 0) or None)
-        channel.exec_command(remote)
-        deadline = time.monotonic() + timeout if timeout > 0 else None
-        out, err = bytearray(), b""
-        echoed = 0   # how much of `out` has been echoed, up to its last complete line
-
-        def take(chunk: bytes) -> None:
-            nonlocal echoed
-            out.extend(chunk)
-            end = out.rfind(b"\n") + 1
-            if end > echoed:
-                for line in bytes(out[echoed:end]).decode("utf-8", "replace").splitlines():
-                    _echo(line)
-                echoed = end
-
-        timed_out = False
-        while not channel.exit_status_ready():
-            if channel.recv_ready():
-                take(channel.recv(4096))
-            if channel.recv_stderr_ready():
-                err += channel.recv_stderr(4096)
-            if deadline is not None and time.monotonic() >= deadline:
-                timed_out = True
-                channel.close()
-                break
-            time.sleep(0.05)
-        if not timed_out:
-            # A batch that finishes before the first poll leaves everything here - echoed too, or
-            # a quick run shows nothing at all (found on the labs: a 0.04 s RESTORE).
-            while channel.recv_ready():
-                take(channel.recv(4096))
-            while channel.recv_stderr_ready():
-                err += channel.recv_stderr(4096)
-        if echoed < len(out):
-            _echo(bytes(out[echoed:]).decode("utf-8", "replace"))
-        exit_code = None if timed_out else channel.recv_exit_status()
-    finally:
-        client.close()
-    return _answer("ssh", started, exit_code=exit_code, stdout=bytes(out).decode("utf-8", "replace"),
-                   stderr=err.decode("utf-8", "replace"), timed_out=timed_out)
+def ssh_command(request: dict[str, Any]) -> str:
+    """The command a Linux host runs - character for character what the app's SSH channel ran."""
+    return (_LINUX_TOOL_PATH
+            + " ".join(shlex.quote(word) for word in sqlcmd_words(request)) + " "
+            + f"-S {shlex.quote(str(request['instance']))} "
+            + "-C " + " ".join(shlex.quote(arg) for arg in _auth_args(request)) + " "
+            + " ".join(_timeout_args(request)) + " -b "
+            + f"-Q {shlex.quote(str(request['sql']))}")
 
 
-def winrm_argv(request: dict[str, Any], host: dict[str, Any], *, timeout: int) -> list[str]:
-    """The local PowerShell that runs ``sqlcmd`` on a Windows host through ``Invoke-Command``."""
-    from db_ops.lib import powershell
+def ssh_access(host: dict[str, Any]) -> dict[str, Any]:
+    """The Linux host's login, as :mod:`remote_exec` opens it."""
+    key_file = str(host.get("key_file") or "").strip()
+    access: dict[str, Any] = {
+        "method": "ssh", "host": str(host.get("host") or "").strip(), "port": host.get("port") or 22,
+        "username": str(host.get("username") or ""), "password": str(host.get("password") or ""),
+        "auth_type": "key" if key_file else "password", "platform": "linux", "shell": "bash"}
+    if key_file:
+        access["key_file"] = key_file
+    if host.get("open_timeout_seconds"):
+        access["timeout_seconds"] = int(host["open_timeout_seconds"])
+    return access
+
+
+def winrm_script(request: dict[str, Any]) -> str:
+    """The PowerShell a Windows host runs: sqlcmd with the request's values, then its exit code."""
+    from db_ops.lib.powershell import quote_powershell
 
     def array(values: list[str]) -> str:
-        return ", ".join(powershell.quote_powershell(value) for value in values)
+        return ", ".join(quote_powershell(value) for value in values)
 
-    return powershell.build_invoke_command_argv(
-        host=str(host.get("host") or ""),
-        username=str(host.get("username") or "") if host.get("password") else "",
-        password=str(host.get("password") or ""),
-        open_timeout_ms=max(int(host.get("open_timeout_seconds") or 0), 1) * 1000,
-        operation_timeout_ms=timeout * 1000 if timeout > 0 else 2_147_483_647,
-        arguments=[str(request.get("sqlcmd_path") or "sqlcmd"), str(request["instance"]),
-                   str(request["sql"])],
-        script_body=[
-            "    param($SqlcmdPath, $SqlInstance, $Sql)",
-            f"    $sqlAuthArgs = @({array(_auth_args(request))})",
-            f"    $timeoutArgs = @({array(_timeout_args(request))})",
-            "    & $SqlcmdPath -S $SqlInstance -C @sqlAuthArgs @timeoutArgs -b -Q $Sql",
-            "    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }",
-        ],
-    )
+    return "\n".join([
+        f"$SqlcmdPath = {quote_powershell(str(request.get('sqlcmd_path') or 'sqlcmd'))}",
+        f"$SqlInstance = {quote_powershell(str(request['instance']))}",
+        f"$Sql = {quote_powershell(str(request['sql']))}",
+        f"$sqlAuthArgs = @({array(_auth_args(request))})",
+        f"$timeoutArgs = @({array(_timeout_args(request))})",
+        "& $SqlcmdPath -S $SqlInstance -C @sqlAuthArgs @timeoutArgs -b -Q $Sql",
+        f'Write-Output "{EXIT_MARKER}$LASTEXITCODE"',
+    ])
+
+
+def winrm_access(host: dict[str, Any]) -> dict[str, Any]:
+    """The Windows host's login. No password means the node's own identity: no username is sent
+    either, as the app's ``Invoke-Command`` never sent a credential it could not complete."""
+    password = str(host.get("password") or "")
+    access: dict[str, Any] = {
+        "method": "winrm", "host": str(host.get("host") or "").strip(), "platform": "windows",
+        "username": str(host.get("username") or "") if password else "", "password": password}
+    if host.get("open_timeout_seconds"):
+        access["timeout_seconds"] = int(host["open_timeout_seconds"])
+    return access
+
+
+def _with_exit_code(stdout: str) -> tuple[int | None, str]:
+    """``(exit code, stdout without the marker)`` - ``None`` when the script never reached it."""
+    kept: list[str] = []
+    code: int | None = None
+    for line in stdout.splitlines(keepends=True):
+        text = line.strip()
+        if text.startswith(EXIT_MARKER):
+            value = text[len(EXIT_MARKER):].strip()
+            code = int(value) if value.lstrip("-").isdigit() else 0
+            continue
+        kept.append(line)
+    return code, "".join(kept)
+
+
+def _run(access: dict[str, Any], command: Any, *, via: str, timeout: int, started: float,
+         merge: bool = False, script: bool = False) -> dict[str, Any]:
+    """``command`` (or a ``script``) through :mod:`remote_exec`, answered as this module answers.
+
+    Could not run at all is :class:`HostCommandError`; cut off at the deadline is ``timed_out``.
+    """
+    from db_ops.common import remote_exec
+    from db_ops.common.hostcmd import HostCommandError
+
+    def answer(exit_code: int | None, out: str, err: str, *, timed_out: bool = False) -> dict[str, Any]:
+        if merge:
+            out, err = out + err, ""
+        return _answer(via, started, exit_code=exit_code, stdout=out, stderr=err, timed_out=timed_out)
+
+    try:
+        with remote_exec.open_session(access) as session:
+            if script:
+                result = session.run_script(command, timeout_seconds=timeout or _WINRM_UNBOUNDED_SECONDS)
+            else:
+                result = session.run(command, timeout_seconds=timeout or None, on_output=_echo)
+    except remote_exec.RemoteCommandTimeoutError as exc:
+        return answer(None, exc.stdout or "", exc.stderr or "", timed_out=True)
+    except remote_exec.RemoteExecError as exc:
+        raise HostCommandError(str(exc)) from exc
+    if not script:
+        return answer(result.exit_code, result.stdout or "", result.stderr or "")
+    code, out = _with_exit_code(result.stdout or "")
+    for line in out.splitlines():
+        _echo(line)
+    return answer(result.exit_code if code is None else code, out, result.stderr or "")
 
 
 def local_argv(request: dict[str, Any]) -> list[str]:
@@ -219,6 +224,8 @@ def run_sqlcmd(request: dict[str, Any]) -> dict[str, Any]:
     timeout = int(request.get("timeout_seconds") or 0)
     started = time.monotonic()
     if via == "ssh":
-        return _run_ssh(request, host, timeout=timeout, started=started)
-    argv = winrm_argv(request, host, timeout=timeout) if via == "winrm" else local_argv(request)
-    return _run_local(argv, via=via, timeout=timeout, started=started)
+        return _run(ssh_access(host), ssh_command(request), via=via, timeout=timeout, started=started)
+    if via == "winrm":
+        return _run(winrm_access(host), winrm_script(request), via=via, timeout=timeout, started=started,
+                    merge=True, script=True)
+    return _run_local(local_argv(request), via=via, timeout=timeout, started=started)

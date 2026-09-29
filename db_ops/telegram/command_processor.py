@@ -18,7 +18,7 @@ from db_ops.lib import field_names
 from db_ops.lib import node_role as node_role_rule
 from db_ops.lib.listing import active_only, choice_lines, hidden_note
 from db_ops.lib.secret_text import SECRET_KEY_ENV_VAR
-from db_ops.config import DEFAULT_CONFIG_PATH, load_config
+from db_ops.lib.config import DEFAULT_CONFIG_PATH, load_config
 from db_ops.transport import common_cli
 from db_ops.lib.common_cli import build_command, common_invocation
 from db_ops.lib.data_sources import request_fill
@@ -45,7 +45,7 @@ from db_ops.lib.telegram_command_text import (  # noqa: F401 - re-exported, see 
     strip_bot_username,
 )
 from db_ops.db.queue_message import queue_message, store_block_from
-from db_ops.lib.time_window import MANUAL_ONLY
+from db_ops.lib.time_window import MANUAL_ONLY, weekdays_text, window_of
 from db_ops.db.job_runs import telegram_log_metadata
 from db_ops.db import DbOpsStore
 from db_ops.logging_ops import log_event, setup_app_logger
@@ -1833,29 +1833,34 @@ def execute_list_all_command_command(
 
 
 def _format_time_window_line(window: dict[str, Any] | None) -> str:
-    """Compact one-line time-window text: only the set bounds + repeat/timeout."""
-    window = window if isinstance(window, dict) else {}
+    """Compact one-line time-window text: only the set bounds + repeat/timeout.
+
+    Read through the scheduler's parser (rules R20), so a legacy field name or a blank shows what
+    the scheduler will do; a window it refuses says so instead of looking like a schedule.
+    """
+    parsed = window_of({"time_window": window if isinstance(window, dict) else {}})
+    if parsed is None:
+        return "invalid time_window (the scheduler refuses it)"
     # A manual entry keeps its day/hour bounds in the JSON, but nothing ever consults them.
     # Printing "day 1..31 hour 0..23" would tell the operator it runs all day, every day.
-    if window.get("repeat_interval") == MANUAL_ONLY:
-        timeout = window.get("timeout")
-        suffix = f" timeout {timeout}s" if timeout is not None else ""
+    if parsed.repeat_interval == MANUAL_ONLY:
+        suffix = f" timeout {parsed.timeout}s" if parsed.timeout is not None else ""
         return f"manual (run with /spbot_run_sql_task){suffix}"
     parts: list[str] = []
     for name in ("year", "month", "day", "hour", "minute"):
-        from_value = window.get(f"from_{name}")
-        to_value = window.get(f"to_{name}")
+        from_value = getattr(parsed, f"from_{name}")
+        to_value = getattr(parsed, f"to_{name}")
         if from_value is None and to_value is None:
             continue
         parts.append(f"{name} {'-' if from_value is None else from_value}..{'-' if to_value is None else to_value}")
-    repeat = window.get("repeat_interval")
-    if repeat == 0:
+    if parsed.weekdays is not None:
+        parts.append(f"on {weekdays_text(parsed.weekdays)}")
+    if parsed.repeat_interval == 0:
         parts.append("run-once")
-    elif repeat is not None:
-        parts.append(f"every {repeat}s")
-    timeout = window.get("timeout")
-    if timeout is not None:
-        parts.append(f"timeout {timeout}s")
+    elif parsed.repeat_interval is not None:
+        parts.append(f"every {parsed.repeat_interval}s")
+    if parsed.timeout is not None:
+        parts.append(f"timeout {parsed.timeout}s")
     return " ".join(parts) or "always"
 
 
@@ -2287,7 +2292,7 @@ def _message_document(message: Any) -> dict[str, Any] | None:
 
 def _download_document_text(document: dict[str, Any], *, config_path: str | Path) -> str:
     """Download an attached document and decode it as text (utf-8, BOM tolerant)."""
-    from db_ops.config import load_config
+    from db_ops.lib.config import load_config
     from db_ops.telegram import api
 
     config = load_config(config_path)
@@ -2312,7 +2317,7 @@ def _download_document_base64(document: dict[str, Any], *, config_path: str | Pa
     """
     import base64
 
-    from db_ops.config import load_config
+    from db_ops.lib.config import load_config
     from db_ops.telegram import api
 
     config = load_config(config_path)

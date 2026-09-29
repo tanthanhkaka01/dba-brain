@@ -489,11 +489,11 @@ def test_the_transfer_recreates_empty_directories(monkeypatch):
 
     class _Client:
         def __init__(self, sftp): self._sftp = sftp
-        def open_sftp(self): return self._sftp
+        def sftp(self): return self._sftp
 
     result = transfer.sync_backup_dir(
-        source_client=_Client(source), source_dir="/src",
-        target_client=_Client(target), target_dir="/dst",
+        source_session=_Client(source), source_dir="/src",
+        target_session=_Client(target), target_dir="/dst",
     )
 
     assert result.copied == 0
