@@ -21,7 +21,7 @@ from typing import Any
 from db_ops.lib.coerce import as_utc_datetime
 from db_ops.lib.time_window import TimeWindow, due_from_row, is_time_window_open, run_anchor
 from db_ops.lib.timezone import display_now
-from db_ops.lib import process_liveness, run_claim
+from db_ops.lib import node_identity, process_liveness, run_claim
 from db_ops.db.job_runs import JobRun
 from db_ops.db.store import DbOpsStore, utc_now_text
 
@@ -191,6 +191,7 @@ def reap_stale_runs(
                 timeout_seconds=int(timeout),
                 pid_alive=(process_liveness.is_pid_alive(owner_pid)
                            if owner_pid is not None and owner_host == this_host else None),
+                this_node=node_identity.current(),
             )
             if not verdict.reap:
                 continue

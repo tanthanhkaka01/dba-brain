@@ -162,7 +162,7 @@ def test_the_task_reads_the_warnings_run_sql_answers(monkeypatch):
 
     answer = {"result_sets": [], "affected_rows": 3, "warnings": [WARNING_8153[1]]}
     monkeypatch.setattr(runner.common_cli, "run_allowing_failure",
-                        lambda command, request: (True, answer, ""))
+                        lambda command, request, **_kw: (True, answer, ""))
 
     result = runner.execute_sql(command=sql_command(), target=sql_target(), database={},
                                 credential={}, password="", sql_text="EXEC dbo.engine;")

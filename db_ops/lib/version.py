@@ -8,4 +8,4 @@ Format: MAJOR.MINOR.PATCH, zero-padded. The released number is ``PUBLIC_VERSION`
 ``lib/distribution.py``, which is separate.
 """
 
-__version__ = "0.25.0"
+__version__ = "0.26.0"

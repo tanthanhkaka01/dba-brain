@@ -55,7 +55,7 @@ from db_ops.lib.data_sources import request_fill
 from db_ops.transport import common_cli
 from db_ops.lib import process_liveness
 from db_ops.lib import sql_task_target
-from db_ops.lib import run_claim
+from db_ops.lib import node_identity, run_claim
 from db_ops.lib.secret_text import add_key_argument, set_key_env
 # Connecting and executing are `common`'s, reached through `common.cli run-sql` — this app
 # imported nine driver-level helpers from `sql_execution` for a connection it no longer opens, and
@@ -267,6 +267,20 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--all", action="store_true",
         help="Include inactive tasks and targets. Default lists only what would actually run.",
     )
+
+    close_run = subparsers.add_parser(
+        "close-run",
+        help="Close ONE run left 'running' by a process that no longer exists, releasing its "
+             "target. Refuses a row that is not running.",
+    )
+    close_run.add_argument("--sql-run-id", type=int, required=True,
+                           help="The sql_runs row to close.")
+    close_run.add_argument("--reason", required=True,
+                           help="Why it is being closed - written into the row, so the close is "
+                                "not read later as a run that failed on its own.")
+    close_run.add_argument("--confirm", default="", metavar="yes",
+                           help="Must be `yes`. Closing a row whose process is in fact alive lets "
+                                "the next scan start a second copy on top of it. Never prompted.")
     return parser.parse_args(argv)
 
 
@@ -388,6 +402,14 @@ def main(argv: list[str]) -> int:
         store = DbOpsStore.from_config(config)
         store.initialize()
         data_dir = Path(args.data_dir).resolve()
+        if args.command == "close-run":
+            answer = close_orphaned_run(store=store, sql_run_id=int(args.sql_run_id),
+                                        reason=str(args.reason), confirm=_opt_str(args.confirm))
+            print(json.dumps(answer, ensure_ascii=False, indent=1))
+            log_event(logger, level="error" if answer["closed"] else "logging",
+                      message=(f"sql_tasks.runner.close_run|sql_run_id={args.sql_run_id}"
+                               f"|closed={answer['closed']}|reason={answer['reason']}"))
+            return 0 if answer["closed"] else 1
         if args.command == "run-sql-id":
             if not args.force:
                 raise RuntimeError("run-sql-id requires --force.")
@@ -442,6 +464,39 @@ def main(argv: list[str]) -> int:
             log_function_error(logger, function_name="sql_tasks.runner", error_text=str(exc))
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
+
+
+def close_orphaned_run(*, store: DbOpsStore, sql_run_id: int, reason: str, confirm: str) -> dict:
+    """Close one ``running`` row by hand - what the stale sweep does, for the row it will not.
+
+    A row whose owner cannot be checked from here waits for its timeout plus an hour of grace, and
+    the row is the claim, so its target does not run meanwhile. On 2026-09-30 that was the
+    production engine task's first target, and the row was closed with a script calling
+    ``update_sql_run`` (0.26.0 §1.69). This is that call, with the same guard the sweep uses:
+    ``only_if_status="running"``, so a run that finished in the meantime keeps its own ending.
+    """
+    if str(confirm or "").strip().lower() != "yes":
+        return {"closed": False, "sql_run_id": sql_run_id,
+                "reason": "not confirmed: pass --confirm yes"}
+    if not str(reason or "").strip():
+        return {"closed": False, "sql_run_id": sql_run_id, "reason": "a reason is required"}
+    row = next((r for r in store.fetch_running_sql_runs() if int(r["sql_run_id"]) == sql_run_id),
+               None)
+    if row is None:
+        return {"closed": False, "sql_run_id": sql_run_id,
+                "reason": "no running row with that id - finished, closed, or never existed"}
+    owner_pid, owner_host = run_claim.claim_owner(run_claim.row_metadata(row))
+    message = (f"SQL task {row['sql_code']} target {row['target_no']} closed by hand: "
+               f"{reason.strip()} (claimed by pid {owner_pid} on {owner_host or 'unknown host'}).")
+    closed = store.update_sql_run(
+        sql_run_id=sql_run_id, status="error", level="error", message=message,
+        finished_at=utc_now_text(), error_text=message,
+        metadata={"stale_running": True, "closed_by": "operator", "close_reason": reason.strip()},
+        only_if_status="running",
+    )
+    return {"closed": bool(closed), "sql_run_id": sql_run_id, "sql_code": str(row["sql_code"]),
+            "target_no": int(row["target_no"]), "claim_pid": owner_pid, "claim_host": owner_host,
+            "reason": message if closed else "the row stopped being running before the close landed"}
 
 
 def run_scheduler_scan(
@@ -650,6 +705,7 @@ def mark_stale_running_sql_runs(
             timeout_seconds=timeout_seconds,
             pid_alive=(process_liveness.is_pid_alive(owner_pid)
                        if owner_pid is not None and owner_host == this_host else None),
+            this_node=node_identity.current(),
         )
         if not verdict.reap:
             continue
@@ -1725,7 +1781,8 @@ def execute_on_target(
         request["prelude"] = prelude
         request["params"] = bound
 
-    success, result, error = common_cli.run_allowing_failure("run-sql", request)
+    success, result, error = common_cli.run_allowing_failure(
+        "run-sql", request, timeout_seconds=run_deadline_seconds(target.timeout_seconds))
     if not success:
         raise RuntimeError(error or "run-sql failed without a reason.")
 
@@ -1748,6 +1805,30 @@ def execute_on_target(
         # when there is one, so a clean run's result keeps the shape every reader already has.
         **({"warnings": [str(item) for item in result["warnings"]]} if result.get("warnings") else {}),
     }
+
+
+#: How many of its own timeouts a ``run-sql`` child may take before this runner stops it.
+RUN_DEADLINE_FACTOR = 2
+
+
+def run_deadline_seconds(timeout_seconds: int) -> int:
+    """The wall-clock deadline on one ``run-sql`` child - the bound the task's timeout never was.
+
+    ``timeout_seconds`` reaches the driver as a *query* timeout, and a query timeout is per call:
+    it restarts on every batch and on every ``nextset()``, so a procedure that answers a stream of
+    small results can run for ever without any single call timing out. The child had no other
+    bound - it was started with no deadline at all - and the claim held by its live pid is never
+    reaped (``run_claim``). On 2026-09-30 SQL033's third target, timeout 7200 s, logged its start
+    at 02:00 +07 and nothing after it for 13 hours, until the container was stopped; 2026-09-28 had
+    a 35-hour one (0.26.0 §1.70).
+
+    Twice the timeout, not the timeout itself: the timeout bounds the statements, and a task of
+    several batches may legitimately take longer in total than one of them may. Past twice, nothing
+    is "legitimately longer" any more. Killing the child closes its connection; what the server does
+    with a statement still running when that happens is the engine's, and is said in §1.70.
+    """
+    budget = max(int(timeout_seconds or 0), 1)
+    return budget * RUN_DEADLINE_FACTOR + DEFAULT_CONNECT_TIMEOUT_SECONDS
 
 
 def legacy_define_values(

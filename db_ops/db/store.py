@@ -12,7 +12,7 @@ from pathlib import Path
 from db_ops.lib.config import StoreConfig
 from db_ops.db.job_runs import JobRun
 from db_ops.lib.rows import row_value
-from db_ops.lib import run_claim
+from db_ops.lib import node_identity, run_claim
 from db_ops.db import backend as backend_mod
 from db_ops.db.backend import StoreTarget
 
@@ -259,7 +259,8 @@ class DbOpsStore:
         metadata = dict(item.metadata or {})
         host_name = item.host_name or socket.gethostname()
         if running:
-            metadata.update(run_claim.claim_fields(pid=_claim_pid(metadata), host=host_name))
+            metadata.update(run_claim.claim_fields(pid=_claim_pid(metadata), host=host_name,
+                                                   node=node_identity.current()))
         metadata_json = json.dumps(metadata, ensure_ascii=False, sort_keys=True)
         try:
             with self.connect() as conn:
@@ -1944,7 +1945,8 @@ class DbOpsStore:
             # The claim is the row: whoever this INSERT accepts owns the run. The pid and host go
             # in beside it so the next scan can ask whether the owner is still alive instead of
             # reaping the row on age and starting a second copy on top of it.
-            metadata.update(run_claim.claim_fields(pid=_claim_pid(metadata), host=host_name))
+            metadata.update(run_claim.claim_fields(pid=_claim_pid(metadata), host=host_name,
+                                                   node=node_identity.current()))
         metadata_json = json.dumps(metadata, ensure_ascii=False, sort_keys=True)
         try:
             with self.connect() as conn:

@@ -15,6 +15,32 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-10-01
+
+### Added
+
+- **`python -m db_ops.sql_tasks.cli close-run --sql-run-id N --reason "..." --confirm yes`** closes
+  one SQL task run left `running` by a process that no longer exists, and releases its target. It
+  closes a row only while it is still `running`, and is never prompted for.
+
+### Changed
+
+- **The tool root has an identity of its own** - `runtime/node_identity`, written once. The daemon
+  hands it to every process it starts, and each run records it beside its host and pid.
+
+### Fixed
+
+- **A container recreated under a new host name frees the runs its predecessor left open at once.**
+  They used to hold their task's target for the run's timeout plus an hour, because the new host
+  name read as another machine whose processes cannot be checked. Rows written by 0.25.0 and earlier
+  carry no identity, so the upgrade *to* 0.26.0 still waits for them (or use `close-run`).
+- **A SQL task run ends at twice its timeout at the latest.** The timeout reached the driver as a
+  per-call query timeout, which restarts on every batch and result set, and the `run-sql` process
+  itself had no deadline - one run went 13 hours on a 2-hour timeout. It is now stopped at twice the
+  timeout plus the connect timeout, and fails saying so.
+- **The SQL Server 2008 R2 sleeping-open-transaction metric names the client's address**
+  (`client_ip=`), as the current variant has since 0.25.0.
+
 ## [0.25.0] - 2026-09-30
 
 ### Added

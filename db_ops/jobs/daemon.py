@@ -32,7 +32,7 @@ from db_ops.lib.timezone import display_now
 from db_ops import __version__ as db_ops_version
 from db_ops.db import DbOpsStore
 from db_ops.db.store import RunAlreadyClaimed
-from db_ops.lib import daemon_state, process_liveness, run_claim, store_outage
+from db_ops.lib import daemon_state, node_identity, process_liveness, run_claim, store_outage
 from db_ops.lib import node_role as node_role_rule
 from db_ops.lib import run_mode as run_mode_lib
 from db_ops.db.store import utc_now_text
@@ -279,6 +279,13 @@ def main(argv: list[str]) -> int:
                 version=db_ops_version,
                 node_role=os.environ.get("DB_OPS_NODE_ROLE") or "master",
             )
+        # Before the first claim and the first reap: every run this daemon starts inherits it, and
+        # the startup recovery below is what reads it - a recreated container finds the rows its
+        # predecessor left under another host name and frees them now, not an hour past their
+        # timeout (0.26.0 §1.69). A root that cannot hold the file leaves it unset: no sooner reap.
+        _identity = node_identity.ensure(config.runtime_dir)
+        if _identity:
+            os.environ[node_identity.ENV_VAR] = _identity
         record_node_timezone(store=store, config=config, logger=logger)
         _startup_commands = load_app_commands(data_dir / "app_commands.json", logger=logger)
         recover_stale_running_jobs(store=store, app_commands=_startup_commands, config=config, logger=logger)
@@ -1129,6 +1136,7 @@ def recover_stale_running_jobs(
             timeout_seconds=0 if app_command.timeout_disabled else app_command.timeout_seconds,
             pid_alive=(process_liveness.is_pid_alive(owner_pid)
                        if owner_pid is not None and owner_host == this_host else None),
+            this_node=node_identity.current(),
         )
         # A service (timeout 0) is still closed here whatever its age, as it always was: this is
         # startup, and its daemon is gone. Only a live pid holds it.

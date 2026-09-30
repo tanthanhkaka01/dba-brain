@@ -464,6 +464,17 @@ the killed row was never latest again, so it never came back through here — no
 alert, and two runs that had died sat in `running` for the rest of the day. What the operator saw
 was runs that had *stopped failing*, which is the worse of the two.
 
+**A run cannot outlive twice its timeout (0.26.0).** The target's `timeout` reaches the driver as a
+query timeout, which is per call: it restarts on every batch and every `nextset()`, so a procedure
+answering a stream of small results never trips it. The `run-sql` child was started with no
+deadline of its own, and a `running` row whose pid is alive is never reaped - so on 2026-09-30
+`SQL033`'s third target (timeout 7200 s) ran for 13 hours until its container was stopped. The
+runner now starts each `run-sql` child with a wall-clock deadline of **twice the timeout plus the
+connect timeout** (`run_deadline_seconds`), and kills it there; the run fails with *ran past its
+deadline of Ns and was stopped*. Twice, not once, because the timeout bounds the statements and a
+task of several batches may legitimately take longer in total. Killing the child closes its
+connection; the next bullet still applies to what the server does with a statement in flight.
+
 Two things this **cannot** do, and both have bitten:
 
 - **It does not stop the SQL.** The runner executes a task inline in the scan process, so when the
@@ -659,6 +670,21 @@ all: `/spbot_run_sql_task` never asked for one, and every run of a task that req
 parameter failed telling the operator to pass a `--param` they were never asked for. The
 listing is built from the same loaders the runner executes with, so it cannot drift from what
 running the task would do.
+
+### `close-run` — release one run left `running` by hand
+
+```bash
+python -m db_ops.sql_tasks.cli close-run --sql-run-id 92697 --reason "killed by the worker upgrade" --confirm yes
+```
+
+For the row the sweep will not close yet - another host's, inside its timeout plus an hour - when
+the operator knows its process is gone. The call the sweep makes, with its guard: the row becomes
+`error` with `metadata_json` `{"stale_running": true, "closed_by": "operator", "close_reason": ...}`
+**only if it is still `running`**, so a run that ended meanwhile keeps its own ending. A row that is
+not running is refused. `--confirm yes` is required and never prompted for: closing a row whose
+process is in fact alive lets the next scan start a second copy on top of it. Prints one JSON object
+(`closed`, `sql_code`, `target_no`, the claim's pid and host, the reason written); exit code 1 when
+nothing was closed. Until 0.26.0 this was a script calling `update_sql_run` (2026-09-30).
 
 ### Oracle 8i targets (`sql_access`)
 

@@ -215,11 +215,23 @@ host that own it, and the reaper asks whether that process is still there
 | --- | --- |
 | this host, pid alive | **held**, however old it is |
 | this host, pid gone | **freed at once** — a dead process will not come back |
+| **this node under a host name it no longer has** | **freed at once** — a container recreated without a pinned `hostname` (0.26.0) |
 | another host | **freed only after its timeout plus an hour**, because this host cannot check that one's processes |
 | no pid recorded (written by an older build) | age alone, exactly as before |
 
 Closing the row is what releases its claim, so "is it stale?" and "may another run start?" are the
 same question and are now answered in one place.
+
+**A node is not its host name (0.26.0).** A container whose compose file pins no `hostname` comes up
+under a new one on every recreate, and read its predecessor's open rows as "another host's": on
+2026-09-30 the upgrade to 0.25.0 held the production engine task's first target that way until the
+row was closed by hand. The tool root now has an identity of its own, `runtime/node_identity` - a
+random id written once, kept on the host across a recreate, never in a config bundle
+(`db_ops/lib/node_identity.py`). The daemon reads it at start and hands it to every child in
+`DB_OPS_NODE_IDENTITY`; each claim records it as `claim_node`. A row carrying this node's identity
+under a different host name is freed at once, **without asking about its pid** - the new
+container's pids start from 1 again, and the old number may be alive there as something else. A
+process started by hand has no identity, and its rows and reaps are judged exactly as before.
 
 **And the other direction — a run that is genuinely still going blocks the next one, across a
 restart.** The `running` row is tested *before* the repeat interval, which matters because almost

@@ -15,6 +15,7 @@ remains: *this row says running — is anybody actually running it?*
 | --- | --- |
 | Owned by **this host**, pid alive | **Held.** Leave it, whatever its age: a task may legitimately outlive its timeout, and taking the claim away starts a second copy on top of the first — which is the loop |
 | Owned by **this host**, pid gone | **Free** once the process is gone. No waiting: a dead process will not come back |
+| Owned by **this node under a host name it no longer has** | **Free at once.** The node's identity (``node_identity``) outlives its host name; a container recreated under a new one has no process left from the old one |
 | Owned by **another host** | **Free only after a grace**, because this host cannot ask that one whether its pid is alive. The grace is long on purpose |
 | **No pid recorded** (written by an older build) | Falls back to age alone, the behaviour before this module existed |
 
@@ -35,6 +36,8 @@ FOREIGN_HOST_GRACE_SECONDS: int = 3600
 #: Where the claim is written inside a run row's ``metadata_json``.
 PID_FIELD = "claim_pid"
 HOST_FIELD = "claim_host"
+#: The tool root's identity (``node_identity``), when the claiming process was handed one.
+NODE_FIELD = "claim_node"
 
 
 @dataclass(frozen=True)
@@ -45,13 +48,34 @@ class ReapVerdict:
     reason: str
 
 
-def claim_fields(*, pid: int, host: str) -> dict[str, object]:
+def claim_fields(*, pid: int, host: str, node: str = "") -> dict[str, object]:
     """The metadata a run writes when it claims its key.
 
     Both halves are needed and neither is enough: a pid without a host is a number that means
     something different on every machine, and a host without a pid cannot be checked at all.
+    ``node`` is written only when there is one, so a row from a process nobody handed an identity
+    reads exactly as it did before the field existed.
     """
-    return {PID_FIELD: int(pid), HOST_FIELD: str(host)}
+    fields: dict[str, object] = {PID_FIELD: int(pid), HOST_FIELD: str(host)}
+    if str(node or "").strip():
+        fields[NODE_FIELD] = str(node).strip()
+    return fields
+
+
+def claim_node(metadata: dict | None) -> str:
+    """The node identity recorded on a claim, or ``""``."""
+    return str((metadata or {}).get(NODE_FIELD) or "").strip()
+
+
+def _left_by_an_earlier_host_of_this_node(metadata: dict | None, *, host: str, this_host: str,
+                                          this_node: str) -> bool:
+    """Was this claim made by *this* node, running under a host name it no longer has?
+
+    Both identities must be present and equal. A missing one on either side is not evidence, and
+    the row falls through to the other-host rule - never to a sooner reap.
+    """
+    node = claim_node(metadata)
+    return bool(node) and bool(this_node) and node == this_node and bool(host) and host != this_host
 
 
 def row_metadata(row: object) -> dict:
@@ -105,6 +129,7 @@ def reap_verdict(
     timeout_seconds: float,
     pid_alive: bool | None,
     foreign_grace_seconds: int = FOREIGN_HOST_GRACE_SECONDS,
+    this_node: str = "",
 ) -> ReapVerdict:
     """May this ``running`` row be closed and its key released?
 
@@ -120,6 +145,16 @@ def reap_verdict(
         if pid_alive:
             return ReapVerdict(False, f"pid {pid} is alive on {host}: the run is still going")
         return ReapVerdict(True, f"pid {pid} is gone on {host}")
+
+    # The host name moved and the node did not: a recreated container. Its pids are not checked -
+    # the new container's pid namespace starts again from 1 and the old number may well be alive
+    # there as something else, which would hold the row for ever.
+    if pid is not None and _left_by_an_earlier_host_of_this_node(
+            metadata, host=host, this_host=this_host, this_node=this_node):
+        return ReapVerdict(
+            True,
+            f"claimed by pid {pid} on {host}, a host name this node ({this_host}) no longer has: "
+            f"its processes ended with that host")
 
     if pid is not None and host and host != this_host:
         if elapsed_seconds >= max(timeout_seconds, 0) + foreign_grace_seconds:
@@ -149,6 +184,7 @@ def startup_verdict(
     timeout_seconds: float,
     pid_alive: bool | None,
     foreign_grace_seconds: int = FOREIGN_HOST_GRACE_SECONDS,
+    this_node: str = "",
 ) -> ReapVerdict:
     """The same question asked at daemon startup, where one more fact is known.
 
@@ -168,7 +204,7 @@ def startup_verdict(
         return reap_verdict(
             metadata=metadata, this_host=this_host, elapsed_seconds=elapsed_seconds,
             timeout_seconds=timeout_seconds, pid_alive=None,
-            foreign_grace_seconds=foreign_grace_seconds)
+            foreign_grace_seconds=foreign_grace_seconds, this_node=this_node)
     if pid is not None and pid_alive:
         return ReapVerdict(False, f"pid {pid} outlived its daemon and is still working")
     if pid is not None:
@@ -181,9 +217,11 @@ def startup_verdict(
 __all__ = [
     "FOREIGN_HOST_GRACE_SECONDS",
     "HOST_FIELD",
+    "NODE_FIELD",
     "PID_FIELD",
     "ReapVerdict",
     "claim_fields",
+    "claim_node",
     "claim_owner",
     "row_metadata",
     "reap_verdict",

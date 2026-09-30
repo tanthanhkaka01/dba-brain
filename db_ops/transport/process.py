@@ -34,6 +34,11 @@ def execute(spec: CommandSpec) -> ProcessResult:
             stderr=None if spec.stream_stderr else subprocess.PIPE,
             timeout=spec.timeout_seconds,
         )
+    except subprocess.TimeoutExpired:
+        # `run` has already killed the child. Said as what it is: a command that ran and was
+        # stopped reads differently in an alert from one that never started.
+        return ProcessResult(returncode=None, stdout="", stderr="",
+                             error=f"ran past its deadline of {spec.timeout_seconds}s and was stopped")
     except (OSError, subprocess.SubprocessError) as exc:
         return ProcessResult(returncode=None, stdout="", stderr="", error=f"could not run: {exc}")
     return ProcessResult(returncode=completed.returncode, stdout=decode(completed.stdout),

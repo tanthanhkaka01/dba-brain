@@ -685,6 +685,12 @@ it claims. `LINKED_SERVER_STATUS` shipped one variant named `sqlserver_2008r2_pl
 the **whole batch**, the metric returned nothing at all rather than partial data. When adding a
 2008 R2 floor, write the `legacy_2008r2/` file and raise the modern variant's floor to 11; a
 2012+ feature reachable from a `min_major_version: 10` variant is a metric that never runs.
+The opposite drift is quieter: a field added to the modern file and not to its 2008 R2 twin. 0.25.0
+added `client_ip=` to every collector joining `sys.dm_exec_connections` and left the twins, so 144
+of 214 sleeping-transaction rows on 2026-09-30 named no address; 0.26.0 added it to
+`legacy_2008r2/024`, and `tests/test_every_sqlserver_session_collector_names_the_client_address.py`
+holds both folders to it. (`legacy_2008r2/009` counts per database and names no session, so it has
+no address to give.)
 Verify with `run-sql` and `"autocommit": true` against a real instance of that version — see
 [`13_common.md`](./13_common.md).
 
