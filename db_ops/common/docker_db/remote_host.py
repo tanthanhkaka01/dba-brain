@@ -235,6 +235,38 @@ class RemoteUbuntuHost:
             _time.sleep(poll_interval)
 
 
+def docker_install_script() -> str:
+    """The root shell script that installs Docker and the compose v2 plugin on Ubuntu.
+
+    **The download and the run are two steps, and each is checked.** This was
+    ``curl -fsSL https://get.docker.com | sh`` under ``set -e`` - and without ``pipefail`` a pipe's
+    status is its last command's, so when the download failed ``sh`` read an empty script and
+    exited 0. The install "succeeded" having installed nothing; the caller then reported Docker as
+    *installed but not usable as the SSH user*, about a host where not even root had a ``docker``.
+    That was a new test VM on 2026-09-30 whose DNS could not resolve ``get.docker.com`` (and whose
+    TLS inspection broke ``download.docker.com``) while its apt mirror worked.
+
+    **The distro packages are the fallback whenever the script cannot do it**, not only when
+    ``curl`` is missing: a host that can reach its apt mirror and not Docker's site is the common
+    shape behind a proxy. ``apt-get update`` is allowed to fail - one unreachable index (a
+    security mirror) fails it while the package is still installable from the rest.
+    """
+    return (
+        "export DEBIAN_FRONTEND=noninteractive; "
+        'script=$(mktemp) || exit 1; ok=""; '
+        "if { command -v curl >/dev/null 2>&1 && curl -fsSL --max-time 120 -o \"$script\" "
+        "https://get.docker.com; } || { command -v wget >/dev/null 2>&1 && wget -q -T 120 "
+        "-O \"$script\" https://get.docker.com; }; then "
+        'if [ -s "$script" ] && sh "$script"; then ok=1; fi; fi; '
+        'rm -f "$script"; '
+        'if [ -z "$ok" ]; then '
+        "echo 'get.docker.com unavailable or failed; installing docker.io + docker-compose-v2' >&2; "
+        "apt-get update || true; "
+        "apt-get install -y docker.io docker-compose-v2 || exit 1; fi; "
+        "command -v docker >/dev/null 2>&1"
+    )
+
+
 def ensure_docker(
     host: "RemoteUbuntuHost",
     *,
@@ -258,8 +290,8 @@ def ensure_docker(
     1. probe ``docker --version`` and ``docker compose version`` as the SSH user;
     2. if either is missing, install via the official convenience script (``get.docker.com``,
        which includes the compose v2 plugin), falling back to the distro packages
-       (``docker.io`` + ``docker-compose-v2``) when ``curl`` is absent — needs root, run through
-       ``sudo -S``;
+       (``docker.io`` + ``docker-compose-v2``) when the script cannot be fetched or fails — needs
+       root, run through ``sudo -S`` (:func:`docker_install_script`);
     3. enable + start the docker service, add the SSH user to the ``docker`` group, and create
        the containers dir and the backup mount owned by that user;
     4. reconnect (so the new group membership applies) and re-probe.
@@ -273,13 +305,7 @@ def ensure_docker(
     already = _usable()
     installed = False
     if not already:
-        install = (
-            "set -e; export DEBIAN_FRONTEND=noninteractive; "
-            "if command -v curl >/dev/null 2>&1; then curl -fsSL https://get.docker.com | sh; "
-            "elif command -v wget >/dev/null 2>&1; then wget -qO- https://get.docker.com | sh; "
-            "else apt-get update && apt-get install -y docker.io docker-compose-v2; fi"
-        )
-        result = host.run_sudo(install, sudo_password, capture_output=True)
+        result = host.run_sudo(docker_install_script(), sudo_password, capture_output=True)
         if result.returncode != 0:
             raise RemoteHostError(
                 f"Docker install failed on {host.host} (exit {result.returncode}). The SSH user "
@@ -320,6 +346,14 @@ def ensure_docker(
         # Group may need a fully fresh session on some images; fall back to a sudo probe so we
         # can report the real state rather than a misleading permission error.
         sudo_probe = host.run_sudo("docker compose version", sudo_password, capture_output=True)
+        if sudo_probe.returncode == 127:
+            # Not even root finds it: nothing was installed, whatever the install step returned.
+            raise RemoteHostError(
+                f"Docker is NOT installed on {host.host}: `docker` is not found even as root after "
+                f"the install step. The host could not fetch get.docker.com and could not install "
+                f"the docker.io / docker-compose-v2 packages either - check its DNS, proxy and apt "
+                f"sources, or install Docker by hand, then re-run."
+            )
         raise RemoteHostError(
             f"Docker is installed on {host.host} but not usable as '{host.user}' without sudo "
             f"(group membership may need a fresh session). sudo probe rc={sudo_probe.returncode}. "

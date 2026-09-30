@@ -38,6 +38,9 @@ do about it. Not the internal refactor that made it possible.
   per-call query timeout, which restarts on every batch and result set, and the `run-sql` process
   itself had no deadline - one run went 13 hours on a 2-hour timeout. It is now stopped at twice the
   timeout plus the connect timeout, and fails saying so.
+- **`create-db-docker --install-docker` installs Docker on a host that cannot reach get.docker.com**
+  from its distro packages (`docker.io` + `docker-compose-v2`). A failed download used to pass as a
+  finished install, and the command then called Docker installed-but-unusable on a host that had none.
 - **The SQL Server 2008 R2 sleeping-open-transaction metric names the client's address**
   (`client_ip=`), as the current variant has since 0.25.0.
 
