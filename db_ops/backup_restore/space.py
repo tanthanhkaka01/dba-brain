@@ -88,7 +88,7 @@ def _linux_free_bytes(config: BackupRestoreConfig) -> int | None:
     client = None
     try:
         client = open_ssh_connection(config)
-        answer = client.run(f"df -Pk {_posix_quote(target)}")
+        answer = client.run(linux_free_space_command(target))
         lines = [line for line in answer.stdout.splitlines() if line.strip()]
     except Exception:  # noqa: BLE001 - any failure to reach the target is "could not measure".
         return None
@@ -107,6 +107,21 @@ def _linux_free_bytes(config: BackupRestoreConfig) -> int | None:
         return int(columns[3]) * 1024
     except ValueError:
         return None
+
+
+def linux_free_space_command(target: str) -> str:
+    """``df`` at ``target``, or at the nearest folder above it that exists.
+
+    The staging folder is made by the copy, which runs after this check - so on a target that has
+    never been restored to, it is not there yet, and ``df`` on it answers "no such file". The local
+    measurement already climbed to the nearest existing parent; the Linux one did not, and the
+    first restore onto every rebuilt lab was refused as "could not measure" (the 0.25.0 soak,
+    2026-09-29: ``.250``'s ``SQLBK_IMPORT`` folder had gone with the rebuild). The filesystem the
+    folder will live on is the one that answers.
+    """
+    return (f"p={_posix_quote(target)}; "
+            'while [ ! -e "$p" ] && [ "$p" != / ]; do p=$(dirname "$p"); done; '
+            'df -Pk "$p"')
 
 
 def _posix_quote(value: str) -> str:

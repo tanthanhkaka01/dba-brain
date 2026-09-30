@@ -159,7 +159,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     workflow.add_argument("--dry-run", action="store_true", help="List what would run without executing it.")
     workflow.add_argument("--skip-backup", action="store_true", help="Run only the restore half.")
     workflow.add_argument("--skip-restore", action="store_true", help="Run only the backup half.")
-    workflow.add_argument("--copy-hours", type=int, default=24, help="Hours for the restore copy step. Default: 24.")
+    workflow.add_argument("--copy-hours", type=int, default=None,
+                          help="Hours for the restore copy step, overriding every entry's copy_recent_hours "
+                               "for this run. Default: each entry's own (24 when it sets none).")
     workflow.add_argument("--delete-retention-seconds", type=int, default=None,
                           help="Override target retention for the restore half, in seconds. "
                                "Default: each entry's cleanup_retention.")
@@ -230,7 +232,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     restore_workflow.add_argument("--source-id", help="Run workflow for only one configured source/server.")
     restore_workflow.add_argument("--restore-id", help="Run workflow only for the restore entry with this restore_id. Example: python -m db_ops.backup_restore.cli restore-workflow --config data/restore_config.json --restore-id ACME_TO_SQLSERVER_198_51_100_31 --force")
-    restore_workflow.add_argument("--copy-hours", type=int, default=24, help="Hours for copy-backup. Default: 24.")
+    restore_workflow.add_argument("--copy-hours", type=int, default=None,
+                                  help="Hours for copy-backup, overriding the entry's copy_recent_hours for "
+                                       "this run. Default: the entry's own (24 when it sets none).")
     restore_workflow.add_argument("--delete-retention-seconds", type=int, default=None,
                                   help="Override how long staged files are kept on the target, in seconds. "
                                        "Default: each entry's cleanup_retention.")
@@ -582,7 +586,7 @@ def main(argv: list[str]) -> int:
                 force=bool(getattr(args, "force", False)),
                 env_overrides=_parse_env_overrides(getattr(args, "env", None)),
                 backup_type=getattr(args, "backup_type", None),
-                copy_hours=int(getattr(args, "copy_hours", 24)),
+                copy_hours=getattr(args, "copy_hours", None),
                 delete_retention=_retention_override(
                     getattr(args, "delete_retention_seconds", None),
                     getattr(args, "delete_hours", None)),
@@ -894,7 +898,7 @@ def main(argv: list[str]) -> int:
             output = run_restore_workflow(
                 restore_configs=restore_configs,
                 app_config=app_config,
-                copy_hours=int(args.copy_hours),
+                copy_hours=args.copy_hours,
                 delete_retention=_retention_override(
                     args.delete_retention_seconds, args.delete_hours),
                 dry_run=bool(args.dry_run),
@@ -1058,7 +1062,7 @@ def run_restore_workflow(
     *,
     restore_configs: list[BackupRestoreConfig],
     app_config: object,
-    copy_hours: int = 24,
+    copy_hours: int | None = None,
     delete_retention: int | None = None,
     dry_run: bool = False,
     force: bool = False,
@@ -1110,18 +1114,27 @@ def run_restore_workflow(
                 _preflighted.append(override if override is not None else config)
         restore_configs = _preflighted
 
-        copy_window_start = None
-        copy_window_end = None
-        if point_in_time_utc is not None:
-            copy_window_end = point_in_time_utc
-            copy_window_start = point_in_time_utc - dt.timedelta(hours=copy_hours)
+        # How far back each entry copies: the run's --copy-hours when one was given, else the entry's
+        # own copy_recent_hours. Until 0.25.0 the flag defaulted to 24 and always won, so an entry's
+        # copy_recent_hours - set, say, to reach a weekly FULL - was read, parsed and never used
+        # (the 100.250 restore on the 0.25.0 soak copied 24 h of LOGs and no FULL).
+        def _hours(config: BackupRestoreConfig) -> int:
+            return int(copy_hours) if copy_hours is not None else int(config.copy_recent_hours)
+
+        def _window_start(config: BackupRestoreConfig):
+            if point_in_time_utc is None:
+                return None
+            return point_in_time_utc - dt.timedelta(hours=_hours(config))
+
+        copy_window_end = point_in_time_utc if point_in_time_utc is not None else None
+        copy_window_start = _window_start(restore_configs[0]) if restore_configs else None
         with _workflow_phase(
             logger,
             f"{_rid}restore-workflow calculating-copy-window",
             summary=summary,
             current_phase="calculating-copy-window",
             restore_mode=restore_mode,
-            copy_hours=copy_hours,
+            copy_hours=_hours(restore_configs[0]) if restore_configs else copy_hours,
             window_start_utc=copy_window_start.isoformat() if copy_window_start is not None else None,
             window_end_utc=copy_window_end.isoformat() if copy_window_end is not None else None,
         ):
@@ -1131,9 +1144,10 @@ def run_restore_workflow(
                            f"copy started ({len(restore_configs)} source(s)).")
         with _workflow_phase(logger, f"{_rid}restore-workflow copy-backup", summary=summary, current_phase="copy-backup", source_count=len(restore_configs)):
             for config in restore_configs:
+                copy_window_start = _window_start(config)
                 step_config = dataclasses.replace(
                     config,
-                    copy_recent_hours=copy_hours,
+                    copy_recent_hours=_hours(config),
                     copy_window_start_utc=copy_window_start,
                     copy_window_end_utc=copy_window_end,
                 )

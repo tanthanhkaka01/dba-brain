@@ -162,3 +162,21 @@ def test_the_usage_text_is_ascii() -> None:
 def test_the_other_spellings_of_help_work(word, capsys) -> None:
     assert cli.main([word]) == 0
     assert "usage: db-ops <app>" in capsys.readouterr().out
+
+
+def test_the_usage_text_lists_apps_and_shared_layers_as_the_rules_do() -> None:
+    """`--help` listed all twelve under "apps:", `common` and `db` included, while the README and
+    docs/rules.md call those two shared layers (2026-09-29). The groups are held to the one list
+    of kinds the import guards use, so the help cannot say another thing again."""
+    from tests.test_import_boundaries import APPS as APP_PACKAGES, SHARED_LAYERS
+
+    for name, module in cli.APPS.items():
+        package = module.split(".")[1]
+        expected = SHARED_LAYERS if name in cli.SHARED_LAYER_COMMANDS else APP_PACKAGES
+        assert package in expected, f"{name} ({package}) is listed in the wrong group"
+
+    usage = cli._usage()
+    apps_part, shared_part = usage.split("shared layers:", 1)
+    assert "  common " in shared_part and "  db " in shared_part
+    assert "  common " not in apps_part and "  db " not in apps_part.split("apps:", 1)[1]
+    assert "daemon" in apps_part and "(the jobs app)" in apps_part

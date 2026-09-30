@@ -20,7 +20,7 @@ directory under `db_ops/` with its own `cli.py`; every component has exactly one
 | :---: | --- | --- | --- |
 | [01](./01_runtime_store.md) | Runtime store | `db_ops/db` | The database the toolkit keeps its own data in: job runs, measurements, reports, the delivery queue, restore history, and the configuration mirror. Also holds the row shapes the store persists. |
 | [02](./02_logging_engine.md) | Logging engine | `db_ops/logging_ops` | One logger per app: files under `logs/`, rows in `job_runs`, and the notify level that decides which chat hears about it. |
-| [03](./03_app_command_daemon.md) | App command daemon | `db_ops/jobs` | The scheduler. Reads `app_commands.json` and runs every other app on its own interval, forwarding the secret passphrase to each child process. |
+| [03](./03_app_command_daemon.md) | App command daemon | `db_ops/jobs` (run as `db-ops daemon`) | The scheduler. Reads `app_commands.json` and runs every other app on its own interval, forwarding the secret passphrase to each child process. |
 | [04](./04_metrics_engine.md) | Metrics engine | `db_ops/metrics` | Collects every metric from every enabled target and writes the results. Reports and SLA both read what it produces. |
 | [05](./05_sql_task_runner.md) | SQL task runner | `db_ops/sql_tasks` | Runs the scheduled SQL scripts against their configured targets and delivers the output. |
 | [06](./06_reports_app.md) | Reports | `db_ops/reports` | Turns collected measurements into the scheduled reports and the inventory pages. |

@@ -26,6 +26,7 @@ def run_bot_workflow(
     send_limit: int = 50,
     retry_count: int = 3,
     send_per_chat: int = 5,
+    send_threads: int = 10,
     pauses_path: str | Path | None = None,
 ) -> dict[str, Any]:
     updates_result = fetch_and_save_updates(
@@ -63,6 +64,7 @@ def run_bot_workflow(
         limit=send_limit,
         retry_count=retry_count,
         send_per_chat=send_per_chat,
+        send_threads=send_threads,
         pauses_path=pauses_path,
     )
     return {

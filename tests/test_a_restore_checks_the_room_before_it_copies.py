@@ -233,3 +233,52 @@ def test_the_preflight_stops_on_it_the_way_it_stops_on_an_unreachable_share(monk
         preflight.run_target_preflight(entry, logger=None)
 
     assert "will not fit" in str(caught.value)
+
+
+def test_a_linux_target_s_staging_folder_that_does_not_exist_yet_is_measured_on_its_parent():
+    """The 0.25.0 soak, 2026-09-29: `.250` was rebuilt, its `SQLBK_IMPORT` folder went with it, and
+    `df` on the missing folder made the first restore onto it "could not measure" - refused. The
+    copy that makes the folder runs after this check, so the check has to measure where it will be."""
+    import shutil
+    import subprocess
+
+    from db_ops.backup_restore import space
+
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("no bash on this machine to run the target's command")
+    import tempfile
+    with tempfile.TemporaryDirectory() as root:
+        missing = Path(root, "SQLBK_IMPORT", "ACME-192-0-2-250").as_posix()
+        answer = subprocess.run([bash, "-c", space.linux_free_space_command(missing)],
+                                capture_output=True, text=True, timeout=30)
+
+    lines = [line for line in answer.stdout.splitlines() if line.strip()]
+    assert answer.returncode == 0, answer.stderr
+    assert len(lines) >= 2 and int(lines[-1].split()[3]) > 0
+
+
+def test_the_linux_measurement_sends_the_climbing_command(monkeypatch):
+    from db_ops.backup_restore import space
+
+    sent: list[str] = []
+
+    class Client:
+        def run(self, command):
+            sent.append(command)
+            return type("Answer", (), {"stdout": "Filesystem 1024-blocks Used Available Capacity Mounted\n"
+                                                 "/dev/sda1 100 40 60 40% /\n"})()
+
+        def close(self):
+            pass
+
+    class LinuxTarget:
+        is_linux = True
+        vm_import_unc = Path("/opt/db_ops/backup/SQLBK_IMPORT/ACME-192-0-2-250")
+        vm_import_local = vm_import_unc
+
+    monkeypatch.setattr(space, "open_ssh_connection", lambda config: Client())
+
+    assert space._linux_free_bytes(LinuxTarget()) == 60 * 1024
+    assert sent == [space.linux_free_space_command("/opt/db_ops/backup/SQLBK_IMPORT/ACME-192-0-2-250")]
+    assert "while [ ! -e" in sent[0]

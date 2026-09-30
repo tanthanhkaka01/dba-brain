@@ -118,6 +118,9 @@ class TelegramConfig:
     # How many of each chat's oldest unsent messages one send pass takes (0.25.0). Per chat, so a
     # flooded chat never holds another behind it - see `telegram.send_queue.SEND_PER_CHAT`.
     send_per_chat: int = 5
+    # How many chats one send pass sends to at once (0.25.0); a chat's own rows stay in order -
+    # see `telegram.send_queue.SEND_THREADS`.
+    send_threads: int = 10
     update_offset: int | None = None
     groups_file: Path | None = None
     # level -> chat_id. **The** routing table: a level with a chat sends there, a level with
@@ -537,6 +540,7 @@ def parse_config(raw: dict[str, Any], *, base_dir: Path) -> DbOpsConfig:
         api_url=str(telegram_raw.get("api_url", "https://api.telegram.org")),
         timeout_seconds=int(telegram_raw.get("timeout_seconds", 20)),
         send_per_chat=_send_per_chat(telegram_raw.get("send_per_chat")),
+        send_threads=_whole_number_or(telegram_raw.get("send_threads"), 10),
         update_offset=_parse_optional_int(telegram_raw.get("update_offset")),
         groups_file=groups_file,
         level_chat_map=level_chat_map,
@@ -803,15 +807,20 @@ def _load_telegram_bot_config(path: Path | None) -> dict[str, Any]:
 
 
 def _send_per_chat(value: Any) -> int:
-    """``send_per_chat``, or 5. A value that is not a whole number of 1 or more keeps the default:
-    one bad setting must not stop the node reading the rest of its configuration."""
+    """``send_per_chat``, or 5."""
+    return _whole_number_or(value, 5)
+
+
+def _whole_number_or(value: Any, default: int) -> int:
+    """``value`` as a whole number of 1 or more, else ``default``. A bad setting keeps the default:
+    one bad value must not stop the node reading the rest of its configuration."""
     if value is None or value == "":
-        return 5
+        return default
     try:
         number = int(value)
     except (TypeError, ValueError):
-        return 5
-    return number if number >= 1 else 5
+        return default
+    return number if number >= 1 else default
 
 
 def _parse_optional_int(value: Any) -> int | None:

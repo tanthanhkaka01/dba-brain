@@ -628,3 +628,21 @@ def test_force_clears_the_output_rather_than_writing_over_it(tmp_path) -> None:
 
     assert not orphan.exists(), "the previous run's page survived a forced rebuild"
     assert {p.name for p in output.iterdir()} == {"sla.html"}
+
+
+def test_a_client_address_in_a_collector_message_is_harvested_as_an_address():
+    """The blocking and lock-holder collectors write `client_ip=` beside `host=` (2026-09-30).
+
+    `host=` is what the client *says* it is; `client_ip=` is where SQL Server saw it connect from,
+    and no configuration file names it. Left unharvested it would reach a showcase page as the
+    real address, and the certifier refuses any address it cannot account for - so the scrub has
+    to learn it from the message the same way it learns the login and the host.
+    """
+    from db_ops.common import showcase
+
+    terms = showcase.object_terms(
+        "Session holding locks. spid=112, login=svc_app, host=APPSRV01, "
+        "client_ip=198.51.100.77, program=Core .Net SqlClient Data Provider")
+
+    assert terms.get("198.51.100.77") == "address"
+    assert terms.get("APPSRV01") == "host"

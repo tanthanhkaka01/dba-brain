@@ -31,6 +31,7 @@ skipped), so nothing about the semantics changes - only the number of round trip
 
 from __future__ import annotations
 
+import errno
 import posixpath
 import shlex
 import stat
@@ -62,6 +63,7 @@ def _walk_remote(sftp, root: str, mtimes: dict[str, int] | None = None) -> tuple
     files: list[tuple[str, int]] = []
     dirs: list[str] = []
     unreadable: list[str] = []
+    vanished: list[str] = []
     stack = [root]
     while stack:
         current = stack.pop()
@@ -71,6 +73,16 @@ def _walk_remote(sftp, root: str, mtimes: dict[str, int] | None = None) -> tuple
             # Never swallow this. A backup directory the SSH user cannot read looks exactly like
             # an empty one, and a transfer that "succeeded" with almost nothing copied is worse
             # than one that failed: the restore then fails far away from the real cause.
+            # A folder that is not there is not one that cannot be read, and saying so matters: a
+            # restore scheduled before its first backup was told the SSH user could not read a
+            # folder no backup had created yet (the 0.25.0 soak, 2026-09-29).
+            if _is_missing(exc):
+                if current == root:
+                    raise FileNotFoundError(
+                        f"{root} does not exist on that host - no backup has been written there "
+                        f"yet, or the path is wrong. Nothing was copied.") from exc
+                vanished.append(current)
+                continue
             unreadable.append(f"{current} ({exc})")
             continue
         for entry in entries:
@@ -87,7 +99,18 @@ def _walk_remote(sftp, root: str, mtimes: dict[str, int] | None = None) -> tuple
             f"{len(unreadable)} director(ies) under {root} could not be read by the SSH user - "
             f"the transfer would silently copy an incomplete backup. First: {unreadable[0]}"
         )
+    if vanished:
+        raise FileNotFoundError(
+            f"{len(vanished)} director(ies) under {root} disappeared while it was being listed - "
+            f"removed as it was read, retention most likely; a copy of a folder that is changing "
+            f"is not a backup. The next run lists it again. First: {vanished[0]}"
+        )
     return files, dirs
+
+
+def _is_missing(exc: OSError) -> bool:
+    """SFTP's "no such file": paramiko raises it as an IOError carrying ENOENT."""
+    return isinstance(exc, FileNotFoundError) or getattr(exc, "errno", None) == errno.ENOENT
 
 
 def _older(target_mtime: int | None, source_mtime: int | None) -> bool:

@@ -217,6 +217,7 @@ def call_telegram_function(
         # The send pass: each chat's oldest rows, and the pauses Telegram imposed kept between
         # passes (each pass is a process of its own).
         "send_per_chat": config.telegram.send_per_chat,
+        "send_threads": config.telegram.send_threads,
         "pauses_path": Path(config.runtime_dir) / PAUSES_FILE_NAME,
     }
     function_params = inspect.signature(telegram_function).parameters

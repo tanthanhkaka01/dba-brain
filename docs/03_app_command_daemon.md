@@ -1,5 +1,9 @@
 # App Command Daemon
 
+The package is `jobs` (`db_ops/jobs`); the command is `daemon` - `db-ops daemon`, or
+`python -m db_ops.jobs.daemon`. Two names for one app: `db-ops --help` lists it as
+`daemon (the jobs app)`, the component lists as `jobs`.
+
 ## Purpose
 
 The App Command Daemon scans active app commands, checks `time_window` repeat intervals and allowed date/time ranges, avoids duplicate running commands per `app_command_id`, and starts SQL tasks, metrics, reports, Telegram, restore, and SLA apps as independent subprocesses.

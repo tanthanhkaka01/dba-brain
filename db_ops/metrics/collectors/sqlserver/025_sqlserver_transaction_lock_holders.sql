@@ -85,6 +85,9 @@ SELECT
     s.open_transaction_count,
     s.login_name,
     s.host_name,
+    -- host_name is whatever the client says it is, and an application can send any name or
+    -- none; client_net_address is the address SQL Server saw the connection come from.
+    CAST(cn.client_net_address AS varchar(48)) AS client_ip,
     s.program_name,
     s.last_request_end_time,
     r.status AS request_status,
@@ -158,6 +161,7 @@ SELECT
         + ', request_status=' + ISNULL(h.request_status, '')
         + ', login=' + ISNULL(h.login_name, '')
         + ', host=' + ISNULL(h.host_name, '')
+        + ', client_ip=' + ISNULL(h.client_ip, '')
         + ', program=' + ISNULL(h.program_name, '')
         + ', command=' + ISNULL(h.command, '')
         + ', wait_type=' + ISNULL(h.wait_type, '')

@@ -137,6 +137,70 @@ def test_the_shipped_examples_obey_the_new_entries(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# A restore entry: what it may say for itself is described on it
+# --------------------------------------------------------------------------- #
+def _smb_restore_example() -> tuple[dict, dict]:
+    """The example's `backup_restore` block, and its one engine (not script) restore entry."""
+    from db_ops.backup_restore.config import is_script_restore
+
+    block = json.loads((DATA / "restore_config.example.json").read_text(encoding="utf-8"))["backup_restore"]
+    entry = next(item for item in block["restores"] if not is_script_restore(item))
+    return block, entry
+
+
+def test_a_copy_default_the_restore_block_sets_is_also_an_entry_field():
+    """2026-09-29: an entry needed its own `copy_recent_hours` (a weekly FULL is older than the 24 h
+    default) and the reference had it only on the block. The parser lets any key on an entry override
+    the block's (`_merge_source_config`), so every setting the block carries for its entries is an
+    entry field too - described the same way."""
+    block = {f["field"]: f for f in _entry("backup_restore_config")["fields"]}
+    entry = {f["field"]: f for f in _entry("restore_entry")["fields"]}
+    for name in set(block) - {"backups", "restores"}:
+        assert name in entry, f"restore_entry does not describe {name}, which the block sets for it"
+        for key in ("type", "default", "constraint"):
+            assert entry[name][key] == block[name][key], (name, key)
+
+
+def test_an_entry_s_own_copy_settings_are_the_ones_it_restores_with():
+    from db_ops.backup_restore.config import RESTORE_PARSER_DEFAULTS, _parse_restore_items
+
+    block, entry = _smb_restore_example()
+    own = {**entry, "copy_recent_hours": 192, "copy_file_patterns": ["APPDB_*"],
+           "space_check": {"factor": 2.0}}
+    section = {**{k: v for k, v in block.items() if k != "restores"}, "copy_recent_hours": 24,
+               "restores": [own]}
+
+    [config] = _parse_restore_items(values=dict(RESTORE_PARSER_DEFAULTS), section=section)
+
+    assert config.copy_recent_hours == 192
+    assert list(config.copy_file_patterns) == ["APPDB_*"]
+    assert config.space_check.factor == 2.0
+
+
+def test_space_check_is_described_as_its_parser_reads_it():
+    from db_ops.lib import restore_space
+
+    fields = {f["field"]: f for f in _entry("restore_space_check")["fields"]}
+    assert set(fields) == {"enabled", "factor", "on_unknown"}
+    assert fields["factor"]["constraint"]["min"] == restore_space.MINIMUM_SAFETY_FACTOR
+    assert float(fields["factor"]["default"]) == restore_space.DEFAULT_SAFETY_FACTOR
+    assert tuple(fields["on_unknown"]["constraint"]["enum"]) == restore_space.UNKNOWN_CHOICES
+    assert _field("restore_entry", "space_check")["constraint"]["checked_by"] == "restore_space_check"
+
+
+def test_a_bad_value_in_an_entry_s_own_copy_settings_is_reported(tmp_path):
+    block, entry = _smb_restore_example()
+    bad = {**entry, "copy_recent_hours": "eight days", "space_check": {"factor": 1.5, "on_unkown": "refuse"}}
+    (tmp_path / "restore_config.json").write_text(json.dumps({"backup_restore": {
+        **{k: v for k, v in block.items() if k != "restores"}, "restores": [bad]}}), encoding="utf-8")
+
+    violations = shared_objects.check_data_dir(tmp_path)["violations"]
+
+    fields = sorted(v["field"] for v in violations)
+    assert "copy_recent_hours" in fields and "on_unkown" in fields, violations
+
+
+# --------------------------------------------------------------------------- #
 # The registrars read the reference
 # --------------------------------------------------------------------------- #
 @pytest.fixture()

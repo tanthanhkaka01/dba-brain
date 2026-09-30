@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -18,12 +19,6 @@ from db_ops.telegram.api import (
 )
 
 
-#: Seconds after which a pass starts no further message; what is left stays queued for the next
-#: pass, a second later. Well under the 300 s the daemon gives the whole Telegram workflow: on
-#: 2026-09-26 one 49-part message spent its pass waiting out Telegram's rate limit, the daemon killed
-#: the workflow at 300 s between two rows, and every message behind it waited for the next pass.
-SEND_BUDGET_SECONDS = 180
-
 #: How many of each chat's oldest unsent rows one pass takes (0.25.0, the operator's number). The
 #: pass runs every second and Telegram takes about 20 messages a minute into one group, so five a
 #: pass is a group's whole minute in four passes - and the next chat never waits for it. Until
@@ -31,6 +26,15 @@ SEND_BUDGET_SECONDS = 180
 #: alerts held every other chat behind them, the bot's replies to its own commands included.
 #: `send_per_chat` in `telegram_config.json` overrides it.
 SEND_PER_CHAT = 5
+
+#: How many chats one pass sends to at once (0.25.0, the operator's number). A chat's own rows still
+#: go one after another, in order - only chats run side by side. One at a time, a pass that met a
+#: backlog in six chats sent 30 rows at ~1.3 s each (a fresh HTTPS call to Telegram, three store
+#: round trips) and took ~40 s, and the bot read its commands once per pass: a `/spbot_self_status`
+#: reply took a minute (2026-09-29). There is no time budget of its own: the pass is bounded by the
+#: Telegram workflow's `time_window.timeout` in `app_commands.json`, like every other app.
+#: `send_threads` in `telegram_config.json` overrides it.
+SEND_THREADS = 10
 
 #: Where a chat's Telegram-imposed pause is kept between passes - each pass is a process of its
 #: own, and a pause that died with the process would be spent on another refused call every
@@ -46,19 +50,22 @@ def send_pending_messages(
     timeout_seconds: int = 20,
     limit: int = 50,
     retry_count: int = 3,
-    budget_seconds: float = SEND_BUDGET_SECONDS,
-    clock: Any = time.monotonic,
     send_per_chat: int = SEND_PER_CHAT,
+    send_threads: int = SEND_THREADS,
     pauses_path: str | Path | None = None,
     now: Any = time.time,
 ) -> dict[str, int]:
-    """One send pass: each chat's oldest ``send_per_chat`` rows, every chat in turn.
+    """One send pass: each chat's oldest ``send_per_chat`` rows, up to ``send_threads`` chats at once.
 
-    A 429 pauses **that chat** for the seconds Telegram asked, and the pass moves on to the next
-    chat without sleeping: the row goes back to the queue unchanged, the chat's remaining rows wait
-    with it, and a later pass takes them once the pause is over. Sleeping on it here is what made a
-    pass take 143 s on average while one chat was flooded (2026-09-28) - every other chat, and the
-    bot reading its commands, waited out another chat's limit.
+    Within a chat the rows go one after another, oldest first, each marked, sent and updated on its
+    own (rules R29) - a chat's messages must arrive in the order they were written. Across chats
+    nothing is shared but the store, so they run side by side.
+
+    A 429 pauses **that chat** for the seconds Telegram asked: the row goes back to the queue
+    unchanged, the chat's remaining rows wait with it, and a later pass takes them once the pause is
+    over. Sleeping on it here is what made a pass take 143 s on average while one chat was flooded
+    (2026-09-28) - every other chat, and the bot reading its commands, waited out another chat's
+    limit.
     """
     store = DbOpsStore(sqlite_path)
     rows = store.fetch_pending_telegram_send_messages(limit=limit, per_chat=send_per_chat)
@@ -71,37 +78,52 @@ def send_pending_messages(
         "paused_chats": 0,
     }
 
+    by_chat: dict[str, list[Any]] = {}
+    for row in rows:
+        by_chat.setdefault(str(row["tlgchat_id"] or ""), []).append(row)
+
     logger = logging.getLogger("telegram")
-    started = clock()
-    for index, row in enumerate(rows):
-        if clock() - started >= budget_seconds:
-            # Left at send_status 0, untouched: the next pass takes them first, in the same order.
-            counts["deferred"] += len(rows) - index
-            break
-        chat_id = str(row["tlgchat_id"] or "")
+
+    def send_chat(chat_id: str, chat_rows: list[Any]) -> tuple[dict[str, int], float | None]:
+        """One chat's rows in order; stops at the first 429 and says how long to pause."""
+        chat_counts = {"sent": 0, "failed": 0, "deferred": 0}
         if chat_id in pauses:
-            counts["deferred"] += 1
-            continue
-        result = send_one_message(
-            sqlite_path=sqlite_path,
-            send_tlgmsg_id=int(row["send_tlgmsg_id"]),
-            bot_token=bot_token,
-            api_url=api_url,
-            timeout_seconds=timeout_seconds,
-            retry_count=retry_count,
-            wait_on_rate_limit=False,
-        )
-        if result.get("status") == "rate_limited":
-            wait = float(result.get("retry_after") or DEFAULT_RATE_LIMIT_WAIT_SECONDS)
-            pauses[chat_id] = now() + wait
-            counts["deferred"] += 1
-            log_event(logger, level="warning", message=(
-                f"telegram.send_queue chat {chat_id} paused {wait:.0f}s by Telegram's rate limit; "
-                f"its rows stay queued (send_tlgmsg_id={result['send_tlgmsg_id']} first)"))
-        elif result["sent"] == 1:
-            counts["sent"] += 1
-        elif result["failed"] == 1:
-            counts["failed"] += 1
+            chat_counts["deferred"] = len(chat_rows)
+            return chat_counts, None
+        for index, row in enumerate(chat_rows):
+            result = send_one_message(
+                sqlite_path=sqlite_path,
+                send_tlgmsg_id=int(row["send_tlgmsg_id"]),
+                bot_token=bot_token,
+                api_url=api_url,
+                timeout_seconds=timeout_seconds,
+                retry_count=retry_count,
+                wait_on_rate_limit=False,
+            )
+            if result.get("status") == "rate_limited":
+                wait = float(result.get("retry_after") or DEFAULT_RATE_LIMIT_WAIT_SECONDS)
+                chat_counts["deferred"] += len(chat_rows) - index
+                log_event(logger, level="warning", message=(
+                    f"telegram.send_queue chat {chat_id} paused {wait:.0f}s by Telegram's rate limit; "
+                    f"its rows stay queued (send_tlgmsg_id={result['send_tlgmsg_id']} first)"))
+                return chat_counts, wait
+            if result["sent"] == 1:
+                chat_counts["sent"] += 1
+            elif result["failed"] == 1:
+                chat_counts["failed"] += 1
+        return chat_counts, None
+
+    if by_chat:
+        workers = max(1, min(int(send_threads or 1), len(by_chat)))
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="telegram-send") as pool:
+            futures = {chat_id: pool.submit(send_chat, chat_id, chat_rows)
+                       for chat_id, chat_rows in by_chat.items()}
+            for chat_id, future in futures.items():
+                chat_counts, pause = future.result()
+                for key, value in chat_counts.items():
+                    counts[key] += value
+                if pause is not None:
+                    pauses[chat_id] = now() + pause
 
     counts["paused_chats"] = len(pauses)
     write_chat_pauses(pauses_path, pauses)

@@ -6,6 +6,7 @@
     "'level_chat_map' is THE routing table: a level with a chat sends there, a level with no chat does not send. There is no second allow-list to keep in sync - mute a level by clearing its chat. Group chats come from telegram_groups.json and are merged in first; entries here override and extend them, which is where a private direct message lives (a DM has a positive chat_id, so it cannot be declared as a group).",
     "'update_offset' is written back by the bot as it consumes updates. Leave it null on a fresh install.",
     "'send_per_chat' is how many of each chat's oldest unsent messages one send pass takes (every second). Per chat, so one flooded chat never holds the others - or the bot's replies - behind it. Telegram takes about 20 messages a minute into a group; a chat it pauses (HTTP 429) waits out that pause while the others carry on.",
+    "'send_threads' is how many chats one send pass sends to at once (default 10). A chat's own messages still go one after another, in order; only chats run side by side. A pass has no time limit of its own - the Telegram workflow's time_window.timeout in app_commands.json bounds it.",
     "'level_chat_map' is also the VOCABULARY, not just the routing: a notify block may only name a level that exists here or as a notify_level in telegram_groups.json, and anything else is refused while the config is being parsed. That is why 'backup' and 'sql' are listed - the backup and SQL-task examples beside this file route to them, and without these entries the example set does not load at all. An empty value means the level is known and undelivered."
   ],
   "enabled": false,
@@ -17,6 +18,7 @@
   "api_url": "https://api.telegram.org",
   "timeout_seconds": 20,
   "send_per_chat": 5,
+  "send_threads": 10,
   "update_offset": null,
   "groups_file": "data/telegram_groups.json",
   "level_chat_map": {

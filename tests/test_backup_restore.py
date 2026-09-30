@@ -1645,7 +1645,10 @@ def test_restore_workflow_cli_accepts_defaults():
     args = parse_args(["restore-workflow", "--config", "config.json"])
 
     assert args.command == "restore-workflow"
-    assert args.copy_hours == 24
+    # None, not 24: the flag is an override. Unset means "use this entry's own copy_recent_hours" -
+    # 24 here overrode every entry's setting, the 100.250 restore's weekly FULL included (0.25.0).
+    assert args.copy_hours is None
+    assert parse_args(["workflow", "--config", "config.json"]).copy_hours is None
     # None, not 48: the flag is now an override. Unset means "use this entry's own
     # cleanup_retention", so one entry can keep a day and another eight without
     # the scheduled command having to pass anything.
@@ -1700,6 +1703,47 @@ def test_restore_workflow_orchestrates_existing_steps_in_order(tmp_path, monkeyp
     assert calls == [("copy-backup", 24), ("restore-latest", config.source_id),
                      ("delete-backup", 24 * 3600)]
     assert result["overall_workflow_status"] == "SUCCESS"
+
+
+def _copy_hours_seen(tmp_path, monkeypatch, *, entry_hours, **workflow_kwargs):
+    """What the copy step is handed, for an entry whose copy_recent_hours is ``entry_hours``."""
+    config = dataclasses.replace(make_config(tmp_path), copy_recent_hours=entry_hours)
+    app_config = DbOpsConfig(log_dir=tmp_path / "logs", runtime_dir=tmp_path / "runtime",
+                             sqlite_path=tmp_path / "runtime" / "db_ops.sqlite")
+    seen = {}
+
+    def fake_copy(step_config, logger=None, force=False):
+        seen["hours"] = step_config.copy_recent_hours
+        seen["window_start"] = step_config.copy_window_start_utc
+        return CopyBackupResult(returncode=0, source_backup_dir=tmp_path, local_import_dir=tmp_path,
+                                files_considered=1, copied=1, skipped=0, file_results=())
+
+    monkeypatch.setattr("db_ops.backup_restore.cli.run_copy_backup", fake_copy)
+    monkeypatch.setattr("db_ops.backup_restore.cli.run_restore_all_latest",
+                        lambda **kwargs: {"status": "SUCCESS", "overall_status": "SUCCESS",
+                                          "databases_considered": 0, "per_database_restore_status": {}})
+    monkeypatch.setattr("db_ops.backup_restore.cli.run_delete_backup",
+                        lambda step_config, logger=None, dry_run=False: DeleteBackupResult(
+                            returncode=0, target_backup_dir=tmp_path, cleanup_retention=0,
+                            files_considered=0, deleted=0, file_results=()))
+    monkeypatch.setattr("db_ops.backup_restore.cli.run_target_preflight", lambda config, logger=None: None)
+    run_restore_workflow(restore_configs=[config], app_config=app_config, **workflow_kwargs)
+    return seen
+
+
+def test_an_entry_copies_as_far_back_as_its_own_copy_recent_hours(tmp_path, monkeypatch):
+    """100.250's FULL is weekly; its entry says 192. The workflow used to hand the copy 24 anyway."""
+    assert _copy_hours_seen(tmp_path, monkeypatch, entry_hours=192)["hours"] == 192
+
+
+def test_the_copy_hours_flag_still_overrides_the_entry(tmp_path, monkeypatch):
+    assert _copy_hours_seen(tmp_path, monkeypatch, entry_hours=192, copy_hours=6)["hours"] == 6
+
+
+def test_a_point_in_time_copy_reaches_back_by_the_entry_s_own_hours(tmp_path, monkeypatch):
+    moment = parse_point_in_time("2026-09-29 05:00:00 +00:00")
+    seen = _copy_hours_seen(tmp_path, monkeypatch, entry_hours=192, point_in_time_utc=moment)
+    assert seen["window_start"] == moment - datetime.timedelta(hours=192)
 
 
 def test_import_certificate_cli_accepts_source_id():

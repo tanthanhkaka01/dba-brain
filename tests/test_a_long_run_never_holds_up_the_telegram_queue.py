@@ -6,9 +6,10 @@ the command's whole output in the text - each database's statement three times, 
 three levels - 181,174 characters, sent as 49 parts. Telegram rate-limited the chat, the waits
 added up past 300 s, and every message queued behind it waited for the next pass.
 
-Two changes, each enough on its own for that run: the message summarises the output (the full output
-stays on the run's ``job_runs`` row), and a sending pass stops starting messages well before the
-daemon's timeout, leaving the rest queued.
+The message summarises the output (the full output stays on the run's ``job_runs`` row). The pass
+also had a 180 s budget of its own until 2026-09-29, when the operator removed it: a pass is bounded
+by the workflow's ``time_window.timeout`` alone, and chats are sent side by side
+(``test_chats_are_sent_side_by_side_each_in_order.py``).
 """
 
 from __future__ import annotations
@@ -16,7 +17,6 @@ from __future__ import annotations
 import json
 
 from db_ops.backup_restore import events
-from db_ops.telegram import send_queue
 
 
 def _restore_latest_end(databases: int = 13) -> dict:
@@ -70,30 +70,3 @@ def test_the_queued_row_keeps_the_summary_and_the_run_keeps_the_whole_output():
     assert "sources" in queued["output"] and "results" not in queued["output"]["sources"][0]
     assert "results" in metadata["output"]["sources"][0], "the caller's copy - the job_runs row's - is untouched"
 
-
-class _Queue:
-    def __init__(self, rows: int) -> None:
-        self.rows = [{"send_tlgmsg_id": number, "tlgchat_id": f"-100{number}"}
-                     for number in range(1, rows + 1)]
-
-    def fetch_pending_telegram_send_messages(self, limit: int, *, per_chat: int | None = None):
-        return self.rows[:limit]
-
-
-def test_a_pass_stops_starting_messages_before_the_daemon_would_kill_it(monkeypatch):
-    now = [0.0]
-    sent: list[int] = []
-
-    def send_one(**kwargs):
-        sent.append(kwargs["send_tlgmsg_id"])
-        now[0] += 100  # one throttled multi-part message
-        return {"send_tlgmsg_id": kwargs["send_tlgmsg_id"], "sent": 1, "failed": 0, "status": "sent"}
-
-    monkeypatch.setattr(send_queue, "DbOpsStore", lambda path: _Queue(rows=5))
-    monkeypatch.setattr(send_queue, "send_one_message", send_one)
-
-    counts = send_queue.send_pending_messages(sqlite_path="x", bot_token="t", clock=lambda: now[0])
-
-    assert sent == [1, 2]
-    assert counts == {"read": 5, "sent": 2, "failed": 0, "deferred": 3, "paused_chats": 0}
-    assert send_queue.SEND_BUDGET_SECONDS < 300

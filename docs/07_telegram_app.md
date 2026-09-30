@@ -145,11 +145,16 @@ A 429 is Telegram asking for a pause, not refusing the message, and it says for 
 Either way it is **logged** — a warning for a deferral, an error for a refusal. A message nobody
 received is a message that did not happen, and it belongs where an operator reads failures.
 
-**A pass has a time budget (`SEND_BUDGET_SECONDS`, 180 s).** It starts no further message after
-it, and what is left stays at `send_status = 0` for the next pass, a second later, in the same
-order (`deferred` in the step's answer). The daemon kills the whole workflow at its 300 s
-timeout: on 2026-09-26 one 49-part message waited out the chat's limit past it, and the pass was
-killed between two rows with every message behind it still queued.
+**Chats are sent side by side, a chat's own rows in order (0.25.0).** A pass sends to up to
+`send_threads` chats at once (10, from `telegram_config.json`); within a chat each row is marked,
+sent and updated before the next is touched (rules R29), so a chat's messages arrive in the order
+they were written. One chat at a time, a pass through a backlog in six chats sent 30 rows at
+~1.3 s each - a fresh HTTPS call to Telegram and three store round trips - and took ~40 s; the bot
+reads its commands once per pass, so a `/spbot_self_status` reply took a minute (2026-09-29).
+
+**A pass has no time limit of its own.** The 180 s `SEND_BUDGET_SECONDS` of 0.24.0 is gone (the
+operator, 2026-09-29): the pass is bounded by the Telegram workflow's `time_window.timeout` in
+`app_commands.json` (300 s), like every other app.
 
 ## Every chat gets its own share of a pass (0.25.0)
 

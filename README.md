@@ -122,13 +122,13 @@ that exist: each one reviewed when it was written, each one logged the way a hum
 
 Ordered to match the reference docs; the **ORD** number links to each one.
 
-**Fifteen components of two kinds.** An **app** (10: `jobs`, `metrics`, `sql_tasks`, `reports`, `telegram`, `backup_restore`, `sla`, `sre`, `control`, `webhost`) does one job, has its own `cli.py`, and never imports another app. A **shared layer** (5: `db`, `logging_ops`, `common`, `lib`, `transport`) is what every app stands on, and never imports an app. The root package `db_ops` is neither: it is the `db-ops` entry point and only dispatches. The same table, and who may import or run whom, is in [`docs/rules.md`](./docs/rules.md#the-components).
+**Fifteen components of two kinds.** An **app** (10: `jobs` - run as `db-ops daemon` -, `metrics`, `sql_tasks`, `reports`, `telegram`, `backup_restore`, `sla`, `sre`, `control`, `webhost`) does one job, has its own `cli.py`, and never imports another app. A **shared layer** (5: `db`, `logging_ops`, `common`, `lib`, `transport`) is what every app stands on, and never imports an app. The root package `db_ops` is neither: it is the `db-ops` entry point and only dispatches. The same table, and who may import or run whom, is in [`docs/rules.md`](./docs/rules.md#the-components).
 
 | ORD | Component | Kind | Package / config | Responsibility |
 | :---: | --- | --- | --- | --- |
 | [01](./docs/01_runtime_store.md) | Runtime store | shared layer | `db_ops/db`, `data/store_config.json` | The database the toolkit keeps its **own** data in — job runs, measurements, report state, the delivery queue, restore history. SQLite to start, PostgreSQL when you outgrow it; the backend is one word in one file. |
 | [02](./docs/02_logging_engine.md) | Logging engine | shared layer | `db_ops/logging_ops`, `logs/` | Scoped application logs, runtime logs, shared errors, and daily archives. |
-| [03](./docs/03_app_command_daemon.md) | App command daemon | app | `db_ops/jobs`, `data/app_commands.json` | The scheduler: runs each app on its own interval inside its allowed hours, skips one that is still running, and forwards the secret passphrase to every child process. |
+| [03](./docs/03_app_command_daemon.md) | App command daemon | app | `db_ops/jobs` (run as `db-ops daemon`), `data/app_commands.json` | The scheduler: runs each app on its own interval inside its allowed hours, skips one that is still running, and forwards the secret passphrase to every child process. |
 | [04](./docs/04_metrics_engine.md) | Metrics engine | app | `db_ops/metrics`, `data/db_instances.json`, `data/metric_definitions.json` | Around ninety metrics across four engines — availability, capacity, performance, recoverability, security, maintenance — collected and normalised into one shape. |
 | [05](./docs/05_sql_task_runner.md) | SQL task runner | app | `db_ops/sql_tasks`, `data/sql_commands.json`, `data/sql_targets.json` | Your own SQL, on a schedule or on request, against approved targets, delivered as text or a spreadsheet. The SQL is a reviewable file, never a string in configuration. |
 | [06](./docs/06_reports_app.md) | Reports | app | `db_ops/reports`, `data/reports_config.json` | Turns measurements into scheduled reports and inventory pages, with a freshness gate so a stale number is never reported as a current one. |
@@ -468,9 +468,9 @@ toolkit needs on each engine, the audit trail, and running with no outbound netw
 
 ## How it is put together
 
-Fourteen components, two shared layers, four rules about who may call whom — and a guard test
-beside each rule, because a diagram describes what someone intended and a test describes what is
-true this morning.
+Fifteen components - ten apps and five shared layers - and rules about who may call whom, four
+of them below - with a guard test beside each rule, because a diagram describes what someone
+intended and a test describes what is true this morning.
 
 > `common` **may not be imported** — it is only ever run as a CLI.
 > `lib` **may not run a CLI** — it is only ever imported.

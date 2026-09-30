@@ -43,6 +43,24 @@ is evidence and not a brake. On 2026-09-17 a drill copied about 115 GB onto the 
 carries the runtime store: `/` reached 42 MB free, PostgreSQL could not write, and the daemon went
 with it 26 minutes into a soak that then had to be abandoned.
 
+**An entry may carry its own copy settings.** `copy_recent_hours` and `copy_file_patterns` on the
+`backup_restore` block are the defaults; the same keys on a restore entry override them for that
+entry, and `space_check` is the entry's own. All three are described on `restore_entry` in the
+reference (and `space_check`'s fields as `restore_space_check`), so `check-objects` reports a wrong
+value in them - until 0.25.0 they were read on the entry and described nowhere there. A source whose
+FULL is weekly needs a window that reaches it: `copy_recent_hours: 192` (a week and a day), with a
+`cleanup_retention` no shorter, or the staging cleanup removes what the next copy brings back.
+`--copy-hours` on `workflow` / `restore-workflow` overrides it for one run; unset, each entry copies
+by its own. Until 0.25.0 the flag defaulted to 24 and always won, so `copy_recent_hours` was parsed
+and never used by a scheduled, manual or `/spbot_restore` run.
+
+**The free space is read where the staged files will land, even before that folder exists.** The
+copy makes the staging folder, and it runs after this check - so on a target never restored to,
+the folder is not there yet. Both sides measure the nearest folder above it that exists: the local
+one always did, and a Linux target's `df` does since 0.25.0 (`space.linux_free_space_command`). Until
+then every first restore onto a rebuilt lab was refused as *could not read the target's free
+space*.
+
 ## Package / Files
 
 - `db_ops/backup_restore/`
@@ -1195,6 +1213,12 @@ from one lab host restored into another) failed six ways before any data arrived
 - **The target folder is created before it is read.** The transfer lists what the target already
   has; a folder a first run had not made yet counted as "could not be read by the SSH user", so
   every new cross-machine drill failed its first run.
+- **A source folder that is not there is said to be missing, not unreadable (0.25.0).** A restore
+  scheduled before its lab's first backup was told the SSH user could not read
+  `/opt/db_ops/backup/<lab>` - a folder no backup had created yet. The copy now answers *does not
+  exist on that host - no backup has been written there yet*; a folder removed while it is being
+  listed (retention) is named as such; only a folder the SSH user really cannot read is a
+  permission error. All three still stop the copy.
 - **The staged pieces are opened to the engine** (`chmod -R a+rX`, no sudo - the SSH user owns what
   it just wrote). SQL Server reads them as its own user (uid 10001 in the image), and a copy left at
   the source's `0660` gave `Operating system error 5` (Msg 3201) on every piece.

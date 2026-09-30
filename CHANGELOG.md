@@ -15,13 +15,32 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
-## [0.25.0] - 2026-09-29
+## [0.25.0] - 2026-09-30
+
+### Added
+
+- **`examples/an-estate-by-command-on-a-new-machine.md`** - a whole estate rebuilt on a new machine
+  from `pip install dbabrain`, one command per item (secrets, bot, inventory, host logins, SQL tasks,
+  backups, restores, schedule), then the checks and the clock. Written from a real move carried out
+  by an AI agent, with what each step measured.
 
 ### Changed
 
+- **SQL Server blocking and lock-holder metrics name the client's address.** `LOCK_BLOCKING_SESSIONS`
+  (009), the sleeping-open-transaction metric (024) and the lock-holder metric (025, and its
+  2008 R2 variant) add `client_ip=` - `sys.dm_exec_connections.client_net_address` - beside
+  `host=`. `host=` is whatever name the client sends, and an application can send any name or
+  none; the address is where SQL Server saw the connection come from. The showcase scrub
+  learns `client_ip=` as an address, so a published page does not carry it.
 - **The Telegram send pass takes the oldest 5 messages of each chat** (`send_per_chat` in
   `telegram_config.json`), every chat in turn, every second - not the oldest 50 of the whole queue.
   One chat's backlog no longer holds any other chat, the bot's replies to its commands included.
+- **The Telegram send pass sends to 10 chats at once** (`send_threads` in `telegram_config.json`);
+  each chat's own messages still go one after another, in order. One chat at a time, a pass through
+  a backlog in six chats took ~40 s, and the bot - which reads its commands once per pass - answered
+  a minute late.
+- **The send pass has no 180 s budget any more.** It is bounded by the Telegram workflow's
+  `time_window.timeout` in `app_commands.json`, like every other app.
 - **A Telegram rate limit (HTTP 429) pauses that chat, not the pass.** The row stays queued, the
   pass carries on with the other chats, and the chat is left alone for the seconds Telegram asked
   (kept in `runtime/telegram_chat_pauses.json`). A pass no longer sleeps out another chat's limit.
@@ -43,6 +62,16 @@ do about it. Not the internal refactor that made it possible.
   `db_ops.lib.config` since 0.24.0, and nothing in DBA Brain imports it any more (rules R41: the
   root package holds only its entry point). Code of yours that imports `db_ops.config` changes that
   one line.
+- **`db-ops --help` lists apps and shared layers apart**, as the README does: `common` and `db` are
+  shared layers, and `daemon` is marked as the `jobs` app. The docs name the scheduler "`jobs` (run
+  as `db-ops daemon`)" and the README counts fifteen components everywhere.
+- **A restore copies as far back as its entry's `copy_recent_hours` says.** `workflow` and
+  `restore-workflow` passed `--copy-hours`, default 24, over every entry's setting, so the setting
+  never took effect - a source with a weekly FULL copied a day of LOGs and had no chain to restore.
+  The flag is now an override only.
+- **The reference describes a restore entry's own copy settings.** `copy_recent_hours`,
+  `copy_file_patterns` and `space_check` were read on a restore entry and described only on the
+  `backup_restore` block, or nowhere; `check-objects` now reports a wrong value in them.
 - **The reference describes every key every `common.cli` command answers** (rules R16). Sixteen
   were missing, among them `move-db-docker`'s `ok` and `copy-schema`'s `mode`; a script that reads
   an answer can now look up each key it gets.
@@ -70,6 +99,12 @@ do about it. Not the internal refactor that made it possible.
 - **A Linux node cleans a Windows target's import share.** In 0.24.0 it held every aged file back
   as `still_needed` and deleted nothing (released as a known limitation). The chain is now read from
   the share's own listing.
+- **The first restore onto a new Linux target is no longer refused by its own space check.** `df`
+  ran on the staging folder, which the copy only creates after the check, and answered "no such
+  file"; the check now measures the nearest folder above it that exists, as it already did locally.
+- **A restore whose source has no backup folder yet says so.** It was told the SSH user could not
+  read `/opt/db_ops/backup/<lab>` - a folder no backup had created. A missing folder, one removed
+  while it was being listed, and one the SSH user cannot read are now three different messages.
 - **A report file sent while its chat is rate-limited is no longer lost.** `sendDocument`'s 429 was
   a plain error: three immediate retries, then the row failed. It is a pause now, as a message's is.
 

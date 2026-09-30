@@ -45,6 +45,16 @@ APPS: dict[str, str] = {
     "daemon": "db_ops.jobs.daemon",
 }
 
+#: The two entries of :data:`APPS` that are shared layers, not apps. ``--help`` listed all twelve
+#: under "apps:" while the README and docs/rules.md call ``common`` and ``db`` shared layers - a
+#: reader was told two different things about the same two words (2026-09-29). The other shared
+#: layers (``lib``, ``transport``, ``logging_ops``) have no command to list.
+SHARED_LAYER_COMMANDS: frozenset[str] = frozenset({"common", "db"})
+
+#: A command whose name is not its package's, said beside it: the scheduler is the ``jobs`` app,
+#: and people type ``daemon`` - the command stays, the docs call it "jobs (run as db-ops daemon)".
+COMMAND_NOTES: dict[str, str] = {"daemon": "the jobs app"}
+
 #: Words a person types that run a ``common.cli`` command: the word, and the request used when none
 #: is given. ``init`` and ``guide`` default to ``format: "txt"`` - they are what a first run types,
 #: and a first run should read sentences, not an envelope. An option is a JSON key: ``db-ops init
@@ -94,6 +104,12 @@ def _usage() -> str:
 
     apps = installed_apps() or APPS
     width = max(len(name) for name in apps)
+
+    def listed(names: list[str]) -> list[str]:
+        return [f"  {name.ljust(width)}  python -m {apps[name]}"
+                + (f"  ({COMMAND_NOTES[name]})" if name in COMMAND_NOTES else "")
+                for name in sorted(names)]
+
     lines = [
         # ASCII only: this prints to whatever console the operator has, and the Windows one is
         # cp1252. An em dash there arrives as a question mark at best.
@@ -103,7 +119,10 @@ def _usage() -> str:
         "",
         "apps:",
     ]
-    lines += [f"  {name.ljust(width)}  python -m {module}" for name, module in sorted(apps.items())]
+    lines += listed([name for name in apps if name not in SHARED_LAYER_COMMANDS])
+    shared = [name for name in apps if name in SHARED_LAYER_COMMANDS]
+    if shared:
+        lines += ["", "shared layers:"] + listed(shared)
     lines += [
         "",
         "  init                   create a tool root here: config, a SQLite store, empty inventory",

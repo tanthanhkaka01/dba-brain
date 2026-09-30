@@ -40,7 +40,7 @@ these, and the guards hold the same lists (`APPS` and `SHARED_LAYERS` in
 
 | Kind | ORD | Component | Package | Note |
 | --- | :---: | --- | --- | --- |
-| **app** | 03 | App command daemon | `jobs` | The scheduler; runs the command lines `app_commands.json` configures (R42's named exception) |
+| **app** | 03 | App command daemon | `jobs` | Run as `db-ops daemon`. The scheduler; runs the command lines `app_commands.json` configures (R42's named exception) |
 | **app** | 04 | Metrics engine | `metrics` | |
 | **app** | 05 | SQL task runner | `sql_tasks` | |
 | **app** | 06 | Reports | `reports` | |

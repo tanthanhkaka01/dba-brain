@@ -476,7 +476,12 @@ def object_terms(text: str) -> dict[str, str]:
                       # into the error text a failed connection hands back, and named by no
                       # configuration file when the login is one the estate does not monitor with.
                       # Added 2026-09-12, after a scrubbed page shipped a DBA's own account name.
-                      ("login", "credential"), ("user", "credential"), ("host", "host")):
+                      ("login", "credential"), ("user", "credential"), ("host", "host"),
+                      # The address SQL Server saw a session connect from, written beside `host=`
+                      # by the blocking and lock-holder collectors since 2026-09-30. A client's
+                      # address is in no configuration file, so unharvested it would reach the
+                      # page unchanged and the certifier would refuse it as unrecognised.
+                      ("client_ip", "address")):
         remember(fields.get(key), kind)
 
     for match in _ITEM_RE.finditer(str(text or "")):

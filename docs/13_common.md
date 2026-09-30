@@ -741,7 +741,7 @@ common cli metadata ...".) The app now resolves the two logins and calls, in ord
 | Step | Command |
 | --- | --- |
 | which files | `backup-chain` - PostgreSQL's newest chain from the directory names, RMAN's own answer for Oracle (`RESTORE DATABASE PREVIEW` plus the catalog), everything for SQL Server. **A point in time copies everything**: both narrowings take the NEWEST chain, and a moment before the newest full needs an older one |
-| the copy | `copy-backup-dir` - one `tar` stream through the orchestrator. It skips a file the target already has at the same size and no older, and removes a staged file the source no longer has |
+| the copy | `copy-backup-dir` - one `tar` stream through the orchestrator. It skips a file the target already has at the same size and no older, and removes a staged file the source no longer has. It refuses a source it cannot list completely, and says which way: the folder does not exist (no backup yet), a folder vanished while listed, or the SSH user cannot read one |
 | the listing | `list-backup-files` (unchanged) |
 | instance metadata | `sqlserver-replay-instance` (unchanged), before the databases and after them |
 | the restore | `restore-full` / `restore-diff` / `restore-log` (unchanged) |
@@ -2423,7 +2423,9 @@ read by hand and still named the estate:
   database name was correctly replaced. It is anchored to an element's whole content, because
   matched loosely it reads the page's own `chart.data.datasets.length` as an object.
 * **`login=` and `host=`** out of a collector message and out of the error text a failed connection
-  hands back, which is how a DBA's own account name reached a page nothing flagged.
+  hands back, which is how a DBA's own account name reached a page nothing flagged. **`client_ip=`**
+  too, since 2026-09-30, as an address: the blocking and lock-holder collectors write the address a
+  session connected from, which no configuration names.
 
 Volume is why `Mapping.apply` makes **one pass over the text rather than one per term**: a real
 estate's index report names 52,000 objects, and neither 52,000 scans of 15 MB nor one

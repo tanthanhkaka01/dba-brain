@@ -90,3 +90,6 @@ db_ops_image.tar
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Private audit files stay on this machine: never committed, never exported.
+audits/*_private_*

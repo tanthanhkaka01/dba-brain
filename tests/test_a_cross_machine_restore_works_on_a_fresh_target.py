@@ -69,11 +69,45 @@ def test_the_first_run_creates_the_target_folder_before_looking_in_it(monkeypatc
     assert result.copied == 1
 
 
+class _Refusing(_Sftp):
+    """A source whose listing fails with one errno at one path."""
+
+    def __init__(self, tree, *, path, error):
+        super().__init__(tree)
+        self.refused_path, self.error = path, error
+
+    def listdir_attr(self, path):
+        if path == self.refused_path:
+            raise self.error
+        return super().listdir_attr(path)
+
+
 def test_an_unreadable_source_still_stops_the_copy():
     """The walk stays strict where it matters: a source it cannot read looks like an empty one."""
-    source = _Client(sftp=_FreshTarget({}))
+    source = _Client(sftp=_Refusing({}, path="/src", error=IOError(13, "Permission denied")))
 
     with pytest.raises(PermissionError, match="could not be read by the SSH user"):
+        transfer.sync_backup_dir(source_session=source, source_dir="/src",
+                                 target_session=_Client(sftp=_Sftp({})), target_dir="/dst")
+
+
+def test_a_source_folder_that_does_not_exist_is_said_to_be_missing_not_unreadable():
+    """The 0.25.0 soak's first restores ran before any backup: the folder was not there, and the
+    message blamed the SSH user's permissions."""
+    source = _Client(sftp=_FreshTarget({}))
+
+    with pytest.raises(FileNotFoundError, match="does not exist on that host - no backup has been "
+                                                "written there yet") as caught:
+        transfer.sync_backup_dir(source_session=source, source_dir="/src",
+                                 target_session=_Client(sftp=_Sftp({})), target_dir="/dst")
+    assert "could not be read" not in str(caught.value)
+
+
+def test_a_folder_removed_while_it_is_listed_stops_the_copy_and_says_so():
+    tree = {"/src": [("full", 0, True), ("a.bak", 100, False)]}
+    source = _Client(sftp=_Refusing(tree, path="/src/full", error=IOError(2, "No such file")))
+
+    with pytest.raises(FileNotFoundError, match="disappeared while it was being listed"):
         transfer.sync_backup_dir(source_session=source, source_dir="/src",
                                  target_session=_Client(sftp=_Sftp({})), target_dir="/dst")
 

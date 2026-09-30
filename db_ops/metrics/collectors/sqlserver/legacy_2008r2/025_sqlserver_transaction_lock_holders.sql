@@ -92,6 +92,9 @@ SELECT
         + 'spid=' + CAST(s.session_id AS varchar(20))
         + ', login=' + ISNULL(s.login_name, '')
         + ', host=' + ISNULL(s.host_name, '')
+        -- host_name is whatever the client says it is, and an application can send any name or
+        -- none; client_net_address is the address SQL Server saw the connection come from.
+        + ', client_ip=' + ISNULL(CAST(c.client_net_address AS varchar(48)), '')
         + ', program=' + ISNULL(s.program_name, '')
         + ', session_status=' + ISNULL(s.status, '')
         + ', request_status=' + ISNULL(r.status, '')

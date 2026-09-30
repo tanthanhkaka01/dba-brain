@@ -77,6 +77,8 @@ def test_the_eighteen_shared_objects_are_described_and_nothing_else_is(reference
         "restore_source", "restore_target",
         # 0.24.1: where an SMB restore reads dbabrain's own backup certificate.
         "restore_backup_certificate",
+        # 0.25.0: a restore's space_check, which a restore entry carried and nothing described.
+        "restore_space_check",
         "docker_db_connection", "store_config", "store_sqlite",
         "store_postgresql", "telegram_settings", "telegram_bot", "backup_policy",
         "backup_policy_override", "backup_type_rule", "capacity_defaults", "capacity_override",
