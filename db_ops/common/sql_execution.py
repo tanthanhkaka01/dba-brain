@@ -90,8 +90,14 @@ def open_sqlserver_odbc(
     password: str,
     timeout: int,
     driver: str = "",
+    tls_verify: bool = False,
 ) -> OdbcConnection:
     """The candidate walk, with the result of every attempt kept.
+
+    ``tls_verify`` (an instance's ``sqlserver_tls_verify``) narrows the walk to drivers that can
+    verify a certificate, at ``Encrypt=yes;TrustServerCertificate=no``, and never steps down to
+    plaintext: a TLS failure there is the answer, not a reason to try without TLS (review 0.25.0,
+    B5.5). Off by default - the walk below is what fourteen live instances connect with.
 
     **Why the attempts are kept.** Until 2026-08-19 this walk reported itself as the single word
     ``odbc``: which of five drivers answered, at which encryption setting, and whether it had to
@@ -104,6 +110,13 @@ def open_sqlserver_odbc(
     attempts: list[OdbcAttempt] = []
     errors: list[str] = []
     candidates = sqlserver_driver_candidates(pyodbc_module, preferred_driver=driver)
+    if tls_verify:
+        candidates = [(name, "yes") for name in dict.fromkeys(name for name, _ in candidates)
+                      if name in VERIFYING_DRIVERS]
+        if not candidates:
+            raise RuntimeError(
+                "sqlserver_tls_verify is set, and no installed ODBC driver can verify the server's "
+                f"certificate - install one of: {', '.join(VERIFYING_DRIVERS)}.")
     for candidate_driver, encryption_mode in candidates:
         conn_str = build_sqlserver_conn_str(
             driver=candidate_driver,
@@ -112,6 +125,7 @@ def open_sqlserver_odbc(
             database=database,
             username=username,
             password=password,
+            trust_server_certificate=not tls_verify,
         )
         try:
             conn = pyodbc_module.connect(conn_str, timeout=timeout)
@@ -131,6 +145,10 @@ def open_sqlserver_odbc(
     raise RuntimeError(report + hint if hint else report)
 
 
+#: The drivers that take ``TrustServerCertificate=no`` and check the chain and the name.
+VERIFYING_DRIVERS = ("ODBC Driver 18 for SQL Server", "ODBC Driver 17 for SQL Server")
+
+
 def build_sqlserver_conn_str(
     *,
     driver: str,
@@ -139,6 +157,7 @@ def build_sqlserver_conn_str(
     database: str,
     username: str,
     password: str,
+    trust_server_certificate: bool = True,
 ) -> str:
     conn_str = (
         f"DRIVER={odbc_value(driver)};"
@@ -148,7 +167,8 @@ def build_sqlserver_conn_str(
         f"PWD={odbc_value(password)};"
     )
     if driver in {"ODBC Driver 18 for SQL Server", "ODBC Driver 17 for SQL Server"}:
-        conn_str += f"Encrypt={encryption_mode};TrustServerCertificate=yes;"
+        trust = "yes" if trust_server_certificate else "no"
+        conn_str += f"Encrypt={encryption_mode};TrustServerCertificate={trust};"
     return conn_str
 
 
@@ -275,8 +295,12 @@ def connect_sqlserver_with_fallback(
     connect_timeout: int = DEFAULT_CONNECT_TIMEOUT_SECONDS,
     command_timeout: int | None = None,
     autocommit: bool = False,
+    tls_verify: bool = False,
 ) -> SqlServerConnection:
     """Open a SQL Server connection over ODBC, falling back to pymssql.
+
+    ``tls_verify`` keeps both fallbacks shut - to plaintext ODBC and to pymssql, which verifies
+    nothing - so an instance that asks for a verified connection gets one or an error.
 
     **The one place db_ops reaches a SQL Server instance.** The rule it encodes: use the
     target's configured ``sqlserver_driver`` when it names one (``pymssql`` goes straight to
@@ -291,6 +315,9 @@ def connect_sqlserver_with_fallback(
     """
     command_timeout = connect_timeout if command_timeout is None else command_timeout
     driver = str(driver or "").strip()
+    if tls_verify and driver.lower() == "pymssql":
+        raise RuntimeError("sqlserver_tls_verify is set, and sqlserver_driver=pymssql cannot verify "
+                           "a certificate; name an ODBC driver (17 or 18) or turn verification off.")
     if driver.lower() == "pymssql":
         return _connect_pymssql(
             host=host, port=port, database=database, username=username, password=password,
@@ -315,9 +342,10 @@ def connect_sqlserver_with_fallback(
             password=password,
             timeout=connect_timeout,
             driver=driver,
+            tls_verify=tls_verify,
         )
     except Exception as odbc_exc:  # noqa: BLE001 - pymssql reaches servers ODBC cannot TLS with.
-        if driver:
+        if driver or tls_verify:
             raise
         return _connect_pymssql(
             host=host, port=port, database=database, username=username, password=password,

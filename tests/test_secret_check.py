@@ -48,24 +48,32 @@ def test_cmd_access_states_the_protocol_so_it_is_not_guessed(tmp_path, monkeypat
     assert target["method"] == "ssh"
 
 
-def test_a_ref_no_config_names_falls_back_to_the_standard_key_name(tmp_path, monkeypatch):
+def test_a_ref_no_config_names_is_not_sent_to_the_host_its_name_spells(tmp_path, monkeypatch):
+    """The standard key carries an IP, which made guessing tempting - and on by default, because
+    "this command only reads". It reads by sending the secret: a password offered to whoever holds
+    that address now. `rotate-password` stopped (owner decision G3.4); this stopped in 0.26.0."""
     _empty_config(monkeypatch)
 
-    target = sc.resolve_check_target("MSSQL_10_1_2_3_DBA_USER", data_dir=tmp_path)
+    for ref in ("MSSQL_10_1_2_3_DBA_USER", "ORACLE_203_0_113_121_1522_SYS", "REMOTE_10_0_0_5_TUSER"):
+        target = sc.resolve_check_target(ref, data_dir=tmp_path)
 
-    assert target["kind"] == "db"
-    assert target["ip"] == "10.1.2.3"
-    assert target["source"] == "key name"
+        assert target["kind"] == "unknown", ref
+        assert "ip" not in target and "host" not in target, "no address was read from the name"
+        assert "default_credential_name" in target["detail"], "the answer says what to add"
 
 
-def test_a_port_in_the_key_name_is_honoured(tmp_path, monkeypatch):
-    """ORACLE_203_0_113_121_1522_SYS names a listener on 1522. Reading past the port and probing
-    the default 1521 is how a reachable instance gets reported as a connect failure."""
-    _empty_config(monkeypatch)
+def test_a_request_still_asking_for_the_name_host_is_refused_not_ignored(tmp_path):
+    """Ignored, its refs would answer NO_TARGET with no word about why - a secret gone missing."""
+    import pytest
 
-    target = sc.resolve_check_target("ORACLE_203_0_113_121_1522_SYS", data_dir=tmp_path)
+    with pytest.raises(sc.SecretCheckError, match="allow_name_host was removed"):
+        sc.check({"refs": ["MSSQL_10_1_2_3_DBA_USER"], "allow_name_host": True}, data_dir=tmp_path)
 
-    assert (target["ip"], target["port"]) == ("203.0.113.121", 1522)
+
+def test_a_request_that_says_no_to_the_name_host_is_what_every_request_now_means(tmp_path, monkeypatch):
+    monkeypatch.setattr(sc.data_sources, "load_secret_text", lambda *a, **k: {})
+
+    assert sc.check({"allow_name_host": False}, data_dir=tmp_path)["selected"] == 0
 
 
 def test_a_ref_nothing_names_and_no_standard_shape_is_the_only_honest_unknown(tmp_path, monkeypatch):

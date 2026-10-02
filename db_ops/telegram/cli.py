@@ -4,6 +4,7 @@ import argparse
 import inspect
 import json
 import sys
+import time
 from collections.abc import Callable
 from typing import Any
 from pathlib import Path
@@ -23,12 +24,23 @@ from db_ops.telegram.command_processor import (
     process_pending_conversation_messages,
 )
 from db_ops.telegram.commands import save_command_messages_from_messages
-from db_ops.telegram.send_queue import PAUSES_FILE_NAME, send_one_message, send_pending_messages
+from db_ops.lib import app_timeout
+from db_ops.telegram.send_queue import (
+    PAUSES_FILE_NAME,
+    SEND_BUDGET_RATIO,
+    send_one_message,
+    send_pending_messages,
+)
 from db_ops.telegram import bot_info, get_updates, send_message
 from db_ops.telegram.updates import add_group, set_group_level, set_user_level
 from db_ops.telegram.updates import fetch_and_save_updates
 from db_ops.telegram.workflow import run_bot_workflow
 from db_ops.logging_ops.runtime_stdout import patch_stdout
+
+
+#: When this process started, on the clock the send budget is measured with: the daemon's timeout
+#: runs from the spawn, so the budget must too, not from the moment the send pass begins.
+_PROCESS_STARTED = time.monotonic()
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -219,6 +231,12 @@ def call_telegram_function(
         "send_per_chat": config.telegram.send_per_chat,
         "send_threads": config.telegram.send_threads,
         "pauses_path": Path(config.runtime_dir) / PAUSES_FILE_NAME,
+        # Half of the timeout the daemon will kill this process at, so a pass stops on its own
+        # before it is cut off mid-row; None (no budget) when nothing will kill it.
+        "budget_seconds": app_timeout.budget_seconds(SEND_BUDGET_RATIO),
+        "budget_started_at": _PROCESS_STARTED,
+        # run-workflow saves the update offset as soon as the updates are stored (see workflow).
+        "save_offset": lambda next_offset: save_next_update_offset(config_path, next_offset),
     }
     function_params = inspect.signature(telegram_function).parameters
     function_args = {
@@ -421,10 +439,11 @@ def save_next_update_offset(config_path: str, next_update_offset: Any) -> None:
         return
 
     data["update_offset"] = next_update_offset
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as file:
-        json.dump(data, file, ensure_ascii=False, indent=2)
-        file.write("\n")
+    # Atomically: this file also holds the level -> chat routing, and it is rewritten whenever the
+    # offset moves. Truncate-then-write left it empty when the process was killed in between.
+    from db_ops.lib.json_io import atomic_write_text
+
+    atomic_write_text(path, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
 
 
 if __name__ == "__main__":

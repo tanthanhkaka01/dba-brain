@@ -281,10 +281,24 @@ def _code_pieces(text: str, db_type: str) -> "list[tuple[str, str]]":
     return pieces
 
 
+#: The node's own keys, never a login's password - whatever a credential names (F12.2, G3.5).
+_NODE_KEYS = frozenset({"DB_OPS_SECRET_KEY", "DB_OPS_KEY_BASE64", "TELEGRAM_BOT_TOKEN"})
+
+
 def resolve_password(credential: dict[str, Any], secrets: dict[str, str]) -> str:
+    """A configured credential's password: its value, or its ref - from the environment, then the
+    store's ``secrets``.
+
+    The environment still answers first here because these refs are the node's own configuration
+    (``users.json``), not a request's choice; the transports' resolver, which a request reaches, no
+    longer asks it (``lib.secret_value``, G3.5). What no credential may name is one of the node's
+    own keys.
+    """
     password_ref = str(credential.get("password_ref", "")).strip()
     if not password_ref:
         return str(credential.get("password", ""))
+    if password_ref.upper() in _NODE_KEYS or password_ref.upper().endswith("BOT_TOKEN"):
+        raise RuntimeError(f"{password_ref!r} is one of this node's own keys - it is never a password.")
     env_value = os.getenv(password_ref, "").strip()
     if env_value:
         return env_value

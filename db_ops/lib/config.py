@@ -345,6 +345,11 @@ class ClusterNode:
     password_ref: str = ""  # secret_text ref for this node's SSH password (control app auto-resolves it)
 
 
+#: Days a file under ``<runtime_dir>/output`` is kept. A file is sent to Telegram within minutes of
+#: being written; a week is what an operator needs to fetch one again by hand.
+DEFAULT_OUTPUT_RETENTION_DAYS = 7
+
+
 @dataclass(frozen=True)
 class DbOpsConfig:
     app_name: str = "db_ops"
@@ -371,6 +376,10 @@ class DbOpsConfig:
     # reports app - are all answers the operator cannot see and did not choose. Resolved by
     # db_ops.lib.timezone; DB_OPS_TIMEZONE overrides it per node, like node_role.
     timezone: str = timezone_lib.DEFAULT_TIMEZONE
+    # How long a result file under <runtime_dir>/output stays: query results, xlsx exports, config
+    # exports - often business data, and nothing removed them, so they only grew (review 0.25.0,
+    # F4.3). The daemon sweeps by age; 0 keeps them for ever.
+    output_retention_days: int = DEFAULT_OUTPUT_RETENTION_DAYS
 
     def __post_init__(self) -> None:
         """Keep ``sqlite_path`` and ``store`` from ever disagreeing.
@@ -580,7 +589,21 @@ def parse_config(raw: dict[str, Any], *, base_dir: Path) -> DbOpsConfig:
         worker=worker,
         node_role=node_role,
         timezone=display_timezone,
+        output_retention_days=_output_retention_days(raw),
     )
+
+
+def _output_retention_days(raw: dict[str, Any]) -> int:
+    value = raw.get("output_retention_days", DEFAULT_OUTPUT_RETENTION_DAYS)
+    try:
+        days = int(value)
+    except (TypeError, ValueError):
+        days = -1
+    if days < 0 or isinstance(value, bool):
+        raise ValueError(
+            f"config.json: output_retention_days must be a whole number of days, 0 or more "
+            f"(0 keeps result files for ever); got {value!r}.")
+    return days
 
 
 def resolve_store_config_path(

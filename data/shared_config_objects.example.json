@@ -1519,7 +1519,7 @@
             "legacy_fields": {
                 "databases": "database_mappings"
             },
-            "field_count": 16,
+            "field_count": 18,
             "required_field_count": 1,
             "fields": [
                 {
@@ -1696,6 +1696,20 @@
                     "rule": "Off only where the check cannot run or is not wanted - e.g. a target that cannot create the check's snapshot (Msg 1823 / 7928)"
                 },
                 {
+                    "field": "overwrite_existing",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "false",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "SQL Server: allow a full restore over a database that is ONLINE on the target. Without it such a restore is refused before anything runs - REPLACE overwrites the database, users and all (0.26.0, owner decision G2.10). A drill that runs again over its own last restore states true.",
+                    "rule": "Only ONLINE is refused; a database RESTORING from an earlier run, or absent, is restored as before"
+                },
+                {
                     "field": "note",
                     "type": "string",
                     "required": false,
@@ -1736,14 +1750,34 @@
                         "min": 1
                     },
                     "measured_against": "hours before the run",
-                    "purpose": "How far back this entry's SQL Server restore copies files; overrides the section's copy_recent_hours.",
+                    "purpose": "The fallback copy window for a database whose restore chain cannot be settled, and how old a staged FULL the restore step still takes; overrides the section's copy_recent_hours. Since 0.26.0 a SQL Server restore copies its chain (the newest FULL at or before the moment, its newest DIFF, the LOGs after), not every file of this window.",
                     "rule": "Long enough to reach the newest FULL: a source whose FULL is weekly needs a week and a day (192) - 24 copied only LOGs and a DIFF of 100.250 on 2026-09-29, and there was no chain to restore"
+                },
+                {
+                    "field": "copy_selection",
+                    "type": "string",
+                    "required": false,
+                    "default": "chain",
+                    "range_text": "chain | window",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true,
+                        "enum": [
+                            "chain",
+                            "window"
+                        ],
+                        "case_insensitive": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "What this entry's SQL Server restore copies from its source - and so what its space check counts: chain, the backups the restore applies (the newest FULL at or before the moment, its newest DIFF, the LOGs after; a database whose chain cannot be settled falls back to its window), or window, every file written in copy_recent_hours. Overrides the section's copy_selection.",
+                    "rule": "chain unless the target must hold the whole range - every restore point of the window, not only the latest chain - and has the room: on 2026-10-01 the window of the 100.250 drill was 527.9 GiB, its chain 56.8 GiB"
                 },
                 {
                     "field": "space_check",
                     "type": "object",
                     "required": false,
-                    "default": "on, factor 1.5, refuse when unmeasured",
+                    "default": "on, factor 2.0, refuse when unmeasured",
                     "range_text": "enabled / factor / on_unknown",
                     "constraint": {
                         "kind": "object",
@@ -2321,7 +2355,7 @@
                 "enabled": "active",
                 "ord": "sort_order"
             },
-            "field_count": 33,
+            "field_count": 34,
             "required_field_count": 6,
             "fields": [
                 {
@@ -2622,7 +2656,7 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "The OS's standing status as an operator records it.",
-                    "rule": "Kept by hand and read by metrics/health.py - not measured by anything"
+                    "rule": "Kept by hand and read by nothing since 0.26.0 - the legacy metrics health message that printed it (metrics/health.py) was never reachable from a command and was removed. Still loads, so an inventory that sets it is not refused."
                 },
                 {
                     "field": "status_db",
@@ -2796,6 +2830,20 @@
                     "measured_against": "not a time value",
                     "purpose": "Which ODBC driver to use.",
                     "rule": "Also accepted inside metrics"
+                },
+                {
+                    "field": "sqlserver_tls_verify",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "false",
+                    "range_text": "true or false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Verify the SQL Server's certificate: Encrypt=yes;TrustServerCertificate=no, only ODBC Driver 17/18, and no fallback to plaintext or pymssql (0.26.0, review B5.5). Off: the driver walk as before, which trusts any certificate.",
+                    "rule": "Reaches every metric and run-sql; restore and backup steps connect as before"
                 },
                 {
                     "field": "sort_order",
@@ -5305,7 +5353,7 @@
                 {
                     "file": "restore_config.json",
                     "path": "backup_restore.restores[].space_check",
-                    "note": "any restore entry; absent means on at the default factor"
+                    "note": "any restore entry; absent means on at the default factor, the copy only"
                 }
             ],
             "legacy_fields": {},
@@ -5328,7 +5376,7 @@
                     "field": "factor",
                     "type": "number",
                     "required": false,
-                    "default": "1.5",
+                    "default": "2.0",
                     "range_text": "1 and up",
                     "constraint": {
                         "kind": "number",
@@ -5337,7 +5385,7 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "Free space needed = bytes to copy x factor.",
-                    "rule": "2.0 when the restored database lives on the same filesystem as the staged files; below 1 is refused - it asks for less room than the files themselves"
+                    "rule": "2.0 for every engine since 0.26.0 (it was 1.5): the restored database usually lives on the filesystem the staged files are on; below 1 is refused - it asks for less room than the files themselves"
                 },
                 {
                     "field": "on_unknown",
@@ -5357,9 +5405,23 @@
                     "measured_against": "not a time value",
                     "purpose": "What to do when a number could not be read.",
                     "rule": "refuse: an unmeasured restore is the one that filled the disk on 2026-09-17"
+                },
+                {
+                    "field": "measure_restore",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "false",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Also measure the database each restore builds, before its first RESTORE: the files the backup says it holds, less the files it overwrites, against the free space of the data volume - free >= added x factor, a measurement that cannot be made held to on_unknown.",
+                    "rule": "Off unless stated: by default only the copy is measured, and the engineer who sets up the restore knows the disk must hold the database. Supported for a share-driven SQL Server restore; a script-driven entry (PostgreSQL, Oracle, SQL Server in a container) that sets it true is refused when it is read"
                 }
             ],
-            "field_count": 3,
+            "field_count": 4,
             "required_field_count": 0,
             "whole_record_note": "whole_record: every key on the record is this entry's business, so a key it does not describe is reported as unknown. Keys starting with '_' are the estate's own comments and are never reported."
         },
@@ -8721,7 +8783,7 @@
             "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 9,
+            "field_count": 10,
             "required_field_count": 0,
             "fields": [
                 {
@@ -8848,6 +8910,25 @@
                     },
                     "measured_against": "milliseconds of wall clock the command took",
                     "purpose": "How long it took."
+                },
+                {
+                    "field": "replace_mode",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "posix-rename | remove+rename",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true,
+                        "enum": [
+                            "posix-rename",
+                            "remove+rename"
+                        ],
+                        "case_insensitive": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "send-file only, when a file was written: how the staged file took its name on the remote host - posix-rename in one step, or remove+rename where the server lacks that extension."
                 }
             ]
         },
@@ -9024,7 +9105,7 @@
             "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 9,
+            "field_count": 10,
             "required_field_count": 0,
             "fields": [
                 {
@@ -9150,6 +9231,25 @@
                     },
                     "measured_against": "milliseconds of wall clock the command took",
                     "purpose": "How long it took."
+                },
+                {
+                    "field": "replace_mode",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "posix-rename | remove+rename",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true,
+                        "enum": [
+                            "posix-rename",
+                            "remove+rename"
+                        ],
+                        "case_insensitive": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "How the staged file took its name on the destination: posix-rename - one step; remove+rename - the server lacks that extension, and between the two steps the destination did not exist."
                 }
             ]
         },
@@ -9542,7 +9642,7 @@
             "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 11,
+            "field_count": 13,
             "required_field_count": 0,
             "fields": [
                 {
@@ -9571,7 +9671,35 @@
                         "min": 0
                     },
                     "measured_against": "days",
-                    "purpose": "The rule."
+                    "purpose": "The rule's window in whole days; 0 when it is under a day - `retention_seconds` is exact."
+                },
+                {
+                    "field": "retention_seconds",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "seconds",
+                    "purpose": "The window exactly as `cleanup_retention` stated it. Until 0.26.0 the planner rounded to whole days, and anything under a day became the 14-day default."
+                },
+                {
+                    "field": "window",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The window as words, in the unit it was given: `8-day`, `7200-second`."
                 },
                 {
                     "field": "cutoff",
@@ -12570,7 +12698,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The target's connection facts, resolved: target_id, db_type, host, port, database (\"\" = the engine's default, master on SQL Server), service_name, sqlserver_driver, username and password; or the legacy-Oracle sql_access block and the credential the bridge builds its connect string from."
+                    "purpose": "The target's connection facts, resolved: target_id, db_type, host, port, database (\"\" = the engine's default, master on SQL Server), service_name, sqlserver_driver, sqlserver_tls_verify, username and password; or the legacy-Oracle sql_access block and the credential the bridge builds its connect string from."
                 },
                 {
                     "field": "secrets",
@@ -12969,7 +13097,7 @@
             "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 7,
+            "field_count": 9,
             "required_field_count": 4,
             "fields": [
                 {
@@ -13067,6 +13195,42 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "chmod -R a+rX on the target after, for the engine's own uid. Default true."
+                },
+                {
+                    "field": "copy_mode",
+                    "type": "string",
+                    "required": false,
+                    "default": "auto",
+                    "range_text": "auto | tar | sftp",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true,
+                        "enum": [
+                            "auto",
+                            "tar",
+                            "sftp"
+                        ],
+                        "case_insensitive": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "How the files cross: auto - one tar stream, and file by file over SFTP when tar cannot be used on either end; tar or sftp - that way only. A pinned way that cannot be used is an error, never a reason to try the other (owner decision G4).",
+                    "rule": "auto unless the slow way must never be taken silently on this link (tar), or tar is known not to be there (sftp). Whichever ran is in the answer."
+                },
+                {
+                    "field": "space_check",
+                    "type": "object",
+                    "required": false,
+                    "default": "on, factor 2.0, refuse when unmeasured",
+                    "range_text": "enabled / factor / on_unknown",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "checked_by": "restore_space_check"
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The room the files still to copy must find on the target before the first one moves: free >= bytes x factor. A restore entry's own space_check, handed on by the app; the same object, the same defaults.",
+                    "rule": "Absent means ON, as on a restore entry. A shortfall, or a target whose free space cannot be read (unless on_unknown is proceed), fails the command with nothing copied"
                 }
             ]
         },
@@ -13086,7 +13250,7 @@
             "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 5,
+            "field_count": 8,
             "required_field_count": 0,
             "fields": [
                 {
@@ -13157,6 +13321,53 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "Whether every staged piece was made readable."
+                },
+                {
+                    "field": "copy_mode",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "tar | sftp | none",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true,
+                        "enum": [
+                            "tar",
+                            "sftp",
+                            "none"
+                        ],
+                        "case_insensitive": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "How the files went: tar - one stream; sftp - one transfer per file; none - nothing needed copying."
+                },
+                {
+                    "field": "copy_fell_back",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "true or false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "True when copy_mode was auto and the tar stream could not be used, so the files went one by one - the slow way, across two hops minutes turned into hours."
+                },
+                {
+                    "field": "space_check",
+                    "type": "object",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "What the space check measured before the first file moved: checked; when true - ok, incoming_bytes, free_bytes, required_bytes, factor, detail; when false - reason (disabled | unknown). Absent when nothing needed copying."
                 }
             ]
         },
@@ -14237,7 +14448,7 @@
             "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 11,
+            "field_count": 12,
             "required_field_count": 0,
             "fields": [
                 {
@@ -14394,6 +14605,25 @@
                     "measured_against": "milliseconds of wall clock the command took",
                     "purpose": "How long it ran.",
                     "rule": "Was `duration_seconds` until 0.22.0"
+                },
+                {
+                    "field": "backend",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "pypsrp | powershell",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true,
+                        "enum": [
+                            "pypsrp",
+                            "powershell"
+                        ],
+                        "case_insensitive": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Over WinRM, which backend ran the command: pypsrp, or powershell - a local PowerShell driving Invoke-Command, used when pypsrp is not installed. Not equals: a WORKGROUP host refuses the second. Install the winrm extra to have the first. Absent over SSH and locally."
                 }
             ]
         },
@@ -16693,7 +16923,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
+                    "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver, sqlserver_tls_verify and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
                 },
                 {
                     "field": "rules",
@@ -16979,7 +17209,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
+                    "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver, sqlserver_tls_verify and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
                 },
                 {
                     "field": "access",
@@ -17265,7 +17495,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
+                    "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver, sqlserver_tls_verify and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
                 },
                 {
                     "field": "policy",
@@ -18167,7 +18397,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
+                    "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver, sqlserver_tls_verify and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
                 }
             ]
         },
@@ -18400,7 +18630,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
+                    "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver, sqlserver_tls_verify and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
                 }
             ]
         },
@@ -18751,7 +18981,7 @@
             "legacy_fields": {
                 "database": "database_name"
             },
-            "field_count": 25,
+            "field_count": 26,
             "required_field_count": 1,
             "fields": [
                 {
@@ -18877,6 +19107,19 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "SQL Server: WITH REPLACE."
+                },
+                {
+                    "field": "overwrite_existing",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "false",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "SQL Server full restore with replace: run even when the database is ONLINE on the target. Without it the batch raises before it touches the database (0.26.0, G2.10)."
                 },
                 {
                     "field": "stats",
@@ -23031,7 +23274,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
+                    "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver, sqlserver_tls_verify and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
                 },
                 {
                     "field": "profile",
@@ -23583,7 +23826,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
+                    "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver, sqlserver_tls_verify and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
                 }
             ]
         },
@@ -23677,7 +23920,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
+                    "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver, sqlserver_tls_verify and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
                 }
             ]
         },
@@ -24001,7 +24244,7 @@
                         "nullable": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "Accept a host read from the ref's own name."
+                    "purpose": "Removed in 0.26.0: a request carrying true is refused. A secret is sent only to a host the configuration names for its ref - never to one read from the ref's name; a ref nothing names answers NO_TARGET."
                 },
                 {
                     "field": "timeout_seconds",
@@ -24078,7 +24321,7 @@
                         "nullable": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "Accept a host from the name."
+                    "purpose": "Removed in 0.26.0 (owner decision G3.4): a request carrying true is refused. A password is changed only on the instance db_instances.json names for its ref - never on a host taken from the ref's name."
                 },
                 {
                     "field": "host_overrides",
@@ -24977,7 +25220,7 @@
                 }
             ],
             "legacy_fields": {},
-            "field_count": 11,
+            "field_count": 12,
             "required_field_count": 0,
             "fields": [
                 {
@@ -25080,7 +25323,21 @@
                         "min": 0
                     },
                     "measured_against": "minutes since the last failure",
-                    "purpose": "How long it stays locked."
+                    "purpose": "How long it stays locked, and the window both failure limits count in."
+                },
+                {
+                    "field": "max_failed_logins_per_ip",
+                    "type": "integer",
+                    "required": false,
+                    "default": "5",
+                    "range_text": "0 and up; 0 turns it off",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 0
+                    },
+                    "measured_against": "failures inside lockout_minutes",
+                    "purpose": "Failures from one address before that address is refused. Below max_failed_logins, so one address cannot lock an account (0.26.0)."
                 },
                 {
                     "field": "min_level_view",
@@ -25415,7 +25672,7 @@
                 }
             ],
             "legacy_fields": {},
-            "field_count": 4,
+            "field_count": 5,
             "required_field_count": 0,
             "fields": [
                 {
@@ -25444,7 +25701,26 @@
                         "min": 1
                     },
                     "measured_against": "hours before the run",
-                    "purpose": "How far back files are copied."
+                    "purpose": "The fallback copy window, and how old a staged FULL the restore step still takes - the copy itself takes the restore chain since 0.26.0."
+                },
+                {
+                    "field": "copy_selection",
+                    "type": "string",
+                    "required": false,
+                    "default": "chain",
+                    "range_text": "chain | window",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true,
+                        "enum": [
+                            "chain",
+                            "window"
+                        ],
+                        "case_insensitive": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "What a SQL Server restore copies from its source, and its space check counts: chain (the backups the restore applies) or window (every file of copy_recent_hours). An entry may set its own."
                 },
                 {
                     "field": "backups",

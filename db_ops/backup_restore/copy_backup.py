@@ -17,6 +17,7 @@ from pathlib import Path, PurePosixPath
 
 from db_ops.backup_restore.config import BackupRestoreConfig, load_restore_config
 from db_ops.lib import data_sources
+from db_ops.lib import sqlserver_backup_chain as chain_rule
 from db_ops.lib.remote_host import RemoteHost
 from db_ops.logging_ops import log_event
 
@@ -100,6 +101,29 @@ def should_list_the_share(config: BackupRestoreConfig) -> bool:
     return os.name == "nt" and str(config.prod_backup_share).startswith("\\\\") and str(config.vm_import_unc).startswith("\\\\")
 
 
+#: The four ways a copy reads its source and writes its target.
+ENGINE_SMBCLIENT = "smbclient"   # a Linux node: the share through smb-list / smb-get, then SFTP
+ENGINE_SFTP = "sftp"             # a Windows node to a Linux target: the share as a path, then SFTP
+ENGINE_SHARE = "share"           # a Windows node, share to share: the source through smb-list
+ENGINE_PYTHON = "python"         # both ends as paths this process can read
+
+
+def copy_engine(config: BackupRestoreConfig) -> str:
+    """Which of the four this copy is - asked by the copy, and by the space check that counts for it.
+
+    One rule, because the two must read the source the same way: the check walked the share as a
+    path whatever the copy did, and on a Linux node a UNC path is no folder at all - it found
+    nothing, counted **0 bytes** and passed, on every restore the worker ran (review notes R8).
+    """
+    if config.is_linux and _running_on_linux() and _is_unc_share(config.prod_backup_share):
+        return ENGINE_SMBCLIENT
+    if config.is_linux:
+        return ENGINE_SFTP
+    if should_list_the_share(config):
+        return ENGINE_SHARE
+    return ENGINE_PYTHON
+
+
 def build_robocopy_command(config: BackupRestoreConfig) -> list[str]:
     _validate_unc_source(config.prod_backup_share)
     cmd = [
@@ -174,7 +198,14 @@ def newest_backup_hint(config: BackupRestoreConfig, *, now: float | None = None)
             "entry names the wrong one")
 
 
-def list_recent_backup_files(config: BackupRestoreConfig | None = None, *, now: float | None = None) -> list[Path]:
+def list_recent_backup_files(config: BackupRestoreConfig | None = None, *, now: float | None = None,
+                              report=None) -> list[Path]:
+    """The backups this copy moves: each database's restore chain, else its copy window.
+
+    The chain is the one the restore will apply (:func:`chain_until`, :mod:`db_ops.lib.
+    sqlserver_backup_chain`); a database the chain cannot be settled for is copied by its window as
+    before. The space check counts this same list, so it measures what is copied.
+    """
     restore_config = config or load_restore_config()
     cutoff, end_ts = _copy_window_timestamps(restore_config, now=now)
     root = restore_config.source_backup_dir
@@ -184,10 +215,53 @@ def list_recent_backup_files(config: BackupRestoreConfig | None = None, *, now: 
         found.extend(_scan_backup_files_with_mtime(
             source_dir=source_dir,
             patterns=restore_config.copy_file_patterns,
-            cutoff=cutoff,
-            end_ts=end_ts,
+            cutoff=None,
+            end_ts=None,
         ))
-    return [path for _, path in sorted(found, key=lambda item: (item[0], str(item[1]).lower()))]
+    candidates = [
+        chain_rule.Candidate(item=(mtime, path), database=path.parent.parent.name,
+                             kind=chain_rule.kind_from_folder(path.parent.name),
+                             timestamp=backup_time_from_name(path.name) or mtime)
+        for mtime, path in found
+    ]
+    chosen = _chain_or_window(
+        restore_config, candidates,
+        in_window=lambda item: (cutoff is None or item[0] >= cutoff) and (end_ts is None or item[0] <= end_ts),
+        report=report)
+    return [path for _, path in sorted(chosen, key=lambda item: (item[0], str(item[1]).lower()))]
+
+
+def chain_until(config: BackupRestoreConfig) -> float | None:
+    """The moment the copy's chain is cut at: the point in time, or ``None`` for latest."""
+    end = config.copy_window_end_utc
+    return end.timestamp() if end is not None else None
+
+
+def _chain_or_window(config: BackupRestoreConfig, candidates: list, *, in_window, report=None) -> list:
+    """The chain's items, plus - for a database the chain could not be settled for - its window.
+
+    ``copy_recent_hours`` stopped deciding what a SQL Server restore copies (0.26.0 §1.74): the copy
+    took every file of its window, which for a weekly FULL is eight days of DIFFs and LOGs - 527.9
+    GiB on the 2026-10-01 drill, for a chain of 56.8 GiB. It is still the fallback, and still how old
+    a staged FULL may be for the restore step to take it.
+    """
+    if str(getattr(config, "copy_selection", "chain") or "chain") == "window":
+        # The entry asked for the whole range (copy_selection: window): every file of the window,
+        # as before 0.26.0 - and the space check counts it, so it is refused if it does not fit.
+        picked = [c.item for c in candidates if in_window(c.item)]
+        if callable(report):
+            report(f"copy_selection=window: {len(picked)} of {len(candidates)} file(s), every file "
+                   "of the copy window")
+        return picked
+    choice = chain_rule.restore_chain(candidates, until=chain_until(config))
+    unresolved = {name.lower() for name in choice.unresolved}
+    picked = list(choice.selected) + [
+        c.item for c in candidates
+        if str(c.database or "(no database folder)").lower() in unresolved and in_window(c.item)]
+    if callable(report):
+        for line in choice.lines:
+            report(line)
+    return picked
 
 
 def _copy_window_timestamps(config: BackupRestoreConfig, *, now: float | None = None) -> tuple[float | None, float | None]:
@@ -267,28 +341,44 @@ def list_recent_backup_files_on_share(
     pattern (case-insensitive, as ``Get-ChildItem -Include`` matched) and whose last write falls in
     the copy window - oldest first, then by full path.
     """
+    return [path for _, path, _size in _select_on_share(config, now=now)]
+
+
+def _select_on_share(config: BackupRestoreConfig, *,
+                     now: float | None = None) -> list[tuple[float, Path, int | None]]:
+    """``(last write, path, bytes)`` for each file :func:`list_recent_backup_files_on_share` takes.
+
+    The size rides along because the listing states it and the space check needs it: a second walk
+    of the share to ``stat`` each file is a second selection, and the two can disagree.
+    """
     from db_ops.backup_restore import share
 
     cutoff_ts, end_ts = _copy_window_timestamps(config, now=now)
     password = resolve_password_ref(config.prod_smb_password_env) if config.prod_smb_password_env else ""
     root = str(config.prod_backup_share).replace("/", "\\").rstrip("\\")
     patterns = [pattern.lower() for pattern in config.copy_file_patterns]
-    chosen: list[tuple[float, Path]] = []
     # One listing per mapped database folder, as the Linux node's copy does - never the whole
     # share, whose other databases this entry does not restore (mapped_database_folders).
     folders = mapped_database_folders(config)
-    for listed in ([f"{root}\\{name}" for name in folders] if folders else [root]):
+    candidates: list[chain_rule.Candidate] = []
+    for listed, database in ([(f"{root}\\{name}", name) for name in folders] if folders else [(root, "")]):
         for item in share.list_files(listed, username=config.prod_smb_username or "", password=password):
             name = str(item.get("name") or "").lower()
             modified = item.get("modified_epoch")
             if not any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns) or modified is None:
                 continue
-            if cutoff_ts is not None and float(modified) < cutoff_ts:
-                continue
-            if end_ts is not None and float(modified) > end_ts:
-                continue
-            chosen.append((float(modified), Path(listed + "\\" + str(item["path"]))))
-    return [path for _, path in sorted(chosen, key=lambda item: (item[0], str(item[1]).lower()))]
+            parts = PurePosixPath(str(item["path"]).replace("\\", "/")).parts
+            size = item.get("size_bytes")
+            candidates.append(chain_rule.Candidate(
+                item=(float(modified), Path(listed + "\\" + str(item["path"])),
+                      int(size) if size is not None else None),
+                database=database or (parts[-3] if len(parts) >= 3 else ""),
+                kind=chain_rule.kind_from_folder(parts[-2] if len(parts) >= 2 else ""),
+                timestamp=backup_time_from_name(str(item.get("name") or "")) or float(modified)))
+    chosen = _chain_or_window(
+        config, candidates,
+        in_window=lambda item: (cutoff_ts is None or item[0] >= cutoff_ts) and (end_ts is None or item[0] <= end_ts))
+    return sorted(chosen, key=lambda item: (item[0], str(item[1]).lower()))
 
 
 def copy_recent_backup_files_on_share(
@@ -595,6 +685,7 @@ class _RemoteBackup:
     relative_path: str
     size_bytes: int
     backup_timestamp: float | None
+    modified_epoch: float | None = None
 
 
 def _share_login(config: BackupRestoreConfig) -> tuple[str, str]:
@@ -616,7 +707,9 @@ def _list_remote_backups(config: BackupRestoreConfig, host: str, share_name: str
     except share.ShareError as exc:
         raise RuntimeError(f"smbclient list failed for //{host}/{share_name}/{remote_dir}: {exc}") from exc
     return [_RemoteBackup(relative_path=str(item["path"]), size_bytes=int(item["size_bytes"]),
-                          backup_timestamp=_backup_time_from_name(str(item["name"])))
+                          backup_timestamp=_backup_time_from_name(str(item["name"])),
+                          modified_epoch=(float(item["modified_epoch"])
+                                          if item.get("modified_epoch") is not None else None))
             for item in files]
 
 
@@ -679,6 +772,41 @@ def _selected_remote_backups(
     return selected, skipped
 
 
+def _chain_remote_backups(
+    config: BackupRestoreConfig,
+    backups: list[_RemoteBackup],
+    *,
+    database: str,
+    cutoff: float | None,
+    end_ts: float | None,
+    patterns: tuple[str, ...],
+    report=None,
+) -> tuple[list[_RemoteBackup], list[tuple[_RemoteBackup, str]]]:
+    """The smbclient copy's selection: the restore chain, else the window (:func:`_chain_or_window`)."""
+    matching = [b for b in backups
+                if any(PurePosixPath(b.relative_path.replace("\\", "/")).match(p) for p in patterns)]
+    skipped = [(b, "pattern_mismatch") for b in backups if b not in matching]
+    candidates = []
+    for backup in matching:
+        parts = PurePosixPath(backup.relative_path.replace("\\", "/")).parts
+        stamp = backup.backup_timestamp if backup.backup_timestamp is not None else backup.modified_epoch
+        candidates.append(chain_rule.Candidate(
+            item=backup, database=database or (parts[-3] if len(parts) >= 3 else ""),
+            kind=chain_rule.kind_from_folder(parts[-2] if len(parts) >= 2 else ""),
+            timestamp=float(stamp) if stamp is not None else 0.0))
+
+    def in_window(backup: _RemoteBackup) -> bool:
+        matched, _reason = _remote_backup_matches_window(
+            backup, cutoff=cutoff, end_ts=end_ts, require_timestamp=cutoff is not None or end_ts is not None)
+        return matched
+
+    chosen = _chain_or_window(config, candidates, in_window=in_window, report=report)
+    chosen_ids = {id(b) for b in chosen}
+    skipped.extend((b, "not_in_restore_chain") for b in matching if id(b) not in chosen_ids)
+    return sorted(chosen, key=lambda b: (b.backup_timestamp or b.modified_epoch or 0.0,
+                                         b.relative_path.lower())), skipped
+
+
 def _backup_time_from_name(name: str) -> float | None:
     """Parse the backup time encoded in a file name (..._YYYYMMDD_HHMMSS[Z].bak/.trn)."""
     return backup_time_from_name(name)
@@ -727,6 +855,88 @@ def _remote_destination_sizes(config: BackupRestoreConfig, *, logger: logging.Lo
     return sizes
 
 
+def _smbclient_selection(config: BackupRestoreConfig, *, logger: logging.Logger | None = None,
+                         announce: bool = True):
+    """Per mapped database, what a Linux node's copy takes from the share: ``(database or None,
+    folder on the share, the backups selected)``.
+
+    The listing and the chain rule in one place, for the copy and for the space check that counts
+    the same files before it (``announce=False``: the check lists, the copy is what reports).
+    """
+    host, share, subpath = _parse_unc_share(config.prod_backup_share)
+    cutoff, end_ts = _copy_window_timestamps(config)
+    _rid = f"restore_id={config.restore_id} " if config.restore_id else ""
+    base = subpath.replace("/", "\\") if subpath else ""
+    db_names = [mapping.source_database for mapping in config.databases] if config.databases else [None]
+
+    def say(message: str) -> None:
+        if announce:
+            _log_progress(logger, f"{_rid}copy-backup source_id={config.source_id} {message}")
+
+    for db in db_names:
+        remote_dir = f"{base}\\{db}" if (base and db) else (db or base)
+        say(f"smbclient_list_start remote={remote_dir or '/'} "
+            f"timeout_seconds={_SMB_LIST_TIMEOUT_SECONDS} {_format_copy_window(config)}")
+        remote_backups = _list_remote_backups(config, host, share, remote_dir)
+        selected, skipped = _chain_remote_backups(
+            config,
+            remote_backups,
+            database=db or "",
+            cutoff=cutoff,
+            end_ts=end_ts,
+            patterns=config.copy_file_patterns,
+            report=lambda line: say(f"restore_chain {line}"),
+        )
+        say(f"smbclient_list_done remote={remote_dir or '/'} scanned_files={len(remote_backups)} "
+            f"selected_files={len(selected)} skipped_files={len(skipped)}")
+        for backup, reason in skipped:
+            say(f"smbclient_skip file={backup.relative_path} reason={reason}")
+        yield db, remote_dir, selected
+
+
+def selected_backup_sizes(config: BackupRestoreConfig, *, now: float | None = None) -> dict[str, int]:
+    """``{path under the staging root: bytes}`` for every file this copy selects.
+
+    Read **the way the copy's own engine reads the source** (:func:`copy_engine`), so the number
+    the space check judges is the number the copy moves. A source that cannot be read raises - it
+    is never an empty selection: "nothing to copy" and "could not look" are different answers, and
+    the second read as the first is a check that passes on a disk it never measured.
+    """
+    engine = copy_engine(config)
+    if engine == ENGINE_SMBCLIENT:
+        sizes: dict[str, int] = {}
+        for db, _remote_dir, selected in _smbclient_selection(config, announce=False):
+            for backup in selected:
+                relative = backup.relative_path.replace("\\", "/")
+                sizes[f"{db}/{relative}" if db else relative] = int(backup.size_bytes)
+        return sizes
+    # A Windows node reads a share with the login the copy stores first; without it a share never
+    # opened in this session is not a folder, and the copy that follows would open it.
+    if not _running_on_linux():
+        store_share_logins(copy_share_login_requests(config))
+    root = Path(config.prod_backup_share)
+    if engine == ENGINE_SHARE:
+        sizes = {}
+        for _modified, path, size in _select_on_share(config, now=now):
+            if size is None:
+                raise OSError(f"the share listing states no size for {path}")
+            sizes[_staging_key(path, root)] = size
+        return sizes
+    if not root.is_dir():
+        raise OSError(f"{root} cannot be read from this node")
+    return {_staging_key(path, root): path.stat().st_size
+            for path in list_recent_backup_files(config, now=now)}
+
+
+def _staging_key(path: Path, root: Path) -> str:
+    """A selected file's path under the staging root, as the copy lays it out there."""
+    try:
+        relative = path.relative_to(root)
+    except ValueError:
+        relative = Path(path.name)
+    return relative.as_posix()
+
+
 def _smbclient_download_selected_to_staging(
     config: BackupRestoreConfig,
     *,
@@ -741,49 +951,18 @@ def _smbclient_download_selected_to_staging(
     ``(staging_dir, pre_skipped_results, total_selected)`` where ``pre_skipped_results``
     are the destination-existing files (status ``SKIPPED_EXISTS``) and ``total_selected``
     is the count of files matching the copy window (skipped or not)."""
-    host, share, subpath = _parse_unc_share(config.prod_backup_share)
+    host, share, _subpath = _parse_unc_share(config.prod_backup_share)
     staging = Path(tempfile.mkdtemp(prefix=f"db_ops_smb_{config.source_id or 'src'}_"))
-    cutoff, end_ts = _copy_window_timestamps(config)
     _rid = f"restore_id={config.restore_id} " if config.restore_id else ""
-    base = subpath.replace("/", "\\") if subpath else ""
-    db_names = [mapping.source_database for mapping in config.databases] if config.databases else [None]
     total_selected = 0
     pre_skipped: list[CopyBackupFileResult] = []
     dest_sizes = {} if force else _remote_destination_sizes(config, logger=logger)
     linux_import = str(config.vm_import_unc).replace("\\", "/").rstrip("/")
     try:
-        for db in db_names:
-            remote_dir = f"{base}\\{db}" if (base and db) else (db or base)
+        for db, remote_dir, selected in _smbclient_selection(config, logger=logger):
             local_dir = (staging / db) if db else staging
             local_dir.mkdir(parents=True, exist_ok=True)
-            _log_progress(
-                logger,
-                (
-                    f"{_rid}copy-backup source_id={config.source_id} smbclient_list_start "
-                    f"remote={remote_dir or '/'} timeout_seconds={_SMB_LIST_TIMEOUT_SECONDS} {_format_copy_window(config)}"
-                ),
-            )
-            remote_backups = _list_remote_backups(config, host, share, remote_dir)
-            selected, skipped = _selected_remote_backups(
-                remote_backups,
-                cutoff=cutoff,
-                end_ts=end_ts,
-                patterns=config.copy_file_patterns,
-            )
             total_selected += len(selected)
-            _log_progress(
-                logger,
-                (
-                    f"{_rid}copy-backup source_id={config.source_id} smbclient_list_done "
-                    f"remote={remote_dir or '/'} scanned_files={len(remote_backups)} "
-                    f"selected_files={len(selected)} skipped_files={len(skipped)}"
-                ),
-            )
-            for backup, reason in skipped:
-                _log_progress(
-                    logger,
-                    f"{_rid}copy-backup source_id={config.source_id} smbclient_skip file={backup.relative_path} reason={reason}",
-                )
             for index, backup in enumerate(selected, start=1):
                 remote_path = f"{remote_dir}\\{backup.relative_path}" if remote_dir else backup.relative_path
                 local_target = local_dir / Path(backup.relative_path.replace("\\", "/"))
@@ -911,16 +1090,10 @@ def run_copy_backup(
         if not _running_on_linux():
             store_share_logins(credential_requests)
 
-        copy_engine = (
-            "smbclient"
-            if restore_config.is_linux and _running_on_linux() and _is_unc_share(restore_config.prod_backup_share)
-            else "sftp" if restore_config.is_linux
-            else "share" if should_list_the_share(restore_config)
-            else "python"
-        )
-        _log_progress(logger, f"{_rid}copy-backup source_id={restore_config.source_id} scanning engine={copy_engine}")
+        engine = copy_engine(restore_config)
+        _log_progress(logger, f"{_rid}copy-backup source_id={restore_config.source_id} scanning engine={engine}")
 
-        if copy_engine == "smbclient":
+        if engine == ENGINE_SMBCLIENT:
             # db_ops runs on Linux and cannot read the Windows UNC share directly:
             # list/filter/download files locally via smbclient, then sftp them to the target.
             # Files already present in the final destination are skipped at the source and
@@ -929,11 +1102,13 @@ def run_copy_backup(
                 restore_config, logger=logger, force=force
             )
             try:
+                # Staged is exactly what was selected. A second window filter here dropped the LOG
+                # that carries a point in time - it is written after the moment (0.26.0 §1.74).
                 selected_files = _scan_backup_files(
                     source_dir=staging,
                     patterns=restore_config.copy_file_patterns,
-                    cutoff=restore_config.copy_window_start_utc.timestamp() if restore_config.copy_window_start_utc else None,
-                    end_ts=restore_config.copy_window_end_utc.timestamp() if restore_config.copy_window_end_utc else None,
+                    cutoff=None,
+                    end_ts=None,
                 )
                 found_count = total_selected
                 reason = " reason=no_matching_files" if found_count == 0 else ""
@@ -951,8 +1126,10 @@ def run_copy_backup(
                 ))
             finally:
                 shutil.rmtree(staging, ignore_errors=True)
-        elif copy_engine == "sftp":
-            selected_files = list_recent_backup_files(restore_config)
+        elif engine == ENGINE_SFTP:
+            selected_files = list_recent_backup_files(
+                restore_config, report=lambda line: _log_progress(
+                    logger, f"{_rid}copy-backup source_id={restore_config.source_id} restore_chain {line}"))
             found_count = len(selected_files)
             reason = " reason=no_matching_files" if found_count == 0 else ""
             _log_progress(logger, f"{_rid}copy-backup source_id={restore_config.source_id} scan_completed found_files={found_count}{reason}")
@@ -960,7 +1137,7 @@ def run_copy_backup(
         else:
             selected_files = (
                 list_recent_backup_files_on_share(restore_config)
-                if copy_engine == "share"
+                if engine == ENGINE_SHARE
                 else list_recent_backup_files(restore_config)
             )
             found_count = len(selected_files)

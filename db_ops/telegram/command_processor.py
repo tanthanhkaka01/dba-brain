@@ -7,11 +7,13 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from db_ops.lib.rows import row_value
 from db_ops.lib import data_sources
 from db_ops.lib.target_flags import is_record_active
 from db_ops.lib import field_names
@@ -33,6 +35,8 @@ from db_ops.lib.process_liveness import (  # noqa: F401 - re-exported, see above
     is_pid_alive as _is_pid_alive,
     is_windows_pid_alive as _is_windows_pid_alive,
     is_zombie as _is_zombie,
+    process_start_marker,
+    stop_process_tree,
 )
 from db_ops.lib.telegram_command_text import (  # noqa: F401 - re-exported, see above
     command_key_from_message,
@@ -59,8 +63,8 @@ DEFAULT_COMMANDS_PATH = DEFAULT_DATA_DIR / "telegram_support_commands.json"
 # db_ops is a standalone repo root; keep REPO_ROOT as an alias so path resolution
 # never escapes the project (was TOOL_ROOT.parents[1] under the old repo/tools/db_ops layout).
 # A claim older than this is treated as abandoned (the owner was killed before it could mark
-# the message done — e.g. the worker container was restarted mid-command), so the message is
-# retried instead of being stuck pending forever.
+# the message done — e.g. the worker container was restarted mid-command). The message is closed
+# and its sender told, never run a second time: see `_close_interrupted_command`.
 CLAIM_STALE_SECONDS = 900
 COMMAND_STATUS_DONE = 1
 COMMAND_STATUS_SKIPPED = -1
@@ -120,6 +124,9 @@ def process_pending_command_messages(
     stale_before = (now - timedelta(seconds=CLAIM_STALE_SECONDS)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     for row in rows:
+        # Read before the claim overwrites it: a row that already carries a claim was started
+        # once and never finished.
+        interrupted = bool(row_value(row, "claimed_at"))
         # A message is only marked done once its action finishes. The workflow runs every
         # second, so without an exclusive claim the next cycle re-reads the same pending row
         # and dispatches the command a second time (observed: five "started" replies for one
@@ -130,6 +137,11 @@ def process_pending_command_messages(
             stale_before=stale_before,
         ):
             counts["already_claimed"] += 1
+            continue
+        if interrupted:
+            _close_interrupted_command(store, row)
+            counts["skipped"] += 1
+            counts["queued_reply"] += 1
             continue
 
         result = process_one_command_message(
@@ -152,7 +164,9 @@ def process_pending_conversation_messages(
     commands_path: str | Path = DEFAULT_COMMANDS_PATH,
     config_path: str | Path = DEFAULT_CONFIG_PATH,
     limit: int = 50,
+    delete_message: Any = None,
 ) -> dict[str, int]:
+    """``delete_message(chat_id, message_id)`` removes a secret answer from the chat (F8.4)."""
     store = DbOpsStore(sqlite_path)
     commands = load_support_commands(commands_path)
     commands_by_id = {command.command_id: command for command in commands}
@@ -221,10 +235,16 @@ def process_pending_conversation_messages(
                     # A .sql body is text; a .xlsx is a zip, and decoding it as utf-8 either
                     # raises or silently mangles it. `file_encoding: "base64"` says the awaited
                     # parameter wants the bytes, carried the way a JSON request can carry them.
+                    # A per-parameter cap (review 0.25.0, F8.3): the file is read whole into memory
+                    # and, as base64, grows by a third inside a JSON request. Absent, Telegram's own
+                    # bot limit is the only bound, as before.
+                    max_bytes = _max_file_bytes(awaited)
                     if str(awaited.get("file_encoding") or "").lower() == "base64":
-                        value = _download_document_base64(document, config_path=config_path)
+                        value = _download_document_base64(document, config_path=config_path,
+                                                          max_bytes=max_bytes)
                     else:
-                        value = _download_document_text(document, config_path=config_path)
+                        value = _download_document_text(document, config_path=config_path,
+                                                        max_bytes=max_bytes)
                     from_file = True
                 except Exception as exc:  # noqa: BLE001 - report and fail the state.
                     queue_message({
@@ -262,6 +282,12 @@ def process_pending_conversation_messages(
             counts["processed"] += 1
             counts["queued_reply"] += 1
             continue
+
+        if not from_file and ws.is_secret(awaited_step):
+            # A password typed to the bot: kept in this run's memory and arguments only. The stored
+            # message rows get `***`, and the message itself is deleted from the chat, where every
+            # member could read it (review 0.25.0, F8.4).
+            forget_secret_answer(store, message, delete_message=delete_message)
 
         # Validate now, not at execution. A value mistyped at step 2 of a 14-step workflow used
         # to be reported after step 14, by which point going back to fix it was impossible.
@@ -639,6 +665,25 @@ def process_one_command_message(
     }
 
 
+#: The level an action that runs free SQL should be configured at. `add_sql_task` registers SQL the
+#: scheduler later runs *with commit* on the target's own credential, and `sql_to_xlsx` runs any text
+#: a rollback does not undo (KILL, RECONFIGURE, xp_cmdshell, DDL on Oracle/MySQL) - both sat at level
+#: 10, below the level-50/100 commands they can emulate (review 0.25.0, F8.1). The shipped catalogue
+#: says so; a node file set lower is **used as written** (the file is the truth) and warned about.
+ACTION_LEVEL_RECOMMENDED = {"add_sql_task": 100, "sql_to_xlsx": 50}
+_WARNED_LEVELS: set[str] = set()
+
+
+def warn_low_level(command_text: str, action_type: str, configured: int) -> str:
+    """The warning for a command set below :data:`ACTION_LEVEL_RECOMMENDED`, or ``""``."""
+    recommended = ACTION_LEVEL_RECOMMENDED.get(str(action_type or ""))
+    if recommended is None or configured < 0 or configured >= recommended:
+        return ""
+    return (f"telegram: /{command_text} is level {configured}; it runs free SQL ({action_type}), "
+            f"which can do what level-{recommended} commands do - set command_type to {recommended} "
+            "in telegram_support_commands.json.")
+
+
 def load_support_commands(path: str | Path = DEFAULT_COMMANDS_PATH) -> list[SupportCommand]:
     with Path(path).open("r", encoding="utf-8-sig") as file:
         data = json.load(file)
@@ -660,6 +705,13 @@ def load_support_commands(path: str | Path = DEFAULT_COMMANDS_PATH) -> list[Supp
                 node_role=(str(item.get("node_role") or "worker").strip().lower() or "worker"),
             )
         )
+        warning = warn_low_level(str(item["command_text"]), str(item.get("action_type") or ""),
+                                 int(item.get("command_type", 0)))
+        if warning and warning not in _WARNED_LEVELS:
+            # Once per process: the catalogue is read on every pass.
+            _WARNED_LEVELS.add(warning)
+            print(warning, file=sys.stderr)
+
     return commands
 
 
@@ -1133,6 +1185,26 @@ def workflow_history(state_data: dict[str, Any]) -> list[int]:
         except (TypeError, ValueError):
             continue
     return history
+
+
+def forget_secret_answer(store: Any, message: Any, *, delete_message: Any = None) -> None:
+    """Redact a secret answer where it is stored, and delete it from the chat. Never raises.
+
+    Deleting can fail - a bot that is not an admin of a group may not delete others' messages, and
+    a message older than 48 hours cannot be deleted - so the stored copies are redacted first and
+    a failed delete is only logged.
+    """
+    try:
+        store.redact_telegram_message(telegram_message_id=int(message["telegram_message_id"]))
+    except Exception as exc:  # noqa: BLE001 - the answer itself must still be processed.
+        print(f"telegram: could not redact a secret answer in the store: {exc}", file=sys.stderr)
+    if delete_message is None or message["message_id"] is None:
+        return
+    try:
+        delete_message(str(message["chat_id"]), int(message["message_id"]))
+    except Exception as exc:  # noqa: BLE001
+        print(f"telegram: could not delete a secret answer from chat {message['chat_id']}: {exc} "
+              "(the bot needs 'delete messages' rights in a group)", file=sys.stderr)
 
 
 def masked_answer(parameter: dict[str, Any], value: str) -> str:
@@ -2104,8 +2176,10 @@ def execute_sql_to_xlsx_command(
     result set to an .xlsx, and queue it back as a Telegram document. The target is a server_id
     or a ``<db_type> <ip> [port]`` spec (see :func:`db_ops.common.sql_run.resolve_sqlserver_target`).
 
-    The SELECT-only contract is enforced in :mod:`db_ops.common.sql_run` (the connection
-    is never committed and any affected rows are rejected + rolled back). A known failure raises
+    The connection is never committed: :mod:`db_ops.common.sql_run` rolls back and reports
+    ``affected_rows``, it does not reject them. A rollback does not undo everything (KILL,
+    RECONFIGURE, xp_cmdshell, an explicit COMMIT, DDL on Oracle/MySQL), which is why the shipped
+    catalogue puts this action at level 50 (:data:`ACTION_LEVEL_RECOMMENDED`, review 0.25.0, F8.1). A known failure raises
     :class:`TelegramCommandError` so the reply template echoes it to the user; the document is
     queued only on success.
     """
@@ -2290,7 +2364,23 @@ def _message_document(message: Any) -> dict[str, Any] | None:
     return None
 
 
-def _download_document_text(document: dict[str, Any], *, config_path: str | Path) -> str:
+def _max_file_bytes(parameter: dict[str, Any]) -> int | None:
+    """The parameter's ``max_file_bytes``, or ``None`` - a value that is not a positive number is
+    refused rather than read as "no limit"."""
+    raw = parameter.get("max_file_bytes")
+    if raw in (None, ""):
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        raise RuntimeError(f"max_file_bytes must be a positive number of bytes, got {raw!r}") from None
+    if value <= 0:
+        raise RuntimeError(f"max_file_bytes must be a positive number of bytes, got {raw!r}")
+    return value
+
+
+def _download_document_text(document: dict[str, Any], *, config_path: str | Path,
+                            max_bytes: int | None = None) -> str:
     """Download an attached document and decode it as text (utf-8, BOM tolerant)."""
     from db_ops.lib.config import load_config
     from db_ops.telegram import api
@@ -2300,6 +2390,7 @@ def _download_document_text(document: dict[str, Any], *, config_path: str | Path
         bot_token=config.telegram.resolved_bot_token,
         file_id=str(document["file_id"]),
         api_url=config.telegram.api_url,
+        max_bytes=max_bytes,
     )
     text = data.decode("utf-8-sig").strip()
     if not text:
@@ -2307,7 +2398,8 @@ def _download_document_text(document: dict[str, Any], *, config_path: str | Path
     return text
 
 
-def _download_document_base64(document: dict[str, Any], *, config_path: str | Path) -> str:
+def _download_document_base64(document: dict[str, Any], *, config_path: str | Path,
+                              max_bytes: int | None = None) -> str:
     """Download an attached document and return it base64-encoded.
 
     For a binary attachment — a workbook, an archive — where decoding as text would either raise
@@ -2325,6 +2417,7 @@ def _download_document_base64(document: dict[str, Any], *, config_path: str | Pa
         bot_token=config.telegram.resolved_bot_token,
         file_id=str(document["file_id"]),
         api_url=config.telegram.api_url,
+        max_bytes=max_bytes,
     )
     if not data:
         raise RuntimeError("Attached file is empty.")
@@ -2860,6 +2953,9 @@ def execute_cli_background_command(
         if stdin_payload is not None:
             popen_kwargs["stdin"] = subprocess.PIPE
         popen = subprocess.Popen(launch_argv, **popen_kwargs)  # noqa: S603
+        # Read at once, while the process is certainly ours: the poller compares it before it
+        # trusts or kills this PID (review 0.25.0, B1.6).
+        started_marker = process_start_marker(popen.pid)
         popen_kwargs["stdout"].close()
         popen_kwargs["stderr"].close()
         if stdin_payload is not None and popen.stdin is not None:
@@ -2947,6 +3043,7 @@ def execute_cli_background_command(
         stderr_path=stderr_path,
         task_data={
             "timeout_seconds": timeout_seconds,
+            "pid_started": started_marker,
             "values": mask_sensitive_value(values),
             "success_text": str(config.get("success_text") or "Command completed."),
             "failure_text": str(
@@ -3079,6 +3176,34 @@ def completion_verdict(
     return not expects_evidence
 
 
+def _is_our_process(pid: int, recorded: object) -> bool:
+    """Is the process holding ``pid`` the one this task started? A row from before the start time
+    was recorded cannot be checked and is believed, as it always was."""
+    if not recorded:
+        return True
+    return process_start_marker(pid) == str(recorded)
+
+
+def _stop_task_tree(pid: int, recorded: object = None) -> None:
+    """Stop a background task: the wrapper AND the command it runs.
+
+    The wrapper (`detached_exit`) runs the real command as its child and waits for it. Killing the
+    wrapper's PID alone left the command running while the chat was told it had timed out (review
+    0.25.0, B1.6). The wrapper is started in a session (POSIX) or a process group (Windows) of its
+    own, so the whole tree can be stopped and nothing outside it is touched.
+
+    A row from before the start time was recorded has no marker, so its tree cannot be told from
+    a stranger's: it gets what it always got, the wrapper's PID alone.
+    """
+    if recorded:
+        stop_process_tree(pid, started=str(recorded))
+        return
+    try:
+        os.kill(pid, 9 if sys.platform != "win32" else 1)
+    except OSError:
+        pass
+
+
 def check_cli_background_tasks(*, sqlite_path: str | Path) -> dict[str, int]:
     store = DbOpsStore(sqlite_path)
     tasks = store.fetch_running_telegram_background_tasks()
@@ -3091,7 +3216,14 @@ def check_cli_background_tasks(*, sqlite_path: str | Path) -> dict[str, int]:
         values = dict(task_data.get("values") or {})
         created_at_str = str(task["created_at"] or "")
 
-        alive = _is_pid_alive(pid)
+        # Three questions before the PID is believed (review 0.25.0, B1.6). Has the wrapper written
+        # its exit code? Then it is finished, whatever holds the PID now - the file is written
+        # last. Is the process holding the PID the one that was started? A PID is reused once its
+        # process ends, and the poller used to wait out the timeout on a stranger and then kill it.
+        # Only then: is it alive?
+        finished = Path(_exit_code_path(str(task["stdout_path"] or ""))).is_file()
+        ours = _is_our_process(pid, task_data.get("pid_started"))
+        alive = (not finished) and ours and _is_pid_alive(pid)
 
         # SQLite is the authoritative completion source for jobs that log a terminal
         # record: report the real outcome even if the detached process lingers past the
@@ -3105,10 +3237,7 @@ def check_cli_background_tasks(*, sqlite_path: str | Path) -> dict[str, int]:
         timed_out = False
         if probe_result is not None:
             if alive:
-                try:
-                    os.kill(pid, 9 if sys.platform != "win32" else 1)
-                except OSError:
-                    pass
+                _stop_task_tree(pid, task_data.get("pid_started"))
                 alive = False
         elif alive and created_at_str:
             try:
@@ -3117,10 +3246,7 @@ def check_cli_background_tasks(*, sqlite_path: str | Path) -> dict[str, int]:
                 if age_seconds > timeout_seconds:
                     timed_out = True
                     alive = False
-                    try:
-                        os.kill(pid, 9 if sys.platform != "win32" else 1)
-                    except OSError:
-                        pass
+                    _stop_task_tree(pid, task_data.get("pid_started"))
             except (ValueError, OSError):
                 pass
 
@@ -3682,10 +3808,63 @@ def parse_json_from_output(text: str) -> dict[str, Any] | None:
 
 
 def render_template(template: str, values: dict[str, Any]) -> str:
+    """Fill ``{name}`` placeholders. A part that is a JSON object is filled as JSON (B1.5)."""
+    stripped = template.strip()
+    if stripped.startswith("{") and stripped.endswith("}") and "{" in stripped[1:]:
+        rendered = render_json_template(stripped, values)
+        if rendered is not None:
+            return rendered
     result = template
     for key, value in values.items():
         result = result.replace("{" + key + "}", str(value))
     return result
+
+
+_PLACEHOLDER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
+_JSON_SCALAR = re.compile(r"-?(0|[1-9][0-9]*)(\.[0-9]+)?|true|false|null")
+
+
+def render_json_template(template: str, values: dict[str, Any]) -> str | None:
+    """Fill a JSON request template so that a value can only ever be a value.
+
+    Plain text substitution let a Telegram user's argument close the string or number it was put
+    in and add keys: ``json.loads`` keeps the last duplicate, so ``1,"limit":999999`` or
+    ``x","target":"OTHER_SERVER`` overrode what the template fixed (review 0.25.0, B1.5). Here a
+    placeholder inside a string is filled with the JSON-escaped text; one standing alone is filled
+    with the value if it is a JSON number/true/false/null, else with a quoted string. Returns
+    ``None`` when the template is not JSON at all, so the caller keeps the plain behaviour.
+    """
+    out: list[str] = []
+    in_string = escaped = False
+    index = 0
+    while index < len(template):
+        char = template[index]
+        match = _PLACEHOLDER.match(template, index) if char == "{" else None
+        if match and match.group(1) in values:
+            value = str(values[match.group(1)])
+            if in_string:
+                out.append(json.dumps(value)[1:-1])
+            else:
+                out.append(value if _JSON_SCALAR.fullmatch(value) else json.dumps(value))
+            index = match.end()
+            continue
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+        elif char == '"':
+            in_string = True
+        out.append(char)
+        index += 1
+    text = "".join(out)
+    try:
+        json.loads(text)
+    except ValueError:
+        return None
+    return text
 
 
 def sanitized_cli_result(result: dict[str, Any]) -> dict[str, Any]:
@@ -3804,6 +3983,36 @@ def queue_command_reply(
         "source_type": "telegram_command_messages",
         "source_id": source_id,
         "metadata": reply_metadata,
+    }, fallback_store=store)
+
+
+def _close_interrupted_command(store: DbOpsStore, row: Any) -> None:
+    """Close a command whose run was interrupted, and tell its sender - never run it again.
+
+    A stale claim used to re-open the message, and fifteen minutes later the next pass ran the
+    action a second time with nobody asking: `/spbot_kill_spid`, `/spbot_shrink_log`,
+    `/spbot_start_job` and `/spbot_restart_server` included, while the first run's reply had
+    perhaps never been sent, so the operator did not know it had run at all (review 0.25.0, B3.1).
+    Whether it took effect is a question only the person who asked can answer.
+    """
+    text = str(row["text"] or "").strip()
+    store.update_telegram_command_message_status(
+        telegram_command_message_id=int(row["telegram_command_message_id"]),
+        command_status=COMMAND_STATUS_SKIPPED,
+        process_note="Interrupted before it finished; not run again (review 0.25.0, B3.1).",
+    )
+    queue_message({
+        "store": store_block_from(store),
+        "message_type": "plain",
+        "chat_id": str(row["chat_id"]),
+        "text": (f"{text}\nwas interrupted before it finished - the bot was restarted, or the command "
+                 "ran past the bot's own time limit. It was NOT run again. Check whether it took "
+                 "effect, and send it again if it is still needed."),
+        "reply_message_id": int(row["message_id"]) if row["message_id"] is not None else None,
+        "note": "Interrupted command, not retried",
+        "source_type": "telegram_command_messages",
+        "source_id": str(row["telegram_command_message_id"]),
+        "metadata": {"status": "interrupted_not_retried"},
     }, fallback_store=store)
 
 

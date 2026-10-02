@@ -101,8 +101,8 @@ def _open(request: dict[str, Any], *, data_dir, secrets):
 
 
 def _result(*, target, status, local_path: Path, remote_path: str, size: int, started: float,
-            direction: str) -> dict[str, Any]:
-    return {
+            direction: str, replace_mode: str = "") -> dict[str, Any]:
+    result = {
         "ok": True,
         "direction": direction,
         "status": status,
@@ -113,6 +113,11 @@ def _result(*, target, status, local_path: Path, remote_path: str, size: int, st
         "size_bytes": int(size),
         "duration_ms": int((time.monotonic() - started) * 1000),
     }
+    if replace_mode:
+        # Only where a staged file was moved onto its name on the remote host: posix-rename, or
+        # remove+rename where the server lacks it - said, not assumed (G4).
+        result["replace_mode"] = replace_mode
+    return result
 
 
 def fetch_file(request: dict[str, Any], *, data_dir=None, secrets=None) -> dict[str, Any]:
@@ -217,7 +222,7 @@ def send_file(request: dict[str, Any], *, data_dir=None, secrets=None) -> dict[s
                 f"short write: {local_path} is {local_size} bytes but {arrived} bytes arrived on "
                 f"{target.host}. The partial file was removed."
             )
-        _atomic_replace(session, staged, remote_path)
+        replaced_by = _atomic_replace(session, staged, remote_path)
         try:
             stat = local_path.stat()
             session.sftp().utime(str(PurePosixPath(remote_path)), (stat.st_atime, stat.st_mtime))
@@ -226,7 +231,7 @@ def send_file(request: dict[str, Any], *, data_dir=None, secrets=None) -> dict[s
 
         return _result(target=target, status=STATUS_REPLACED if existing is not None else STATUS_COPIED,
                        local_path=local_path, remote_path=remote_path, size=local_size,
-                       started=started, direction="send")
+                       started=started, direction="send", replace_mode=str(replaced_by or ""))
     except RemoteExecError as exc:
         raise FileTransferError(f"{target.describe()}: {exc}") from exc
     finally:
@@ -554,6 +559,8 @@ def relay_file(request: dict[str, Any], *, data_dir=None, secrets=None) -> dict[
             "size_bytes": streamed["size_bytes"],
             "sha256": streamed["sha256"],
             "verified": streamed["verified"],
+            # posix-rename, or remove+rename where the server lacks it - said, not assumed (G4).
+            "replace_mode": str(streamed.get("replace_mode") or ""),
             "duration_ms": int((time.monotonic() - started) * 1000),
         }
     finally:

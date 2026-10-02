@@ -147,7 +147,8 @@ def _script_config(tmp_path, **over):
     import json
     entry = {
         "cleanup_retention": 691200, "restore_id": "ORA_DRILL", "active": True, "db_type": "oracle",
-        "server_id": "SRC", "target_container": "target_c",
+        "server_id": "SRC", "target_server_id": "SRC", "target_container": "target_c",
+        "target_visible_dir": "/backup/dbops",
         "backup_dir": "/backup/dbops", "script": "assets/restore/oracle/oracle_rman_restore.sh",
         "time_window": {"repeat_interval": 72000, "timeout": 7200},
     }
@@ -273,15 +274,47 @@ def test_an_entry_must_name_a_target_at_all(tmp_path):
     from db_ops.backup_restore.restore_script import load_script_restores
 
     cfg = _script_config(tmp_path, target_container="", target_server_id="")
-    with pytest.raises(ValueError, match="target_container.*or target_server_id"):
+    with pytest.raises(ValueError, match="requires target_server_id"):
         load_script_restores(cfg)
+
+
+def test_a_container_alone_no_longer_means_the_source_machine(tmp_path):
+    """Owner decision 2026-10-01 (review 0.25.0, B4.5 / G2.1): the target is named, never assumed."""
+    from db_ops.backup_restore.restore_script import load_script_restores
+
+    cfg = _script_config(tmp_path, target_container="target_c", target_server_id="")
+    with pytest.raises(ValueError, match="requires target_server_id"):
+        load_script_restores(cfg)
+
+
+@pytest.mark.parametrize("missing, message", [
+    ({"target_container": ""}, "requires target_container"),
+    ({"target_visible_dir": ""}, "requires target_visible_dir"),
+    ({"db_type": ""}, "requires db_type"),
+])
+def test_an_in_place_entry_states_every_target_field(tmp_path, missing, message):
+    from db_ops.backup_restore.restore_script import load_script_restores
+
+    with pytest.raises(ValueError, match=message):
+        load_script_restores(_script_config(tmp_path, **missing))
+
+
+def test_an_in_place_sql_server_entry_states_the_target_port(tmp_path):
+    """Without it the restore connected to the source's own port: production restored over itself."""
+    from db_ops.backup_restore.restore_script import load_script_restores
+
+    with pytest.raises(ValueError, match="env.MSSQL_PORT"):
+        load_script_restores(_script_config(tmp_path, db_type="sqlserver"))
+    job = load_script_restores(_script_config(tmp_path, db_type="sqlserver",
+                                              env={"MSSQL_PORT": "11433"}))[0]
+    assert job.env["MSSQL_PORT"] == "11433"
 
 
 def test_remote_and_native_modes_are_derived_from_the_entry(tmp_path):
     from db_ops.backup_restore.restore_script import load_script_restores
 
     remote = load_script_restores(_script_config(
-        tmp_path, target_container="", target_server_id="VM1", target_backup_dir="/backup",
+        tmp_path, target_container="", target_server_id="VM1", target_backup_dir="/opt/db_ops/stage",
         source_backup_host_dir="/host/backup",
     ))[0]
     assert remote.is_remote and remote.target_mode == "native"
@@ -291,7 +324,7 @@ def test_remote_and_native_modes_are_derived_from_the_entry(tmp_path):
 
     # A container ON another machine is remote but still driven through docker.
     remote_docker = load_script_restores(_script_config(
-        tmp_path, target_server_id="VM1", target_backup_dir="/backup",
+        tmp_path, target_server_id="VM1", target_backup_dir="/opt/db_ops/stage",
         source_backup_host_dir="/host/backup",
     ))[0]
     assert remote_docker.is_remote and remote_docker.target_mode == "docker"
@@ -331,7 +364,7 @@ def test_a_remote_restore_transfers_then_runs_on_the_target_host(monkeypatch, tm
     assert transferred.get("done"), "the backup must be transferred before the restore runs"
     assert ran_on["host"] == "vm1.host", "the script must run on the target host"
     # The script reads the transferred copy, not the source path.
-    assert ran_on["env"]["BACKUP_DIR"] == "/target/backup"
+    assert ran_on["env"]["BACKUP_DIR"] == "/opt/target/backup"
     assert ran_on["env"]["TARGET_MODE"] == "native"
     assert "PHASE=copy-backup transferred" in out
 
@@ -340,7 +373,7 @@ def load_remote_job(tmp_path):
     from db_ops.backup_restore.restore_script import load_script_restores
 
     return load_script_restores(_script_config(
-        tmp_path, target_container="", target_server_id="VM1", target_backup_dir="/target/backup",
+        tmp_path, target_container="", target_server_id="VM1", target_backup_dir="/opt/target/backup",
         source_backup_host_dir="/host/backup",
     ))[0]
 
@@ -476,7 +509,7 @@ def test_the_transfer_recreates_empty_directories(monkeypatch):
         def mkdir(self, path): made.append(path)
         def open(self, path, *a, **k):
             # The writability probe is expected; a real file copy in this fixture is not.
-            if path.endswith(".db_ops_write_probe"):
+            if path.endswith((".db_ops_write_probe", ".dbops-staging")):
                 return _Probe()
             raise AssertionError("no files to copy in this fixture")
         def remove(self, path): pass
@@ -511,3 +544,45 @@ def test_a_failure_before_the_entries_resolve_reports_the_real_error(tmp_path, c
     assert rc == 1
     err = capsys.readouterr().err
     assert "UnboundLocalError" not in err
+
+
+# ---------------------------------------------------------------------------
+# Every cross-machine restore stages into a directory of its own (review 0.25.0, B4.7)
+# ---------------------------------------------------------------------------
+
+def _two_remote_entries(tmp_path, first_dir, second_dir, second_target="VM1"):
+    import json
+    common = {"cleanup_retention": 86400, "active": True, "db_type": "postgresql",
+              "server_id": "SRC", "target_container": "pg", "backup_dir": "/backup/pg",
+              "source_backup_host_dir": "/host/backup/pg", "script": "x.sh",
+              "time_window": {"repeat_interval": 72000, "timeout": 7200}}
+    entries = [{**common, "restore_id": "A", "target_server_id": "VM1", "target_backup_dir": first_dir},
+               {**common, "restore_id": "B", "target_server_id": second_target,
+                "target_backup_dir": second_dir}]
+    path = tmp_path / "restore_config.json"
+    path.write_text(json.dumps({"backup_restore": {"restores": entries}}), encoding="utf-8")
+    return path
+
+
+@pytest.mark.parametrize("second", ["/opt/db_ops/stage/a", "/opt/db_ops/stage/a/b", "/opt/db_ops/stage"])
+def test_two_restores_cannot_share_or_nest_a_staging_dir_on_one_target(tmp_path, second):
+    from db_ops.backup_restore.restore_script import load_script_restores
+
+    with pytest.raises(ValueError, match="Give every restore its own target_backup_dir"):
+        load_script_restores(_two_remote_entries(tmp_path, "/opt/db_ops/stage/a", second))
+
+
+def test_the_same_dir_on_two_different_targets_is_fine(tmp_path):
+    from db_ops.backup_restore.restore_script import load_script_restores
+
+    jobs = load_script_restores(_two_remote_entries(
+        tmp_path, "/opt/db_ops/stage/a", "/opt/db_ops/stage/a", second_target="VM2"))
+    assert [j.restore_id for j in jobs] == ["A", "B"]
+
+
+@pytest.mark.parametrize("shallow", ["/", "/data", "/opt/db_ops"])
+def test_a_shallow_staging_dir_is_refused(tmp_path, shallow):
+    from db_ops.backup_restore.restore_script import load_script_restores
+
+    with pytest.raises(ValueError, match="too shallow"):
+        load_script_restores(_two_remote_entries(tmp_path, shallow, "/opt/db_ops/stage/b"))

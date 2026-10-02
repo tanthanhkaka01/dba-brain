@@ -34,6 +34,7 @@ backup_dir="${BACKUP_DIR:-}"
 restore_id="${RESTORE_ID:-mssql-restore}"
 mssql_user="${MSSQL_USER:-sa}"
 mssql_password="${MSSQL_PASSWORD:-}"
+export SQLCMDPASSWORD="$mssql_password"
 enc_password="${BACKUP_ENCRYPTION_PASSWORD:-}"
 cert_name="${BACKUP_CERT_NAME:-db_ops_backup_cert}"
 databases_csv="${MSSQL_DATABASES:-}"
@@ -105,13 +106,20 @@ for candidate in /opt/mssql-tools18/bin/sqlcmd /opt/mssql-tools/bin/sqlcmd sqlcm
 done
 [ -n "$sqlcmd_bin" ] || die "no sqlcmd found in '${target_container}'."
 
+# The login's password is never an argument: sqlcmd reads SQLCMDPASSWORD, handed to the container
+# by name (`-e SQLCMDPASSWORD`). As `-P` it was in `ps` for every statement (review 0.25.0, F10.4).
 run_sql() {
-    $DOCKER exec -i "$target_container" "$sqlcmd_bin" -C -b -S localhost \
-        -U "$mssql_user" -P "$mssql_password" -Q "$1" </dev/null
+    $DOCKER exec -i -e SQLCMDPASSWORD "$target_container" "$sqlcmd_bin" -C -b -S localhost \
+        -U "$mssql_user" -Q "$1" </dev/null
+}
+# A batch that carries a secret (the certificate's password) goes in on stdin, not in -Q.
+run_sql_secret() {
+    printf '%s\n' "$1" | $DOCKER exec -i -e SQLCMDPASSWORD "$target_container" "$sqlcmd_bin" -C -b \
+        -S localhost -U "$mssql_user" -i /dev/stdin
 }
 query_sql() {
-    $DOCKER exec -i "$target_container" "$sqlcmd_bin" -C -b -S localhost \
-        -U "$mssql_user" -P "$mssql_password" -h -1 -W -Q "SET NOCOUNT ON; $1" </dev/null \
+    $DOCKER exec -i -e SQLCMDPASSWORD "$target_container" "$sqlcmd_bin" -C -b -S localhost \
+        -U "$mssql_user" -h -1 -W -Q "SET NOCOUNT ON; $1" </dev/null \
         | sed '/^$/d;/rows affected/d' | tr -d '\r'
 }
 sql_escape() { printf '%s' "$1" | sed "s/'/''/g"; }
@@ -156,7 +164,7 @@ if in_t "test -f '${cert_dir}/${cert_name}.cer'"; then
     esc_cer2="$(sql_escape "$esc_cer")"
     esc_pvk2="$(sql_escape "$(sql_escape "${cert_dir}/${cert_name}.pvk")")"
     with_key="WITH PRIVATE KEY (FILE = N''${esc_pvk2}'', DECRYPTION BY PASSWORD = N''${esc_pw2}'')"
-    imported="$(run_sql "
+    imported="$(run_sql_secret "
 SET NOCOUNT ON;
 IF NOT EXISTS (SELECT 1 FROM master.sys.symmetric_keys WHERE name = N'##MS_DatabaseMasterKey##')
     CREATE MASTER KEY ENCRYPTION BY PASSWORD = N'${esc_pw}';

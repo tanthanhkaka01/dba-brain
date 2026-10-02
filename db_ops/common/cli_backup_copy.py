@@ -48,11 +48,17 @@ Copy a backup directory from one host to another as one tar stream, mirroring th
    "target_dir": "/opt/db_ops/backup/pg_restore_from_a",
    "include": ["base/20260925T004710Z_FULL", "wal/"],   // from backup-chain; [] = everything
    "make_readable": true,       // sudo chmod -R a+rX on the source first (a live archivelog job)
-   "open_for_engine": true}}     // chmod -R a+rX on the target after (the engine's own uid)
+   "open_for_engine": true,      // chmod -R a+rX on the target after (the engine's own uid)
+   "copy_mode": "auto",          // auto: tar, else file by file | tar | sftp - pinned, no step down
+   "space_check": {{"enabled": true, "factor": 2.0, "on_unknown": "refuse"}}}}   // these are the defaults
 
 A file already on the target with the same size and not older is skipped; a staged file the source
-no longer has is removed. data: {{"copied", "skipped", "bytes_copied",
-"removed_absent_at_source", "opened_for_engine"}}. Progress goes to stderr.
+no longer has is removed. The files still to copy must fit the target's free space, times the
+factor, or nothing is copied. data: {{"copied", "skipped", "bytes_copied",
+"removed_absent_at_source", "opened_for_engine", "copy_mode", "copy_fell_back", "space_check"}} -
+copy_mode is how the files went (tar | sftp | none), copy_fell_back whether that was the step down
+from tar, space_check what was measured (absent when there was nothing to copy).
+Progress goes to stderr.
 """,
     "prune-staged-backups": f"""\
 Usage: <request> | python -m db_ops.common.cli prune-staged-backups -
@@ -118,9 +124,18 @@ def _copy_backup_dir(request: dict[str, Any]) -> dict[str, Any]:
     import shlex
 
     from db_ops.common import backup_copy
+    from db_ops.lib import restore_space
+    from db_ops.lib.restore.copy_mode import parse_copy_mode
 
     _required(request, "source_dir", "target_dir")
     source_dir, target_dir = str(request["source_dir"]), str(request["target_dir"])
+    copy_mode = parse_copy_mode(request.get("copy_mode"))
+    # Absent means on, as on a restore entry: a check that has to be asked for protects only the
+    # copies somebody remembered.
+    space_check = restore_space.parse_space_check({"space_check": request.get("space_check")})
+    if space_check.measure_restore:
+        raise ValueError("space_check.measure_restore belongs to a restore entry: this command "
+                         "copies files and measures only them.")
     source = _open(request.get("source"), role="source")
     try:
         if request.get("make_readable", True):
@@ -133,7 +148,8 @@ def _copy_backup_dir(request: dict[str, Any]) -> dict[str, Any]:
             result = backup_copy.sync_backup_dir(
                 source_session=source, source_dir=source_dir,
                 target_session=target, target_dir=target_dir,
-                include=tuple(str(item) for item in request.get("include") or ()), log=_log)
+                include=tuple(str(item) for item in request.get("include") or ()), log=_log,
+                copy_mode=copy_mode, space_check=space_check)
             opened = (backup_copy.open_for_the_engine(target, target_dir, log=_log)
                       if request.get("open_for_engine", True) else False)
         finally:
@@ -165,7 +181,10 @@ def _message(command: str, data: dict[str, Any]) -> str:
                 else "the whole directory")
     if command == "copy-backup-dir":
         return (f"{data['copied']} copied, {data['skipped']} already there, "
-                f"{data.get('removed_absent_at_source', 0)} removed (gone at the source)")
+                f"{data.get('removed_absent_at_source', 0)} removed (gone at the source)"
+                # Said in the one line a person reads: the step down is the slow way (G4).
+                + (" - file by file over SFTP, the tar stream could not be used"
+                   if data.get("copy_fell_back") else ""))
     return f"{data.get('pruned', 0)} staged file(s) removed"
 
 
@@ -185,6 +204,7 @@ def run(command: str, argv: list[str], *, read_request: Any) -> int:
 
     import contextlib
 
+    from db_ops.common.backup_copy import CopySpaceError
     from db_ops.lib.ssh_errors import SshError
 
     try:
@@ -193,7 +213,8 @@ def run(command: str, argv: list[str], *, read_request: Any) -> int:
         # response", 2026-09-25). Everything said while working goes to stderr, as progress.
         with contextlib.redirect_stdout(sys.stderr):
             data = _WORK[command](request)
-    except (ValueError, SshError, OSError) as exc:
+    except (ValueError, SshError, OSError, CopySpaceError) as exc:
+        # A refusal is said in its own words: the reader acts on the sentence, not on a class name.
         return response.emit(response.fail(command, str(exc)))
     except Exception as exc:  # noqa: BLE001 - the caller parses an answer; a traceback is none
         return response.emit(response.fail(command, f"{type(exc).__name__}: {exc}"))

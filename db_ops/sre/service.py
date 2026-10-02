@@ -40,7 +40,16 @@ def run_ssh_command(
     host: str,
     command_args: list[str],
     dry_run: bool = False,
+    script_text: str | None = None,
 ) -> RemoteOutcome:
+    """Run a command on ``host``. ``script_text`` sends it as a script, on stdin all the way.
+
+    Arguments are the process table's: a command that carries a password - the lab AG tool's
+    ``SSHPASS=...`` - sat in the local and the bastion's argv for as long as it ran (review 0.25.0,
+    B8.1). ``sre ssh --stdin`` reads the command from stdin and hands it on here.
+    """
+    if script_text is not None:
+        return _remote(sre_config, script_text, host=host, dry_run=dry_run, script=True)
     remote_command = (
         command_args[0] if len(command_args) == 1
         else " ".join(shlex.quote(arg) for arg in command_args)
@@ -110,12 +119,14 @@ def run_bastion_script(
         f"chmod +x {shlex.quote(relative_script)}",
         env_prefix + " ".join([shlex.quote(f"./{relative_script}"), *(shlex.quote(a) for a in (args or []))]),
     ])
+    # As a script, on stdin: `GUEST_BECOME_PASS=...` in a command line was in `ps` on the bastion
+    # for the whole playbook (review 0.25.0, F5).
     if dry_run:
-        return _remote(sre_config, remote_command, dry_run=True, secrets=[guest_pass])
+        return _remote(sre_config, remote_command, dry_run=True, secrets=[guest_pass], script=True)
     # Retry on TCP-level SSH failures (rc=255) — bastion may be briefly unreachable
     # right after heavy VMware Tools operations (repo sync, key distribution).
     _wait_for_bastion_ssh(sre_config, timeout=120)
-    return _remote(sre_config, remote_command)
+    return _remote(sre_config, remote_command, script=True)
 
 
 def _wait_for_bastion_ssh(sre_config: SreOperationalConfig, *, timeout: int = 120) -> None:
@@ -222,14 +233,15 @@ def check_mysql_cluster(
         "if(s.defaultReplicaSet.status!=='OK'||members.length!==3||primary!==1||secondary!==2)"
         "{throw new Error('MySQL cluster is not healthy');}"
     )
+    # The password goes to mysqlsh on its stdin; `--password=` was in `ps` on the node (F5).
     remote_command = (
         "set -e; "
-        f"mysqlsh --js --uri {shlex.quote(admin_user)}@{shlex.quote(str(primary['ip']))}:{port} "
-        f"--password={shlex.quote(admin_password)} "
+        f"printf '%s\\n' {shlex.quote(admin_password)} | "
+        f"mysqlsh --passwords-from-stdin --js --uri {shlex.quote(admin_user)}@{shlex.quote(str(primary['ip']))}:{port} "
         f"-e {shlex.quote(status_js)}"
     )
     results.append(_remote(sre_config, remote_command, host=str(primary["ip"]), dry_run=dry_run,
-                           secrets=[admin_password]))
+                           secrets=[admin_password], script=True))
     return results
 
 
@@ -323,6 +335,7 @@ def _remote(
     host: str | None = None,
     dry_run: bool = False,
     secrets: list[str | None] | None = None,
+    script: bool = False,
 ) -> RemoteOutcome:
     """Run ``remote_command`` on ``host`` (the bastion by default) through ``common run-cmd``.
 
@@ -332,11 +345,12 @@ def _remote(
     (``'"'"'secret'"'"'``), which the old ``--password=`` pattern did not match, so ``--dry-run``
     printed the MySQL admin password in full.
     """
-    request = _remote_request(sre_config, remote_command, host=host)
+    request = _remote_request(sre_config, remote_command, host=host, script=script)
     if dry_run:
+        body_key = "script" if script else "command"
         for secret in secrets or []:
             if secret:
-                request["command"] = request["command"].replace(secret, "***")
+                request[body_key] = request[body_key].replace(secret, "***")
         return request
     try:
         success, data, error = run_allowing_failure("run-cmd", request)
@@ -354,7 +368,7 @@ def _remote(
 
 
 def _remote_request(sre_config: SreOperationalConfig, remote_command: str, *,
-                    host: str | None = None) -> dict:
+                    host: str | None = None, script: bool = False) -> dict:
     """The ``run-cmd`` request, carrying every fact, so ``common`` looks nothing up (R09).
 
     ``assume_yes`` is the operator's own ``sre`` command answering the gate: they typed it, and
@@ -368,19 +382,23 @@ def _remote_request(sre_config: SreOperationalConfig, remote_command: str, *,
     # Route through bastion when the target is a non-bastion node.
     # Wrap the remote_command in a second ssh hop executed ON bastion so that
     # this machine only needs its key on bastion; bastion's key reaches all other nodes.
+    hop = ("ssh -o BatchMode=yes -o StrictHostKeyChecking=no"
+           " -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10"
+           f" {shlex.quote(user)}@{shlex.quote(target_host)}")
     if target_host != bastion:
-        remote_command = (
-            "ssh -o BatchMode=yes -o StrictHostKeyChecking=no"
-            " -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10"
-            f" {shlex.quote(user)}@{shlex.quote(target_host)}"
-            f" {shlex.quote(remote_command)}"
-        )
+        if script:
+            # A script carries secrets: it reaches the node on the hop's stdin (a quoted heredoc
+            # in the bastion's own stdin script), never as an argument of the hop (F5 / B8.1).
+            remote_command = f"{hop} bash -s <<'DBOPS_SCRIPT_EOF'\n{remote_command}\nDBOPS_SCRIPT_EOF\n"
+        else:
+            remote_command = f"{hop} {shlex.quote(remote_command)}"
     access = {"method": "ssh", "host": bastion, "username": user, "auth_type": "key",
               "timeout_seconds": 10}
     ssh_key = sre_config.ssh_identity_file()
     if ssh_key:
         access["key_file"] = ssh_key
-    return {"access": access, "command": remote_command, "confirm": True, "assume_yes": True}
+    body_key = "script" if script else "command"
+    return {"access": access, body_key: remote_command, "confirm": True, "assume_yes": True}
 
 
 def _build_powershell_payload(sre_config: SreOperationalConfig) -> str:

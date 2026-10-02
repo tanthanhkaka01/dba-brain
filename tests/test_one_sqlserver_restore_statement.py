@@ -38,7 +38,10 @@ def _composed(inputs: dict, kind: str) -> str:
                        inputs["logfile"]),
     }
     level, fields, path = requests[kind]
-    return mssql.build_statements(level, {"database_name": inputs["database"], **fields}, [path])[0]
+    # The nightly overwrote its own last restore, which is what overwrite_existing states; without it
+    # a full gets the ONLINE guard first (G2.10, tests/test_a_restore_never_overwrites_an_online_database.py).
+    return mssql.build_statements(level, {"database_name": inputs["database"], "overwrite_existing": True,
+                                          **fields}, [path])[0]
 
 
 @pytest.mark.parametrize("case", sorted(GOLDEN))

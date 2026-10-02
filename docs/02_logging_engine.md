@@ -92,3 +92,18 @@ display clock - not under "yesterday". A file last written today is today's log 
 Named after yesterday whatever it held, the first process of a new root filed that root's first
 lines under the wrong date, and a node back from three days down filed its last day as yesterday.
 
+## Rotation on a Windows master, and one line per record (0.26.0)
+
+**Windows cannot rename a file another process holds open**, and the daemon held `errors.log` and
+`jobs.log` open for its whole life: the nightly rename failed - silently, because a failure there is
+normally a race with another writer - and the files grew without bound on a Windows master (review
+0.25.0, F2.2). On Windows `DailyArchiveFileHandler` now opens, appends and closes for each record,
+as `TeeStdout` does, so no handle outlives one write, and runs the archive check before each record:
+a rename that lost a race is retried on the next line, not the next day. POSIX renames an open file
+and keeps its stream.
+
+**A record is one line in the file.** A message carrying a newline - remote stderr, a driver error,
+a traceback the formatter appends - became extra lines with no `DATE|LOGTYPE|APP|HOST` prefix, which
+`lib/log_tail` and every parser filed under the record before (F2.3). The file handlers write each
+line break as the two characters `\n` (`handlers.one_line`); the console keeps real line breaks.
+

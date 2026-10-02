@@ -34,6 +34,7 @@ import pytest
 
 from db_ops.backup_restore import events, restore_by_id, restore_script
 from db_ops.common import backup_copy
+from db_ops.lib import restore_space
 
 SUCCESS = ["COPY_START", "COPY_DONE", "METADATA_SKIP", "RESTORE_START", "RESTORE_DONE",
            "VERIFY_START", "VERIFY_DONE", "DELETE_START", "DELETE_DONE"]
@@ -46,7 +47,8 @@ def _job(db_type="postgresql", *, remote=True, metadata=False):
         target_container="PG_LAB_B", is_remote=remote, env={}, env_secrets={},
         backup_dir="/b/PG_LAB_A", source_backup_host_dir="/b/PG_LAB_A",
         target_backup_dir="/b/pg_restore_from_a", target_visible_dir="/b/pg_restore_from_a",
-        cleanup_retention=259200, server_metadata=SimpleNamespace(enabled=metadata))
+        cleanup_retention=259200, copy_mode="auto", space_check=restore_space.SpaceCheck(),
+        server_metadata=SimpleNamespace(enabled=metadata))
 
 
 PG_PLAN = [
@@ -66,6 +68,7 @@ def drill(monkeypatch):
             point_in_time=""):
         monkeypatch.setattr(restore_script, "load_script_restores", lambda _p=None: [job])
         monkeypatch.setattr(restore_by_id, "_host_block", lambda j, **_: {"host": "h"})
+        monkeypatch.setattr(restore_by_id, "assert_target_is_not_source", lambda *a, **k: None)
         monkeypatch.setitem(restore_by_id._PLANNERS, job.db_type, lambda *a, **k: plan)
         monkeypatch.setattr("db_ops.backup_restore.backup.resolve_ssh_target",
                             lambda *a, **k: SimpleNamespace(host="h", port=22, username="u",

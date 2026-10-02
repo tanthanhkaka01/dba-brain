@@ -152,9 +152,27 @@ they were written. One chat at a time, a pass through a backlog in six chats sen
 ~1.3 s each - a fresh HTTPS call to Telegram and three store round trips - and took ~40 s; the bot
 reads its commands once per pass, so a `/spbot_self_status` reply took a minute (2026-09-29).
 
-**A pass has no time limit of its own.** The 180 s `SEND_BUDGET_SECONDS` of 0.24.0 is gone (the
-operator, 2026-09-29): the pass is bounded by the Telegram workflow's `time_window.timeout` in
-`app_commands.json` (300 s), like every other app.
+**A pass stops starting messages at half of the workflow's own timeout.** The daemon kills the
+Telegram workflow at its `time_window.timeout` in `app_commands.json` (300 s) and states that number
+to the process in `DB_OPS_APP_TIMEOUT_SECONDS` (`db_ops/lib/app_timeout.py`); the pass takes
+`SEND_BUDGET_RATIO` (0.5) of it, counted from the process start, so the commands the workflow ran
+first count too. Past it no chat starts another row, and the rest stay at `send_status = 0` for the
+next pass, in order. Run by hand there is no timeout and no budget. The fixed 180 s
+`SEND_BUDGET_SECONDS` of 0.24.0 was dropped in 0.25.0's first candidate, and with it the margin: the
+daemon then killed passes mid-row.
+
+**A row a killed pass left in flight comes back.** `send_status = 2` means a pass holds the row, and
+nothing else ever moved it on - so a pass killed mid-row lost that message without a word. Each pass
+first puts back rows in flight for longer than `STALE_IN_FLIGHT_SECONDS` (900 s) or twice the
+timeout, whichever is longer. Telegram may already have had such a row: one possible duplicate,
+much later, is the price of never losing one. `send_date` on a row in flight is when it went in.
+
+**Recording a delivered message is never a reason to send it again.** The store write that marks a
+row sent is outside the send's retry: it is retried on its own, and if the store still refuses, the
+row is left in flight and logged at error level.
+
+**A chat that fails a pass costs only itself.** Its error is logged and counted (`errors`); every
+other chat's counts and any pause Telegram imposed are kept.
 
 ## Every chat gets its own share of a pass (0.25.0)
 
@@ -178,6 +196,43 @@ flood, and the bot reads its commands once per pass.
 **A document's 429 is a pause too.** `sendDocument` answered it as a plain error until 0.25.0, so a
 report file met three immediate retries and a terminal `send_status = -1` - the fault messages lost
 on 2026-09-09, never fixed for documents.
+
+## Three things that no longer go missing (0.26.0)
+
+**A document's caption has 1024 characters, not 4096.** A longer one - a SQL task's workbook carries
+its whole status block, error text included - was refused with HTTP 400, retried three times, and the
+file was never delivered. The caption is now the leading lines, cut inside the limit with *[full text
+in the next message]*, and the whole text follows as an ordinary message
+(`lib/telegram_text.document_caption`, review 0.25.0 B1.1). That text is a second call, and it
+failing never sends the file again: the row remembers the document (`document_delivered`,
+`document_message_id` in its metadata), a rate limit hands the row back to the send pass like any
+other, and the next pass sends only the text, from the part the limit stopped. A text that fails
+outright leaves the row failed with *the document was delivered; the text that follows it was not*.
+
+**A background task is known by its PID and its start time.** The poller looked at a detached command
+by PID alone, and a PID is reused once its process ends - soon, in a container whose PIDs restart
+low. It waited out the timeout on a stranger and then killed it. Now the exit-code file is read first
+(it exists: the task finished), the process start time recorded at launch (`pid_started`,
+`lib/process_liveness.process_start_marker`) must match before the PID is believed or killed, and a
+timeout stops the wrapper **and** the command under it - `killpg` on POSIX, `taskkill /T` on Windows -
+where it used to kill the wrapper and leave the command running (review 0.25.0 B1.6).
+
+**An interrupted command is never run a second time.** A command message whose claim went stale - its
+pass was killed mid-run, by a restart or by the workflow's own timeout - used to be re-opened and run
+again fifteen minutes later with nobody asking, `/spbot_kill_spid` and `/spbot_restart_server`
+included. It is closed now (`command_status = -1`, *Interrupted before it finished; not run again*)
+and its sender is told to check whether it took effect and send it again (review 0.25.0 B3.1).
+
+**A rate limit on a later part resumes there.** A 429 that outlasted the wait on part 3 of a long message
+put the row back in the queue, and the next pass started again at part 1 - the chat saw parts 1 and 2
+twice. The row now records `parts_delivered` and the next pass sends from the next part; a failed row
+keeps its metadata (`document_path`, `reply_markup`) with `fail_text` merged in (review 0.25.0 B1.2, B3.2).
+
+**The routing files take turns.** `telegram_groups.json` and `telegram_users.json` are written by the
+workflow every second and by `group-add` / `group-level` / `user-level`. Each holds the file's lock
+(`<file>.lock`, `lib/file_lock.py`) from its read to its write - the workflow both files, groups first -
+so an operator's change is no longer overwritten by a workflow pass that read the file before it
+(review 0.25.0 F8.2).
 
 ## How to Run
 
@@ -552,6 +607,7 @@ declares:
 | `consume_rest: true` | This parameter takes **everything from its position onward**, spaces and newlines included. Only allowed on the last parameter | `consume_rest_position` / `command_args_from_text` (`command_processor.py:398`), and the argv builder (`:3329`) |
 | `accept_file: true` | The answer may be a **document** instead of text; the file's contents become the value | the conversation loop (`command_processor.py:212`) |
 | `file_encoding: "base64"` | That document is **binary** (a spreadsheet), carried as base64 rather than decoded as text | `command_processor.py:219` |
+| `max_file_bytes` | The largest attachment this parameter takes, in bytes; a larger one is refused with a reply. Absent, Telegram's own bot limit (20 MB) is the only bound - the file is read whole into memory, and as base64 it grows by a third inside the JSON request (0.26.0, review 0.25.0 F8.3) | `command_processor._max_file_bytes` |
 | `options` + `allow_text_input: false` | A closed list, so the answer is one of the values — which are themselves single tokens, guarded by a test | `db_ops/lib/workflow_steps.py` |
 
 All four are data. Nothing about any particular command is hard-coded.
@@ -849,7 +905,7 @@ The Telegram app resolves its config file using this chain:
 3. `config.telegram.json` next to `config.json`, or in the current working directory.
 4. `config.json` shared fallback.
 
-The selected source is printed to stderr on startup. The `update_offset` for `save-updates` and `run-workflow` is read from and written back to the resolved config file.
+The selected source is printed to stderr on startup. The `update_offset` - the getUpdates cursor - for `save-updates` and `run-workflow` is read from and written back to the resolved Telegram settings file (`data/telegram_config.json` by default). `run-workflow` writes it **as soon as the updates are stored, before any command runs**: saved at the end, a later step that raised, or the daemon killing the pass at its timeout, kept the old offset, and every pass re-read the same updates while the ones behind them were never fetched (review 0.25.0, B1.3).
 
 App-specific config file: `config.telegram.json`
 
@@ -871,6 +927,6 @@ Required keys: in `data/telegram_config.json` — `enabled` and the bot token (v
 
 ## EXE Packaging Notes
 
-- The `update_offset` is written back to the config file after each `save-updates` or `run-workflow` run. The resolved config file must be writable.
+- The `update_offset` is written back to the Telegram settings file by each `save-updates` or `run-workflow` run - by `run-workflow` as soon as the updates are stored. The file must be writable.
 - SQL telegram command files must be co-located or reachable; paths in `telegram_support_commands.json` are relative to the data directory.
 

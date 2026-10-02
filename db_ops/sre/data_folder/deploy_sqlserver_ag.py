@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import os
 import re
 import subprocess
@@ -44,10 +45,11 @@ def load_json(p: Path) -> dict:
     return json.loads(p.read_text(encoding="utf-8"))
 
 
-def _run(cmd: list, timeout: int = 1800, cwd: Path | None = None) -> tuple[int, str, str]:
+def _run(cmd: list, timeout: int = 1800, cwd: Path | None = None,
+         stdin_text: str | None = None) -> tuple[int, str, str]:
     try:
         r = subprocess.run(
-            cmd, capture_output=True, text=True,
+            cmd, capture_output=True, text=True, input=stdin_text,
             timeout=timeout, cwd=str(cwd or _DB_OPS),
         )
         return r.returncode, r.stdout, r.stderr
@@ -57,16 +59,27 @@ def _run(cmd: list, timeout: int = 1800, cwd: Path | None = None) -> tuple[int, 
         return -1, "", str(exc)
 
 
-def cli(*args, timeout: int = 1800) -> tuple[int, str, str]:
+def cli(*args, timeout: int = 1800, stdin_text: str | None = None) -> tuple[int, str, str]:
     cmd = [sys.executable, "-m", "db_ops.sre.cli"] + list(args)
     label = " ".join(args[:4])
     print(f"    $ python -m db_ops.sre.cli {label}")
-    rc, out, err = _run(cmd, timeout=timeout)
+    rc, out, err = _run(cmd, timeout=timeout, stdin_text=stdin_text)
     if out.strip():
         print(textwrap.indent(out.strip()[-1200:], "      "))
     if err.strip():
         print(textwrap.indent(err.strip()[-600:], "      [E] "), file=sys.stderr)
     return rc, out, err
+
+
+def remote(host: str, command_text: str, *, timeout: int = 1800) -> tuple[int, str, str]:
+    """Run ``command_text`` on ``host`` through ``sre ssh --stdin``.
+
+    On stdin, not as an argument: these commands carry the SQL nodes' password (``SSHPASS=...``),
+    and an argument is in the process table here and on the bastion while it runs (review 0.25.0,
+    B8.1 - the quoting was fixed in batch 3, this was the residual).
+    """
+    # Before the host: everything after it is the remote command (argparse REMAINDER).
+    return cli("ssh", "--stdin", host, timeout=timeout, stdin_text=command_text)
 
 
 def ssh_key() -> Path:
@@ -261,7 +274,7 @@ def step_repo_sync(install: dict) -> StepResult:
         "find /opt/db-sre/repo/automation/bash -name '*.sh' -exec sed -i 's/\\r//' {} \\; && "
         "find /opt/db-sre/repo/automation/ansible \\( -name '*.yml' -o -name '*.j2' \\) -exec sed -i 's/\\r//' {} \\;"
     )
-    rc, out, err = cli("ssh", bip, "--", extract_remote, timeout=120)
+    rc, out, err = remote(bip, extract_remote, timeout=120)
     return s.done(rc, out, err)
 
 
@@ -274,12 +287,15 @@ def step_bastion_key_to_sql_nodes(install: dict) -> StepResult:
     ips  = [n["host"] for n in install["nodes"]]
 
     # 1. Install sshpass + gen bastion key
+    # Every value quoted: a password with a `'` closed the old '{spwd}' literal and ran the rest as a
+    # command on the bastion (review 0.25.0, B8.1). sshpass reads SSHPASS (`-e`), not `-p <pw>`.
+    qpwd = shlex.quote(spwd)
     setup = (
-        f"echo '{spwd}' | sudo -S apt-get install -y -q sshpass 2>&1 | tail -3; "
+        f"printf '%s\\n' {qpwd} | sudo -S apt-get install -y -q sshpass 2>&1 | tail -3; "
         "[ ! -f ~/.ssh/id_ed25519 ] && "
         "  ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519 -q || true"
     )
-    rc, out, err = cli("ssh", bip, "--", setup, timeout=120)
+    rc, out, err = remote(bip, setup, timeout=120)
     if rc != 0:
         return s.fail(f"sshpass/keygen on bastion failed: {err}")
 
@@ -288,16 +304,16 @@ def step_bastion_key_to_sql_nodes(install: dict) -> StepResult:
     for ip in ips:
         deploy = (
             "PUBKEY=$(cat ~/.ssh/id_ed25519.pub); "
-            f"sshpass -p '{spwd}' ssh "
+            f"SSHPASS={qpwd} sshpass -e ssh "
             "-o StrictHostKeyChecking=no -o ConnectTimeout=10 "
-            f"{user}@{ip} "
+            f"{shlex.quote(user)}@{shlex.quote(ip)} "
             "\"mkdir -p ~/.ssh && chmod 700 ~/.ssh && "
             "touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && "
             "grep -qxF \\\"$PUBKEY\\\" ~/.ssh/authorized_keys || "
             "echo \\\"$PUBKEY\\\" >> ~/.ssh/authorized_keys && "
-            f"echo '{ip}: bastion key deployed'\""
+            f"echo {shlex.quote(ip + ': bastion key deployed')}\""
         )
-        rc2, o2, e2 = cli("ssh", bip, "--", deploy, timeout=60)
+        rc2, o2, e2 = remote(bip, deploy, timeout=60)
         combined += o2 + e2
         if rc2 != 0:
             print(f"    WARN: key deploy to {ip} rc={rc2}")
@@ -338,7 +354,7 @@ def step_verify(install: dict) -> StepResult:
         "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U SA "
         f"-Q \"{sql}\""
     )
-    rc, out, err = cli("ssh", prim, "--", cmd, timeout=120)
+    rc, out, err = remote(prim, cmd, timeout=120)
     return s.done(rc, out, err)
 
 

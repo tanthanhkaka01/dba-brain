@@ -9,7 +9,7 @@
         "'cleanup_retention' is how long a restored copy is kept before it is dropped. A drill target is disposable by design; keeping copies indefinitely fills the target instance and turns a proof into an incident.",
         "A physical restore carries the SOURCE instance's logins and passwords with it. After a drill the target answers to the source's credentials, and the target's own stored credential goes stale - expect that rather than being surprised by it.",
         "Every 'time_window' hour and day bound is read in the timezone DBA Brain runs in - the 'timezone' field in config.json - on every node, whatever clock the host or container keeps. So 'from_hour': 1 is 01:00 there, not 01:00 UTC and not 01:00 on the machine. There is no per-entry timezone: one declaration decides every window in every file. Changing it moves every schedule that names an hour, so set it before the first scheduled run.",
-        "space_check: does the incoming copy fit? free >= bytes_to_copy x factor, checked before a share is prepared or a byte is moved. Defaults to on at 1.5 when the entry says nothing. Use 2.0 - as here - when the restored database lands on the same filesystem as its staged backups: the copy is not the only thing that grows, and a restored log file can outgrow anything the backup size predicts. on_unknown says what to do when a number cannot be read; 'refuse' is the default, because an unmeasured restore is the one that fills a disk."
+        "space_check: does the incoming copy fit? free >= bytes_to_copy x factor, checked before a share is prepared or a byte is moved. Defaults to on at 2.0 when the entry says nothing, on every engine: the copy is not the only thing that grows, and a restored log file can outgrow anything the backup size predicts. The database a backup restores to is not measured unless the entry adds \"measure_restore\": true (a share-driven SQL Server restore only). on_unknown says what to do when a number cannot be read; 'refuse' is the default, because an unmeasured restore is the one that fills a disk."
     ],
     "backup_restore": {
         "copy_file_patterns": [
@@ -170,6 +170,7 @@
                 "server_id": "ACME-192-0-2-10",
                 "target_server_id": "ACME-192-0-2-40-HOST",
                 "active": true,
+                "overwrite_existing": true,
                 "cleanup_retention": 86400,
                 "space_check": {
                     "enabled": true,

@@ -41,6 +41,7 @@ backup_dir="${BACKUP_DIR:-}"
 level="$(printf '%s' "${BACKUP_LEVEL:-}" | tr '[:upper:]' '[:lower:]')"
 mssql_user="${MSSQL_USER:-sa}"
 mssql_password="${MSSQL_PASSWORD:-}"
+export SQLCMDPASSWORD="$mssql_password"
 databases_csv="${MSSQL_DATABASES:-}"
 enc_password="${BACKUP_ENCRYPTION_PASSWORD:-}"
 cert_name="${BACKUP_CERT_NAME:-db_ops_backup_cert}"
@@ -78,7 +79,9 @@ if [ -n "$container" ]; then
         || die "container '${container}' is not running - start it (docker start ${container}) and run the backup again."
     # stdin is closed on every docker exec: this whole script arrives on the host's `bash -s`
     # stdin, and an exec that keeps it open would eat the rest of the script.
-    exec_here() { $DOCKER exec -i "$container" "$@" < /dev/null; }
+    exec_here() { $DOCKER exec -i -e SQLCMDPASSWORD "$container" "$@" < /dev/null; }
+    # The same, reading the caller's stdin: a batch that carries a secret is fed to sqlcmd this way.
+    exec_stdin() { $DOCKER exec -i -e SQLCMDPASSWORD "$container" "$@"; }
     probe_here() { $DOCKER exec "$container" sh -c "$1" >/dev/null 2>&1; }
     # Root where the engine runs, for the one thing its own user cannot do: take over a backup
     # folder someone else made (see "writable by the engine" below).
@@ -86,6 +89,7 @@ if [ -n "$container" ]; then
     where="container ${container}"
 else
     exec_here() { "$@" < /dev/null; }
+    exec_stdin() { "$@"; }
     probe_here() { sh -c "$1" >/dev/null 2>&1; }
     # Never prompts: a host whose sudo wants a password fails here and the folder is named below.
     exec_as_root() { sudo -n "$@" < /dev/null; }
@@ -107,13 +111,19 @@ done
 # non-zero on a SQL error, which is what turns a failed BACKUP into a failed job.
 # stdin is closed on every docker exec: this whole script arrives on the host's `bash -s`
 # stdin, and an exec that keeps it open would eat the rest of the script.
+# The login's password is never an argument: sqlcmd reads SQLCMDPASSWORD (exported above, handed to
+# the container by name with `-e SQLCMDPASSWORD`). As `-P` it was in `ps` on the host and in the
+# container for every statement (review 0.25.0, F10.4).
 run_sql() {
-    exec_here "$sqlcmd_bin" -C -b -S localhost \
-        -U "$mssql_user" -P "$mssql_password" -Q "$1"
+    exec_here "$sqlcmd_bin" -C -b -S localhost -U "$mssql_user" -Q "$1"
+}
+# A batch that carries a secret (the encryption password) goes in on stdin, not in -Q.
+run_sql_secret() {
+    printf '%s\n' "$1" | exec_stdin "$sqlcmd_bin" -C -b -S localhost -U "$mssql_user" -i /dev/stdin
 }
 query_sql() {   # single column, no headers, trimmed
     exec_here "$sqlcmd_bin" -C -b -S localhost \
-        -U "$mssql_user" -P "$mssql_password" -h -1 -W -Q "SET NOCOUNT ON; $1" \
+        -U "$mssql_user" -h -1 -W -Q "SET NOCOUNT ON; $1" \
         | sed '/^$/d;/^(.*rows affected)$/d'
 }
 
@@ -146,7 +156,7 @@ if [ -n "$enc_password" ]; then
     exec_here mkdir -p "$cert_dir" \
         || die "cannot create ${cert_dir} (${where})."
 
-    run_sql "
+    run_sql_secret "
 IF NOT EXISTS (SELECT 1 FROM sys.symmetric_keys WHERE name = '##MS_DatabaseMasterKey##')
     CREATE MASTER KEY ENCRYPTION BY PASSWORD = '${esc_pw}';
 IF NOT EXISTS (SELECT 1 FROM sys.certificates WHERE name = '${esc_cert}')
@@ -156,7 +166,7 @@ IF NOT EXISTS (SELECT 1 FROM sys.certificates WHERE name = '${esc_cert}')
     # Export once. Without the .cer/.pvk pair beside the backups, an encrypted backup is
     # restorable only on the instance that wrote it — which defeats the point of taking it.
     if ! exec_here test -f "${cert_dir}/${cert_name}.cer"; then
-        run_sql "
+        run_sql_secret "
 BACKUP CERTIFICATE [${cert_name}]
     TO FILE = '${cert_dir}/${cert_name}.cer'
     WITH PRIVATE KEY (

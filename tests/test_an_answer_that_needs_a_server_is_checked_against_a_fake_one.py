@@ -618,6 +618,11 @@ _STAGED = "/opt/db_ops/backup/PG_LAB_A"
 def _a_backup_directory(host: _Host) -> None:
     host.files[f"{_STAGED}/base/20260925T004710Z_FULL/backup_label"] = b"a base backup"
     host.files[f"{_STAGED}/wal/000000010000000000000001"] = b"a WAL segment"
+    # What `backup-chain` lists: an unknown chain is refused now, not copied whole (review 0.25.0, G2.9).
+    host.answers["ls -1d"] = (0, f"{_STAGED}/base/20260925T004710Z_FULL\n")
+    # What the copy asks its target before the first file moves (0.26.0): room for the files, x2.
+    host.answers["df -Pk"] = (0, "Filesystem 1024-blocks Used Available Capacity Mounted on\n"
+                                 "/dev/sda1 104857600 1048576 103809024 1% /\n")
 
 
 def test_backup_chain(host, monkeypatch, capsys):

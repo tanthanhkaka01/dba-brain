@@ -58,7 +58,12 @@ def test_a_windows_target_runs_the_same_sqlcmd_over_winrm(windows, monkeypatch):
     script = sqlcmd_run.winrm_script(request)
     access = sqlcmd_run.winrm_access(request["host"])
 
-    assert _lines(script, "$sqlAuthArgs", "$timeoutArgs") == _lines(before, "$sqlAuthArgs", "$timeoutArgs")
+    # The same values, except the password: it is set in the script body as SQLCMDPASSWORD and is
+    # no longer one of sqlcmd's arguments (review 0.25.0, F11.2).
+    assert _lines(script, "$timeoutArgs") == _lines(before, "$timeoutArgs")
+    assert _lines(script, "$sqlAuthArgs") == [line.replace(", '-P', 'sql-secret'", "")
+                                              for line in _lines(before, "$sqlAuthArgs")]
+    assert "$env:SQLCMDPASSWORD = 'sql-secret'" in script
     assert "& $SqlcmdPath -S $SqlInstance -C @sqlAuthArgs @timeoutArgs -b -Q $Sql" in script
     assert "$Sql = 'RESTORE DATABASE [APPDB] FROM DISK = N''E:\\SQLBK_IMPORT\\APPDB.bak'' WITH NORECOVERY, STATS = 10'" in script
     assert script.endswith(f'Write-Output "{sqlcmd_run.EXIT_MARKER}$LASTEXITCODE"')
@@ -110,7 +115,10 @@ def test_a_local_run_gets_the_same_sqlcmd_argv(tmp_path, monkeypatch):
 
     request = _sqlcmd_request(build_sqlcmd_query_command(sql=SQL, config=config), config, via="local")
 
-    assert sqlcmd_run.local_argv(request) == _sqlcmd_argv(sql=SQL, config=config)
+    app_argv = _sqlcmd_argv(sql=SQL, config=config)
+    at = app_argv.index("-P")
+    assert sqlcmd_run.local_argv(request) == app_argv[:at] + app_argv[at + 2:]
+    assert "sql-secret" not in sqlcmd_run.local_argv(request), "the password travels in SQLCMDPASSWORD"
 
 
 def _connect_to(monkeypatch, client):
@@ -131,6 +139,12 @@ def test_a_linux_target_gets_the_same_remote_command(monkeypatch):
     class Channel:
         def exec_command(self, command):
             ran["command"] = command
+
+        def sendall(self, data):
+            ran["stdin"] = ran.get("stdin", "") + data.decode("utf-8")
+
+        def shutdown_write(self):
+            ran["stdin_closed"] = True
 
         def exit_status_ready(self):
             return True
@@ -160,9 +174,13 @@ def test_a_linux_target_gets_the_same_remote_command(monkeypatch):
 
     assert answer["exit_code"] == 0 and answer["timed_out"] is False and ran["closed"]
     assert ran["timeout"] == 60
+    # The password is read from stdin into SQLCMDPASSWORD: the command string is the remote shell's
+    # argv, so it is not written into it (review 0.25.0, F11.2).
     assert ran["command"] == (
+        "IFS= read -r SQLCMDPASSWORD; export SQLCMDPASSWORD; "
         "export PATH=$PATH:/opt/mssql-tools/bin:/opt/mssql-tools18/bin; sqlcmd -S localhost,1433 "
-        "-C -U sa -P 'p'\"'\"'w' -l 60 -t 0 -b -Q 'RESTORE LOG [db] FROM DISK = N'\"'\"'/tmp/log.trn'\"'\"';'")
+        "-C -U sa -l 60 -t 0 -b -Q 'RESTORE LOG [db] FROM DISK = N'\"'\"'/tmp/log.trn'\"'\"';'")
+    assert ran["stdin"] == "p'w\n"
 
 
 # --------------------------------------------------------------------------- #

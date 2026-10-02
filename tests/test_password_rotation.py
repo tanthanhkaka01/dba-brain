@@ -282,37 +282,23 @@ def test_a_ref_no_instance_uses_is_skipped_with_a_reason(monkeypatch):
 # ---------------------------------------------------------------------------
 # A key name is a label, not configuration
 # ---------------------------------------------------------------------------
-def test_a_ref_with_no_db_instance_is_refused_until_the_operator_opts_in(monkeypatch):
-    """The standard name carries the IP, which makes guessing tempting. It stays a guess, so the
-    refusal names the two ways to proceed instead of quietly picking one."""
+def test_a_ref_with_no_db_instance_is_refused_and_told_what_to_add(monkeypatch):
+    """The standard name carries the IP, which makes guessing tempting. A rotation changes a
+    password on a server, so it changes one only where the inventory says the login lives - the
+    name-derived host was removed (owner decision G3.4) - and the refusal names what to add."""
     monkeypatch.setattr(rot.data_sources, "load_all_credentials", lambda *a, **k: {})
     monkeypatch.setattr(rot.data_sources, "load_db_instances", lambda *a, **k: [])
 
     result = rot.rotate_ref("MSSQL_10_1_2_3_DBA_USER")
 
     assert result["status"] == "SKIPPED"
-    assert "allow_name_host" in result["detail"]
+    assert "db_instances.json" in result["detail"] and "allow_name_host" not in result["detail"]
 
 
-def test_allow_name_host_takes_the_target_from_the_standard_key_name(monkeypatch):
-    log = []
-    monkeypatch.setattr(rot.data_sources, "load_all_credentials", lambda *a, **k: {})
-    monkeypatch.setattr(rot.data_sources, "load_db_instances", lambda *a, **k: [])
-    monkeypatch.setattr(rot.data_sources, "load_secret_text",
-                        lambda *a, **k: {"MSSQL_10_1_2_3_DBA_USER": "OldPass1!"})
-    monkeypatch.setattr(rot.sql_run, "connect_target", lambda t, **k: _Connection(log))
-
-    result = rot.rotate_ref("MSSQL_10_1_2_3_DBA_USER", allow_name_host=True)
-
-    assert result["status"] == "SUCCESS"
-    assert result["host"] == "10.1.2.3"
-    assert result["username"] == "dba_user"
-
-
-def test_a_name_that_is_not_the_standard_scheme_yields_no_target():
-    assert rot.target_from_ref_name("TOKEN_TELEGRAM_IT_DEV_CODE_SP_BOT") is None
-    assert rot.target_from_ref_name("GRAFANA_192_0_2_104_ADMIN") is None
-    assert rot.target_from_ref_name("MSSQL_10_1_2_3_DBA")["db_type"] == "sqlserver"
+def test_a_request_still_asking_for_the_name_host_is_refused_not_ignored():
+    """Ignored, the caller would believe the ref was rotated on the host its name spells."""
+    with pytest.raises(rot.PasswordRotationError, match="G3.4"):
+        rot.rotate({"refs": ["MSSQL_10_1_2_3_DBA_USER"], "allow_name_host": True})
 
 
 # ---------------------------------------------------------------------------
@@ -364,3 +350,56 @@ def test_persist_never_leaves_the_new_password_on_the_result(tmp_path, monkeypat
 def _write_json(path, payload):
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
+
+
+# ---------------------------------------------------------------------------
+# Stored ref by ref, rolled back when storing fails (review 0.25.0, F11.1)
+# ---------------------------------------------------------------------------
+def _three_refs(monkeypatch, log):
+    monkeypatch.setattr(rot.data_sources, "load_secret_text",
+                        lambda *a, **k: {"A_DBA": "x", "B_DBA": "y", "C_DBA": "z"})
+    monkeypatch.setattr(rot, "resolve_ref_target", lambda ref, **k: _target(password_ref=ref))
+    monkeypatch.setattr(rot.sql_run, "connect_target", lambda t, **k: _Connection(log))
+
+
+def test_each_new_password_is_stored_before_the_next_ref_is_changed(monkeypatch):
+    log, order = [], []
+    _three_refs(monkeypatch, log)
+
+    def persist(ref, value):
+        order.append(("store", ref))
+
+    original = rot.rotate_ref
+
+    def rotate_ref(ref, **kwargs):
+        order.append(("change", ref))
+        return original(ref, **kwargs)
+
+    monkeypatch.setattr(rot, "rotate_ref", rotate_ref)
+    outcome = rot.rotate({"match": "_DBA"}, persist=persist)
+
+    assert order == [("change", "A_DBA"), ("store", "A_DBA"), ("change", "B_DBA"), ("store", "B_DBA"),
+                     ("change", "C_DBA"), ("store", "C_DBA")]
+    assert all(item["stored"] for item in outcome["results"])
+    assert not any("_new_password" in item for item in outcome["results"]), "nothing left to lose"
+
+
+def test_a_store_failure_rolls_that_change_back_and_stops_the_batch(monkeypatch):
+    """Before: every password was changed, then stored one by one; the first store error lost the
+    new password of every ref after it - logins nobody could use any more."""
+    log = []
+    _three_refs(monkeypatch, log)
+
+    def persist(ref, value):
+        if ref == "B_DBA":
+            raise OSError("No space left on device")
+
+    outcome = rot.rotate({"match": "_DBA"}, persist=persist)
+    by_ref = {item["password_ref"]: item for item in outcome["results"]}
+
+    assert by_ref["A_DBA"]["status"] == "SUCCESS" and by_ref["A_DBA"]["stored"]
+    assert by_ref["B_DBA"]["status"] == "FAILED" and by_ref["B_DBA"]["store_failed"]
+    assert by_ref["B_DBA"]["rollback"] == "rolled back to the previous password"
+    assert "OLD_PASSWORD" in log[-1], "the rollback statement ran last"
+    assert by_ref["C_DBA"]["status"] == "SKIPPED" and "not started" in by_ref["C_DBA"]["detail"]
+    assert outcome["ok"] is False

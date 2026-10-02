@@ -93,3 +93,6 @@ desktop.ini
 
 # Private audit files stay on this machine: never committed, never exported.
 audits/*_private_*
+
+# Lock files beside the secret stores (review 0.25.0, B9.1)
+*.json.lock

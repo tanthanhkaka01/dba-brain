@@ -57,8 +57,7 @@ def prune_job_request(job: Any, *, target: Any, secrets: dict[str, str] | None =
         "db_type": job.db_type,
         "path": job.backup_dir,
         # Seconds, under the one name both halves of the app read - see
-        # db_ops.lib.cleanup_retention. `prune-backup-files` converts it to whole days for the
-        # planner at its own edge.
+        # db_ops.lib.cleanup_retention. The planner takes them as seconds (review 0.25.0, B4.4).
         "cleanup_retention": int(retention_seconds if retention_seconds is not None
                                  else job.cleanup_retention),
         "mode": mode,
@@ -163,7 +162,7 @@ def run_prune(
             "kept": result["counts"]["keep"],
         })
         message = (f"{item.label}: {obsolete} obsolete of {result['counts']['total']} at "
-                   f"{result['retention_days']} days"
+                   f"a {result.get('window') or str(result['retention_days']) + '-day'} window"
                    + (f", {deleted} deleted." if apply else ", nothing deleted (report only)."))
         _record(store, item, status="DONE", started_at=started_at, message=message,
                 app_config=app_config, logger=logger,
@@ -191,9 +190,10 @@ def _prune_one(request: dict[str, Any], *, secrets: dict[str, str]) -> dict[str,
     listed = common_cli.run("list-backup-files", request)
     plan = plan_retention(
         listed["files"],
-        # The planner reasons in whole days; the config states seconds. One conversion, here.
-        retention_days=int(cleanup_retention.as_days(request["cleanup_retention"]))
-        or DEFAULT_RETENTION_DAYS,
+        # The configured seconds as they are (review 0.25.0, B4.4): converting to whole days made
+        # anything under a day 0, and 0 became DEFAULT_RETENTION_DAYS - 14 days, silently.
+        retention_days=DEFAULT_RETENTION_DAYS,
+        retention_seconds=int(request["cleanup_retention"] or 0),
         mode=request["mode"])
     if not request.get("delete") or not plan["obsolete_paths"]:
         return {**plan, "deleted": None}

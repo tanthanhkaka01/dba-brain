@@ -60,9 +60,30 @@ def test_oracle_is_still_named_by_its_service():
     ("[28000] ... Login failed for user 'x'. (18456) (SQLDriverConnect)", "login"),
     ("[08001] ... TCP Provider: No connection could be made (10061)", "unreachable"),
     ("[42S02] ... Invalid object name 'dbo.t'. (208) (SQLExecDirectW)", None),
+    # ODBC reports both timeouts as HYT00: the login one is unreachable, the query one is not.
+    ("[HYT00] [Microsoft][ODBC Driver 18 for SQL Server]Login timeout expired (0) (SQLDriverConnect)",
+     "unreachable"),
+    ("('HYT00', '[HYT00] [Microsoft][ODBC Driver 18 for SQL Server]Query timeout expired (0) "
+     "(SQLExecDirectW)')", "statement_timeout"),
+    ("{'C': '57014', 'M': 'canceling statement due to statement timeout'}", "statement_timeout"),
+    # pg8000, a host that does not answer: none of the usual words - read raw until 0.26.0.
+    ("postgresql connect to 192.0.2.251:5432 failed: Can't create a connection to host 192.0.2.251 "
+     "and port 5432 (timeout is 30 and source_address is None).", "unreachable"),
 ])
 def test_a_failure_to_connect_is_told_from_a_failure_in_the_script(text, kind):
     assert sql_task_target.classify_connect_failure(text) == kind
+
+
+def test_a_query_timeout_names_the_timeout_and_not_an_unreachable_instance():
+    """The 2026-10-01 drill: a 20 s query timeout on a healthy lab read *could not reach ... the
+    instance is down* (0.26.0 §1.73)."""
+    target = dataclasses.replace(sql_target(sql_id=37), server_id="LAB-1433", database_name="LABTEST")
+    said = runner.diagnose_connect_failure(
+        target=target,
+        error="('HYT00', '[HYT00] [Microsoft][ODBC Driver 18 for SQL Server]Query timeout expired (0) "
+              "(SQLExecDirectW)')")
+    assert "ran past this target's timeout" in said
+    assert "could not reach" not in said
 
 
 def test_the_name_meant_is_found_in_another_case_first():

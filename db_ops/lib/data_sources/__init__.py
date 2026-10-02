@@ -366,8 +366,9 @@ def resolve_secret_value(
 ) -> str:
     """:func:`db_ops.lib.secret_value.resolve_secret_value` with this node's store behind it.
 
-    The rule is ``lib.secret_value``'s - explicit value > env var > a ref in ``secrets`` or the
-    environment; the encrypted store is opened only for a ref neither holds, and only here, because
+    The rule is ``lib.secret_value``'s - the explicit value, else the ref (``password_env`` being
+    its old spelling) in ``secrets``, never the environment (G3.5); the encrypted store is opened
+    only for a ref ``secrets`` does not hold, and only here, because
     this package is the one reader of ``data/`` (0.24.0: until then the rule itself opened it, so
     every ``common`` transport that asked it read the store one import away).
     """
@@ -386,8 +387,7 @@ def resolve_secret_value(
     try:
         return _resolve(values, secrets=stored, **keys)
     except SecretValueError:
-        raise SecretValueError(
-            f"Password ref not found in environment or the secret store: {ref}") from None
+        raise SecretValueError(f"Password ref not found in the secret store: {ref}") from None
 
 
 def load_credentials(db_type: str, data_dir: str | Path | None = None) -> list[dict[str, Any]]:

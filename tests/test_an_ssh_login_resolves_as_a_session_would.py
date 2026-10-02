@@ -27,8 +27,12 @@ def data_dir(tmp_path, monkeypatch):
     keys.mkdir()
     (keys / "lab.key").write_text("not a real key", encoding="utf-8")
     (tmp_path / "absolute.key").write_text("not a real key either", encoding="utf-8")
-    monkeypatch.setenv("LAB_OS_PASSWORD", "from-the-environment")
-    monkeypatch.delenv("DB_OPS_SECRET_KEY", raising=False)
+    # The store answers a ref, never the environment (owner decision G3.5).
+    from db_ops.lib import secret_text
+
+    monkeypatch.setenv("LAB_OS_PASSWORD", "in the environment, never read")
+    monkeypatch.setenv("DB_OPS_SECRET_KEY", "a key for this test only")
+    secret_text.set_secret_text(tmp_path, "LAB_OS_PASSWORD", "from-the-store")
     return tmp_path
 
 
@@ -37,7 +41,7 @@ def _cases(data_dir):
         "a password in the credential": (
             {"method": "ssh", "host": "192.0.2.10", "auth_type": "password"},
             {"username": "ops", "password": "typed"}),
-        "a password ref the environment answers": (
+        "a password ref the store answers": (
             {"method": "ssh", "host": "192.0.2.10", "auth_type": "password"},
             {"username": "ops", "password_ref": "LAB_OS_PASSWORD"}),
         "the block's own user wins over the credential's": (

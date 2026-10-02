@@ -71,3 +71,57 @@ def test_the_message_names_both_windows(sql):
     assert "alert_window=last_30_minutes" in sql
     assert "alert_from=" in sql
     assert "checked_window=last_6_hours" in sql
+
+
+def test_a_finding_is_judged_on_what_the_plan_did_recently(sql):
+    """The alert filter alone does not stop a repeat. A plan with one heavy execution at 09:00 that
+    keeps running normally has a newest execution inside every alert window until 15:00, so judged
+    on its six-hour maximum it was re-reported all morning. The maxima a finding is judged on come
+    from the rows touched inside the alert window; the six hours stay the baseline only."""
+    assert "recent_agg AS" in sql
+    recent = sql.split("recent_agg AS", 1)[1].split("query_best AS", 1)[0]
+    assert "WHERE last_execution_time_local >= @p_AlertFromLocal" in recent
+    assert "FROM recent_agg p" in sql
+    assert "JOIN plan_agg h" in sql
+
+
+def test_a_small_query_on_a_worse_plan_run_often_is_a_finding(sql):
+    """2026-10-02, a production engine: four statements went from ~25 ms to ~1,300 ms after a recompile
+    and ran ~1,300 times each in half an hour - every engine run took ten times longer and this
+    metric said nothing, because each of its thresholds is about ONE execution being huge. The
+    finding needs all three legs; drop any one and it is either blind again or fires on noise."""
+    assert "'QUERY_PLAN_REGRESSED_FREQUENT'" in sql
+    assert "'query_store_plan_regressed_frequent'" in sql
+    leg = sql.split("THEN 'QUERY_PLAN_REGRESSED_FREQUENT'", 1)[0].rsplit("WHEN", 1)[1]
+    assert "p.recent_executions >= @p_FreqMinExecutions" in leg
+    assert "p.recent_total_cpu_sec >= @p_FreqWarnTotalCpuSec" in leg
+    assert "NULLIF(b.best_avg_cpu_sec, 0) >= @p_FreqWarnCpuRatio" in leg
+
+
+def test_the_frequency_baseline_is_another_plan_over_a_longer_window(sql):
+    """Two ways the baseline goes blind. Compared with its own history a plan has ratio ~1; and
+    inside the six-hour scan a flip that survived the night has no good plan left to compare with.
+    So the baseline is the cheapest OTHER plan, read over seven days, for candidate queries only."""
+    assert "@p_BaselineFromLocal datetime = DATEADD(DAY, -7, GETDATE())" in sql
+    assert "AND bb.plan_id <> p.plan_id" in sql
+    assert "FROM #qs_cand c WHERE c.database_name = @db_name" in sql
+    assert "cpu_baseline_window=last_7_days" in sql
+
+
+def test_the_windows_follow_the_servers_own_clock(sql):
+    """Query Store stores UTC. A named time zone in the SQL is right on one estate and silently
+    shifts every window on a server that lives anywhere else."""
+    assert "AT TIME ZONE" not in sql
+    assert "DATEDIFF(MINUTE, GETUTCDATE(), GETDATE())" in sql
+
+
+def test_the_scan_does_not_read_query_text(sql):
+    """It was copied into #qs_raw once per runtime-stats row and never reached the message."""
+    assert "query_store_query_text" not in sql
+    assert "query_sql_text" not in sql
+
+
+def test_averages_are_weighted_by_executions(sql):
+    """A plain AVG over interval rows lets an hour with one execution outvote one with ten thousand."""
+    assert "AVG(avg_cpu_sec)" not in sql
+    assert "SUM(avg_cpu_sec * ISNULL(count_executions, 0)) / NULLIF(SUM(ISNULL(count_executions, 0)), 0) AS avg_cpu_sec" in sql

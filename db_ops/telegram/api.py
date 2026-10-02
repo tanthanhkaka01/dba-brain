@@ -50,6 +50,8 @@ class TelegramRateLimited(RuntimeError):
 
     def __init__(self, message: str, retry_after: float) -> None:
         super().__init__(message)
+        # How many leading parts of a multi-part message Telegram already has (send_message sets it).
+        self.parts_delivered = 0
         self.retry_after = float(retry_after)
 
 
@@ -135,8 +137,12 @@ def send_message(
     message_type: str | None = None,
     part_pause_seconds: float = PART_PAUSE_SECONDS,
     wait_before_first_part: bool = True,
+    start_part: int = 0,
 ) -> dict[str, Any]:
     """Send ``text`` to one chat, split into parts when it is longer than Telegram takes.
+
+    ``start_part`` skips the parts an earlier attempt delivered; a rate limit raised from part
+    ``n`` carries ``parts_delivered = n`` for the caller to come back with.
 
     ``wait_before_first_part=False`` gives a 429 on the **first** part straight back as
     :class:`TelegramRateLimited` instead of sleeping on it - nothing has been sent, so handing the
@@ -163,10 +169,13 @@ def send_message(
     parts = split_telegram_message(text)
     first_result: dict[str, Any] | None = None
     for index, part in enumerate(parts):
+        # Parts an earlier attempt delivered before a rate limit stopped it (review 0.25.0, B1.2).
+        if index < start_part:
+            continue
         # Paced, because the limit this hits is Telegram's own: roughly 20 messages a minute to
         # one group. A dozen parts posted back to back is over it before the first one is read,
         # and what came back was a 429 that lost the rest of the body.
-        if index:
+        if index > start_part:
             time.sleep(part_pause_seconds)
         payload: dict[str, Any] = {
             "chat_id": str(chat_id),
@@ -183,16 +192,22 @@ def send_message(
         if reply_markup is not None and index == len(parts) - 1:
             payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
 
-        result = _send_part_honouring_rate_limit(
-            bot_token=bot_token,
-            payload=payload,
-            api_url=api_url,
-            timeout_seconds=timeout_seconds,
-            part_number=index + 1,
-            part_count=len(parts),
-            chat_id=str(chat_id),
-            wait=wait_before_first_part or index > 0,
-        )
+        try:
+            result = _send_part_honouring_rate_limit(
+                bot_token=bot_token,
+                payload=payload,
+                api_url=api_url,
+                timeout_seconds=timeout_seconds,
+                part_number=index + 1,
+                part_count=len(parts),
+                chat_id=str(chat_id),
+                wait=wait_before_first_part or index > start_part,
+            )
+        except TelegramRateLimited as exc:
+            # Telegram has parts 1..index. Saying so lets the queue resume at this part: a pass
+            # that started again from part 1 showed the chat the delivered parts twice (B1.2).
+            exc.parts_delivered = index
+            raise
         # The first part's id is the one recorded against the queue row: it is where the output
         # starts, so a reply that quotes it quotes the beginning and not the tail.
         if first_result is None:

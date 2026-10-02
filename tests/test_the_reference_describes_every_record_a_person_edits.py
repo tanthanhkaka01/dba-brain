@@ -181,7 +181,10 @@ def test_space_check_is_described_as_its_parser_reads_it():
     from db_ops.lib import restore_space
 
     fields = {f["field"]: f for f in _entry("restore_space_check")["fields"]}
-    assert set(fields) == {"enabled", "factor", "on_unknown"}
+    assert set(fields) == {"enabled", "factor", "on_unknown", "measure_restore"}
+    # Off unless the entry says so, as the parser reads it (the operator, 2026-10-02).
+    assert fields["measure_restore"]["default"] == "false"
+    assert restore_space.SpaceCheck().measure_restore is False
     assert fields["factor"]["constraint"]["min"] == restore_space.MINIMUM_SAFETY_FACTOR
     assert float(fields["factor"]["default"]) == restore_space.DEFAULT_SAFETY_FACTOR
     assert tuple(fields["on_unknown"]["constraint"]["enum"]) == restore_space.UNKNOWN_CHOICES

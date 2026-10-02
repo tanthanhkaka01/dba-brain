@@ -42,6 +42,7 @@ Python caller all read the same result.
 """
 
 from __future__ import annotations
+
 from db_ops.lib.cmd_access import (  # noqa: F401 - one definition, see that module
     PLATFORM_LINUX,
     PLATFORM_WINDOWS,
@@ -56,6 +57,8 @@ from db_ops.lib.cmd_access import (  # noqa: F401 - one definition, see that mod
 
 import json
 import os
+import re
+import shlex
 import socket
 import time
 from dataclasses import dataclass, field
@@ -743,9 +746,9 @@ def _service_command(action: str, name: str, *, platform: str) -> str:
         }
     else:
         verbs = {
-            "start": f"systemctl start {name}",
-            "stop": f"systemctl stop {name}",
-            "restart": f"systemctl restart {name}",
+            "start": f"systemctl start {shlex.quote(name)}",
+            "stop": f"systemctl stop {shlex.quote(name)}",
+            "restart": f"systemctl restart {shlex.quote(name)}",
         }
     if action not in verbs:
         raise HostOpsError(f"Unknown service action '{action}'. Use: status, start, stop, restart.")
@@ -1266,11 +1269,24 @@ def _prepare(request: dict[str, Any]) -> tuple[HostTarget, dict[str, Any], list[
     return target, policy, overrides
 
 
+#: A service or systemd unit name: letters, digits and `@ . _ : - $` - the systemd unit grammar plus
+#: `$` for a named SQL Server instance (`MSSQL$SQLEXPRESS`). Anything else is refused before a session opens:
+#: the Linux branch ran `systemctl <action> <name>` as root, unquoted, so `"mssql-server; id"` ran
+#: `id` as root while the gate and evidence said "restart mssql-server" (review 0.25.0, F11.3).
+_SERVICE_NAME = re.compile(r"[A-Za-z0-9@._:$-]+")
+
+
 def _services_of(request: dict[str, Any]) -> list[str]:
     raw = request.get("services") or []
     if isinstance(raw, str):
         raw = [part.strip() for part in raw.split(",")]
-    return [str(name).strip() for name in raw if str(name).strip()]
+    names = [str(name).strip() for name in raw if str(name).strip()]
+    bad = [name for name in names if not _SERVICE_NAME.fullmatch(name)]
+    if bad:
+        raise HostOpsError(
+            f"not a service name: {', '.join(repr(name) for name in bad)} - letters, digits and "
+            "@ . _ : - $ only.")
+    return names
 
 
 def _authorized(

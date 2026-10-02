@@ -32,6 +32,32 @@ TELEGRAM_MESSAGE_LIMIT = 4096
 #: and any decoration the send layer adds still fit without pushing the body over.
 TELEGRAM_SAFE_TEXT_LENGTH = 3900
 
+#: A document's caption has a quarter of a message's room. A longer one is refused with HTTP 400 -
+#: retried three times and failed, and the file that carried it (a SQL task's workbook) was never
+#: delivered (review 0.25.0, B1.1).
+TELEGRAM_CAPTION_LIMIT = 1024
+
+#: What a cut caption ends with: the reader is told the rest is coming, not left with half a block.
+CAPTION_CONTINUED = "\n[full text in the next message]"
+
+
+def document_caption(text: str) -> tuple[str, str]:
+    """``(caption, follow_up)`` for a document carrying ``text``.
+
+    A text that fits is the caption and nothing follows. A longer one is cut at a line, inside the
+    limit, and the WHOLE text follows as an ordinary message - split by the send layer like any
+    other - so nothing is lost and nothing has to be reassembled from two halves.
+    """
+    text = str(text or "")
+    if len(text) <= TELEGRAM_CAPTION_LIMIT:
+        return text, ""
+    room = TELEGRAM_CAPTION_LIMIT - len(CAPTION_CONTINUED)
+    head = text[:room]
+    cut = head.rfind("\n")
+    if cut > room // 2:
+        head = head[:cut]
+    return head.rstrip() + CAPTION_CONTINUED, text
+
 #: Room left for the marker itself when chunking.
 _PART_MARKER_ROOM = 80
 

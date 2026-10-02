@@ -29,6 +29,7 @@ from db_ops.backup_restore.restore_script import (
     load_script_restores,
     run_script_restore,
     select_due_script_restores,
+    unusable_reason,
 )
 from db_ops.backup_restore.events import emit_backup_restore_event, stdout_excerpt
 from db_ops.backup_restore.server_metadata import replay_phase
@@ -95,7 +96,7 @@ def script_restore_metadata(job: Any) -> dict[str, Any]:
         "server_id": job.server_id,
         "target_container": job.target_container,
         "source_id": job.server_id,
-        "target_id": job.target_server_id or job.server_id,
+        "target_id": job.target_server_id,
         "target_host": job.target_container,
     }
 
@@ -155,8 +156,12 @@ def run_scheduled_restores(
     # a perfectly valid restore_id as missing.
     script_jobs = load_script_restores(config_path)
     if restore_id:
+        # An inactive entry the loader could not read is not "missing": it says what it lacks.
+        why_not = unusable_reason(script_jobs, restore_id)
         configs = [item for item in configs if item.restore_id == restore_id]
         script_jobs = [item for item in script_jobs if item.restore_id == restore_id]
+        if why_not:
+            raise ValueError(why_not)
         if not configs and not script_jobs:
             raise ValueError(f"No backup_restore entry found with restore_id={restore_id}.")
 

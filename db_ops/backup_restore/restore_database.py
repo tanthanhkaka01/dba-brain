@@ -338,6 +338,8 @@ def _restore_step(level: str, candidate: RestoreCandidate, config: BackupRestore
         "with_recovery": bool(recovery),
     }
     if level == "full":
+        # The entry's word, never assumed: without it a database ONLINE on the target is refused.
+        fields["overwrite_existing"] = bool(config.overwrite_existing)
         # The logical names are read on the server (RESTORE FILELISTONLY), as they always were;
         # only where the two files go is this app's to say.
         fields["move_files"] = {
@@ -713,6 +715,8 @@ def run_restore_database(
         restore_start=started_at,
     )
     try:
+        # Before the first RESTORE: do the files this backup holds fit where they go (§1.76).
+        restore_room = _check_restore_room(restore_config, candidate, selected_diff_backup, logger=logger)
         steps = [
             run_restore_full(config=restore_config, candidate=candidate, logger=logger),
             run_restore_diff(config=restore_config, candidate=candidate, selected_backup=selected_diff_backup, logger=logger),
@@ -801,12 +805,49 @@ def run_restore_database(
         "checkdb_status": checkdb_result["status"],
         "backup_file_unc": str(candidate.backup_file_unc),
         "backup_file_on_vm": str(candidate.backup_file_on_vm),
+        "restore_room": restore_room,
         "duration_seconds": duration_seconds,
         "stdout": "\n".join(str(step.get("stdout", "")).strip() for step in steps if step.get("stdout")).strip(),
         "stderr": "\n".join(str(step.get("stderr", "")).strip() for step in steps if step.get("stderr")).strip(),
         "steps": steps,
         "certificate": certificate_result,
     }
+
+
+def _check_restore_room(config: BackupRestoreConfig, candidate: RestoreCandidate,
+                        selected_diff_backup: Path | None, *,
+                        logger: object | None = None) -> dict[str, object]:
+    """The room this database's restore needs, asked of the target before its first RESTORE.
+
+    The rule and the batch are :mod:`db_ops.backup_restore.space`'s; what is this module's is the
+    channel - the ``sqlcmd`` the restore itself is about to use - and the paths as the target
+    spells them. A measured shortfall raises, and is this database's failure like any other step's.
+    """
+    from db_ops.backup_restore import space
+
+    backups = [_target_path_str(Path(str(candidate.backup_file_on_vm)), config)]
+    if selected_diff_backup:
+        backups.append(_target_path_str(vm_unc_to_local_path(selected_diff_backup, config), config))
+
+    def run_sql(sql: str) -> str:
+        # One attempt: a measurement that did not answer is reported as not made, and the RESTORE
+        # that follows is the step that retries a connection.
+        return run_sqlcmd_query_command(
+            build_sqlcmd_query_command(sql=sql, config=config),
+            config=config, logger=logger, progress_step="restore-room",
+            progress_database=candidate.source_database_name, restore_id=config.restore_id,
+            allow_transient_retry=False,
+        ).stdout
+
+    return space.check_restore_room(
+        config,
+        database=candidate.restore_database_name,
+        backups=backups,
+        data_path=_target_path_str(candidate.restore_data_file_on_vm, config),
+        log_path=_target_path_str(candidate.restore_log_file_on_vm, config),
+        run_sql=run_sql,
+        log=lambda message: _emit_restore_log(logger, "restore-db " + message),
+    )
 
 
 def run_restore_full(*, config: BackupRestoreConfig, candidate: RestoreCandidate, logger: object | None = None) -> dict[str, object]:

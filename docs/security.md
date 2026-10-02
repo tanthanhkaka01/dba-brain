@@ -174,11 +174,16 @@ passphrase survive a shell. The encrypted file is exactly as safe as the passphr
 ### How a secret is named, and how it is resolved
 
 Configuration never carries a secret value. It carries a **reference** — `password_ref`,
-`secret_ref`, `authentication_info_ref`, or `password_env` naming an environment variable —
+`secret_ref`, `authentication_info_ref`, or `password_env`, the old spelling of `password_ref` —
 and the reference is resolved at use time:
 
-1. an environment variable of that name, if set;
-2. the encrypted store.
+1. for a database login the apps read from `users.json`: an environment variable of that name, if
+   set, then the encrypted store - the operator's own configuration names these refs;
+2. for anything a **request** names - an SSH or WinRM login, an SRE config's password, a
+   `run-sql` connection: the secrets the caller hands over only, **never the environment**
+   (0.26.0, owner decision G3.5). A request could name any variable, the node's passphrase
+   included, and have it sent to a host of its choosing. No reference may name one of the node's
+   own keys (`DB_OPS_SECRET_KEY`, `DB_OPS_KEY_BASE64`, a bot token) anywhere.
 
 That order is the escape hatch: an organisation that keeps secrets in an external manager injects
 them as environment variables and never uses the built-in store at all.
@@ -277,6 +282,47 @@ Every capability except message delivery works with no route off the machines yo
 An air-gapped install is therefore the default shape, not a special mode.
 
 ---
+
+## 5a. What this tool does and does not defend (0.25.0 review)
+
+**Secrets never travel as an argument.** The passphrase reaches the daemon and its children in
+`DB_OPS_SECRET_KEY` only; SQL Server logins reach `sqlcmd` in `SQLCMDPASSWORD`; batches that carry
+the backup-encryption password go on stdin (Linux) or a private temp file (Windows); SRE commands
+that carry a password run as a script on stdin; a recovered console password is printed, not
+logged. A password typed to the bot is redacted in the store and deleted from the chat (the bot
+needs "delete messages" rights in a group). The secret stores are written atomically, under a
+lock, and created `0600`.
+
+**The console.** Report pages need a console session (`reports_require_login`), with no directory
+listing. Changes to what runs on the worker, or to who may do what, need admin level and the
+password typed again. Logs are admin-only. Estate data embedded in a report cannot close its
+`<script>` block, and the login sends a user only to a path on this site.
+
+**The confirmation gate prevents accidents; it is not the security boundary.** A request can make
+an operation harder to confirm, never easier, and cannot name the node's own keys as a password.
+But `assume_yes` exists for automation, so whoever can run `python -m db_ops.common.cli` with the
+node's data and passphrase can do what the tool can do. The boundary is who can run it: OS
+accounts on the node, the console's levels, the bot's levels (free-SQL bot actions are level 50
+and 100).
+
+**Transport: the defaults trust whatever answers; a switch per hop verifies it** (0.26.0, review
+notes B5.5). The defaults stay because a lab estate connects with them - the worker's own store, for
+one, refuses TLS today - but nothing about production is a lab:
+
+| Hop | Default | To verify the machine |
+| --- | --- | --- |
+| SQL Server (metrics, `run-sql`) | `Encrypt=optional`, then plaintext; any certificate trusted; pymssql as a last resort | `"sqlserver_tls_verify": true` on the instance in `db_instances.json`: `Encrypt=yes;TrustServerCertificate=no`, ODBC Driver 17/18 only, no fallback. Restore and backup steps connect as before. |
+| PostgreSQL store | `sslmode=prefer`, which connects without TLS (the setting was read and never passed to pg8000 until 0.26.0) | `"sslmode": "verify-full"` (or `verify-ca`, `require`) in the `postgresql` block of `data/store_config.json`; the system trust store, or `SSL_CERT_FILE` |
+| WinRM | HTTP on 5985; with `ssl`, any certificate | `"ssl": true, "cert_validation": true` in the target's `cmd_access` |
+| Vault certificate fetch | TLS verified | `certificate_api_verify_tls: false` turns it off, and says so on every fetch |
+
+The session cookie of the console crosses the network in clear while the listener is plain HTTP:
+put TLS in front of the console and set `cookie_secure: true` in `webhost_config.json` (`docs/12`).
+
+**Not yet defended - know these before production** (review notes B5.1, F10.2):
+- SSH host keys are not verified (every hop accepts whatever key answers).
+- Backup directories are made world-readable (`chmod -R a+rX`) so the copy can read them as the SSH
+  user. Restrict the hosts' local accounts accordingly until this changes.
 
 ## 6. Reporting a vulnerability
 

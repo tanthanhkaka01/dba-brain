@@ -253,13 +253,17 @@ def test_smbclient_selected_staging_skips_files_already_in_destination(tmp_path,
         "\\APPDB-DB$APPDB\\APPDB_Prod\\FULL\n"
         "  APPDB_Prod_FULL_20260608_010000.bak      A  10  Mon Jun 08 01:00:00 2026\n"
         "  APPDB_Prod_FULL_20260609_010000.bak      A  10  Tue Jun 09 01:00:00 2026\n"
+        "\n"
+        "\\APPDB-DB$APPDB\\APPDB_Prod\\LOG\n"
+        "  APPDB_Prod_LOG_20260609_020000.trn       A  10  Tue Jun 09 02:00:00 2026\n"
     )
     fake = _share(monkeypatch, _FakeShare(listing))
-    # The 0608 backup already exists in the final destination at the same size; the 0609 does not.
+    # The chain is the 0609 FULL and the LOG after it (the 0608 FULL is not part of it, 0.26.0).
+    # The FULL already exists in the final destination at the same size; the LOG does not.
     monkeypatch.setattr(
         copy_module,
         "_remote_destination_sizes",
-        lambda config, *, logger=None: {"appdb_prod/full/appdb_prod_full_20260608_010000.bak": 10},
+        lambda config, *, logger=None: {"appdb_prod/full/appdb_prod_full_20260609_010000.bak": 10},
     )
 
     staging, pre_skipped, total_selected = _smbclient_download_selected_to_staging(config, logger=None)
@@ -268,7 +272,7 @@ def test_smbclient_selected_staging_skips_files_already_in_destination(tmp_path,
     assert len(pre_skipped) == 1
     assert pre_skipped[0].status == "SKIPPED_EXISTS"
     # Only the missing backup was downloaded from SMB.
-    assert fake.gets() == ["APPDB-DB$APPDB\\APPDB_Prod\\FULL\\APPDB_Prod_FULL_20260609_010000.bak"]
+    assert fake.gets() == ["APPDB-DB$APPDB\\APPDB_Prod\\LOG\\APPDB_Prod_LOG_20260609_020000.trn"]
 
 
 def test_smbclient_selected_staging_fails_fast_when_no_files_selected(tmp_path, monkeypatch):
@@ -915,6 +919,8 @@ def test_run_restore_database_stops_before_recovery_when_full_fails(tmp_path, mo
             ensure_credential=False,
         )
 
+    # One call: the entry does not ask for its restore to be measured (space_check.measure_restore,
+    # off by default), so the full is the first thing sent - and where the run ends.
     assert len(calls) == 1
     # The step the app hands to common.cli restore-full, and the text common writes from it (R43).
     level, fields = calls[0].restore_step
@@ -1694,7 +1700,7 @@ def test_restore_workflow_orchestrates_existing_steps_in_order(tmp_path, monkeyp
     monkeypatch.setattr("db_ops.backup_restore.cli.run_copy_backup", fake_copy)
     monkeypatch.setattr("db_ops.backup_restore.cli.run_restore_all_latest", fake_restore)
     monkeypatch.setattr("db_ops.backup_restore.cli.run_delete_backup", fake_delete)
-    monkeypatch.setattr("db_ops.backup_restore.cli.run_target_preflight", lambda config, logger=None: None)
+    monkeypatch.setattr("db_ops.backup_restore.cli.run_target_preflight", lambda config, logger=None, **_: None)
 
     result = run_restore_workflow(restore_configs=[config], app_config=app_config)
 
@@ -1726,7 +1732,7 @@ def _copy_hours_seen(tmp_path, monkeypatch, *, entry_hours, **workflow_kwargs):
                         lambda step_config, logger=None, dry_run=False: DeleteBackupResult(
                             returncode=0, target_backup_dir=tmp_path, cleanup_retention=0,
                             files_considered=0, deleted=0, file_results=()))
-    monkeypatch.setattr("db_ops.backup_restore.cli.run_target_preflight", lambda config, logger=None: None)
+    monkeypatch.setattr("db_ops.backup_restore.cli.run_target_preflight", lambda config, logger=None, **_: None)
     run_restore_workflow(restore_configs=[config], app_config=app_config, **workflow_kwargs)
     return seen
 
@@ -2004,8 +2010,10 @@ def test_list_recent_backup_files_filters_by_pattern_and_mtime(tmp_path):
     import os
 
     now = 1_800_000_000
-    os.utime(recent_bak, (now - 60, now - 60))
-    os.utime(recent_trn, (now - 120, now - 120))
+    # The LOG is after the FULL: since 0.26.0 the copy takes the restore chain, and a LOG older
+    # than the newest FULL is not part of it (tests/test_a_restore_copies_its_chain_not_its_window.py).
+    os.utime(recent_bak, (now - 120, now - 120))
+    os.utime(recent_trn, (now - 60, now - 60))
     os.utime(old_bak, (now - 90_000, now - 90_000))
     os.utime(ignored_txt, (now - 60, now - 60))
 
@@ -2030,7 +2038,7 @@ def test_list_recent_backup_files_filters_by_pattern_and_mtime(tmp_path):
         copy_recent_hours=24,
     )
 
-    assert list_recent_backup_files(config, now=now) == [recent_trn, recent_bak]
+    assert list_recent_backup_files(config, now=now) == [recent_bak, recent_trn]
 
 
 def test_list_recent_backup_files_honors_explicit_point_in_time_window(tmp_path):
@@ -2566,7 +2574,7 @@ def test_restore_workflow_hands_dry_run_to_every_step(tmp_path, monkeypatch):
     monkeypatch.setattr(cli_module, "run_copy_backup", fake_copy)
     monkeypatch.setattr(cli_module, "run_restore_all_latest", fake_restore)
     monkeypatch.setattr(cli_module, "run_delete_backup", fake_delete)
-    monkeypatch.setattr(cli_module, "run_target_preflight", lambda config, logger=None: None)
+    monkeypatch.setattr(cli_module, "run_target_preflight", lambda config, logger=None, **_: None)
 
     cfg, _ = _make_two_target_configs(tmp_path)
     app_config = DbOpsConfig(log_dir=tmp_path / "logs", runtime_dir=tmp_path / "runtime",
@@ -3126,7 +3134,7 @@ def test_restore_workflow_pitr_passes_point_in_time_to_restore(tmp_path, monkeyp
     monkeypatch.setattr("db_ops.backup_restore.cli.run_copy_backup", fake_copy)
     monkeypatch.setattr("db_ops.backup_restore.cli.run_restore_all_latest", fake_restore)
     monkeypatch.setattr("db_ops.backup_restore.cli.run_delete_backup", fake_delete)
-    monkeypatch.setattr("db_ops.backup_restore.cli.run_target_preflight", lambda config, logger=None: None)
+    monkeypatch.setattr("db_ops.backup_restore.cli.run_target_preflight", lambda config, logger=None, **_: None)
 
     pit = parse_point_in_time("2026-05-30 18:00:00 +07:00")
     run_restore_workflow(
@@ -3152,7 +3160,7 @@ def test_restore_workflow_pitr_no_matching_copy_files_fails_fast(tmp_path, monke
         return CopyBackupResult(returncode=0, source_backup_dir=tmp_path, local_import_dir=tmp_path, files_considered=0, copied=0, skipped=0, file_results=())
 
     monkeypatch.setattr("db_ops.backup_restore.cli.run_copy_backup", fake_copy)
-    monkeypatch.setattr("db_ops.backup_restore.cli.run_target_preflight", lambda config, logger=None: None)
+    monkeypatch.setattr("db_ops.backup_restore.cli.run_target_preflight", lambda config, logger=None, **_: None)
 
     pit = parse_point_in_time("2026-05-30 18:00:00 +07:00")
     with pytest.raises(RuntimeError, match="copy-backup selected no files"):
@@ -3175,7 +3183,7 @@ def test_restore_workflow_emits_phase_progress_logs(tmp_path, monkeypatch):
     messages = []
 
     monkeypatch.setattr(cli_module, "log_event", lambda _logger, level, message: messages.append(message))
-    monkeypatch.setattr(cli_module, "run_target_preflight", lambda config, logger=None: None)
+    monkeypatch.setattr(cli_module, "run_target_preflight", lambda config, logger=None, **_: None)
     monkeypatch.setattr(
         cli_module,
         "run_copy_backup",
@@ -3282,17 +3290,17 @@ def test_a_script_driven_restore_names_its_target_like_an_engine_restore_does():
     assert "restore_id=CLOUD_MSSQL_TO_CLOUD2" in text
 
 
-def test_an_in_place_drill_names_the_source_host_as_its_target():
-    """No target_server_id means the restore happens on the source's own host. Leaving the
-    target blank there would read as "we do not know where this restored to"."""
+def test_an_in_place_drill_reports_the_target_it_states():
+    """An in-place drill states the source's machine as `target_server_id` itself (owner decision
+    2026-10-01, review 0.25.0 G2): the event names that, never a target derived from the source."""
     from db_ops.backup_restore.restore_script import ScriptRestore
     from db_ops.backup_restore.workflow import script_restore_metadata
     from db_ops.lib.time_window import TimeWindow
 
     job = ScriptRestore(
         restore_id="CLOUD_PG_RESTORE_DRILL", db_type="postgresql",
-        server_id="CLOUD-203-0-113-188-PG", backup_dir="/backup",
-        script="x.sh", time_window=TimeWindow(), target_container="pg_ha-primary",
+        server_id="CLOUD-203-0-113-188-PG", target_server_id="CLOUD-203-0-113-188-PG",
+        backup_dir="/backup", script="x.sh", time_window=TimeWindow(), target_container="pg_ha-primary",
     )
 
     assert script_restore_metadata(job)["target_id"] == "CLOUD-203-0-113-188-PG"
@@ -3552,7 +3560,7 @@ def _fake_workflow_ops(monkeypatch, called_targets):
     monkeypatch.setattr("db_ops.backup_restore.cli.run_copy_backup", fake_copy)
     monkeypatch.setattr("db_ops.backup_restore.cli.run_restore_all_latest", fake_restore)
     monkeypatch.setattr("db_ops.backup_restore.cli.run_delete_backup", fake_delete)
-    monkeypatch.setattr("db_ops.backup_restore.cli.run_target_preflight", lambda config, logger=None: None)
+    monkeypatch.setattr("db_ops.backup_restore.cli.run_target_preflight", lambda config, logger=None, **_: None)
 
 
 def test_restore_workflow_scoping_only_runs_selected_restore_id(tmp_path, monkeypatch):
@@ -3620,7 +3628,7 @@ def test_restore_workflow_windows_then_linux_keeps_per_restore_executor(tmp_path
     executor_calls = []
     workflow_logger = object()
 
-    monkeypatch.setattr("db_ops.backup_restore.cli.run_target_preflight", lambda config, logger=None: None)
+    monkeypatch.setattr("db_ops.backup_restore.cli.run_target_preflight", lambda config, logger=None, **_: None)
     monkeypatch.setattr("db_ops.backup_restore.cli.log_event", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(restore_module, "log_event", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(

@@ -165,14 +165,16 @@ def _prune(request: dict) -> int:
         # Listed through the same code path the listing command uses, so a caller cannot be shown
         # one set of files by `list` and have a different set judged by `prune`.
         listed = list_backup_files(request)
-        # `cleanup_retention` is the one spelling and it is seconds; the planner reasons in whole
-        # days, so the conversion happens here, once, at the edge. `required=False` because this
+        # `cleanup_retention` is the one spelling and it is seconds, and the planner takes it as
+        # seconds: converting to whole days here made anything under a day 14 days (review 0.25.0,
+        # B4.4). An absent retention keeps the planner's default. `required=False` because this
         # command is also driven by hand against a directory nobody has configured - and unlike a
         # scheduled entry, "I did not say" cannot be answered by reading the config.
         retention = cleanup_retention.parse(request, context=operation, required=False)
         plan = plan_retention(
             listed["files"],
-            retention_days=int(cleanup_retention.as_days(retention)) or DEFAULT_RETENTION_DAYS,
+            retention_days=DEFAULT_RETENTION_DAYS,
+            retention_seconds=int(retention or 0),
             mode=request.get("mode") or "age",
         )
     except Exception as exc:  # noqa: BLE001
@@ -186,14 +188,14 @@ def _prune(request: dict) -> int:
         return response.emit(response.ok(
             operation,
             message=(f"{counts['obsolete']} of {counts['total']} backup file(s) obsolete under a "
-                     f"{plan['retention_days']}-day {plan['mode']} rule "
+                     f"{plan['window']} {plan['mode']} rule "
                      f"({_bytes(plan)}). Nothing deleted: pass delete=true."),
             data=plan, metrics=metrics))
 
     if not plan["obsolete_paths"]:
         return response.emit(response.ok(
             operation,
-            message=f"Nothing obsolete under a {plan['retention_days']}-day {plan['mode']} rule.",
+            message=f"Nothing obsolete under a {plan['window']} {plan['mode']} rule.",
             data={**plan, "deleted": None}, metrics=metrics))
 
     from db_ops.common.deletefiles import delete_files

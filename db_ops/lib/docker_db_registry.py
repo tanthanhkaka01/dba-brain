@@ -24,6 +24,7 @@ from pathlib import Path
 from db_ops.lib import field_names
 from db_ops.lib.data_sources import REGISTRY_FILENAME
 from db_ops.lib.docker_db_spec import ENGINE_META, DockerDbSpec
+from db_ops.lib.json_io import atomic_write_text
 
 REGISTRY_ROOT_KEY = "docker_db_connections"
 CREATED_BY = "db_ops.sre.create-db-docker"
@@ -94,11 +95,9 @@ def load_registry(path: str | Path) -> dict:
 
 
 def save_registry(path: str | Path, data: dict) -> None:
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="\n") as fh:
-        json.dump(data, fh, indent=2, ensure_ascii=False)
-        fh.write("\n")
+    # Atomic: this truncated first, so a crash mid-write left an empty registry and every lab
+    # database it described forgotten (review 0.25.0, B9.2).
+    atomic_write_text(Path(path), json.dumps(data, indent=2, ensure_ascii=False) + "\n")
 
 
 def register_connection(registry_path: str | Path, entry: dict) -> str:

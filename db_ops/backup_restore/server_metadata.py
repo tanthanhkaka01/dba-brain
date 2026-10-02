@@ -223,13 +223,16 @@ def resolve_replay_target(
     if plan.target:
         return plan.target
 
-    from db_ops.lib.data_sources import load_config_metric_targets
-
-    targets = (load_config_metric_targets(data_dir=data_dir) if data_dir is not None
-               else load_config_metric_targets())
+    targets = _inventory_instances(data_dir)
     by_id = {str(item.server_id): item for item in targets}
 
-    host_id = str(target_server_id or source_server_id or "").strip()
+    # The target only - never the source's id (owner decision 2026-10-01, rules R47): replaying
+    # logins onto the source would be the one target that is certainly wrong.
+    host_id = str(target_server_id or "").strip()
+    if not host_id and not str(target_host or "").strip():
+        raise ServerMetadataConfigError(
+            "server_metadata has nothing to replay onto: the entry names no target_server_id "
+            "(and no target host).")
     named = by_id.get(host_id)
     if named is not None and str(getattr(named, "db_type", "")).lower() == "sqlserver":
         return host_id
@@ -260,7 +263,7 @@ def resolve_replay_target(
     matches = [
         item for item in targets
         if str(getattr(item, "db_type", "")).lower() == "sqlserver"
-        and str(getattr(item, "instance_name", "")) == container
+        and container in (str(getattr(item, "instance_name", "")), str(getattr(item, "container_name", "")))
         and (not host_ip or str(getattr(item, "ip", "")) == host_ip)
     ]
     if len(matches) == 1:
@@ -276,6 +279,32 @@ def resolve_replay_target(
         f"({', '.join(sorted(str(m.server_id) for m in matches))}). Set server_metadata.target "
         "to say which one."
     )
+
+
+def _inventory_instances(data_dir: str | Path | None = None) -> list:
+    """Every instance ``db_instances.json`` holds - active or not, collected or not.
+
+    The resolver read the METRIC targets until 0.26.0, and those are the active instances with
+    metrics on. A restore target is very often neither: every lab instance is ``active: false``
+    with metrics off, so a lab target was never found and the replay refused *No SQL Server instance
+    matches container* - though the entry named it exactly (0.26.0 section 1.78, the 100.250 drill
+    onto the .252 lab; a disabled site did the same to this module's tests on 2026-08-12). Whether
+    an instance is monitored has nothing to do with whether logins can be replayed onto it.
+
+    A lab's container is in ``container_name``; older inventories put it in ``instance_name``.
+    Both are matched.
+    """
+    from types import SimpleNamespace
+
+    from db_ops.lib import data_sources
+
+    instances = data_sources.load_db_instances(data_dir)
+    return [SimpleNamespace(server_id=str(item.get("server_id") or ""),
+                            db_type=str(item.get("db_type") or ""),
+                            ip=str(item.get("ip") or ""),
+                            instance_name=str(item.get("instance_name") or ""),
+                            container_name=str(item.get("container_name") or ""))
+            for item in instances if str(item.get("server_id") or "").strip()]
 
 
 def summarize(result: dict[str, Any] | None) -> dict[str, Any]:

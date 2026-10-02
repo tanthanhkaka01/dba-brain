@@ -13,10 +13,18 @@ So target resolution walks **every** place a ref can be named, in priority order
    non-default port a container publishes (5442, 1522, 5435 …). Missing this is why an earlier pass
    probed 5432 on a PostgreSQL container listening on 5442 and called the secret unusable;
 3. ``restore_config.json`` — ``password_env`` / ``sql_password_env`` on a backup or restore job;
-4. ``users.json`` ``remote_credentials`` — the host for an OS account no instance references;
-5. the standard key name, which carries the IP — a label, so it is last and only with ``allow_name_host``.
+4. ``users.json`` ``remote_credentials`` — the host for an OS account no instance references.
 
-Before all five sits ``db_instances.json`` ``sql_access`` — the block that says a target is
+**Never the ref's own name, for a database or a host login** (0.26.0, the operator, 2026-10-02).
+The standard key scheme carries an IP, and a fifth step read the host from it when no config named
+the ref - on by default, because "this command only reads". It reads by sending the secret: a
+password offered to whoever holds that address now. ``rotate-password`` stopped doing it (owner
+decision G3.4) and this did not. A ref no config names is ``NO_TARGET``, with what to add; a request
+that still says ``allow_name_host`` is refused, not ignored. The one name still read is a web
+login's (:data:`HTTP_LOGINS`): no configuration file names a Grafana or InfluxDB account, so its
+key is the only statement of where it lives.
+
+Before all four sits ``db_instances.json`` ``sql_access`` — the block that says a target is
 reached through the legacy Oracle tool rather than a driver. Its ``secret_ref`` (the shared
 secret the bridge token is signed with) and ``connect_ref`` were named by no other source, so a
 configured bridge secret resolved to ``unknown`` and was reported ``NO_TARGET`` while every
@@ -43,7 +51,6 @@ from db_ops.common import db_connect, host_probe, oracle_bridge, remote_exec, sq
 
 from db_ops.lib import data_sources
 from db_ops.lib.data_sources import request_fill
-from db_ops.common.password_rotation import target_from_ref_name
 from db_ops.lib import field_names
 from db_ops.lib import sql_access
 
@@ -101,12 +108,11 @@ def resolve_check_target(
     ref: str,
     *,
     data_dir: str | Path | None = None,
-    allow_name_host: bool = True,
 ) -> dict[str, Any]:
     """Where a ref can be proven, and over what protocol. Never raises; returns a ``kind``.
 
     ``kind`` is ``db``, ``remote``, ``not_a_login`` or ``unknown`` — the last meaning no config
-    names this ref and its name is not the standard scheme, which is the only honest "cannot check".
+    names this ref, which is the only honest "cannot check".
     """
     # Config before name. A bridge secret matches the ``ORACLE_BRIDGE`` fragment below and would
     # stop there as "not a login" - true, and useless: it is provable, and the instance that names
@@ -199,19 +205,13 @@ def resolve_check_target(
                         "method": "", "host": str(group["host"]), "port": None,
                         "username": str(cred.get("username") or "")}
 
-    # 5. the key name, last and only on request
-    if allow_name_host:
-        named = target_from_ref_name(ref)
-        if named:
-            named.update(kind="db", source="key name")
-            return named
-        match = re.match(r"^REMOTE_(\d{1,3})_(\d{1,3})_(\d{1,3})_(\d{1,3})_(.+)$", ref)
-        if match:
-            return {"kind": "remote", "source": "key name", "method": "",
-                    "host": ".".join(match.groups()[:4]), "port": None,
-                    "username": match.group(5).lower()}
+    # No fifth source: the ref's name is a label, and a secret is not sent to the host a label
+    # spells (see the module docstring).
     return {"kind": "unknown",
-            "detail": "no config names this ref and its name is not the standard scheme"}
+            "detail": "no config names this ref, so there is nowhere to prove it: name it on an "
+                      "instance (default_credential_name, or cmd_access.credential_name), on a "
+                      "docker_db_connection or a restore entry, or give its users.json "
+                      "remote_credentials group a host"}
 
 
 def _sql_access_target(ref: str, *, data_dir: str | Path | None = None) -> dict[str, Any] | None:
@@ -267,15 +267,14 @@ def _restore_config_target(base: Path, ref: str, remotes: list[dict[str, Any]]) 
 
 
 def check_ref(ref: str, *, data_dir: str | Path | None = None, key: str | None = None,
-              timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
-              allow_name_host: bool = True) -> dict[str, Any]:
+              timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS) -> dict[str, Any]:
     """Try to authenticate with one secret. Returns a result that never contains the value."""
     secrets = data_sources.load_secret_text(data_dir, key=key)
     if ref not in secrets:
         return {"password_ref": ref, "status": "UNKNOWN_REF",
                 "detail": "not present in the secret store"}
 
-    target = resolve_check_target(ref, data_dir=data_dir, allow_name_host=allow_name_host)
+    target = resolve_check_target(ref, data_dir=data_dir)
     result: dict[str, Any] = {"password_ref": ref, "kind": target.get("kind"),
                               "source": target.get("source", "")}
     if target["kind"] in ("not_a_login", "unknown"):
@@ -534,6 +533,13 @@ def check(request: dict[str, Any], *, data_dir: str | Path | None = None,
     """Check every secret a request selects. ``{}`` checks the whole store."""
     if not isinstance(request, dict):
         raise SecretCheckError("request must be a JSON object.")
+    if request.get("allow_name_host"):
+        # Refused, not ignored: a caller that asks for it expects those refs to be proven, and
+        # NO_TARGET with no word about why would read as a secret gone missing.
+        raise SecretCheckError(
+            "allow_name_host was removed in 0.26.0: a secret is sent only to a host the "
+            "configuration names for it, never to one read from the ref's name. A ref nothing "
+            "names answers NO_TARGET, with what to add.")
     secrets = data_sources.load_secret_text(data_dir, key=key)
     refs = request.get("refs") or request.get("password_refs") or []
     if isinstance(refs, str):
@@ -552,8 +558,7 @@ def check(request: dict[str, Any], *, data_dir: str | Path | None = None,
 
     results = [
         check_ref(ref, data_dir=data_dir, key=key,
-                  timeout_seconds=int(request.get("timeout_seconds") or DEFAULT_TIMEOUT_SECONDS),
-                  allow_name_host=bool(request.get("allow_name_host", True)))
+                  timeout_seconds=int(request.get("timeout_seconds") or DEFAULT_TIMEOUT_SECONDS))
         for ref in sorted(selected)
     ]
     summary: dict[str, int] = {}

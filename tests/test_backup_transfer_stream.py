@@ -125,7 +125,7 @@ def test_a_failing_tar_reports_failure_so_the_caller_can_fall_back():
 
 def test_nothing_is_transferred_when_the_target_already_has_it(monkeypatch):
     """The unattended case: a drill that runs daily must not re-send what it sent yesterday."""
-    same = {"/src": [("a.bak", 100, False)], "/dst": [("a.bak", 100, False)]}
+    same = {"/src": [("a.bak", 100, False)], "/dst": [("a.bak", 100, False), (".dbops-staging", 1, False)]}
     source = _Client(sftp=_Sftp(same))
     target = _Client(sftp=_Sftp(same))
     called = []
@@ -140,7 +140,7 @@ def test_nothing_is_transferred_when_the_target_already_has_it(monkeypatch):
 
 def test_only_the_new_files_are_streamed_on_a_repeat_run(monkeypatch):
     tree_src = {"/src": [("old.bak", 100, False), ("new.bak", 200, False)]}
-    tree_dst = {"/dst": [("old.bak", 100, False)]}
+    tree_dst = {"/dst": [("old.bak", 100, False), (".dbops-staging", 1, False)]}
     source = _Client(sftp=_Sftp(tree_src))
     target = _Client(sftp=_Sftp(tree_dst))
     seen = {}
@@ -156,7 +156,7 @@ def test_only_the_new_files_are_streamed_on_a_repeat_run(monkeypatch):
 def test_a_changed_size_is_re_sent():
     """Same name, different size = not the same file."""
     tree_src = {"/src": [("a.bak", 300, False)]}
-    tree_dst = {"/dst": [("a.bak", 100, False)]}
+    tree_dst = {"/dst": [("a.bak", 100, False), (".dbops-staging", 1, False)]}
     source = _Client(sftp=_Sftp(tree_src), payload=b"X")
     target = _Client(sftp=_Sftp(tree_dst))
 
@@ -188,7 +188,7 @@ def test_a_staging_dir_the_ssh_user_cannot_write_fails_before_anything_is_sent(m
 
 
 def test_the_probe_file_is_cleaned_up_on_a_writable_target(monkeypatch):
-    tree = {"/src": [("a.bak", 100, False)], "/dst": [("a.bak", 100, False)]}
+    tree = {"/src": [("a.bak", 100, False)], "/dst": [("a.bak", 100, False), (".dbops-staging", 1, False)]}
     target_sftp = _Sftp(tree)
     source = _Client(sftp=_Sftp(tree))
     target = _Client(sftp=target_sftp)
@@ -261,7 +261,7 @@ def test_prune_still_deletes_files_older_than_the_retention():
     result = prune_target_dir(client, "/stage", 2 * 86400)
 
     assert result["pruned"] == 7
-    assert "-type f -mmin +2880 -print -delete" in client.command
+    assert "-type f ! -name .dbops-staging -mmin +2880 -print -delete" in client.command
 
 
 def test_prune_is_skipped_when_retention_is_disabled():
@@ -289,7 +289,8 @@ def test_the_prune_shell_command_really_keeps_the_piece_and_drops_the_husk(tmp_p
         f"{root}/base/live/pg_tblspc {root}/base/live/pg_replslot "
         f"{root}/base/husk/base/1 {root}/empty_top {root}/wal && "
         f"echo x > {root}/base/live/backup_manifest && "
-        f"echo old > {root}/wal/old.wal && touch -t 202001010000 {root}/wal/old.wal"
+        f"echo old > {root}/wal/old.wal && touch -t 202001010000 {root}/wal/old.wal && "
+        f"touch -t 202001010000 {root}/.dbops-staging"
     )
     subprocess.run(["bash", "-lc", layout], check=True, capture_output=True)
 
@@ -314,6 +315,7 @@ def test_the_prune_shell_command_really_keeps_the_piece_and_drops_the_husk(tmp_p
     assert "/base/husk" not in rel                  # no file anywhere beneath it
     assert "/empty_top" not in rel
     assert "/wal/old.wal" not in rel                # older than the retention
+    assert "/.dbops-staging" in rel                 # the marker is never pruned, however old
 
 
 class _RemovingSftp(_Sftp):
@@ -330,7 +332,7 @@ def test_the_staging_copy_mirrors_the_source_and_drops_what_it_no_longer_has(mon
     ones; a gvenzl Oracle lab has the same DBID in every life, so RMAN mixed the two and a
     point-in-time duplicate died on the old life's logs (RMAN-06054, 2026-09-25)."""
     tree_src = {"/src": [("new_life.bkp", 100, False)]}
-    tree_dst = {"/dst": [("new_life.bkp", 100, False), ("old_life.bkp", 100, False)]}
+    tree_dst = {"/dst": [("new_life.bkp", 100, False), ("old_life.bkp", 100, False), (".dbops-staging", 1, False)]}
     target_sftp = _RemovingSftp(tree_dst)
     monkeypatch.setattr(transfer, "_stream_files", lambda **kw: True)
 
@@ -345,7 +347,7 @@ def test_a_file_the_source_still_has_stays_even_when_this_run_does_not_copy_it(m
     """`include` narrows what one run COPIES, not what the staging folder may hold - an older point
     in time needs pieces a newest-chain copy skipped."""
     tree_src = {"/src": [("full_old.bak", 100, False), ("full_new.bak", 100, False)]}
-    tree_dst = {"/dst": [("full_old.bak", 100, False)]}
+    tree_dst = {"/dst": [("full_old.bak", 100, False), (".dbops-staging", 1, False)]}
     target_sftp = _RemovingSftp(tree_dst)
     monkeypatch.setattr(transfer, "_stream_files", lambda **kw: True)
 
@@ -354,3 +356,71 @@ def test_a_file_the_source_still_has_stays_even_when_this_run_does_not_copy_it(m
                              include=("full_new",))
 
     assert target_sftp.removed == []
+
+
+# --------------------------------------------------------------------------- #
+# Only a marked staging directory is mirrored or pruned (review 0.25.0, B4.7)
+# --------------------------------------------------------------------------- #
+def test_an_unmarked_directory_that_holds_files_is_refused_and_nothing_is_deleted(monkeypatch):
+    """A target_backup_dir pointed at the target host's own backups used to be emptied by the
+    mirror: every file the source lacked was removed."""
+    tree_src = {"/src": [("a.bak", 100, False)]}
+    tree_dst = {"/dst": [("the_targets_own_backup.bak", 100, False)]}
+    target_sftp = _RemovingSftp(tree_dst)
+    monkeypatch.setattr(transfer, "_stream_files", lambda **kw: True)
+
+    with pytest.raises(transfer.StagingDirError, match="touch /dst/.dbops-staging"):
+        transfer.sync_backup_dir(source_session=_Client(sftp=_Sftp(tree_src)), source_dir="/src",
+                                 target_session=_Client(sftp=target_sftp), target_dir="/dst")
+    assert target_sftp.removed == []
+
+
+def test_an_empty_directory_is_marked_on_the_first_copy(monkeypatch):
+    tree_src = {"/src": [("a.bak", 100, False)]}
+    target_sftp = _Sftp({"/dst": []})
+    monkeypatch.setattr(transfer, "_stream_files", lambda **kw: True)
+
+    transfer.sync_backup_dir(source_session=_Client(sftp=_Sftp(tree_src)), source_dir="/src",
+                             target_session=_Client(sftp=target_sftp), target_dir="/dst")
+
+    assert "/dst/.dbops-staging" in target_sftp.probed
+
+
+def test_the_marker_is_not_mirrored_away(monkeypatch):
+    tree_src = {"/src": [("a.bak", 100, False)]}
+    target_sftp = _RemovingSftp({"/dst": [("a.bak", 100, False), (".dbops-staging", 1, False)]})
+    monkeypatch.setattr(transfer, "_stream_files", lambda **kw: True)
+
+    transfer.sync_backup_dir(source_session=_Client(sftp=_Sftp(tree_src)), source_dir="/src",
+                             target_session=_Client(sftp=target_sftp), target_dir="/dst")
+
+    assert target_sftp.removed == []
+
+
+def test_prune_refuses_an_unmarked_directory():
+    from db_ops.common.backup_copy import prune_target_dir
+
+    client = _CapturingClient(stdout="-1\n")
+    result = prune_target_dir(client, "/stage", 2 * 86400)
+
+    assert result["pruned"] == 0
+    assert "no .dbops-staging marker" in result["error"]
+    assert "[ ! -f /stage/.dbops-staging ]" in client.command
+
+
+def test_an_earlier_staging_copy_of_this_source_is_adopted_without_a_manual_step(monkeypatch):
+    """A staging folder from before the marker shares files with its source: it is marked and
+    mirrored as usual, no `touch` needed (owner, 2026-10-01: fixes must not add manual steps)."""
+    tree_src = {"/src": [("a.bak", 100, False), ("b.bak", 100, False)]}
+    target_sftp = _RemovingSftp({"/dst": [("a.bak", 100, False), ("gone_at_source.bak", 100, False)]})
+    monkeypatch.setattr(transfer, "_stream_files", lambda **kw: True)
+    lines = []
+
+    result = transfer.sync_backup_dir(source_session=_Client(sftp=_Sftp(tree_src)), source_dir="/src",
+                                      target_session=_Client(sftp=target_sftp), target_dir="/dst",
+                                      log=lines.append)
+
+    assert "/dst/.dbops-staging" in target_sftp.probed
+    assert target_sftp.removed == ["/dst/gone_at_source.bak"]
+    assert result.as_dict()["removed_absent_at_source"] == 1
+    assert any("adopted" in line for line in lines)

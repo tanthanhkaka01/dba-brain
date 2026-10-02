@@ -72,6 +72,8 @@ $retentionDays = [int]$retentionDays
 # backs up as whoever WinRM connected as - which may have rights the operator did not intend.
 if ($mssqlUser -and -not $mssqlPass) { Die 'MSSQL_USER is set without MSSQL_PASSWORD.' }
 if ($mssqlPass -and -not $mssqlUser) { Die 'MSSQL_PASSWORD is set without MSSQL_USER.' }
+# sqlcmd reads the login's password from SQLCMDPASSWORD when no -P is given: never on its command line.
+if ($mssqlPass) { $env:SQLCMDPASSWORD = $mssqlPass }
 
 $backupDir = $backupDir.TrimEnd('\', '/')
 
@@ -104,7 +106,7 @@ function Get-TrustFlag {
     if ($null -ne $script:trustFlag) { return $script:trustFlag }
     foreach ($attempt in @(@('-C'), @())) {
         $sqlArgs = @('-S', $server, '-b', '-h', '-1', '-W', '-Q', 'SET NOCOUNT ON; SELECT 1') + $attempt
-        if ($mssqlUser) { $sqlArgs += @('-U', $mssqlUser, '-P', $mssqlPass) } else { $sqlArgs += '-E' }
+        if ($mssqlUser) { $sqlArgs += @('-U', $mssqlUser) } else { $sqlArgs += '-E' }
         & $sqlcmdPath @sqlArgs > $null 2>&1
         if ($LASTEXITCODE -eq 0) { $script:trustFlag = $attempt; return $script:trustFlag }
     }
@@ -113,14 +115,29 @@ function Get-TrustFlag {
 
 function Invoke-Sql($query) {
     $sqlArgs = @('-S', $server, '-b', '-Q', $query) + (Get-TrustFlag)
-    if ($mssqlUser) { $sqlArgs += @('-U', $mssqlUser, '-P', $mssqlPass) } else { $sqlArgs += '-E' }
+    if ($mssqlUser) { $sqlArgs += @('-U', $mssqlUser) } else { $sqlArgs += '-E' }
     $output = & $sqlcmdPath @sqlArgs 2>&1
     return @{ ok = ($LASTEXITCODE -eq 0); output = ($output -join "`n") }
 }
 
+# A batch that carries a secret (the encryption password) is read from a file only this account can
+# read, deleted at once - never `-Q`, which is sqlcmd's command line (review 0.25.0, F10.4).
+function Invoke-SqlSecret($query) {
+    $file = New-TemporaryFile
+    try {
+        Set-Content -LiteralPath $file.FullName -Value $query -Encoding UTF8
+        $sqlArgs = @('-S', $server, '-b', '-i', $file.FullName) + (Get-TrustFlag)
+        if ($mssqlUser) { $sqlArgs += @('-U', $mssqlUser) } else { $sqlArgs += '-E' }
+        $output = & $sqlcmdPath @sqlArgs 2>&1
+        return @{ ok = ($LASTEXITCODE -eq 0); output = ($output -join "`n") }
+    } finally {
+        Remove-Item -LiteralPath $file.FullName -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Get-SqlRows($query) {
     $sqlArgs = @('-S', $server, '-b', '-h', '-1', '-W', '-Q', "SET NOCOUNT ON; $query") + (Get-TrustFlag)
-    if ($mssqlUser) { $sqlArgs += @('-U', $mssqlUser, '-P', $mssqlPass) } else { $sqlArgs += '-E' }
+    if ($mssqlUser) { $sqlArgs += @('-U', $mssqlUser) } else { $sqlArgs += '-E' }
     $output = & $sqlcmdPath @sqlArgs 2>&1
     if ($LASTEXITCODE -ne 0) { Die "query failed: $($output -join ' ')" }
     return @($output | ForEach-Object { "$_".Trim() } |
@@ -141,7 +158,7 @@ if ($encPassword) {
     $result = Invoke-Sql "EXEC master.dbo.xp_create_subdir '$(Get-SqlEscaped $certDir)';"
     if (-not $result.ok) { Die "cannot create $certDir (the SQL Server service account must be able to write there): $($result.output)" }
 
-    $result = Invoke-Sql @"
+    $result = Invoke-SqlSecret @"
 IF NOT EXISTS (SELECT 1 FROM sys.symmetric_keys WHERE name = '##MS_DatabaseMasterKey##')
     CREATE MASTER KEY ENCRYPTION BY PASSWORD = '$escPw';
 IF NOT EXISTS (SELECT 1 FROM sys.certificates WHERE name = '$escCert')
@@ -158,7 +175,7 @@ IF NOT EXISTS (SELECT 1 FROM sys.certificates WHERE name = '$escCert')
     # Test-Path says "no" and the certificate is exported again over the top of itself.
     $certExists = (Get-SqlRows "DECLARE @e int; EXEC master.dbo.xp_fileexist '$(Get-SqlEscaped "$certDir\$certName.cer")', @e OUTPUT; SELECT @e;")
     if (@($certExists)[0] -ne '1') {
-        $result = Invoke-Sql @"
+        $result = Invoke-SqlSecret @"
 BACKUP CERTIFICATE [$certName]
     TO FILE = '$(Get-SqlEscaped "$certDir\$certName.cer")'
     WITH PRIVATE KEY (

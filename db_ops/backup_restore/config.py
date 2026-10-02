@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import dataclasses
+import functools
+import ipaddress
 import json
+import socket
 from dataclasses import dataclass, field
 import datetime as dt
 from pathlib import Path, PureWindowsPath
@@ -111,6 +114,7 @@ def merge_notify_configs(blocks: list[NotifyConfig]) -> NotifyConfig:
 RESTORE_PARSER_DEFAULTS = {
     "copy_file_patterns": ["*.bak", "*.trn"],
     "copy_recent_hours": 24,
+    "copy_selection": "chain",
     "cleanup_retention": None,
     "full_backup_subdir": "FULL",
     "sqlcmd_path": "sqlcmd",
@@ -131,7 +135,10 @@ RESTORE_PARSER_DEFAULTS = {
     "restore_command_timeout_seconds": 0,
     "certificate_api_url": "",
     "certificate_api_token_ref": "TOKEN_192_0_2_112_VAULT",
-    "certificate_api_verify_tls": False,
+    # Verified by default (review 0.25.0, B5.4): the request carries the Vault token and returns the
+    # certificate's private key. An internal CA is named with certificate_api_ca_file.
+    "certificate_api_verify_tls": True,
+    "certificate_api_ca_file": "",
 }
 
 
@@ -189,10 +196,14 @@ class BackupRestoreConfig:
     restore_data_dir_on_vm: Path = Path(r"D:\MSSQL\DATA")
     copy_file_patterns: tuple[str, ...] = ("*.bak", "*.trn")
     copy_recent_hours: int = 24
+    # What the copy - and so the space check, which counts the same list - takes from the source:
+    # `chain`, the backups the restore will apply (the default since 0.26.0), or `window`, every
+    # file of `copy_recent_hours`, which is what every restore copied before. See COPY_SELECTIONS.
+    copy_selection: str = "chain"
     # Seconds of staged backup kept on the target after a restore (0 = no age gate; see
     # parse_cleanup_retention).
     cleanup_retention: int = DEFAULT_CLEANUP_RETENTION
-    # Does the incoming copy fit, with room to spare? Defaults to on at x1.5 - a check that has to
+    # Does the incoming copy fit, with room to spare? Defaults to on at x2 - a check that has to
     # be switched on protects only the entries somebody remembered. See lib/restore_space.py for
     # the run that made it non-optional.
     space_check: restore_space.SpaceCheck = dataclasses.field(
@@ -207,7 +218,8 @@ class BackupRestoreConfig:
     databases: tuple[DatabaseRestoreMapping, ...] = ()
     certificate_api_url: str = ""
     certificate_api_token_ref: str = "TOKEN_192_0_2_112_VAULT"
-    certificate_api_verify_tls: bool = False
+    certificate_api_verify_tls: bool = True
+    certificate_api_ca_file: str = ""
     backup_certificate: BackupCertificateSource | None = None
     # The container the target's SQL Server runs in: sqlcmd runs inside it (`docker exec`), for a
     # host with no sqlcmd of its own - a lab VM with only Docker on it has none.
@@ -218,6 +230,10 @@ class BackupRestoreConfig:
     # `checkdb: false` - the check is what proves the restored data is consistent, and turning it
     # off by default would silently weaken every drill on upgrade (the operator, 2026-09-24).
     checkdb: bool = True
+    # A full restore over a database that is ONLINE on the target is refused unless the entry says
+    # so (owner decision G2.10): REPLACE overwrites it, users and all. A drill that runs again over
+    # its own last restore states `overwrite_existing: true`.
+    overwrite_existing: bool = False
     # Opt-in: also replay the source instance's server-level metadata around this restore. The
     # same block, the same parser and the same two phases the script path uses - see
     # db_ops.backup_restore.server_metadata. Absent means this entry behaves exactly as it did
@@ -354,21 +370,66 @@ def _instance_host(sql_instance: str) -> str:
     return text.strip()
 
 
+@functools.lru_cache(maxsize=256)
+def _addresses(host: str) -> frozenset[str]:
+    """Every address ``host`` names, loopback left out; empty when it does not resolve.
+
+    Loopback is left out because it is relative: ``localhost`` in ``restore_sql_instance_on_vm`` is
+    the target VM, not the machine running this check, and two loopbacks say nothing about whether
+    two hosts are one. An unresolvable name proves nothing either way, so it adds no address and the
+    string comparison still applies to it.
+    """
+    text = str(host or "").strip().strip("[]")
+    if not text or text in {".", "(local)"}:
+        return frozenset()
+    try:
+        literal = ipaddress.ip_address(text)
+        return frozenset() if literal.is_loopback else frozenset({str(literal)})
+    except ValueError:
+        pass
+    try:
+        infos = socket.getaddrinfo(text, None)
+    except (OSError, UnicodeError):
+        return frozenset()
+    found: set[str] = set()
+    for info in infos:
+        try:
+            address = ipaddress.ip_address(str(info[4][0]).split("%", 1)[0])
+        except ValueError:
+            continue
+        if not address.is_loopback:
+            found.add(str(address))
+    return frozenset(found)
+
+
+def _same_machine(first: str, second: str) -> bool:
+    r"""One machine under two spellings - a name and its IP, a short name and an FQDN.
+
+    The guard compared strings, so ``\\PRODSQL\...`` against ``10.0.0.5,1433`` passed while both
+    were the production server (review 0.25.0, B4.6).
+    """
+    if not first or not second:
+        return False
+    return first == second or bool(_addresses(first) & _addresses(second))
+
+
 def validate_restore_target_is_not_source(config: BackupRestoreConfig) -> None:
     source_target = config.prod_smb_credential_target.strip().lower()
     vm_target = config.vm_credential_target.strip().lower()
     sql_instance = config.restore_sql_instance_on_vm.strip().lower()
     vm_import_unc = str(config.vm_import_unc).strip().lower()
 
-    if source_target and vm_target and source_target == vm_target:
+    if _same_machine(source_target, vm_target):
         raise ValueError(
             f"Unsafe restore config: source credential_target and target credential_target are both {config.vm_credential_target}."
         )
-    if source_target and sql_instance and source_target in sql_instance:
+    if source_target and sql_instance and (source_target in sql_instance
+                                           or _same_machine(source_target, _instance_host(sql_instance))):
         raise ValueError(
             f"Unsafe restore config: restore SQL instance points at source server {config.prod_smb_credential_target}."
         )
-    if not config.is_linux and source_target and vm_import_unc.startswith(f"\\\\{source_target}\\"):
+    if not config.is_linux and source_target and (vm_import_unc.startswith(f"\\\\{source_target}\\")
+                                                  or _same_machine(source_target, _unc_host(vm_import_unc))):
         raise ValueError(
             f"Unsafe restore config: vm_import_unc points at source server {config.prod_smb_credential_target}."
         )
@@ -385,7 +446,7 @@ def validate_restore_target_is_not_source(config: BackupRestoreConfig) -> None:
         )
     share_host = _unc_host(str(config.prod_backup_share))
     restore_host = _instance_host(sql_instance)
-    if share_host and restore_host and share_host == restore_host:
+    if _same_machine(share_host, restore_host):
         raise ValueError(
             f"Unsafe restore config: the restore SQL instance host '{restore_host}' equals the "
             "backup source share host; the restore would overwrite a database on the source server."
@@ -549,6 +610,7 @@ def parse_restore_config(raw: dict[str, Any]) -> BackupRestoreConfig:
         vm_log_local=Path(str(values["vm_log_local"])),
         copy_file_patterns=_parse_patterns(values.get("copy_file_patterns")),
         copy_recent_hours=_parse_int(values.get("copy_recent_hours"), default=24),
+        copy_selection=_parse_copy_selection(values.get("copy_selection")),
         cleanup_retention=parse_cleanup_retention(values, context="backup_restore"),
         space_check=restore_space.parse_space_check(values),
         prod_smb_credential_target=str(values.get("prod_smb_credential_target") or ""),
@@ -577,13 +639,15 @@ def parse_restore_config(raw: dict[str, Any]) -> BackupRestoreConfig:
             field_names.read(values, "restore_entry", "database_mappings")),
         certificate_api_url=str(values.get("certificate_api_url") or values.get("api_link_get_cer") or ""),
         certificate_api_token_ref=str(values.get("certificate_api_token_ref") or "TOKEN_192_0_2_112_VAULT"),
-        certificate_api_verify_tls=_parse_bool(values.get("certificate_api_verify_tls"), default=False),
+        certificate_api_verify_tls=_parse_bool(values.get("certificate_api_verify_tls"), default=True),
+        certificate_api_ca_file=str(values.get("certificate_api_ca_file") or "").strip(),
         backup_certificate=_parse_backup_certificate(
             values.get("backup_certificate"), restore_id=restore_id_for_label),
         sql_container=str(values.get("sql_container") or "").strip(),
         execution_mode=_parse_execution_mode(values.get("execution_mode")),
         active=_parse_bool(values.get("active"), default=True),
         checkdb=_parse_bool(values.get("checkdb"), default=True),
+        overwrite_existing=values.get("overwrite_existing") is True,
         time_window=parse_time_window_config(
             values, context=f"backup_restore.restores[{values.get('restore_id') or '?'}]"
         ).time_window,
@@ -632,6 +696,7 @@ def _with_source_target_pair(raw: dict[str, Any]) -> dict[str, Any]:
             "api_link_get_cer": "certificate_api_url",
             "certificate_api_token_ref": "certificate_api_token_ref",
             "certificate_api_verify_tls": "certificate_api_verify_tls",
+            "certificate_api_ca_file": "certificate_api_ca_file",
         }
         for old_key, new_key in source_map.items():
             if old_key in source and _should_apply_nested_value(values, new_key):
@@ -773,6 +838,27 @@ def _parse_int(value: Any, *, default: int) -> int:
     if value is None or str(value).strip() == "":
         return default
     return int(value)
+
+
+#: What a SQL Server restore copies from its source (`copy_selection`).
+#: ``chain`` - the backups the restore applies: the newest FULL at or before the moment, its newest
+#: DIFF, the LOGs after (db_ops/lib/sqlserver_backup_chain.py); a database whose chain cannot be
+#: settled falls back to its window. ``window`` - every file written in `copy_recent_hours`, as
+#: before 0.26.0: for an entry that wants the whole range on the target - every restore point of
+#: the window, not only the latest chain - and has the room for it.
+COPY_SELECTIONS = ("chain", "window")
+
+
+def _parse_copy_selection(value: Any) -> str:
+    """``chain`` when absent; a value outside COPY_SELECTIONS is refused rather than guessed at -
+    a misspelt ``window`` silently copying the chain would be found only when a restore point the
+    operator expected on the target is not there."""
+    if value is None or str(value).strip() == "":
+        return "chain"
+    chosen = str(value).strip().lower()
+    if chosen not in COPY_SELECTIONS:
+        raise ValueError(f"copy_selection must be one of {', '.join(COPY_SELECTIONS)}, got: {value!r}")
+    return chosen
 
 
 def _parse_execution_mode(value: Any) -> str:

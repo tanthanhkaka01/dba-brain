@@ -95,14 +95,18 @@ def load_operation(
     become harder to run, never easier — the failure mode of the opposite default is a destructive
     command that quietly needs no confirmation at all.
 
-    A ``path`` that does not exist falls back to :data:`PACKAGED_OPERATIONS_PATH`; one that exists
-    and will not parse is the strictest answer, because there IS a ladder and it is broken -
-    pricing from another table would be pricing from one nobody is looking at. The reading itself
-    is :func:`db_ops.lib.confirmation_ladder.operation_rules`, shared with the app side.
+    A ``path`` that is named and missing is refused (owner decision G3.6): it fell back to
+    :data:`PACKAGED_OPERATIONS_PATH`, so a caller that named its own ladder was priced by another
+    one without a word. One that exists and will not parse is the strictest answer, because there IS
+    a ladder and it is broken - pricing from another table would be pricing from one nobody is
+    looking at. The reading itself is :func:`db_ops.lib.confirmation_ladder.operation_rules`, shared
+    with the app side, where an install not yet initialised is priced by the shipped ladder.
     """
     source = Path(path)
     if not source.exists():
-        source = PACKAGED_OPERATIONS_PATH
+        raise FileNotFoundError(
+            f"confirmation ladder {source} does not exist; name one that does, or none for the "
+            "ladder the package ships.")
     try:
         document = json.loads(source.read_bytes().decode("utf-8-sig"))
     except (OSError, ValueError):
@@ -119,7 +123,18 @@ def rules_for(request: dict[str, Any], operation: str) -> dict[str, Any]:
     """
     stated = confirmation_ladder.rules_from_request(
         request.get("rules") if isinstance(request, dict) else None)
-    return stated if stated is not None else load_operation(operation)
+    shipped = load_operation(operation)
+    if stated is None:
+        return shipped
+    # A request may make an operation harder to confirm, never easier: `rules` arrives with the
+    # request, and any caller - a script, an agent, a compromised app command - could otherwise
+    # send `"confirmations": 0` and skip the ladder (review 0.25.0, F11.4).
+    return {
+        "level": max(int(stated["level"]), int(shipped["level"])),
+        "confirmations": max(int(stated["confirmations"]), int(shipped["confirmations"])),
+        "challenge": str(shipped.get("challenge") or "") or str(stated.get("challenge") or ""),
+        "effects": list(dict.fromkeys([*shipped.get("effects", []), *stated.get("effects", [])])),
+    }
 
 
 def open_terminal() -> TextIO | None:

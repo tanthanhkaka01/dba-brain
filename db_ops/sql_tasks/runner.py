@@ -581,6 +581,17 @@ def run_scheduler_scan(
                 reason=str(exc))
             skipped_count += 1
             continue
+        except Exception as exc:  # noqa: BLE001 - one task must not stop the scan (F4.1).
+            from db_ops.lib import store_outage
+
+            if store_outage.is_transient(exc):
+                raise  # the store itself is down: every task after this one would fail the same way
+            log_sql_task_event(
+                logger, "sql_tasks.runner.task.error", command=command, target=target,
+                sql_id=command.sql_id, sql_code=command.sql_code, status="error", level="error",
+                error=f"{type(exc).__name__}: {exc}")
+            error_count += 1
+            continue
         if success:
             success_count += 1
         else:
@@ -618,6 +629,15 @@ def run_sql_id_tasks(
     secrets = data_sources.load_secret_text(data_dir)
     inventory = data_sources.load_inventory(data_dir)
     credentials = data_sources.load_all_credentials(data_dir)
+    if not dry_run:
+        # Before this task runs: its own runs still `running` past their timeout are closed as
+        # errors by timeout (0.26.0 §1.70). The scheduled scan sweeps every task at its start; a
+        # run asked for by hand sweeps the one it is about to run.
+        mark_stale_running_sql_runs(
+            store=store, commands=commands, targets=targets,
+            running_runs=[row for row in store.fetch_running_sql_runs()
+                          if int(row["sql_id"]) == sql_id],
+            telegram_groups=telegram_groups, logger=logger)
 
     success_count = 0
     error_count = 0
@@ -658,7 +678,8 @@ def mark_stale_running_sql_runs(
     telegram_groups: dict[str, str],
     logger: Any,
 ) -> None:
-    """Close out runs left `running` by a process that died, and ALERT on each one.
+    """Close out runs left `running` by a process that died - or past their timeout - and ALERT on
+    each one.
 
     The alert is the point. This path used to write the error row and log it, and nothing else:
     `alert_on_error` was only wired into the exception handler inside `run_sql_target`, and a run
@@ -690,12 +711,14 @@ def mark_stale_running_sql_runs(
             continue
         target = targets_by_key.get((int(row["sql_id"]), int(row["target_no"])))
         timeout_seconds = target.timeout_seconds if target is not None else DEFAULT_SQL_TIMEOUT_SECONDS
-        # **A row whose process is still alive is left alone, however old it is.** The timeout used
-        # to be the whole answer, and that is the loop: a task that legitimately outran its timeout
-        # had its row closed here and the next scan started a second copy on top of the first. The
-        # `running` row is now a claim (ux_sql_runs_claim), so closing it is what releases the key —
-        # which makes this decision and "may another run start?" the same decision. A row from
-        # another host cannot be checked from here and waits for its timeout plus a long grace.
+        # **A row past its timeout is over, whoever owns it** (the operator, 2026-10-02, 0.26.0
+        # §1.70). Until then a row whose process was alive was left alone however old it was: the
+        # `running` row is a claim (ux_sql_runs_claim), closing it releases the key, and a row closed
+        # under a process still working started a second copy on top of the first. But nothing else
+        # bounded a SQL task - one target stayed `running` for 13 hours on 2026-09-30, and did not
+        # run again until the container was stopped. So the timeout is the answer again, and the
+        # second copy is prevented the other way: the owner is stopped first (below). Inside its
+        # timeout a row is judged as before - a dead pid frees it at once, a live one holds it.
         metadata = run_claim.row_metadata(row)
         owner_pid, owner_host = run_claim.claim_owner(metadata)
         verdict = run_claim.reap_verdict(
@@ -706,6 +729,7 @@ def mark_stale_running_sql_runs(
             pid_alive=(process_liveness.is_pid_alive(owner_pid)
                        if owner_pid is not None and owner_host == this_host else None),
             this_node=node_identity.current(),
+            at_timeout=True,
         )
         if not verdict.reap:
             continue
@@ -714,9 +738,17 @@ def mark_stale_running_sql_runs(
         # died, and a reap can happen hours after the fact — a worker restarted at 06:13 was
         # reported at 13:05 with nothing in the text to tell the two apart.
         stale_minutes = int((now - started).total_seconds() // 60)
-        message = (f"SQL task {row['sql_code']} stale running: {verdict.reason}. It started at "
-                   f"{format_message_time(started)} with timeout_seconds={timeout_seconds} and was "
-                   f"still 'running' {stale_minutes} minutes later.")
+        if verdict.timed_out:
+            # Before the row is closed, so the claim is never free while its owner still works.
+            owner = stop_overdue_owner(owner_pid, owner_host, this_host=this_host,
+                                       started=run_claim.claim_started(metadata))
+            message = (f"SQL task {row['sql_code']} error by timeout: {verdict.reason}. It started "
+                       f"at {format_message_time(started)} with timeout_seconds={timeout_seconds} "
+                       f"and was still 'running' {stale_minutes} minutes later; {owner}.")
+        else:
+            message = (f"SQL task {row['sql_code']} stale running: {verdict.reason}. It started at "
+                       f"{format_message_time(started)} with timeout_seconds={timeout_seconds} and was "
+                       f"still 'running' {stale_minutes} minutes later.")
         # Closed as a claim: ten scans run at once and each reads the same `running` row, so only
         # the one whose close lands may report it - the others were each sending the same alert
         # (three dead runs reported twice on 2026-09-26).
@@ -727,12 +759,14 @@ def mark_stale_running_sql_runs(
             message=message,
             finished_at=utc_now_text(),
             error_text=message,
-            metadata={"stale_running": True},
+            metadata={"stale_running": True, **({"timed_out": True} if verdict.timed_out else {})},
             only_if_status="running",
         )
         if not closed:
             continue
-        log_function_error(logger, function_name="sql_tasks.stale_running", error_text=message)
+        log_function_error(
+            logger, error_text=message,
+            function_name="sql_tasks.timed_out" if verdict.timed_out else "sql_tasks.stale_running")
         # A target is how a run learns where to complain. Without one there is no notify block to
         # read, so the log line above is all this can be - the same fallback the timeout above uses.
         if target is not None and target.alert_on_error.enabled:
@@ -743,13 +777,41 @@ def mark_stale_running_sql_runs(
                 command=command,
                 target=target,
                 status="error",
-                message=(f"{message} The run process is gone, but the SQL it started may still be "
+                message=(f"{message} The SQL it started may still be executing on "
+                         f"{target_location(target)} - check for an orphaned session before the "
+                         f"next cycle." if verdict.timed_out else
+                         f"{message} The run process is gone, but the SQL it started may still be "
                          f"executing on {target_location(target)} - check for an "
                          f"orphaned session before the next cycle."),
                 sql_run_id=int(row["sql_run_id"]),
                 # There are no rows to show: the process died before it reported any.
                 include_result_table=False,
             )
+
+
+def stop_overdue_owner(owner_pid: int | None, owner_host: str, *, this_host: str, started: str) -> str:
+    """Stop the process behind a run that is past its timeout, and say what was done - one clause.
+
+    The row is about to be closed, which frees its claim; a process still working under it would be
+    joined by the next run of the same task. Only a process on this host can be stopped, and only
+    one that still carries the start time its claim recorded - a pid alone is whoever holds the
+    number now (``process_liveness.stop_process_and_children``). A row claimed before 0.26.0 has no
+    start time: its process is left, and the clause says so.
+    """
+    if owner_pid is None:
+        return "no owner was recorded on it"
+    if owner_host != this_host:
+        return (f"its process (pid {owner_pid}) is on {owner_host or 'an unnamed host'} and cannot "
+                f"be stopped from {this_host}")
+    if not process_liveness.is_pid_alive(owner_pid):
+        return f"its process (pid {owner_pid}) had already ended"
+    if process_liveness.stop_process_and_children(owner_pid, started=started or None):
+        return f"its process (pid {owner_pid}) was stopped"
+    if not started:
+        return (f"its process (pid {owner_pid}) was left running - the claim records no start time "
+                "to tell it from another process holding that number")
+    return (f"pid {owner_pid} is held by another process now, or would not stop; nothing else was "
+            "touched")
 
 
 def due_sql_tasks(
@@ -821,7 +883,16 @@ def run_one_sql_task(
 ) -> bool:
     started = datetime.now(timezone.utc)
     started_text = started.strftime("%Y-%m-%dT%H:%M:%SZ")
-    sql_paths = resolve_sql_files(command.script_files, data_dir=data_dir)
+    # Resolved here, before the run row exists, used to be outside every handler: one task whose
+    # SQL file had been removed raised out of the scan, and every task after it in the scan was
+    # skipped - on every scan (review 0.25.0, F4.1). A missing file is now this task's failure,
+    # recorded and alerted like any other, below.
+    sql_paths: list[Path] = []
+    resolve_error: Exception | None = None
+    try:
+        sql_paths = resolve_sql_files(command.script_files, data_dir=data_dir)
+    except FileNotFoundError as exc:
+        resolve_error = exc
     database = find_database_inventory(target, inventory)
     credential = find_database_credential(target, credentials)
     file_results: list[dict[str, Any]] = []
@@ -834,7 +905,7 @@ def run_one_sql_task(
         "database": database,
         "credential": scrub_credential(credential),
     }
-    if command.script_type == "folder":
+    if command.script_type == "folder" and resolve_error is None:
         log_sql_task_event(
             logger,
             "sql_tasks.runner.script.discovered",
@@ -887,6 +958,8 @@ def run_one_sql_task(
     failing_file = ""
     total_files = 0
     try:
+        if resolve_error is not None:
+            raise resolve_error
         if database is None:
             # Only what connecting needs is checked here - the instance. Whether the database exists
             # is the server's to say, after connecting (see diagnose_connect_failure).
@@ -2106,6 +2179,10 @@ def diagnose_connect_failure(*, target: SqlTarget, error: str,
     if kind == "login":
         return (f"the login of {target.credential_name or 'this target'} was refused on {where} "
                 "(18456) - check its password_ref and that the login exists")
+    if kind == "statement_timeout":
+        return (f"a statement ran past this target's timeout ({target.timeout_seconds}s) on {where} - "
+                "the instance answered; raise `timeout` in its time_window, or find what the "
+                "statement waited on")
     if kind == "unreachable":
         return (f"could not reach {where} - the instance is down, its address or port is wrong, "
                 "or something between them blocks it")

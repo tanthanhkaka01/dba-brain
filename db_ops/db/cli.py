@@ -301,8 +301,9 @@ def _handle_use_store(args) -> int:
             if stripped.startswith('"') and line != stripped:
                 indent = len(line) - len(stripped)
                 break
-        path.write_text(json.dumps(updated, ensure_ascii=False, indent=indent) + chr(10),
-                        encoding="utf-8")
+        # Atomic (review 0.25.0, B9.2): a half-written store declaration is a node that cannot
+        # find its own store on the next start.
+        json_io.atomic_write_text(path, json.dumps(updated, ensure_ascii=False, indent=indent) + chr(10))
         print(f"{done} in {path}")
 
     after = load_config(config_path)

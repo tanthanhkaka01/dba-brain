@@ -47,14 +47,25 @@ def _echo(line: str) -> None:
     print(line.rstrip("\n"), file=sys.stderr, flush=True)
 
 
+#: sqlcmd reads the SQL login's password from this variable when there is no ``-P``. The password
+#: was ``-P <password>`` on the command line - readable by every user on the host (``ps``,
+#: /proc/<pid>/cmdline), and with ``container`` in ``docker exec``'s argv too (review 0.25.0, F11.2).
+PASSWORD_ENV = "SQLCMDPASSWORD"
+
+
+def _password(request: dict[str, Any]) -> str:
+    return str(request.get("password") or "")
+
+
 def _auth_args(request: dict[str, Any]) -> list[str]:
+    """``-U <user>`` (the password travels in :data:`PASSWORD_ENV`), or ``-E`` for neither."""
     username = str(request.get("username") or "")
-    password = str(request.get("password") or "")
+    password = _password(request)
     if not username and not password:
         return ["-E"]
     if not username or not password:
         raise SqlcmdRunError("a SQL login needs both username and password; give neither for -E.")
-    return ["-U", username, "-P", password]
+    return ["-U", username]
 
 
 def sqlcmd_words(request: dict[str, Any]) -> list[str]:
@@ -70,7 +81,10 @@ def sqlcmd_words(request: dict[str, Any]) -> list[str]:
     container = str(request.get("container") or "").strip()
     if not container:
         return [path or "sqlcmd"]
-    return ["docker", "exec", container, CONTAINER_SQLCMD if path in ("", "sqlcmd") else path]
+    # `-e NAME` without a value hands the container the variable from docker's own environment:
+    # the password is never a word on this command line.
+    passes = ["-e", PASSWORD_ENV] if _password(request) else []
+    return ["docker", "exec", *passes, container, CONTAINER_SQLCMD if path in ("", "sqlcmd") else path]
 
 
 def _timeout_args(request: dict[str, Any]) -> list[str]:
@@ -89,19 +103,23 @@ def _answer(via: str, started: float, *, exit_code, stdout: str, stderr: str,
 #: stdout - a failed RESTORE would read as a success. Read back and removed from the output.
 EXIT_MARKER = "DB_OPS_SQLCMD_EXIT="
 
-#: "No deadline" over WinRM: its backends need a number, and the connect timeout they would fall
-#: back to cuts a one-hour restore off at 30 s. The old Invoke-Command's own maximum, in seconds.
-_WINRM_UNBOUNDED_SECONDS = 2_147_483
 
-
-def _run_local(argv: list[str], *, via: str, timeout: int, started: float) -> dict[str, Any]:
+def _run_local(argv: list[str], *, via: str, timeout: int, started: float,
+               password: str = "") -> dict[str, Any]:
     """Run ``argv`` here, each line echoed as it arrives; stderr follows stdout in the answer."""
-    return _run({"method": "local"}, argv, via=via, timeout=timeout, started=started, merge=True)
+    return _run({"method": "local"}, argv, via=via, timeout=timeout, started=started, merge=True,
+                env={PASSWORD_ENV: password} if password else None)
 
 
 def ssh_command(request: dict[str, Any]) -> str:
-    """The command a Linux host runs - character for character what the app's SSH channel ran."""
-    return (_LINUX_TOOL_PATH
+    """The command a Linux host runs - character for character what the app's SSH channel ran.
+
+    With a password it first reads it from stdin into :data:`PASSWORD_ENV` - the command string
+    is the remote shell's argv, so the value cannot be written into it (F11.2).
+    """
+    reads = (f"IFS= read -r {PASSWORD_ENV}; export {PASSWORD_ENV}; "
+             if _password(request) else "")
+    return (reads + _LINUX_TOOL_PATH
             + " ".join(shlex.quote(word) for word in sqlcmd_words(request)) + " "
             + f"-S {shlex.quote(str(request['instance']))} "
             + "-C " + " ".join(shlex.quote(arg) for arg in _auth_args(request)) + " "
@@ -134,6 +152,8 @@ def winrm_script(request: dict[str, Any]) -> str:
         f"$SqlcmdPath = {quote_powershell(str(request.get('sqlcmd_path') or 'sqlcmd'))}",
         f"$SqlInstance = {quote_powershell(str(request['instance']))}",
         f"$Sql = {quote_powershell(str(request['sql']))}",
+        # In the script body, not an argument: sqlcmd reads it from the environment (F11.2).
+        *([f"$env:{PASSWORD_ENV} = {quote_powershell(_password(request))}"] if _password(request) else []),
         f"$sqlAuthArgs = @({array(_auth_args(request))})",
         f"$timeoutArgs = @({array(_timeout_args(request))})",
         "& $SqlcmdPath -S $SqlInstance -C @sqlAuthArgs @timeoutArgs -b -Q $Sql",
@@ -168,7 +188,8 @@ def _with_exit_code(stdout: str) -> tuple[int | None, str]:
 
 
 def _run(access: dict[str, Any], command: Any, *, via: str, timeout: int, started: float,
-         merge: bool = False, script: bool = False) -> dict[str, Any]:
+         merge: bool = False, script: bool = False, env: dict[str, str] | None = None,
+         stdin: str | None = None) -> dict[str, Any]:
     """``command`` (or a ``script``) through :mod:`remote_exec`, answered as this module answers.
 
     Could not run at all is :class:`HostCommandError`; cut off at the deadline is ``timed_out``.
@@ -184,9 +205,10 @@ def _run(access: dict[str, Any], command: Any, *, via: str, timeout: int, starte
     try:
         with remote_exec.open_session(access) as session:
             if script:
-                result = session.run_script(command, timeout_seconds=timeout or _WINRM_UNBOUNDED_SECONDS)
+                result = session.run_script(command, timeout_seconds=timeout or None)
             else:
-                result = session.run(command, timeout_seconds=timeout or None, on_output=_echo)
+                result = session.run(command, timeout_seconds=timeout or None, on_output=_echo,
+                                     env=env, stdin=stdin)
     except remote_exec.RemoteCommandTimeoutError as exc:
         return answer(None, exc.stdout or "", exc.stderr or "", timed_out=True)
     except remote_exec.RemoteExecError as exc:
@@ -223,9 +245,11 @@ def run_sqlcmd(request: dict[str, Any]) -> dict[str, Any]:
             "runs its own sqlcmd - leave container out.")
     timeout = int(request.get("timeout_seconds") or 0)
     started = time.monotonic()
+    password = _password(request)
     if via == "ssh":
-        return _run(ssh_access(host), ssh_command(request), via=via, timeout=timeout, started=started)
+        return _run(ssh_access(host), ssh_command(request), via=via, timeout=timeout, started=started,
+                    stdin=f"{password}\n" if password else None)
     if via == "winrm":
         return _run(winrm_access(host), winrm_script(request), via=via, timeout=timeout, started=started,
                     merge=True, script=True)
-    return _run_local(local_argv(request), via=via, timeout=timeout, started=started)
+    return _run_local(local_argv(request), via=via, timeout=timeout, started=started, password=password)

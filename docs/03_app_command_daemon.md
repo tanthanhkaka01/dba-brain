@@ -65,7 +65,7 @@ node's app command there, keeping its schedule.
 
 ## Data Flow
 
-`data/app_commands.json` -> active command filter -> local `time_window` check -> duplicate-running check by `app_command_id` -> latest `job_runs.started_at` interval check -> subprocess start with `DB_OPS_LOG_SCOPE` environment -> runtime log files -> final `job_runs` update.
+`data/app_commands.json` -> active command filter -> local `time_window` check -> duplicate-running check by `app_command_id` -> latest `job_runs.started_at` interval check -> subprocess start with `DB_OPS_LOG_SCOPE` and, for a command with a timeout, `DB_OPS_APP_TIMEOUT_SECONDS` in its environment -> runtime log files -> final `job_runs` update.
 
 The `time_window` check uses the **configured timezone** (`config.json` → `timezone`), so `from_hour: 1` means 01:00 in that zone on every node regardless of the host clock. `job_runs` timestamps are stored in **UTC (+00)** and are unaffected by it — see "Timezone convention" in [`docs/13_common.md`](./13_common.md).
 
@@ -195,6 +195,29 @@ A `sync` command still claims its own id, so a second daemon on the host — or 
 its daemon — cannot start a duplicate either. An `async` command claims nothing, because being
 called again while one is running is the whole point of it.
 
+## A timeout and a stop end the whole tree (0.26.0)
+
+An app command runs through `shell=True`. A timeout used to `terminate()` the shell - `/bin/sh`, or on a
+Windows master `cmd.exe`, which stays the parent - and the app under it, with its `common.cli` children,
+kept working after its run was closed as a timeout and its claim released for a duplicate. Each app
+command now starts as the head of a process tree of its own (`lib.process_liveness.own_group_kwargs`:
+a session on POSIX, a process group on Windows), and a timeout, a refused claim and a daemon stop all
+end the tree (`stop_process_tree`) - a tree the daemon can prove is its own: the head's start time
+is read right after launch, only for a process whose parent is the daemon, and a PID that no longer
+carries it is never walked. A stopping daemon stops its children **before** it closes their
+rows as interrupted, so the next daemon does not start a duplicate beside a survivor; a SIGTERM that
+arrives during start-up no longer fails in the stop handler; and at start-up a `running` row of an app
+command that was removed from `app_commands.json` is closed (`app_command_removed`) instead of staying
+open for ever - rows other apps write into `job_runs` are left to them (review 0.25.0, B2.3, F1.1, B2.5).
+
+## Result files are swept by age (0.26.0)
+
+Query results, xlsx exports and config exports land under `<runtime_dir>/output` and nothing removed
+them - the folder only grew, holding business data no one would read again (review 0.25.0, F4.3).
+The daemon deletes files there older than `output_retention_days` (`config.json`, default 7; `0`
+keeps them), once an hour, after scheduling, by age only. Nothing outside that folder is touched, and
+a failed sweep is swallowed like the `job_runs` one.
+
 ## Stale RUNNING Job Recovery
 
 When the daemon process is killed or crashes while a child subprocess is active, the corresponding `job_runs` row can be left in `status = 'running'` indefinitely. The daemon handles this in two ways:
@@ -221,6 +244,15 @@ host that own it, and the reaper asks whether that process is still there
 
 Closing the row is what releases its claim, so "is it stale?" and "may another run start?" are the
 same question and are now answered in one place.
+
+**For a SQL task the first row of that table ends at the timeout (0.26.0).** An app command is
+stopped at its timeout by the daemon, so its row never outlives it by much. A SQL task had no such
+bound, and one target stayed `running` for 13 hours behind a live pid. The SQL-task reaper therefore
+asks `reap_verdict(at_timeout=True)`: a row past its timeout is closed as an *error by timeout*
+whoever owns it, and the owner is stopped first, so no second copy starts on top of the first -
+`docs/05_sql_task_runner.md`, *A run past its timeout is over*. Every claim records when its
+process started (`claim_started`) for that: the process stopped is the one that claimed, never
+whoever holds the pid now. Restores and app commands are judged by the table as it stands.
 
 **A node is not its host name (0.26.0).** A container whose compose file pins no `hostname` comes up
 under a new one on every recreate, and read its predecessor's open rows as "another host's": on

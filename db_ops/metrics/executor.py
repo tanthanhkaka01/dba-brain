@@ -132,6 +132,7 @@ def connection_block(target: MetricTarget | None, secrets: dict[str, str]) -> di
         "port": target.port, "database": _metric_database(target),
         "service_name": str(target.connection_info.get("service_name") or target.db_name or ""),
         "sqlserver_driver": str(target.connection_info.get("sqlserver_driver", "") or "").strip(),
+        "sqlserver_tls_verify": target.connection_info.get("sqlserver_tls_verify") is True,
         "sql_access": target.sql_access,
     }
     try:

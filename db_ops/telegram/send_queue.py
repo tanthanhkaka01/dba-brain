@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from db_ops.lib.rows import row_value
+from db_ops.lib.telegram_text import document_caption
 from db_ops.db import DbOpsStore
 from db_ops.logging_ops import log_event
 from db_ops.telegram.api import (
@@ -31,15 +32,34 @@ SEND_PER_CHAT = 5
 #: go one after another, in order - only chats run side by side. One at a time, a pass that met a
 #: backlog in six chats sent 30 rows at ~1.3 s each (a fresh HTTPS call to Telegram, three store
 #: round trips) and took ~40 s, and the bot read its commands once per pass: a `/spbot_self_status`
-#: reply took a minute (2026-09-29). There is no time budget of its own: the pass is bounded by the
-#: Telegram workflow's `time_window.timeout` in `app_commands.json`, like every other app.
-#: `send_threads` in `telegram_config.json` overrides it.
+#: reply took a minute (2026-09-29). `send_threads` in `telegram_config.json` overrides it.
 SEND_THREADS = 10
+
+#: The share of the Telegram workflow's own timeout one pass may spend before it starts no further
+#: row (the operator's number). The daemon kills the workflow at that timeout, and a row it is
+#: killed in the middle of is left in flight: 0.25.0's first candidate dropped the fixed 180 s budget
+#: of 0.24.0 and with it the margin that let a pass stop on its own. Half of the timeout, read from
+#: `DB_OPS_APP_TIMEOUT_SECONDS` (db_ops.lib.app_timeout), so changing the timeout in
+#: `app_commands.json` moves the budget with it. Run by hand, with no timeout, a pass has no budget.
+SEND_BUDGET_RATIO = 0.5
+
+#: How long a row may sit in flight (`send_status = 2`) before a pass puts it back in the queue. No
+#: pass outlives its timeout, so a row older than that was left by a pass that was killed; this is
+#: the floor, and twice the app's timeout is used when that is longer.
+STALE_IN_FLIGHT_SECONDS = 900
 
 #: Where a chat's Telegram-imposed pause is kept between passes - each pass is a process of its
 #: own, and a pause that died with the process would be spent on another refused call every
 #: second. Seconds of state: losing the file costs one 429 per chat, nothing else.
 PAUSES_FILE_NAME = "telegram_chat_pauses.json"
+
+
+def stale_in_flight_seconds() -> int:
+    """How old an in-flight row must be before it is re-queued - see STALE_IN_FLIGHT_SECONDS."""
+    from db_ops.lib import app_timeout
+
+    timeout = app_timeout.timeout_seconds() or 0
+    return max(STALE_IN_FLIGHT_SECONDS, 2 * timeout)
 
 
 def send_pending_messages(
@@ -53,7 +73,11 @@ def send_pending_messages(
     send_per_chat: int = SEND_PER_CHAT,
     send_threads: int = SEND_THREADS,
     pauses_path: str | Path | None = None,
+    budget_seconds: float | None = None,
+    budget_started_at: float | None = None,
+    stale_after_seconds: int | None = None,
     now: Any = time.time,
+    clock: Any = time.monotonic,
 ) -> dict[str, int]:
     """One send pass: each chat's oldest ``send_per_chat`` rows, up to ``send_threads`` chats at once.
 
@@ -66,8 +90,23 @@ def send_pending_messages(
     over. Sleeping on it here is what made a pass take 143 s on average while one chat was flooded
     (2026-09-28) - every other chat, and the bot reading its commands, waited out another chat's
     limit.
+
+    ``budget_seconds`` (see SEND_BUDGET_RATIO): once spent, no chat starts another row; what is left
+    stays at ``send_status = 0`` and the next pass takes it first, in the same order. ``None`` is no
+    budget. It is counted from ``budget_started_at`` (a ``clock()`` reading) when given - the
+    process start, since the daemon's timeout covers the whole workflow and not only this pass.
+    Rows a killed pass left in flight are put back first (``stale_after_seconds``).
     """
     store = DbOpsStore(sqlite_path)
+    started = clock() if budget_started_at is None else budget_started_at
+    requeued = store.requeue_stale_telegram_send_messages(
+        older_than_seconds=stale_after_seconds if stale_after_seconds is not None
+        else stale_in_flight_seconds())
+    logger = logging.getLogger("telegram")
+    if requeued:
+        log_event(logger, level="warning", message=(
+            f"telegram.send_queue re-queued {requeued} row(s) left in flight by a pass that did not "
+            "finish (killed at its timeout, most likely); Telegram may already have had them"))
     rows = store.fetch_pending_telegram_send_messages(limit=limit, per_chat=send_per_chat)
     pauses = read_chat_pauses(pauses_path, now=now())
     counts = {
@@ -76,13 +115,16 @@ def send_pending_messages(
         "failed": 0,
         "deferred": 0,
         "paused_chats": 0,
+        "requeued": requeued,
+        "errors": 0,
     }
 
     by_chat: dict[str, list[Any]] = {}
     for row in rows:
         by_chat.setdefault(str(row["tlgchat_id"] or ""), []).append(row)
 
-    logger = logging.getLogger("telegram")
+    def out_of_budget() -> bool:
+        return budget_seconds is not None and clock() - started >= budget_seconds
 
     def send_chat(chat_id: str, chat_rows: list[Any]) -> tuple[dict[str, int], float | None]:
         """One chat's rows in order; stops at the first 429 and says how long to pause."""
@@ -91,6 +133,10 @@ def send_pending_messages(
             chat_counts["deferred"] = len(chat_rows)
             return chat_counts, None
         for index, row in enumerate(chat_rows):
+            if out_of_budget():
+                # Left at send_status 0, untouched: the next pass takes them first, in order.
+                chat_counts["deferred"] += len(chat_rows) - index
+                break
             result = send_one_message(
                 sqlite_path=sqlite_path,
                 send_tlgmsg_id=int(row["send_tlgmsg_id"]),
@@ -113,20 +159,30 @@ def send_pending_messages(
                 chat_counts["failed"] += 1
         return chat_counts, None
 
-    if by_chat:
-        workers = max(1, min(int(send_threads or 1), len(by_chat)))
-        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="telegram-send") as pool:
-            futures = {chat_id: pool.submit(send_chat, chat_id, chat_rows)
-                       for chat_id, chat_rows in by_chat.items()}
-            for chat_id, future in futures.items():
-                chat_counts, pause = future.result()
-                for key, value in chat_counts.items():
-                    counts[key] += value
-                if pause is not None:
-                    pauses[chat_id] = now() + pause
-
-    counts["paused_chats"] = len(pauses)
-    write_chat_pauses(pauses_path, pauses)
+    try:
+        if by_chat:
+            workers = max(1, min(int(send_threads or 1), len(by_chat)))
+            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="telegram-send") as pool:
+                futures = {chat_id: pool.submit(send_chat, chat_id, chat_rows)
+                           for chat_id, chat_rows in by_chat.items()}
+                for chat_id, future in futures.items():
+                    try:
+                        chat_counts, pause = future.result()
+                    except Exception as exc:  # noqa: BLE001 - one chat must not cost the others.
+                        # Its row, if any, is in flight and comes back through the stale re-queue.
+                        # Letting it out lost every other chat's counts and, worse, the pauses
+                        # Telegram had just imposed - so each paused chat drew another 429.
+                        counts["errors"] += 1
+                        log_event(logger, level="error", message=(
+                            f"telegram.send_queue chat {chat_id} failed this pass: {exc}"))
+                        continue
+                    for key, value in chat_counts.items():
+                        counts[key] += value
+                    if pause is not None:
+                        pauses[chat_id] = now() + pause
+    finally:
+        counts["paused_chats"] = len(pauses)
+        write_chat_pauses(pauses_path, pauses)
     return counts
 
 
@@ -193,7 +249,9 @@ def send_one_message(
     if int(row["send_status"]) != 0:
         return {"send_tlgmsg_id": send_tlgmsg_id, "sent": 0, "failed": 0, "status": "not_pending"}
 
-    store.mark_telegram_send_message_processing(send_tlgmsg_id=send_tlgmsg_id)
+    if not store.mark_telegram_send_message_processing(send_tlgmsg_id=send_tlgmsg_id):
+        # Another sender (a `send-one` beside the pass) took it between the read and here.
+        return {"send_tlgmsg_id": send_tlgmsg_id, "sent": 0, "failed": 0, "status": "not_pending"}
     # Rows written before the column existed, and any producer that has not adopted it, simply
     # have nothing here — the send layer then falls back to reading the message header.
     message_type = row_value(row, "message_type")
@@ -202,20 +260,54 @@ def send_one_message(
     # terminal, a rate limit is a deferral.
     rate_limited = False
     retry_after = 0.0
+    # Parts of this row an earlier pass delivered before a rate limit stopped it: the send resumes
+    # there instead of showing the chat parts 1..n again (review 0.25.0, B1.2).
+    stored = metadata_from_json(str(row["metadata_json"] or "{}"))
+    try:
+        parts_delivered = int(stored.get("parts_delivered") or 0)
+    except (TypeError, ValueError):
+        parts_delivered = 0
+    # A document that reached the chat on an earlier attempt, and its message id. The text that
+    # follows a long caption is a second call, and it failing - a rate limit, which is when a chat
+    # is busiest - sent the row round again from the top: the same workbook arrived once per
+    # attempt. Kept across the attempts below and, on a deferral, on the row.
+    document_delivered = stored.get("document_delivered") is True
+    document_message_id = stored.get("document_message_id")
     for _ in range(max(1, retry_count)):
         try:
-            metadata = metadata_from_json(str(row["metadata_json"] or "{}"))
+            metadata = stored
             document_path = str(metadata.get("document_path") or "").strip()
             if document_path:
-                result = send_document(
-                    bot_token=bot_token,
-                    chat_id=str(row["tlgchat_id"] or ""),
-                    document_path=document_path,
-                    caption=str(row["message_text"] or ""),
-                    api_url=api_url,
-                    timeout_seconds=max(timeout_seconds, int(metadata.get("timeout_seconds") or 60)),
-                    reply_to_message_id=int(row["reply_message_id"]) if row["reply_message_id"] is not None else None,
-                )
+                # A caption has 1024 characters, not 4096 (review 0.25.0, B1.1): a longer one went
+                # to the document as-is, Telegram refused it, and the file was never delivered.
+                caption, follow_up = document_caption(str(row["message_text"] or ""))
+                if not document_delivered:
+                    sent_document = send_document(
+                        bot_token=bot_token,
+                        chat_id=str(row["tlgchat_id"] or ""),
+                        document_path=document_path,
+                        caption=caption,
+                        api_url=api_url,
+                        timeout_seconds=max(timeout_seconds, int(metadata.get("timeout_seconds") or 60)),
+                        reply_to_message_id=int(row["reply_message_id"]) if row["reply_message_id"] is not None else None,
+                    )
+                    document_delivered = True
+                    document_message_id = extract_sent_message_id(sent_document)
+                # The row's message is the document: a reply quoting it quotes the file.
+                result = {"result": {"message_id": document_message_id}}
+                if follow_up:
+                    send_message(
+                        bot_token=bot_token,
+                        chat_id=str(row["tlgchat_id"] or ""),
+                        text=follow_up,
+                        api_url=api_url,
+                        timeout_seconds=timeout_seconds,
+                        message_type=message_type,
+                        # The document is remembered, so a limit met here costs no duplicate: the
+                        # send pass is handed the row back, like any other, and resumes at the text.
+                        wait_before_first_part=wait_on_rate_limit,
+                        start_part=parts_delivered,
+                    )
             else:
                 result = send_message(
                     bot_token=bot_token,
@@ -227,13 +319,8 @@ def send_one_message(
                     reply_markup=reply_markup_from_metadata(metadata),
                     message_type=message_type,
                     wait_before_first_part=wait_on_rate_limit,
+                    start_part=parts_delivered,
                 )
-            message_id = extract_sent_message_id(result)
-            store.mark_telegram_send_message_sent(
-                send_tlgmsg_id=send_tlgmsg_id,
-                message_id=message_id,
-            )
-            return {"send_tlgmsg_id": send_tlgmsg_id, "sent": 1, "failed": 0, "status": "sent"}
         except TelegramRateLimited as exc:
             # The one failure that is not a fault. Retrying it the way every other error is
             # retried - immediately, three times - spent all three attempts inside the same
@@ -241,12 +328,20 @@ def send_one_message(
             last_error = str(exc)
             rate_limited = True
             retry_after = float(exc.retry_after)
+            parts_delivered = max(parts_delivered, int(getattr(exc, "parts_delivered", 0) or 0))
             if not wait_on_rate_limit:
                 break
             time.sleep(min(exc.retry_after, float(MAX_RATE_LIMIT_WAIT_SECONDS)))
         except Exception as exc:  # noqa: BLE001 - retry path.
             last_error = str(exc)
             rate_limited = False
+        else:
+            # Telegram has the message. Recording that is outside the retry on purpose: a store
+            # write that failed inside it (SQLite `database is locked` under the send threads) sent
+            # the message again on the next attempt - the chat got it twice for a local hiccup.
+            _record_sent(store, send_tlgmsg_id=send_tlgmsg_id,
+                         message_id=extract_sent_message_id(result), chat_id=row["tlgchat_id"])
+            return {"send_tlgmsg_id": send_tlgmsg_id, "sent": 1, "failed": 0, "status": "sent"}
 
     # Whatever happens next is logged. The store already held the failure and nothing read it
     # back: on 2026-09-09 a report lost parts to a 429 and it appeared in no log file at all, the
@@ -258,8 +353,11 @@ def send_one_message(
         # Telegram did not refuse this message, it asked for a pause - so the row goes back to
         # pending rather than to a terminal -1. Marking it failed is what silently dropped parts
         # of a report whose only problem was arriving too fast.
+        resume: dict[str, Any] = {"parts_delivered": parts_delivered} if parts_delivered else {}
+        if document_delivered:
+            resume.update(document_delivered=True, document_message_id=document_message_id)
         store.reset_telegram_send_message_pending(
-            send_tlgmsg_id=send_tlgmsg_id, fail_text=last_error)
+            send_tlgmsg_id=send_tlgmsg_id, fail_text=last_error, extra=resume or None)
         if wait_on_rate_limit:
             # Without the wait, the send pass logs the chat's pause once instead - one line per
             # pause, not one per row that met it.
@@ -269,6 +367,10 @@ def send_one_message(
         return {"send_tlgmsg_id": send_tlgmsg_id, "sent": 0, "failed": 0, "status": "rate_limited",
                 "retry_after": retry_after}
 
+    if document_delivered:
+        # The file is in the chat; what failed is the text after it. The row is failed either way -
+        # its record should not read as a file nobody received.
+        last_error = f"the document was delivered; the text that follows it was not: {last_error}"
     store.mark_telegram_send_message_failed(
         send_tlgmsg_id=send_tlgmsg_id,
         fail_text=last_error,
@@ -277,6 +379,34 @@ def send_one_message(
         f"telegram.send_queue delivery FAILED after {attempts} attempt(s): "
         f"send_tlgmsg_id={send_tlgmsg_id} chat={row['tlgchat_id']} error={last_error}"))
     return {"send_tlgmsg_id": send_tlgmsg_id, "sent": 0, "failed": 1, "status": "failed"}
+
+
+#: Attempts at recording a delivered message, and the pause between them. Short: the store is
+#: local, and what fails here is a lock another writer holds for a moment.
+RECORD_SENT_ATTEMPTS = 3
+RECORD_SENT_PAUSE_SECONDS = 0.5
+
+
+def _record_sent(store: Any, *, send_tlgmsg_id: int, message_id: int | None, chat_id: Any) -> None:
+    """Mark a delivered row sent, retrying the store write - never the send.
+
+    If the store still refuses, the row is left in flight (``send_status = 2``) and the failure is
+    logged at error level. The stale re-queue in :func:`send_pending_messages` will bring it back
+    after ``stale_in_flight_seconds()`` - one possible duplicate, much later, instead of one at once
+    on every store hiccup.
+    """
+    for attempt in range(1, RECORD_SENT_ATTEMPTS + 1):
+        try:
+            store.mark_telegram_send_message_sent(send_tlgmsg_id=send_tlgmsg_id, message_id=message_id)
+            return
+        except Exception as exc:  # noqa: BLE001 - reported below once the attempts are spent.
+            if attempt == RECORD_SENT_ATTEMPTS:
+                log_event(logging.getLogger("telegram"), level="error", message=(
+                    f"telegram.send_queue delivered but NOT recorded: send_tlgmsg_id={send_tlgmsg_id} "
+                    f"chat={chat_id} message_id={message_id} error={exc}. Not re-sent now; the row stays "
+                    "in flight and is re-queued if still unrecorded after the stale window."))
+                return
+            time.sleep(RECORD_SENT_PAUSE_SECONDS)
 
 
 # `row_value` is `db_ops.lib.rows.row_value` since 2026-08-16. It was the third near-copy of

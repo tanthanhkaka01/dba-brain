@@ -118,7 +118,7 @@ def column_comment(table_name: str, column_name: str) -> str:
         ("telegram_send_messages", "message_text"): "Outgoing message text.",
         ("telegram_send_messages", "entities"): "Optional Telegram entities JSON/text.",
         ("telegram_send_messages", "send_status"): "-1=failed, 0=pending, 1=sent, 2=processing.",
-        ("telegram_send_messages", "send_date"): "Date/time when send finished.",
+        ("telegram_send_messages", "send_date"): "Date/time when send finished (while send_status=2: when the send started).",
         ("telegram_send_messages", "message_id"): "Telegram message_id returned by sendMessage after successful send.",
         ("telegram_send_messages", "reply_message_id"): "Optional Telegram message_id to reply to.",
         ("telegram_send_messages", "source_type"): "Optional origin, for example command_processor.",

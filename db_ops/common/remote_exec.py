@@ -189,6 +189,11 @@ class RemoteResult:
     stdout: str = ""
     stderr: str = ""
     duration_seconds: float = 0.0
+    #: Over WinRM, which of its two backends ran the command: ``pypsrp``, or ``powershell`` - a
+    #: local PowerShell driving ``Invoke-Command`` when ``pypsrp`` is not installed. The second is
+    #: not the first's equal (a WORKGROUP host refuses it) and only a failure ever said which had
+    #: run; a fallback in *how* is reported always (owner decision G4). Empty for SSH and local.
+    backend: str = ""
 
     @property
     def ok(self) -> bool:
@@ -212,7 +217,7 @@ class RemoteResult:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        item = {
             "method": self.method,
             "host": self.host,
             "command": self.command,
@@ -221,6 +226,9 @@ class RemoteResult:
             "stderr": self.stderr,
             "duration_ms": int(round(self.duration_seconds * 1000)),
         }
+        if self.backend:
+            item["backend"] = self.backend
+        return item
 
     def to_completed_process(self) -> subprocess.CompletedProcess:
         """Adapt to ``subprocess.CompletedProcess`` for callers written against it."""
@@ -831,7 +839,8 @@ class SshSession(RemoteSession):
         client = self._connect()
         started = time.monotonic()
         if on_output is not None:
-            result = self._run_streaming(client, text, timeout=timeout, on_output=on_output, started=started)
+            result = self._run_streaming(client, text, timeout=timeout, on_output=on_output, started=started,
+                                         stdin=stdin)
             return result.check() if check else result
         try:
             stdin_ch, stdout_ch, stderr_ch = client.exec_command(text, timeout=timeout, get_pty=False)
@@ -867,7 +876,7 @@ class SshSession(RemoteSession):
         return result.check() if check else result
 
     def _run_streaming(self, client: Any, text: str, *, timeout: int | None, on_output: Any,
-                       started: float) -> RemoteResult:
+                       started: float, stdin: str | bytes | None = None) -> RemoteResult:
         """``run`` with each stdout line handed to ``on_output`` as it arrives.
 
         A channel of its own, polled, because a whole-output read gives nothing until the command
@@ -890,6 +899,11 @@ class SshSession(RemoteSession):
         try:
             channel = client.get_transport().open_session(timeout=self.access.timeout_seconds or None)
             channel.exec_command(text)
+            if stdin is not None:
+                # A secret the command reads first (sqlcmd's password - F11.2) goes here, never into
+                # `text`, which is the remote shell's argv. It used to be dropped on this path.
+                channel.sendall(stdin if isinstance(stdin, bytes) else str(stdin).encode("utf-8"))
+                channel.shutdown_write()
             timed_out = False
             while not channel.exit_status_ready():
                 if channel.recv_ready():
@@ -1050,6 +1064,11 @@ class SshSession(RemoteSession):
         self.sftp().get(_posix(remote_path), str(local_path))
 
 
+#: The two WinRM backends, as an answer names them (``backend``). Which one runs is decided by the
+#: install - ``pypsrp`` when the ``[winrm]`` extra is there - so the way to pin it is to install it.
+WINRM_BACKEND_PYPSRP = "pypsrp"
+WINRM_BACKEND_POWERSHELL = "powershell"
+
 #: What a Windows host says when `Invoke-Command` cannot authenticate at all. The local-PowerShell
 #: fallback hands these back verbatim as a CLIXML blob, which reads as a problem with the host.
 _WINRM_AUTH_MARKERS = ("0x8009030e", "specified logon session does not exist",
@@ -1130,24 +1149,29 @@ class WinrmSession(RemoteSession):
     ) -> RemoteResult:
         # WinRM is PowerShell remoting; a bash script cannot run over it.
         text = self._script_text(script, shell=SHELL_POWERSHELL, env=env)
-        # Both backends need a real number here (pypsrp's connection_timeout, subprocess's
-        # timeout), so an unbounded command falls back to the connect timeout — WinRM has no
-        # way to express "wait forever" that is safe to leave on by default.
-        timeout = self._timeout(timeout_seconds) or self.access.timeout_seconds
+        # Unbounded when the caller set no deadline, as over SSH and locally. This fell back to the
+        # connect timeout, so every WinRM caller that passed none - a patch, a host operation - was
+        # cut at 30 s, and `sqlcmd_run` carried its own "very large number" to get round it (review
+        # 0.25.0, B5.3). The connect timeout still bounds each HTTP round trip (`_run_via_pypsrp`).
+        timeout = self._timeout(timeout_seconds)
         try:
             from pypsrp.client import Client  # type: ignore[import-not-found]
         except ImportError:
             result = self._run_via_local_powershell(text, timeout)
             result = _name_the_missing_backend(result, host=self.access.host)
+            result = replace(result, backend=WINRM_BACKEND_POWERSHELL)
         else:
-            result = self._run_via_pypsrp(Client, text, timeout)
+            result = replace(self._run_via_pypsrp(Client, text, timeout), backend=WINRM_BACKEND_PYPSRP)
         return result.check() if check else result
 
     # ------------------------------------------------------------------ #
-    def _run_via_pypsrp(self, client_cls, script_text: str, timeout: int) -> RemoteResult:
+    def _run_via_pypsrp(self, client_cls, script_text: str, timeout: int | None) -> RemoteResult:
         access = self.access
         # Basic auth over plain HTTP cannot negotiate message encryption; anything else can.
         encryption = "never" if (access.winrm_auth.lower() == "basic" and not access.ssl) else "auto"
+        # One HTTP round trip: the connect timeout, and never longer than the command may run.
+        connect = int(access.timeout_seconds or DEFAULT_SESSION_TIMEOUT_SECONDS)
+        round_trip = min(connect, timeout) if timeout else connect
         started = time.monotonic()
         outcome: dict[str, Any] = {}
 
@@ -1161,7 +1185,7 @@ class WinrmSession(RemoteSession):
                     port=access.port,
                     auth=access.winrm_auth,
                     encryption=encryption,
-                    connection_timeout=timeout,
+                    connection_timeout=round_trip,
                     cert_validation=access.cert_validation,
                 )
                 outcome["result"] = client.execute_ps(script_text)
@@ -1202,7 +1226,7 @@ class WinrmSession(RemoteSession):
         return self._result("<powershell script>", int(exit_code or 0),
                             as_text(stdout), _ps_streams_text(stderr), started)
 
-    def _run_via_local_powershell(self, script_text: str, timeout: int) -> RemoteResult:
+    def _run_via_local_powershell(self, script_text: str, timeout: int | None) -> RemoteResult:
         """Fallback: drive ``Invoke-Command`` from a PowerShell on this host.
 
         The credential and the script both travel through environment variables rather than

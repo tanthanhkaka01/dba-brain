@@ -32,7 +32,7 @@ import re
 import secrets as _secrets
 import string
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from db_ops.common import db_connect, sql_run
 
@@ -168,53 +168,12 @@ def select_refs(
     return sorted(dict.fromkeys(chosen))
 
 
-#: ``<CATEGORY>_<a>_<b>_<c>_<d>[_<port>]_<PRINCIPAL>`` — the standard key scheme, which carries the
-#: target's IP and, where one instance is not on the default port, the port too
-#: (``ORACLE_203_0_113_121_1522_SYS``). Only consulted when the caller opts in via
-#: ``allow_name_host``. Missing the optional port is how a check ends up knocking on 1521 for a
-#: listener published on 1522 and calling the secret unusable.
-_NAME_WITH_IP = re.compile(
-    r"^([A-Z0-9]+)_(\d{1,3})_(\d{1,3})_(\d{1,3})_(\d{1,3})(?:_(\d{2,5}))?_(.+)$"
-)
-_NAME_ENGINE = {"MSSQL": "sqlserver", "SQLSERVER": "sqlserver", "POSTGRE": "postgresql",
-                "PG": "postgresql", "ORACLE": "oracle", "MYSQL": "mysql"}
-
-
-def target_from_ref_name(ref: str) -> dict[str, Any] | None:
-    """Derive host, engine and login from a standard key name, or None if it does not match.
-
-    This is a label, not configuration, so it is never used unless the caller passes
-    ``allow_name_host``. It exists because a perfectly good credential can have no
-    ``db_instances`` entry — it was never wired into automation — and refusing to rotate those
-    would leave the least-monitored logins the least rotated, which is backwards.
-    """
-    match = _NAME_WITH_IP.match(str(ref or ""))
-    if not match:
-        return None
-    engine = _NAME_ENGINE.get(match.group(1))
-    if not engine:
-        return None
-    return {
-        "server_id": "",
-        "db_type": engine,
-        "ip": ".".join(match.groups()[1:5]),
-        "port": int(match.group(6)) if match.group(6) else None,
-        "username": match.group(7).lower(),
-        "database_name": db_connect.default_database(engine),
-        "service_name": "",
-        "sqlserver_driver": "",
-        "credential_name": "",
-        "from_ref_name": True,
-    }
-
-
 def resolve_ref_target(
     ref: str,
     *,
     data_dir: str | Path | None = None,
     key: str | None = None,
     host_overrides: dict[str, str] | None = None,
-    allow_name_host: bool = False,
 ) -> dict[str, Any]:
     """Find the database instance and login a password_ref belongs to.
 
@@ -244,19 +203,8 @@ def resolve_ref_target(
         if str(instance.get("default_credential_name") or "") in credential_names
     ]
     if not matches:
-        fallback = target_from_ref_name(ref) if allow_name_host else None
-        if fallback is not None:
-            secrets = data_sources.load_secret_text(data_dir, key=key)
-            fallback["password"] = secrets.get(ref, "")
-            fallback["password_ref"] = ref
-            fallback["instance_count"] = 0
-            # Prefer the username actually declared for this ref over the one in the name.
-            for groups in users_credentials.values():
-                for group in groups:
-                    for cred in group.get("credentials", []):
-                        if str(cred.get("password_ref") or "") == ref and cred.get("username"):
-                            fallback["username"] = str(cred["username"])
-            return fallback
+        # No guess from the ref's name (owner decision G3.4): the name is a label, and a password
+        # changed on the host a label points at is a password changed on whoever holds that IP now.
         reason = (
             "is not referenced by any credential in users.json"
             if not credential_names
@@ -264,8 +212,9 @@ def resolve_ref_target(
         )
         raise PasswordRotationError(
             f"password_ref {ref!r} {reason}, so there is no server to change it on. "
-            "Pass allow_name_host=true to take the host from the standard key name, or "
-            "host_overrides to name it explicitly."
+            "Add the instance to db_instances.json with this credential as its "
+            "default_credential_name - the rotation changes a password only where the inventory "
+            "says it lives."
         )
 
     override = (host_overrides or {}).get(ref, "")
@@ -302,9 +251,13 @@ def rotate_ref(
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
     dry_run: bool = False,
     host_overrides: dict[str, str] | None = None,
-    allow_name_host: bool = False,
+    persist: Callable[[str, str], None] | None = None,
 ) -> dict[str, Any]:
     """Rotate one password_ref. Returns a result dict that never contains the password.
+
+    ``persist(ref, value)`` stores the new value as soon as it is verified, before the next ref is
+    touched. If storing fails the change is rolled back, so the database and the store never
+    disagree about a password (review 0.25.0, F11.1).
 
     ``new_password`` lets an operator supply a value that has to match an external policy; omit it
     and one is generated. On success the value is under ``_new_password`` for the caller to persist —
@@ -313,8 +266,7 @@ def rotate_ref(
     result: dict[str, Any] = {"password_ref": ref, "status": "FAILED", "detail": ""}
     try:
         target = resolve_ref_target(ref, data_dir=data_dir, key=key,
-                                    host_overrides=host_overrides,
-                                    allow_name_host=allow_name_host)
+                                    host_overrides=host_overrides)
     except PasswordRotationError as exc:
         result.update(status="SKIPPED", detail=str(exc))
         return result
@@ -377,6 +329,24 @@ def rotate_ref(
                                        timeout_seconds)
         return result
 
+    if persist is not None:
+        try:
+            persist(ref, generated)
+        except Exception as exc:  # noqa: BLE001 - any store failure means: undo the change.
+            rollback = _rollback(verify_target, engine, generated, old_password, timeout_seconds)
+            result.update(status="FAILED", store_failed=True, rollback=rollback,
+                          detail=f"changed and verified, but storing it failed ({str(exc)[:160]}); "
+                                 f"{rollback}")
+            if rollback.startswith("ROLLBACK FAILED"):
+                # The one state with no good answer: the new value is in neither the store nor
+                # the database's old password. It is handed back (never printed) so the caller
+                # can still write it somewhere; the CLI says so loudly.
+                result["_new_password"] = generated
+            return result
+        result.update(status="SUCCESS", stored=True,
+                      detail="changed, re-authenticated on a new connection, and stored")
+        return result
+
     result.update(status="SUCCESS", detail="changed and re-authenticated on a new connection")
     result["_new_password"] = generated
     return result
@@ -402,7 +372,8 @@ def _rollback(target: dict[str, Any], engine: str, current: str, previous: str,
 
 
 def rotate(request: dict[str, Any], *, data_dir: str | Path | None = None,
-           key: str | None = None) -> dict[str, Any]:
+           key: str | None = None,
+           persist: Callable[[str, str], None] | None = None) -> dict[str, Any]:
     """Rotate every password_ref a request selects. Returns results with no secret values.
 
     Persisting is the caller's job (:func:`persist_rotated`) so a caller that only wants to test
@@ -410,6 +381,12 @@ def rotate(request: dict[str, Any], *, data_dir: str | Path | None = None,
     """
     if not isinstance(request, dict):
         raise PasswordRotationError("request must be a JSON object.")
+    if request.get("allow_name_host"):
+        # Refused, not ignored: a caller that asked for it believes some ref will be rotated on the
+        # host its name spells, and silently doing nothing for that ref would read as done.
+        raise PasswordRotationError(
+            "allow_name_host was removed (owner decision G3.4): a password is changed only on the "
+            "instance db_instances.json names for it. Add the instance, then rotate.")
 
     refs = request.get("refs") or request.get("password_refs") or []
     if isinstance(refs, str):
@@ -420,8 +397,16 @@ def rotate(request: dict[str, Any], *, data_dir: str | Path | None = None,
     if not isinstance(explicit, dict):
         raise PasswordRotationError("'passwords' must be a JSON object of {password_ref: value}.")
 
-    results = [
-        rotate_ref(
+    results: list[dict[str, Any]] = []
+    stopped = ""
+    for ref in selected:
+        if stopped:
+            # Storing an earlier password failed: the store is not to be trusted with another
+            # change until somebody has looked (review 0.25.0, F11.1).
+            results.append({"password_ref": ref, "status": "SKIPPED",
+                            "detail": f"not started - storing {stopped}'s new password failed"})
+            continue
+        item = rotate_ref(
             ref,
             data_dir=data_dir,
             key=key,
@@ -430,15 +415,29 @@ def rotate(request: dict[str, Any], *, data_dir: str | Path | None = None,
             timeout_seconds=int(request.get("timeout_seconds") or DEFAULT_TIMEOUT_SECONDS),
             dry_run=bool(request.get("dry_run")),
             host_overrides=request.get("host_overrides") or {},
-            allow_name_host=bool(request.get("allow_name_host")),
+            persist=persist,
         )
-        for ref in selected
-    ]
+        results.append(item)
+        if item.get("store_failed"):
+            stopped = ref
     counts: dict[str, int] = {}
     for item in results:
         counts[item["status"]] = counts.get(item["status"], 0) + 1
     return {"ok": not counts.get("FAILED"), "selected": len(selected),
             "summary": counts, "results": results}
+
+
+def store_writer(*, data_dir: str | Path | None = None, key: str | None = None,
+                 plaintext_store: str | Path | None = None) -> Callable[[str, str], None]:
+    """``persist(ref, value)`` for :func:`rotate`: one ref into the secret store(s), at once."""
+    from db_ops.lib import secret_text as _secret_text
+
+    resolved_dir = Path(data_sources._resolve_data_dir(data_dir))  # noqa: SLF001 - same package
+
+    def persist(ref: str, value: str) -> None:
+        _secret_text.set_secret_everywhere(resolved_dir, ref, value, key=key,
+                                           plaintext_store=plaintext_store, overwrite=True)
+    return persist
 
 
 def persist_rotated(outcome: dict[str, Any], *, data_dir: str | Path | None = None,

@@ -418,7 +418,7 @@ def test_sql_to_xlsx_command_queues_document_and_summary(tmp_path, monkeypatch):
     commands_path = tmp_path / "telegram_support_commands.json"
     write_sql_to_xlsx_command(commands_path)
     write_json(tmp_path / "telegram_users.json", "telegram_users",
-               [{"user_id": "100", "user_type": 2, "status": "active"}])
+               [{"user_id": "100", "user_type": 50, "status": "active"}])
     write_json(tmp_path / "telegram_groups.json", "telegram_groups", [])
 
     def fake_run_sql_to_xlsx(*, target, sql_text, **_kwargs):
@@ -467,7 +467,7 @@ def test_sql_to_xlsx_error_is_reported_to_user(tmp_path, monkeypatch):
     commands_path = tmp_path / "telegram_support_commands.json"
     write_sql_to_xlsx_command(commands_path)
     write_json(tmp_path / "telegram_users.json", "telegram_users",
-               [{"user_id": "100", "user_type": 2, "status": "active"}])
+               [{"user_id": "100", "user_type": 50, "status": "active"}])
     write_json(tmp_path / "telegram_groups.json", "telegram_groups", [])
 
     def boom(*, target, sql_text, **_kwargs):

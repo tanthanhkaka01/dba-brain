@@ -110,8 +110,10 @@ class Chat:
 
     def say(self, text):
         self._post(text)
+        self.deleted = getattr(self, "deleted", [])
         return process_pending_conversation_messages(
-            sqlite_path=self.sqlite_path, commands_path=self.commands_path)
+            sqlite_path=self.sqlite_path, commands_path=self.commands_path,
+            delete_message=lambda chat_id, message_id: self.deleted.append((chat_id, message_id)))
 
     def last_message(self):
         with sqlite3.connect(self.sqlite_path) as connection:
@@ -196,6 +198,21 @@ def test_a_secret_answer_is_never_written_to_the_trail(chat) -> None:
     stored = [row for row in chat.trail() if row[1] == "password_text"][0]
     assert stored[3] == "*** (15 chars)"
     assert "hunter2" not in json.dumps(chat.trail())
+
+
+def test_a_secret_answer_is_redacted_in_the_store_and_deleted_from_the_chat(chat) -> None:
+    """It was masked in the trail only: telegram_messages and telegram_command_messages kept it in
+    text and raw_json, and it stayed in the chat for every member (review 0.25.0, F8.4)."""
+    chat.say("mssql_lab_01")
+    chat.say("Password")
+    chat.say("hunter2-hunter2")
+
+    with sqlite3.connect(chat.sqlite_path) as connection:
+        dumped = json.dumps([list(row) for row in connection.execute(
+            "SELECT text, raw_json FROM telegram_messages")])
+    assert "hunter2" not in dumped
+    assert (USER, chat.next_id) in chat.deleted, "the answer is deleted from the chat"
+    assert len(chat.deleted) == 1, "only the secret answer, never the other answers"
 
 
 # --------------------------------------------------------------------------- #

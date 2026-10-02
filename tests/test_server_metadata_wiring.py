@@ -68,7 +68,8 @@ def test_an_entry_with_no_block_still_loads_as_inert(tmp_path):
         {"backup_restore": {"restores": [{
             "cleanup_retention": 691200, "restore_id": "CLOUD_PG_DRILL", "db_type": "postgresql",
             "server_id": "CLOUD-203-0-113-188-PG-5433", "backup_dir": "/b",
-            "target_container": "pg_ha-standby-1",
+            "target_server_id": "CLOUD-203-0-113-188-PG-5433", "target_container": "pg_ha-standby-1",
+            "target_visible_dir": "/b",
             "script": "assets/restore/postgresql/pg_restore_database.sh"
         }]}}
         """,
@@ -357,8 +358,9 @@ def _target(server_id, ip, instance_name="", db_type="sqlserver"):
 
 
 def _with_inventory(monkeypatch, targets):
-    import db_ops.lib.data_sources as mtc
-    monkeypatch.setattr(mtc, "load_config_metric_targets", lambda **k: targets)
+    # The resolver reads the whole inventory since 0.26.0 (§1.78), not the metric targets: an
+    # inactive lab with metrics off is a perfectly good replay target.
+    monkeypatch.setattr(sm, "_inventory_instances", lambda data_dir=None: targets)
 
 
 def test_an_engine_entry_resolves_its_instance_by_ip(monkeypatch):

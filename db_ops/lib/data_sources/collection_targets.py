@@ -149,6 +149,7 @@ def load_metric_targets(
                     "platform": platform,
                     "sid": (inventory_match or {}).get("sid"),
                     "sqlserver_driver": sqlserver_driver,
+                    "sqlserver_tls_verify": item.get("sqlserver_tls_verify") is True,
                     "major_version": major_version,
                     f"{item_db_type}_major_version": major_version,
                     "database": item.get("database") or service_name or db_name,

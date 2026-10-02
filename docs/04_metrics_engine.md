@@ -146,6 +146,44 @@ Both windows are printed in the message (`alert_window` / `alert_from` next to `
 `checked_from`), because a six-hour window shown alone next to a two-hour-old `last_execution_time`
 reads as an alert arriving late rather than as a baseline.
 
+### A small query on a worse plan, run often (2026-10-02)
+
+Every finding above is about **one execution being huge** — the lowest thresholds are 300 M reads,
+1,800 s of CPU, 1,800 s elapsed. On 2026-10-02 four statements of a production calculation engine
+were recompiled into a worse plan: ~25 ms became ~1,300 ms, and each ran ~1,300 times in half an
+hour. Every caller took ten times longer and the metric reported nothing, because 17,000 reads per
+execution is nowhere near any threshold even at a read ratio in the thousands.
+
+`QUERY_PLAN_REGRESSED_FREQUENT` is the finding for that. It needs all three:
+
+| Leg | WARNING | CRITICAL |
+| --- | --- | --- |
+| executions of this plan in the recent rows | ≥ 20 | ≥ 20 |
+| CPU this plan burned in the recent rows (`recent_total_cpu_sec`) | ≥ 300 s | ≥ 1,200 s |
+| its recent average CPU ÷ the cheapest **other** plan of the same query (`cpu_ratio`) | ≥ 5 | ≥ 10 |
+
+Its baseline is not the six-hour scan. A flip that survives the night leaves no good plan inside six
+hours, the bad plan becomes its own best and the finding goes quiet while the query is still slow.
+So `@p_BaselineFromLocal` reads **seven days**, but only for candidate queries (those already past
+the CPU leg), which is usually none and never more than a handful. The baseline plan must itself
+have ≥ 20 executions. It is the cheapest plan, so a query with a legitimately cheap plan for some
+parameters and an expensive one for others can show up here — the message names both plan ids
+(`plan_id`, `best_cpu_plan_id`) so that is checkable.
+
+Four defects in the same file were fixed with it:
+
+- **Findings are judged on the recent rows, not the six-hour maxima.** The alert filter only asked
+  whether the plan's *newest* execution was recent. A plan with one heavy execution at 09:00 that
+  kept running normally passed that test at every collection until 15:00. `recent_agg` now holds
+  what the plan did in the rows touched inside the alert window; `plan_agg` (six hours) stays the
+  baseline. A runtime-stats row spans one Query Store interval, so "recent" reaches back to the
+  start of that interval, not further.
+- **Averages are weighted by executions.** `AVG(avg_cpu_sec)` over interval rows gave an hour with
+  one execution the same say as an hour with ten thousand.
+- **The windows follow the server's own UTC offset**, not a named time zone written into the SQL.
+- **The query text is no longer read.** It was copied into `#qs_raw` once per runtime-stats row and
+  never reached the message; the scan now joins two catalog views instead of four.
+
 ## One PostgreSQL database is not the cluster (`variants[].per_database`)
 
 PostgreSQL cannot read another database's catalog from one connection. `executor._metric_database`
@@ -650,6 +688,10 @@ three concerns, kept separate so nothing is double-collected:
    `cmd_access.method: ssh`) so CPU/RAM/disk/network/load are collected once for the whole host.
 2. **Per-container stats** — each DB-in-Docker target sets `container_name` and gets the
    `docker` metric (`DOCKER_CONTAINER_STATS`); a target with no `container_name` skips docker metrics.
+   Its `restart_count` row warns while a restart is news: Docker's count only grows, so it warned on
+   every pass for months after one restart. Since 0.26.0 it is WARNING while the current run started
+   less than `DOCKER_RESTART_WARN_MINUTES` ago (default 60; set it in the target's `collector_env`),
+   and OK after - the count still in the message (review 0.25.0, F3.4).
 3. **SQL as usual** — the DB target still collects its `sql` metrics over its published port.
 
 So a DB-in-Docker target collects `sql` + `docker`; the shared host OS lives on the VM target;
@@ -690,7 +732,11 @@ added `client_ip=` to every collector joining `sys.dm_exec_connections` and left
 of 214 sleeping-transaction rows on 2026-09-30 named no address; 0.26.0 added it to
 `legacy_2008r2/024`, and `tests/test_every_sqlserver_session_collector_names_the_client_address.py`
 holds both folders to it. (`legacy_2008r2/009` counts per database and names no session, so it has
-no address to give.)
+no address to give.) The first rule keyed on the join and so missed the collectors that had none:
+`004` (long-running requests) and `026` (long-waiting or rollback) held the join only in a
+commented-out draft, and a `QUERY_LONG_RUNNING` alert of 2026-10-01 named `host=hrms-backend` and
+no address. Both join the request's own connection now (`c.connection_id = r.connection_id`), and
+the guard holds every collector whose live SQL writes `host=` to write `client_ip=` too.
 Verify with `run-sql` and `"autocommit": true` against a real instance of that version — see
 [`13_common.md`](./13_common.md).
 
@@ -1339,7 +1385,10 @@ High-cardinality queries are bounded and normal collection does not expose query
 metric per target with `metrics.metric_overrides.<CODE>.enabled=false`;
 `report_policy.disabled_metric_codes` stays canonical for broad report/OS exclusions. Numeric
 defaults can be replaced per target with `warning_threshold`, `critical_threshold`, and
-`higher_is_worse` under the same override. The PostgreSQL statement timeout is set from the metric
+`higher_is_worse` under the same override. They grade the number of a row the metric left at OK, LOGGING or
+WARNING, and **never overrule a CRITICAL, ERROR or NO_DATA the metric decided itself** (0.26.0): a
+database offline that reports `0`, or a failed check, became OK once any threshold existed for the
+metric (review 0.25.0, F3.2). To lower such a verdict, say so with `severity_map`, which runs after. The PostgreSQL statement timeout is set from the metric
 definition's timeout before the SQL runs.
 
 ### `POSTGRES_BACKUP_LAST_RESULT` — a **docker** collector, not SQL

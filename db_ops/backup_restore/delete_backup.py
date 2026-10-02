@@ -83,6 +83,31 @@ def _chain_group(path: Any) -> str:
     return parts[-1].lower() if parts else ""
 
 
+#: Folder names and name markers for the two kinds that hang off a full. A SQL Server
+#: differential is a ``.bak`` like the full it depends on (`<DB>/DIFF/<DB>_DIFF_<stamp>Z.bak`), so
+#: the extension alone cannot tell them apart.
+_DIFF_FOLDERS = frozenset({"diff", "differential", "incr", "incremental"})
+_LOG_FOLDERS = frozenset({"log", "archivelog", "arch", "redo"})
+_DIFF_MARKERS = ("_diff_", "_incr_")
+_LOG_MARKERS = ("_log_",)
+
+
+def backup_kind(path: Any) -> str:
+    """``"full"``, ``"diff"`` or ``"log"`` for a staged file, from its folder, its name, its extension.
+
+    Only a full anchors a chain. Classified by extension alone, the newest DIFF ``.bak`` became the
+    anchor and the FULL it restores onto was deleted as obsolete (review 0.25.0, B4.1).
+    """
+    parts = [part for part in re.split(r"[\\/]+", str(path).strip()) if part]
+    name = parts[-1].lower() if parts else ""
+    folder = parts[-2].lower() if len(parts) > 1 else ""
+    if name.endswith(".trn") or folder in _LOG_FOLDERS or any(m in name for m in _LOG_MARKERS):
+        return "log"
+    if folder in _DIFF_FOLDERS or any(m in name for m in _DIFF_MARKERS):
+        return "diff"
+    return "full"
+
+
 def obsolete_only(candidates: list[tuple[Any, float, int]]) -> set[str]:
     """Of files already past the age gate, the ones that are also **obsolete**.
 
@@ -102,12 +127,12 @@ def obsolete_only(candidates: list[tuple[Any, float, int]]) -> set[str]:
     ever obsolete and the cleanup silently stops running — the folder fills up while the command
     reports success every night.
 
-    Classification is by extension: ``.trn`` is a log, ``.bak`` a full. That is all a staging
-    directory carries, it is what the restore side has always keyed on here, and reading real
-    headers would need a login this cleanup does not have.
+    Classification is by folder, name and extension (:func:`backup_kind`): a DIFF is a ``.bak``
+    too, and only a FULL anchors a chain. Reading real headers would need a login this cleanup
+    does not have.
     """
     fulls = [(stamp, str(path)) for path, stamp, _size in candidates
-             if not str(path).lower().endswith(".trn")]
+             if backup_kind(path) == "full"]
     if not fulls:
         # Only logs staged, with no full among them to anchor on. The age gate alone decides:
         # holding them forever would defeat the cleanup, and there is no chain here to protect.
@@ -138,9 +163,9 @@ def obsolete_only(candidates: list[tuple[Any, float, int]]) -> set[str]:
     for path, stamp, _size in candidates:
         text = str(path)
         anchor = anchors.get(_chain_group(text), fallback)
-        if text.lower().endswith(".trn"):
-            # A log at the same instant as the newest full may belong to the chain that starts
-            # there, so only a strictly older one is spared.
+        if backup_kind(text) != "full":
+            # A log or diff at the same instant as the newest full may belong to the chain that
+            # starts there, so only a strictly older one is obsolete.
             if stamp < anchor[0]:
                 obsolete.add(text)
         elif (stamp, text) < anchor:
@@ -169,6 +194,26 @@ def _all_target_backup_files(root: Path) -> list[tuple[Path, float, int]]:
             found.append((path, _backup_timestamp(path, fallback_mtime=info.st_mtime),
                           info.st_size))
     return found
+
+
+def _staged_by_this_entry(config: BackupRestoreConfig, path: object) -> bool:
+    """Is ``path`` under ``<import root>/<a mapped database>/`` - where this entry's copy puts files?
+
+    The cleanup recursed every ``*.bak`` / ``*.trn`` under the import root, so a root set one level
+    too high - the target host's own backup or data directory - had the host's own backups deleted
+    by age (review 0.25.0, B4.2). The copy writes under the mapped databases' folders only
+    (`copy_backup.mapped_database_folders`), so that is all the cleanup may touch. An entry that maps
+    no database is limited by the depth rule in `_validate_safe_target_delete_root` instead.
+    """
+    names = {mapping.source_database.strip().lower() for mapping in config.databases
+             if mapping.source_database.strip()}
+    if not names:
+        return True
+    root = str(config.vm_import_unc).replace("\\", "/").rstrip("/").lower()
+    text = str(path).replace("\\", "/").lower()
+    if not text.startswith(root + "/"):
+        return False
+    return text[len(root) + 1:].split("/", 1)[0] in names
 
 
 def _split_by_obsolete(paths: list[Path], *, root: Path) -> tuple[list[Path], list[Path]]:
@@ -237,7 +282,8 @@ def delete_old_target_backup_files_on_share(
         listed.append((PureWindowsPath(root + "\\" + str(item["path"]).replace("/", "\\")),
                        None if modified is None else float(modified), int(item.get("size_bytes") or 0)))
     aged = sorted(((modified, path) for path, modified, _size in listed
-                   if modified is not None and (cutoff is None or modified <= cutoff)),
+                   if modified is not None and (cutoff is None or modified <= cutoff)
+                   and _staged_by_this_entry(config, path)),
                   key=lambda item: (item[0], str(item[1]).lower()))
     aged_paths = [path for _, path in aged]
     # The chain over the WHOLE share, not the aged part - see `_all_target_backup_files`.
@@ -308,6 +354,8 @@ def delete_old_target_backup_files_via_ssh(
             # Everything, not just the aged ones: the newest full is exactly what the age gate
             # filters out, so a chain computed on the survivors alone has no anchor to speak of.
             scanned.append((fpath, backup_ts, size))
+            if not _staged_by_this_entry(config, fpath):
+                continue
             if cutoff is None or backup_ts <= cutoff:
                 files_to_delete.append((fpath, size, backup_ts))
             else:
@@ -427,7 +475,8 @@ def run_delete_backup(
         file_results = delete_old_target_backup_files_on_share(
             restore_config, dry_run=dry_run)
     else:
-        aged_files = list_old_target_backup_files(restore_config)
+        aged_files = [path for path in list_old_target_backup_files(restore_config)
+                      if _staged_by_this_entry(restore_config, path)]
         selected_files, held_back = _split_by_obsolete(aged_files, root=restore_config.vm_import_unc)
         _log_progress(logger, f"{_rid}delete-backup source_id={restore_config.source_id} cleanup_root={restore_config.vm_import_unc} cleanup_retention={restore_config.cleanup_retention} aged_files={len(aged_files)} selected_files={len(selected_files)} still_needed={len(held_back)}")
         file_results_list: list[DeleteBackupFileResult] = [
@@ -506,6 +555,14 @@ def _validate_safe_target_delete_root(config: BackupRestoreConfig) -> None:
     parts = PurePosixPath(target).parts if config.is_linux else config.vm_import_unc.parts
     if len(parts) < 2:
         raise ValueError(f"Unsafe delete-backup config: target backup folder is too broad: {config.vm_import_unc}")
+    # An entry that maps no database has no folder to keep the cleanup in (`_staged_by_this_entry`),
+    # so its root must be deep: `/data` passed and the cleanup recursed the whole of it (review
+    # 0.25.0, B4.2). Three directories below `/` - `/opt/db_ops/staging` - and anything deeper.
+    if config.is_linux and not config.databases and len(parts) < 4:
+        raise ValueError(
+            f"Unsafe delete-backup config: target backup folder {config.vm_import_unc} is too broad for an "
+            "entry that maps no database - use a directory at least three levels below / , or map the "
+            "databases the entry restores.")
 
 
 def _normalize_path_for_compare(path: Path, is_linux: bool) -> str:

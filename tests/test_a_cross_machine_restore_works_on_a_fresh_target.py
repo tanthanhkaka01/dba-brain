@@ -135,8 +135,10 @@ def test_a_chmod_that_fails_is_said_and_does_not_stop_the_restore():
 def _job(**env):
     return SimpleNamespace(
         restore_id="LAB_TO_LAB", server_id="SRC", target_server_id="TGT-11433", target_container="lab",
-        target_backup_dir="/in", target_visible_dir="", backup_dir="/out", env=dict(env),
-        env_secrets={"MSSQL_PASSWORD": "SA_REF", "BACKUP_ENCRYPTION_PASSWORD": "ENC_REF"})
+        target_backup_dir="/in", target_visible_dir="", backup_dir="/out",
+        env={"MSSQL_USER": "sa", **env},
+        env_secrets={"MSSQL_PASSWORD": "SA_REF", "BACKUP_ENCRYPTION_PASSWORD": "ENC_REF"},
+        overwrite_existing=True)
 
 
 @pytest.fixture
@@ -194,6 +196,7 @@ def test_a_step_run_while_planning_is_recorded_not_repeated(monkeypatch):
     job = SimpleNamespace(restore_id="R", db_type="sqlserver", env_secrets={}, is_remote=False, label="L")
     monkeypatch.setattr(restore_script, "load_script_restores", lambda _p=None: [job])
     monkeypatch.setattr(restore_by_id, "_host_block", lambda j, **_: {"host": "h"})
+    monkeypatch.setattr(restore_by_id, "assert_target_is_not_source", lambda *a, **k: None)
     monkeypatch.setitem(restore_by_id._PLANNERS, "sqlserver", lambda *a, **k: [
         {"op": "restore-key", "request": {}, "done": True},
         {"op": "restore-full", "request": {}}])

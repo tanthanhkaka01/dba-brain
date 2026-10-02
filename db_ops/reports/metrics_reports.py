@@ -355,22 +355,39 @@ def run_scheduled_reports(
 
     for report_config in report_configs:
         report_code = str(report_config["report_code"])
-        result = _run_one_scheduled_report(
-            store=store,
-            sqlite_path=sqlite_path,
-            telegram_groups=telegram_groups,
-            report_config=report_config,
-            summary_limit=summary_limit,
-            backup_days=backup_days,
-            evaluated_at=evaluated_at,
-            scheduler_trigger_time=trigger_time,
-            logger=logger,
-            config=config,
-        )
+        try:
+            result = _run_one_scheduled_report(
+                store=store,
+                sqlite_path=sqlite_path,
+                telegram_groups=telegram_groups,
+                report_config=report_config,
+                summary_limit=summary_limit,
+                backup_days=backup_days,
+                evaluated_at=evaluated_at,
+                scheduler_trigger_time=trigger_time,
+                logger=logger,
+                config=config,
+            )
+        except Exception as exc:  # noqa: BLE001 - one broken report never takes the rest (F7.1).
+            from db_ops.lib import store_outage
+
+            if store_outage.is_transient(exc):
+                raise  # the store is down: every report after this one would fail the same way
+            # Only the inventory report used to be wrapped; any other report that raised ended the
+            # pass, and the reports after it in reports_config.json were not evaluated
+            # (review 0.25.0, F7.1).
+            error = f"{type(exc).__name__}: {exc}"
+            if logger is not None:
+                from db_ops.logging_ops import log_event
+
+                log_event(logger, level="error",
+                          message=f"reports.scheduled.error|report_code={report_code}|error={error}")
+            result = {"report_code": report_code, "created": 0, "queued": 0, "error": error}
         results.append(result)
 
     return {
         "evaluated": len(results),
+        "failed": [item["report_code"] for item in results if item.get("error")],
         "created": sum(int(item.get("created", 0)) for item in results),
         "queued": sum(int(item.get("queued", 0)) for item in results),
         "sent": 0,
@@ -571,6 +588,14 @@ def push_report_alerts(
     report_configs: list[dict[str, Any]] | None = None,
     logger: Any | None = None,
 ) -> dict[str, Any]:
+    """Queue the unpushed reports for Telegram.
+
+    ``dedupe_seconds`` skips a report whose ``source_id`` already went out inside that window - one
+    message or several parts (review 0.25.0, F7.2: the parts were never matched). It applies to the
+    reports with a stable id: the latest-metrics report per level and target, a metric's history,
+    the daily backup health. A level report's id carries the moment it was generated and is never a
+    duplicate, and that is right: it renders only rows no earlier report rendered, and marks them.
+    """
     store = DbOpsStore(sqlite_path)
     target_id = _resolve_report_target_id(store=store, target_ip=target_ip, target_id=target_id)
     reports = store.fetch_reports_for_push(

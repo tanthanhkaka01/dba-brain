@@ -17,6 +17,7 @@ timeout. Three outages were diagnosed by hand before it existed.
 from __future__ import annotations
 
 import base64
+import shlex
 import sys
 from pathlib import Path
 
@@ -60,7 +61,8 @@ def run_worker_status(*, host: str, user: str, password: str | None, port: int =
     client = ssh_connect(host, user, password, port)
     try:
         rc, out, _ = ssh_capture(
-            client, f"docker ps -a --filter name={container} --format '{{{{.Names}}}} | {{{{.Status}}}}'")
+            client, f"docker ps -a --filter {shlex.quote('name=' + container)} "
+                    f"--format '{{{{.Names}}}} | {{{{.Status}}}}'")
         container_line = out.strip()
         print(f"# worker {user}@{host}")
         print(f"container: {container_line or '(not found)'}")
@@ -69,7 +71,7 @@ def run_worker_status(*, host: str, user: str, password: str | None, port: int =
             return 1
 
         rc, ver, _ = ssh_capture(
-            client, f"docker exec {container} python -c 'import db_ops;print(db_ops.__version__)' 2>&1")
+            client, f"docker exec {shlex.quote(container)} python -c 'import db_ops;print(db_ops.__version__)' 2>&1")
         print(f"version:   {ver.strip()}")
 
         flags = ""
@@ -86,7 +88,7 @@ def run_worker_status(*, host: str, user: str, password: str | None, port: int =
         elif key:
             flags += f" --key_base64 {base64.b64encode(key.encode()).decode()}"
         print()
-        rc, out, err = ssh_capture(client, f"docker exec {container} python -m db_ops.jobs.status{flags}")
+        rc, out, err = ssh_capture(client, f"docker exec {shlex.quote(container)} python -m db_ops.jobs.status{flags}")
         if rc != 0 and "No module named" in (err or ""):
             print(_MISSING_STATUS_MODULE, file=sys.stderr)
             return 1

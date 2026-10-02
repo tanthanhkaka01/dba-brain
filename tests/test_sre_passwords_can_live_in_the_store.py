@@ -6,8 +6,9 @@ throwaway lab — it is the lab that gets *kept*. At that point a password typed
 is a stored credential living somewhere no other credential in this toolkit lives, outside the
 encrypted store, outside `check-secret`, and inside a file people copy between machines.
 
-So all three forms are read, in the toolkit's usual precedence: a literal, then `_password_env`,
-then `_password_ref` against the secret store.
+So both forms are read: a literal, else the ref - `_password_ref`, or `_password_env`, its old
+spelling - against the secret store. Never the environment (owner decision G3.5): a ref was also
+looked up there under its own name, so the node's environment answered for whatever a config said.
 
 The resolution point matters as much as the resolution. `sre` serialises whole config sections
 into a base64 payload for PowerShell and passes them to Ansible, and those consumers cannot look a
@@ -21,7 +22,19 @@ from pathlib import Path
 
 import pytest
 
+from db_ops.lib import data_sources, secret_text
 from db_ops.sre.config import load_sre_operational_config, resolve_password_fields
+
+
+@pytest.fixture
+def store(tmp_path, monkeypatch):
+    """A secret store of this test's own, holding the refs the tests name."""
+    data = tmp_path / "data"
+    monkeypatch.setenv("DB_OPS_SECRET_KEY", "a key for this test only")
+    monkeypatch.setattr(data_sources, "DEFAULT_DATA_DIR", data)
+    secret_text.set_secret_text(data, "LAB_SA_PASSWORD", "out-of-the-store")
+    secret_text.set_secret_text(data, "LAB_ROOT_PASSWORD", "resolved-at-use")
+    return data
 
 
 def test_a_literal_still_works_because_a_throwaway_lab_is_a_real_case():
@@ -29,17 +42,17 @@ def test_a_literal_still_works_because_a_throwaway_lab_is_a_real_case():
         "typed-in-place")
 
 
-def test_a_ref_resolves_from_the_environment(monkeypatch):
-    monkeypatch.setenv("LAB_SA_PASSWORD", "out-of-the-store")
-    resolved = resolve_password_fields({"sa_password_ref": "LAB_SA_PASSWORD", "sa_user": "sa"})
+def test_a_ref_resolves_from_the_store_and_never_the_environment(store, monkeypatch):
+    monkeypatch.setenv("LAB_SA_PASSWORD", "in the environment, never read")
+    resolved = resolve_password_fields({"sa_password_ref": "LAB_SA_PASSWORD", "sa_user": "sa"},
+                                       data_dir=store)
     assert resolved["sa_password"] == "out-of-the-store"
     assert resolved["sa_user"] == "sa", "unrelated settings survive untouched"
 
 
-def test_the_ref_key_does_not_survive_into_the_payload(monkeypatch):
+def test_the_ref_key_does_not_survive_into_the_payload(store):
     """What goes to PowerShell is the password, not the name of where it is kept."""
-    monkeypatch.setenv("LAB_SA_PASSWORD", "out-of-the-store")
-    resolved = resolve_password_fields({"sa_password_ref": "LAB_SA_PASSWORD"})
+    resolved = resolve_password_fields({"sa_password_ref": "LAB_SA_PASSWORD"}, data_dir=store)
     assert "sa_password_ref" not in resolved
     assert "sa_password_env" not in resolved
 
@@ -99,8 +112,7 @@ def shipped_sre_config():
     return json.loads(example.read_text(encoding="utf-8"))
 
 
-def test_the_config_loads_and_resolves_through_the_real_loader(tmp_path, monkeypatch):
-    monkeypatch.setenv("LAB_ROOT_PASSWORD", "resolved-at-use")
+def test_the_config_loads_and_resolves_through_the_real_loader(tmp_path, store):
     config = tmp_path / "config.json"
     config.write_text(json.dumps({"sre": {
         "credentials": {"guest_user": "labuser", "guest_password_ref": "LAB_ROOT_PASSWORD"},

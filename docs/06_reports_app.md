@@ -295,6 +295,16 @@ python -m db_ops.reports.cli --config config.json force-hourly-report --target-i
 
 `force-hourly-report` resolves the target from `--target-ip`. When more than one configured target shares that IP, add `--db-type` and/or `--port` to pick exactly one (otherwise it fails with an "ambiguous target" error). The same-IP case is the norm for SRE lab HA clusters whose primary/standbys publish different ports on one worker.
 
+### What the alert dedupe window covers (0.26.0)
+
+`push_report_alerts(dedupe_seconds=...)` (300 s from the scheduled queueing) skips a report whose
+`source_id` already went out inside the window. It applies to reports with a stable id - the
+latest-metrics report per level and target, a metric's history, the daily backup health - and since
+0.26.0 it also finds one that was queued in several parts: a body over Telegram's limit is queued as
+`<source_id>:part:<n>`, and the exact match never found those (review 0.25.0, F7.2). A level report's
+id carries the moment it was generated and is never a duplicate, by design: it renders only rows no
+earlier report rendered, and marks them.
+
 ### Single-metric history report (store-local)
 
 `metric-history-report` reports one exact `server_id` + `metric_code` pair over the UTC window from `now - hours` through `now`. It reads and formats existing `metric_results` rows only, then queues the report at Telegram's `logging` level; it does not run metric collection.

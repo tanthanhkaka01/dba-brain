@@ -593,3 +593,36 @@ def test_evidence_is_written_next_to_the_run_when_asked(data_dir, monkeypatch, t
     written = json.loads((tmp_path / "evidence" / "facts" / f"{result['run_id']}.json").read_text(encoding="utf-8"))
     assert written["target"].startswith("TEST-10-0-0-5")
     assert written["gates"]
+
+
+# --------------------------------------------------------------------------- #
+# A service name is a name, never a shell line (review 0.25.0, F11.3)
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("bad", ["mssql-server; id", "a b", "$(id)", "x`id`", "x|y", "x\ny", "x'y"])
+def test_a_service_name_that_is_not_a_name_is_refused(bad):
+    with pytest.raises(host_ops.HostOpsError, match="not a service name"):
+        host_ops._services_of({"services": [bad]})
+
+
+def test_real_unit_names_pass_and_are_quoted_anyway():
+    names = ["mssql-server", "postgresql@16-main.service", "MSSQL$SQLEXPRESS", "sshd"]
+    assert host_ops._services_of({"services": names}) == names
+    assert host_ops._service_command("restart", "postgresql@16-main.service", platform="linux") == \
+        "systemctl restart postgresql@16-main.service"
+
+
+def test_a_dollar_name_is_quoted_on_linux():
+    assert host_ops._service_command("stop", "MSSQL$X", platform="linux") == "systemctl stop 'MSSQL$X'"
+
+
+# --------------------------------------------------------------------------- #
+# delete-files: no `..` past the fence (review 0.25.0, B5.2)
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("path", ["/backup/../etc/shadow", "/backup/./x.bak", "D:\\\\SQL\\\\..\\\\Windows\\\\x"])
+def test_a_path_with_dot_segments_is_refused(path):
+    from db_ops.common import deletefiles
+    from db_ops.common.hostcmd import parse_host
+
+    host = parse_host({"runtime": "windows" if ":" in path else "linux", "host": "h"})
+    with pytest.raises(deletefiles.DeleteFileError, match="'.' or '..'"):
+        deletefiles._validated_path(path, host=host, must_be_under="/backup")

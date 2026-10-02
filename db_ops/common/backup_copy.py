@@ -40,16 +40,44 @@ from dataclasses import dataclass
 from typing import Any
 
 
+# How the files cross (``copy_mode``): ``auto`` tries one tar stream and steps down to a transfer
+# per file when tar cannot be used on either end; ``tar`` and ``sftp`` pin one of the two, and a
+# pinned mode that cannot do it is an error, not a reason to try the other (owner decision G4).
+# The words are ``lib``'s - the restore entry states them too.
+from db_ops.lib import restore_space
+from db_ops.lib.restore.copy_mode import COPY_AUTO, COPY_MODES, COPY_NONE, COPY_SFTP, COPY_TAR
+
+
+class CopyModeError(RuntimeError):
+    """The copy was pinned to a mode that could not do it."""
+
+
+class CopySpaceError(RuntimeError):
+    """The files to copy do not fit on the target, or its free space could not be read."""
+
+
 @dataclass
 class TransferResult:
     copied: int = 0
     skipped: int = 0
     bytes_copied: int = 0
     removed: int = 0
+    # Which way the files went - ``tar``, ``sftp``, or ``none`` when nothing needed copying - and
+    # whether that was the step down from a tar stream. It was only ever a line on stderr: a drill
+    # that took hours instead of minutes looked, in its answer, like any other (G4).
+    copy_mode: str = COPY_NONE
+    fell_back: bool = False
+    # What the space check measured before the first byte moved - ``None`` when there was nothing
+    # to copy, or no rule was given.
+    space: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
-        return {"copied": self.copied, "skipped": self.skipped, "bytes_copied": self.bytes_copied,
-                "removed_absent_at_source": self.removed}
+        answer = {"copied": self.copied, "skipped": self.skipped, "bytes_copied": self.bytes_copied,
+                  "removed_absent_at_source": self.removed,
+                  "copy_mode": self.copy_mode, "copy_fell_back": self.fell_back}
+        if self.space is not None:
+            answer["space_check"] = self.space
+        return answer
 
 
 def _walk_remote(sftp, root: str, mtimes: dict[str, int] | None = None) -> tuple[list[tuple[str, int]], list[str]]:
@@ -264,6 +292,27 @@ def _stream_files(
     return True
 
 
+#: The file a staging directory carries once this module owns it. Mirroring and pruning delete what
+#: they find under the directory, so they act only where this file says the directory is theirs: a
+#: `target_backup_dir` pointed at the target host's own backups, at a shared folder or at another
+#: entry's staging used to be emptied without a word (review 0.25.0, B4.7).
+STAGING_MARKER = ".dbops-staging"
+
+
+class StagingDirError(RuntimeError):
+    """``target_dir`` holds files and is not marked as a db_ops staging directory."""
+
+
+def _not_a_staging_dir(target_dir: str) -> StagingDirError:
+    marker = posixpath.join(target_dir, STAGING_MARKER)
+    return StagingDirError(
+        f"{target_dir} already holds files, none of which is at the source, and has no "
+        f"{STAGING_MARKER} marker, so it is not known to be a db_ops staging directory - nothing "
+        f"was copied or deleted there. If it is one (a "
+        f"staging folder from before 0.25.0), mark it: `touch {marker}`. Otherwise give the entry "
+        f"its own, empty target_backup_dir.")
+
+
 def prune_target_dir(session, target_dir: str, older_than_seconds: int, *, log: Any = None) -> dict[str, Any]:
     """Delete files under ``target_dir`` older than ``older_than_seconds``. 0 disables it.
 
@@ -287,10 +336,12 @@ def prune_target_dir(session, target_dir: str, older_than_seconds: int, *, log: 
         return result
     minutes = max(1, int(older_than_seconds) // 60)
     quoted = shlex.quote(target_dir)
+    marker = shlex.quote(STAGING_MARKER)
     # -mmin over -mtime: the threshold is configured in seconds, and -mtime's day granularity
     # would silently round a 24h setting to something else.
     prune_files = (
-        f"find {quoted} -mindepth 1 -type f -mmin +{minutes} -print -delete 2>/dev/null | wc -l"
+        f"find {quoted} -mindepth 1 -type f ! -name {marker} -mmin +{minutes} -print -delete "
+        f"2>/dev/null | wc -l"
     )
     # Then remove the husk a fully pruned backup set leaves behind — but NOT a directory that is
     # empty *by design* inside a live one. `find -type d -empty -delete` deleted both, and a
@@ -308,7 +359,10 @@ def prune_target_dir(session, target_dir: str, older_than_seconds: int, *, log: 
         f"'test -n \"$(find \"$1\" -type f -print -quit 2>/dev/null)\" || rm -rf \"$1\"' "
         f"_ {{}} \\; 2>/dev/null"
     )
-    command = f"if [ -d {quoted} ]; then {prune_files}; {drop_husks}; else echo 0; fi"
+    # Only a marked directory is pruned (B4.7); an unmarked one answers -1 and is refused below.
+    command = (f"if [ ! -d {quoted} ]; then echo 0; "
+               f"elif [ ! -f {quoted}/{marker} ]; then echo -1; "
+               f"else {prune_files}; {drop_husks}; fi")
     _in, out, _err = session.open_stream(command)
     text = out.read().decode("utf-8", errors="replace").strip()
     exit_status = out.channel.recv_exit_status()
@@ -319,9 +373,70 @@ def prune_target_dir(session, target_dir: str, older_than_seconds: int, *, log: 
         result["pruned"] = int(text.splitlines()[0]) if text else 0
     except (ValueError, IndexError):
         result["pruned"] = 0
+    if result["pruned"] < 0:
+        result["pruned"] = 0
+        result["error"] = str(_not_a_staging_dir(target_dir))
+        return result
     if log:
         log(f"pruned {result['pruned']} file(s) older than {older_than_seconds}s from {target_dir}")
     return result
+
+
+def _target_free_bytes(target_session, directory: str) -> int | None:
+    """Free bytes on the filesystem ``directory`` is on, as the target answers - ``None`` if not."""
+    try:
+        _stdin, out, _err = target_session.open_stream(restore_space.free_space_command(directory))
+        text = out.read().decode("utf-8", "replace")
+        out.channel.recv_exit_status()
+    except Exception:  # noqa: BLE001 - whatever stopped the reading, the free space is not known.
+        return None
+    return restore_space.parse_df_free_bytes(text)
+
+
+def check_room(target_session, target_dir: str, pending: list[tuple[str, int]],
+               rule: restore_space.SpaceCheck, *, log: Any = None) -> dict[str, Any]:
+    """Refuse a copy whose files do not fit on the target, with room to spare - before any moves.
+
+    The rule is the restore entry's ``space_check`` (:mod:`db_ops.lib.restore_space`):
+    ``free >= bytes to copy x factor``. It has stopped the copy of a share-driven SQL Server
+    restore since 2026-09-19; the copy between two hosts - every script-driven restore onto
+    another machine - asked nothing, while the entry's ``space_check`` was read by nobody and its
+    reference said *absent means on* (found 2026-10-02, review notes R8). The operator's rule for
+    it: the restore script checks nothing itself - the tool has checked before the script runs.
+    ``pending`` is what this copy will write: a file the target already holds is not in it.
+
+    Returns what it measured; raises :class:`CopySpaceError` on a shortfall, and on a target whose
+    free space cannot be read unless the rule says ``on_unknown: proceed``.
+    """
+    def say(text: str) -> None:
+        if log:
+            log(f"space check: {text}")
+
+    if not rule.enabled:
+        say("disabled by space_check.enabled=false")
+        return {"checked": False, "reason": "disabled"}
+    incoming = sum(size for _rel, size in pending)
+    free = _target_free_bytes(target_session, target_dir)
+    if free is None:
+        detail = f"could not read the free space of {target_dir} on the target"
+        if rule.on_unknown == "proceed":
+            say(detail + " - proceeding, because space_check.on_unknown=proceed")
+            return {"checked": False, "reason": "unknown", "incoming_bytes": incoming}
+        raise CopySpaceError(
+            f"space check: {detail}. Refusing: an unmeasured copy is the one that filled the disk. "
+            'Set space_check {"on_unknown": "proceed"} on this entry to accept that, or '
+            '{"enabled": false} to turn the check off. No file was copied.')
+    verdict = restore_space.judge(incoming, free, rule.factor)
+    say(verdict.text)
+    if not verdict.ok:
+        raise CopySpaceError(
+            f"{target_dir} will not fit: {verdict.text}. Free "
+            f"{restore_space.format_gib(verdict.shortfall_bytes)} on the target, lower "
+            f"space_check.factor (now {verdict.factor:g}), or stage somewhere else. No file was "
+            "copied.")
+    return {"checked": True, "ok": True, "incoming_bytes": verdict.incoming_bytes,
+            "free_bytes": verdict.free_bytes, "required_bytes": verdict.required_bytes,
+            "factor": verdict.factor, "detail": verdict.text}
 
 
 def sync_backup_dir(
@@ -332,12 +447,18 @@ def sync_backup_dir(
     target_dir: str,
     include: tuple[str, ...] = (),
     log: Any = None,
+    copy_mode: str = COPY_AUTO,
+    space_check: restore_space.SpaceCheck | None = None,
 ) -> TransferResult:
     """Copy ``source_dir`` to ``target_dir`` on another host, skipping identical files.
 
     ``include`` limits the copy to relative paths starting with one of the given prefixes, so a
-    restore can pull only the parts of a backup directory it needs.
+    restore can pull only the parts of a backup directory it needs. ``copy_mode`` is one of
+    :data:`COPY_MODES`; the result says which way the files went. ``space_check`` is the rule the
+    files to copy are held to before the first one moves (:func:`check_room`); ``None`` asks nothing.
     """
+    if copy_mode not in COPY_MODES:
+        raise ValueError(f"copy_mode must be one of {', '.join(COPY_MODES)}, got: {copy_mode!r}")
     result = TransferResult()
     # The sessions own their SFTP channels and close them with themselves.
     source_sftp = source_session.sftp()
@@ -355,7 +476,20 @@ def sync_backup_dir(
     _assert_writable(target_sftp, target_dir)
     target_mtimes: dict[str, int] = {}
     existing_files, _ = _walk_remote(target_sftp, target_dir, target_mtimes)
-    existing = {rel: size for rel, size in existing_files}
+    existing = {rel: size for rel, size in existing_files if rel.replace("\\", "/") != STAGING_MARKER}
+    if len(existing) == len(existing_files):
+        # No marker. An empty directory becomes ours. One that already holds files is adopted when
+        # it is plainly an earlier staging copy of THIS source - at least one of its files is also
+        # at the source, under the same relative path - so a staging folder from before the marker
+        # needs no manual step (owner, 2026-10-01: a fix must not make the tool harder to use).
+        # Anything else is refused rather than mirrored: mirroring deletes whatever the source
+        # does not have, and a folder sharing nothing with the source is someone else's (B4.7).
+        if existing and not any(rel.replace("\\", "/") in at_source for rel in existing):
+            raise _not_a_staging_dir(target_dir)
+        if existing and log:
+            log(f"{target_dir}: adopted as this source's staging directory (marked {STAGING_MARKER})")
+        with target_sftp.open(posixpath.join(target_dir, STAGING_MARKER), "w") as handle:
+            handle.write(b"db_ops restore staging directory - mirrored and pruned by db_ops.\n")
     # A mirror, not an accumulation: what the source no longer has goes here too. The copy
     # only ever added, so a source rebuilt under the same name left its previous life's pieces
     # beside the new ones - and a gvenzl Oracle lab has the image's DBID and incarnation in
@@ -396,18 +530,29 @@ def sync_backup_dir(
     # Nothing new: the common case for a repeated drill, and it costs two directory walks
     # rather than a transfer.
     if pending:
-        streamed = _stream_files(
+        if space_check is not None:
+            # After the mirror above, which only frees room, and before the first byte.
+            result.space = check_room(target_session, target_dir, pending, space_check, log=log)
+        streamed = copy_mode != COPY_SFTP and _stream_files(
             source_session=source_session, source_dir=source_dir,
             target_session=target_session, target_dir=target_dir,
             files=pending, log=log,
         )
         if streamed:
+            result.copy_mode = COPY_TAR
             result.copied += len(pending)
             result.bytes_copied += sum(size for _rel, size in pending)
+        elif copy_mode == COPY_TAR:
+            raise CopyModeError(
+                f"copy_mode is tar, and the tar stream from {source_dir} to {target_dir} could not "
+                "be used (the lines above say why). Nothing was copied file by file: the mode is "
+                "pinned. Fix tar on both hosts, or set copy_mode to auto or sftp.")
         else:
             # tar missing or refused on either end: fall back to the per-file copy, which
             # is slow over a high-latency link but always works.
-            if log:
+            result.copy_mode = COPY_SFTP
+            result.fell_back = copy_mode == COPY_AUTO
+            if log and result.fell_back:
                 log("tar stream unavailable; falling back to per-file SFTP copy")
             for rel, size in pending:
                 rel_posix = rel.replace("\\", "/")
@@ -469,10 +614,22 @@ def chain_include(db_type: str, source_session, *, source_dir: str, backup_dir: 
         return ()
     if engine in {"postgresql", "postgres"}:
         return postgresql_chain_include(source_session, source_dir=source_dir, log=log)
-    if engine == "oracle" and container:
+    if engine == "oracle":
+        if not container:
+            # RMAN is asked inside the source container; without it the chain is unknown, and
+            # copying the whole directory instead was a fallback (review 0.25.0, G2.9).
+            raise ChainUnknownError("the Oracle source names no container to ask RMAN in.")
         return oracle_chain_include(source_session, backup_dir=backup_dir or source_dir,
                                     container=container, log=log)
     return ()
+
+
+class ChainUnknownError(RuntimeError):
+    """The source cannot say which pieces form the restore chain, so nothing is copied.
+
+    It used to copy the whole directory instead. Owner decision 2026-10-01 (review 0.25.0, G2.9):
+    no fallback - a set nobody chose is not copied, and the restore fails with the reason.
+    """
 
 
 def postgresql_chain_include(source_session, *, source_dir: str, log: Any = None) -> tuple[str, ...]:
@@ -483,8 +640,8 @@ def postgresql_chain_include(source_session, *, source_dir: str, log: Any = None
     drill will not touch. Deciding it here, on the source, is what keeps those older chains from
     being copied and then pruned on every run.
 
-    Falls back to "everything" whenever the listing is unusable: a narrowed copy that guessed
-    wrong would fail the restore, while an un-narrowed one only costs bandwidth.
+    A listing with no ``_FULL`` raises :class:`ChainUnknownError`: there is no chain to restore,
+    and copying the whole directory instead was a fallback (review 0.25.0, G2.9).
     """
     base = f"{source_dir.rstrip('/')}/base"
     command = f"ls -1d {shlex.quote(base)}/*_FULL {shlex.quote(base)}/*_INCR 2>/dev/null | sort"
@@ -493,9 +650,9 @@ def postgresql_chain_include(source_session, *, source_dir: str, log: Any = None
              for line in stdout.read().decode("utf-8", "replace").splitlines() if line.strip()]
     fulls = [name for name in names if name.endswith("_FULL")]
     if not fulls:
-        if log:
-            log("no _FULL backup found on the source; copying the whole backup directory")
-        return ()
+        raise ChainUnknownError(
+            f"no _FULL backup under {base} on the source - there is no chain to restore from. "
+            "Run the full backup job first.")
     newest_full = fulls[-1]
     chain = [newest_full] + [name for name in names
                              if name.endswith("_INCR") and name > newest_full]
@@ -550,15 +707,14 @@ def oracle_chain_include(source_session, *, backup_dir: str, container: str,
     the pieces present allow, so a chain missing its incrementals still "succeeds", just at an older
     point than the operator believes.
 
-    Falls back to "everything" whenever the answer is unusable: an un-narrowed copy only costs
-    bandwidth, while a narrowed one that guessed wrong costs the restore.
+    An unusable answer raises :class:`ChainUnknownError` rather than copying the whole directory
+    (review 0.25.0, G2.9): RMAN could not name the chain, so neither can this.
     """
     directory = backup_dir.rstrip("/")
     handles = _oracle_preview_handles(source_session, container, log=log)
     if not handles:
-        if log:
-            log("RMAN preview named no backup pieces; copying the whole backup directory")
-        return ()
+        raise ChainUnknownError(
+            f"RMAN preview in {container} named no backup pieces - the restore chain is unknown.")
 
     quoted = ", ".join("'" + h.replace("'", "''") + "'" for h in handles)
     rows = _oracle_sql(source_session, container, _ORACLE_CHAIN_SQL.format(handles=quoted))
@@ -570,9 +726,9 @@ def oracle_chain_include(source_session, *, backup_dir: str, container: str,
         if line.startswith(directory + "/"):
             names.append(line.rsplit("/", 1)[-1])
     if not names:
-        if log:
-            log("no catalog pieces resolved under the backup dir; copying the whole directory")
-        return ()
+        raise ChainUnknownError(
+            f"no catalog piece of the restore chain lies under {directory} - the directory being "
+            "transferred does not hold the chain.")
     if log:
         log(f"transfer narrowed to the RMAN chain: {len(names)} piece(s) from the newest level 0")
     return tuple(sorted(set(names)))

@@ -30,6 +30,8 @@ not own.
 
 from __future__ import annotations
 
+import re
+
 import shlex
 from typing import Any
 
@@ -163,9 +165,8 @@ def _windows_command(path: str, *, dry_run: bool) -> str:
     )
 
 
-def _ps_quote(value: str) -> str:
-    """A PowerShell single-quoted literal: no expansion, and a path is never a command."""
-    return "'" + str(value).replace("'", "''") + "'"
+# One definition, the one that doubles typographic quotes too (review 0.25.0, F12.1).
+from db_ops.lib.powershell import quote_powershell as _ps_quote  # noqa: E402
 
 
 def _validated_path(value: Any, *, host: Host, must_be_under: Any = None) -> str:
@@ -185,6 +186,10 @@ def _validated_path(value: Any, *, host: Host, must_be_under: Any = None) -> str
         )
     if not _is_absolute(path, host=host):
         raise DeleteFileError(f"path must be absolute: {path!r}.")
+    if any(part in (".", "..") for part in re.split(r"[\\/]+", path)):
+        # The fence below compares text, so `/backup/../etc/x` was "under /backup" (review 0.25.0,
+        # B5.2). A path to delete names the file itself; it never needs to step back out.
+        raise DeleteFileError(f"path must not contain '.' or '..' segments: {path!r}.")
     root = str(must_be_under or "").strip()
     if root and not _under(path, root, host=host):
         # An optional fence for a caller that already knows the one directory it is allowed to

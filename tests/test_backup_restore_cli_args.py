@@ -74,7 +74,7 @@ def _config_with_script_restore(tmp_path):
         "target_container": "c",
         "backup_dir": "/var/opt/mssql/backup/dbops",
         "source_backup_host_dir": "/opt/backup/dbops",
-        "target_backup_dir": "/opt/stage",
+        "target_backup_dir": "/opt/db_ops/stage",
         "script": "assets/restore/sqlserver/mssql_restore.sh",
     }]}}), encoding="utf-8")
     return config

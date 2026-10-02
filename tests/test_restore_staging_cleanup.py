@@ -145,3 +145,39 @@ def test_a_chain_with_no_full_of_its_own_still_answers_to_the_newest_full_staged
     ]
 
     assert obsolete_only(candidates) == {"/stage/SRC/VRS_Prod/LOG/vrs_LOG.trn"}
+
+
+# ------------------------------------------------------------------ differentials (review 0.25.0, B4.1)
+#
+# A SQL Server differential is a `.bak` like the full it restores onto. Classified by extension, the
+# newest DIFF became the chain's anchor and the FULL it needs was deleted as obsolete.
+
+
+def test_a_newer_diff_does_not_retire_the_full_it_restores_onto():
+    candidates = [
+        _db("Orders", "FULL", "Orders_FULL_20260901_000000Z.bak", 1000),
+        _db("Orders", "DIFF", "Orders_DIFF_20260903_000000Z.bak", 3000),
+        _db("Orders", "LOG", "Orders_LOG_20260903_010000Z.trn", 3100),
+    ]
+
+    assert obsolete_only(candidates) == set()
+
+
+def test_an_older_full_and_its_diff_are_retired_by_a_newer_full():
+    candidates = [
+        _db("Orders", "FULL", "Orders_FULL_old.bak", 1000),
+        _db("Orders", "DIFF", "Orders_DIFF_old.bak", 2000),
+        _db("Orders", "FULL", "Orders_FULL_new.bak", 3000),
+        _db("Orders", "DIFF", "Orders_DIFF_new.bak", 4000),
+    ]
+
+    assert obsolete_only(candidates) == {
+        "/stage/SRC/Orders/FULL/Orders_FULL_old.bak",
+        "/stage/SRC/Orders/DIFF/Orders_DIFF_old.bak",
+    }
+
+
+def test_a_diff_named_as_one_in_a_flat_folder_is_still_a_diff():
+    candidates = [_f("Orders_FULL_a.bak", 1000), _f("Orders_DIFF_b.bak", 3000)]
+
+    assert obsolete_only(candidates) == set()

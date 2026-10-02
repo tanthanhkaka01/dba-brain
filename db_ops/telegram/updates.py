@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from db_ops.lib import data_sources
+from db_ops.lib.file_lock import FileLock
 from db_ops.db import DbOpsStore
 from db_ops.telegram.api import get_updates
 from db_ops.lib.paths import DEFAULT_DATA_DIR  # noqa: F401 - one definition, see that module
@@ -84,6 +85,20 @@ def save_updates(
         groups_path=GROUPS_PATH,
         users_path=USERS_PATH,
     )
+    # Both routing files are read here and written at the end, every second. An operator's
+    # `group-level` or `user-level` landing in between was overwritten by this write (review
+    # 0.25.0, F8.2), so the read-modify-write holds each file's lock - always groups first, then
+    # users, the order every writer takes them in, so two writers never wait on each other.
+    with FileLock(target_paths.groups_path), FileLock(target_paths.users_path):
+        return _save_updates_unlocked(updates, target_paths=target_paths, store=store)
+
+
+def _save_updates_unlocked(
+    updates: list[dict[str, Any]],
+    *,
+    target_paths: TelegramUpdatePaths,
+    store: DbOpsStore,
+) -> dict[str, int]:
     # One reader for both files (common.data_sources). The writes below stay here:
     # this app owns the file, and owning it is what makes it the only writer.
     groups_data = data_sources.load_telegram_groups(target_paths.groups_path)
@@ -284,10 +299,11 @@ def load_json_list(path: Path, *, root_key: str) -> list[dict[str, Any]]:
 
 
 def write_json_list(path: Path, *, root_key: str, items: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as file:
-        json.dump({root_key: items}, file, ensure_ascii=False, indent=2)
-        file.write("\n")
+    """Rewrite a groups/users file atomically: ``telegram_groups.json`` is the routing table, and a
+    write cut off halfway used to leave it empty - every alert without a chat."""
+    from db_ops.lib.json_io import atomic_write_text
+
+    atomic_write_text(path, json.dumps({root_key: items}, ensure_ascii=False, indent=2) + "\n")
 
 
 #: The notify levels this estate routes on. Not a closed set in the config — `notify_level` is a
@@ -301,6 +317,22 @@ KNOWN_NOTIFY_LEVELS: tuple[str, ...] = (
 
 
 def add_group(
+    *,
+    group_id: str,
+    level: str = "",
+    title: str = "",
+    allow_command: int | None = None,
+    bot_token: str = "",
+    groups_path: Path | None = None,
+    api_url: str = "",
+    verify: bool = True,
+) -> dict[str, Any]:
+    """Edit the groups file under its lock - the workflow writes it every second (review 0.25.0, F8.2)."""
+    with FileLock(Path(groups_path) if groups_path else GROUPS_PATH):
+        return _add_group_unlocked(group_id=group_id, level=level, title=title, allow_command=allow_command, bot_token=bot_token, groups_path=groups_path, api_url=api_url, verify=verify)
+
+
+def _add_group_unlocked(
     *,
     group_id: str,
     level: str = "",
@@ -397,6 +429,18 @@ def set_group_level(
     allow_command: int | None = None,
     groups_path: Path | None = None,
 ) -> dict[str, Any]:
+    """Edit the groups file under its lock - the workflow writes it every second (review 0.25.0, F8.2)."""
+    with FileLock(Path(groups_path) if groups_path else GROUPS_PATH):
+        return _set_group_level_unlocked(group=group, level=level, allow_command=allow_command, groups_path=groups_path)
+
+
+def _set_group_level_unlocked(
+    *,
+    group: str,
+    level: str,
+    allow_command: int | None = None,
+    groups_path: Path | None = None,
+) -> dict[str, Any]:
     """Give a discovered group its notify level, without opening the file.
 
     `save-updates` finds every group the bot is in and writes it with **no level and no command
@@ -450,6 +494,18 @@ def set_group_level(
 
 
 def set_user_level(
+    *,
+    user: str,
+    level: int,
+    users_path: Path | None = None,
+    pending: bool = False,
+) -> dict[str, Any]:
+    """Edit the users file under its lock - the workflow writes it every second (review 0.25.0, F8.2)."""
+    with FileLock(Path(users_path) if users_path else USERS_PATH):
+        return _set_user_level_unlocked(user=user, level=level, users_path=users_path, pending=pending)
+
+
+def _set_user_level_unlocked(
     *,
     user: str,
     level: int,

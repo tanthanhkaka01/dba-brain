@@ -222,15 +222,16 @@ def json_script(payload: Any) -> str:
     ``</script>`` ends the block and everything after it is parsed as markup. Escaping the three
     sequences that can start a tag is the whole fix, and it keeps the text valid JSON.
     """
-    text = json.dumps(payload, ensure_ascii=False, default=str)
-    return text.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+    from db_ops.lib.html_json import json_for_html
+
+    return json_for_html(payload, default=str)
 
 
 # --------------------------------------------------------------------------- #
 # Login
 # --------------------------------------------------------------------------- #
 def login_page(*, prefix: str, next_url: str = "", has_users: bool = True,
-               error: str = "", username: str = "") -> str:
+               error: str = "", username: str = "", first_run: bool = False) -> str:
     """The login form. ``has_users=False`` explains a store with no accounts yet.
 
     Without that branch a fresh deployment answers every attempt with "wrong username or
@@ -239,6 +240,9 @@ def login_page(*, prefix: str, next_url: str = "", has_users: bool = True,
     banner = ""
     if error:
         banner = f'<div class="alert bad">{escape(error)}</div>'
+    elif first_run:
+        banner = ('<div class="alert info">First sign-in: <code>admin</code> / <code>admin</code>. '
+                  'You will be asked to choose a new password before anything else.</div>')
     elif not has_users:
         banner = ('<div class="alert info">No accounts exist yet. Create the first one on the '
                   'worker with<br><code>python -m db_ops.webhost.cli user-add --username '
@@ -260,6 +264,32 @@ def login_page(*, prefix: str, next_url: str = "", has_users: bool = True,
     return _document("Sign in — db_ops", body)
 
 
+def password_page(*, prefix: str, session: dict[str, Any], forced: bool = False,
+                  error: str = "") -> str:
+    """Change one's own password; ``forced`` for the first sign-in of the bootstrap admin."""
+    banner = f'<div class="alert bad">{escape(error)}</div>' if error else ""
+    if forced and not error:
+        banner = ('<div class="alert info">Choose a new password before using the console. '
+                  'At least 8 characters.</div>')
+    body = f"""
+<div class="login-wrap"><form class="login" method="post" action="{escape(prefix)}/password">
+  <h1>Change password</h1>
+  <p class="sub">{escape(session.get("username"))}</p>
+  {banner}
+  <input type="hidden" name="csrf" value="{escape(session.get("csrf_token", ""))}">
+  <label for="current_password">Current password</label>
+  <input id="current_password" name="current_password" type="password"
+         autocomplete="current-password" required autofocus>
+  <label for="new_password">New password</label>
+  <input id="new_password" name="new_password" type="password" autocomplete="new-password" required>
+  <label for="new_password_again">New password, again</label>
+  <input id="new_password_again" name="new_password_again" type="password" autocomplete="new-password" required>
+  <div class="actions"><button class="primary" type="submit">Change password</button></div>
+</form></div>
+"""
+    return _document("Change password — db_ops", body)
+
+
 # --------------------------------------------------------------------------- #
 # Dashboard
 # --------------------------------------------------------------------------- #
@@ -279,6 +309,7 @@ def _top_bar(prefix: str, session: dict[str, Any], *, back: str = "") -> str:
     {home}{who} &middot; level {escape(session.get('user_level'))}
     &middot; session until {escape(str(session.get('expires_at'))[:10])}
     <form method="post" action="{escape(prefix)}/logout">
+      <input type="hidden" name="csrf" value="{escape(session.get('csrf_token') or '')}">
       <button type="submit">Sign out</button>
     </form>
   </div>
@@ -850,6 +881,11 @@ def _config_row(item: dict[str, Any], *, base: str, can_edit: bool) -> str:
 </tr>"""
 
 
+_CONFIRM_PASSWORD = '''<input type="password" name="confirm_password" autocomplete="current-password"
+         placeholder="your password - needed when a command, script, host login or permission changes"
+         style="width:100%;margin:6px 0">'''
+
+
 def config_record_page(*, prefix: str, session: dict[str, Any], blocks: list[dict[str, Any]],
                        report_links: list[tuple[str, str]] | tuple = (),
                        source_file: str, collection: str, item_key: str | None, payload: Any,
@@ -894,6 +930,9 @@ def config_record_page(*, prefix: str, session: dict[str, Any], blocks: list[dic
 </form>"""
 
     controls = f"""
+<input type="password" name="confirm_password" autocomplete="current-password"
+         placeholder="your password - needed when a command, script, host login or permission changes"
+         style="width:100%;margin:6px 0">
 <div class="row-actions">
   <button class="primary" type="submit" style="width:auto">Save</button>
   <a href="{back}"><button type="button">Cancel</button></a>
@@ -923,6 +962,7 @@ def config_record_page(*, prefix: str, session: dict[str, Any], blocks: list[dic
       <input type="hidden" name="csrf" value="{csrf}">
       <textarea class="json" name="payload" spellcheck="false" style="min-height:280px"
                 {'readonly' if not can_edit else ''}>{raw}</textarea>
+      {_CONFIRM_PASSWORD if can_edit else ''}
       {'<div class="row-actions"><button type="submit">Save this JSON</button></div>' if can_edit else ''}
     </form>
   </details>

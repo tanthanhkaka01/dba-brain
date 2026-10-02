@@ -194,6 +194,25 @@ def test_a_container_with_no_registered_instance_is_refused_not_guessed(inventor
                                  target_container="no_such_container", data_dir=inventory)
 
 
+def test_an_inactive_lab_with_metrics_off_is_still_a_replay_target(tmp_path):
+    """The .252 lab of 2026-10-01: `active: false`, metrics off, its container in `container_name`.
+    The resolver read only the monitored instances and refused *No SQL Server instance matches
+    container*, though the restore entry named the instance exactly (0.26.0 §1.78)."""
+    (tmp_path / "db_instances.json").write_text(json.dumps({"db_instances": [
+        {"server_id": "LAB-252-MSSQLLAB-1433", "db_type": "sqlserver", "ip": "10.0.0.252", "port": 1433,
+         "instance_name": "MSSQLSERVER", "container_name": "MSSQL_LAB_252_1433", "active": False,
+         "metrics": {"enabled": False}},
+    ]}), encoding="utf-8")
+    plan = sm.parse_server_metadata({"enabled": True}, label="X", for_restore=True)
+
+    by_id = sm.resolve_replay_target(plan, target_server_id="LAB-252-MSSQLLAB-1433",
+                                     target_container="MSSQL_LAB_252_1433", data_dir=tmp_path)
+    by_container = sm.resolve_replay_target(plan, target_server_id="", target_host="10.0.0.252",
+                                            target_container="MSSQL_LAB_252_1433", data_dir=tmp_path)
+
+    assert by_id == by_container == "LAB-252-MSSQLLAB-1433"
+
+
 def test_a_backup_needs_no_target_because_it_reads_its_own_instance():
     plan = sm.parse_server_metadata({"enabled": True}, label="CLOUD_MSSQL_FULL")
 

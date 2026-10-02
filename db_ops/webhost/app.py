@@ -93,6 +93,22 @@ def _app_is_installed(block: dict[str, Any]) -> bool:
         return False
 
 
+
+def safe_next(target: str, *, default: str) -> str:
+    """Where to send a user after login: a path on this site, or ``default``.
+
+    Never an absolute URL from a form field - that is an open redirect, and a login page is
+    exactly where one gets used. "Starts with /" was the whole check, and `//evil.example`
+    (protocol-relative) and `/\\evil.example` (browsers read `\\` as `/`) both pass it
+    (review 0.25.0, B6.1).
+    """
+    text = str(target or "")
+    if (not text.startswith("/") or text.startswith("//") or "\\" in text
+            or any(ord(char) < 0x20 or ord(char) == 0x7F for char in text)):
+        return default
+    return text
+
+
 class WebAppError(RuntimeError):
     """The console cannot serve a request as configured."""
 
@@ -214,10 +230,16 @@ class WebSettings:
     cookie_samesite: str = "Lax"
     max_failed_logins: int = 8
     lockout_minutes: int = 15
+    max_failed_logins_per_ip: int = 5
     min_level_view: int = 1
     min_level_edit: int = 50
     min_level_run: int = 50
     min_level_admin: int = 90
+    #: The report pages share the console's listener and origin. They carry server names, IPs,
+    #: versions and health, and were readable by anyone who could reach the port (review 0.25.0,
+    #: B6.2). On by default; ``false`` restores the old open behaviour for an estate that puts
+    #: its own authentication in front.
+    reports_require_login: bool = True
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any] | None) -> "WebSettings":
@@ -231,10 +253,14 @@ class WebSettings:
             cookie_samesite=str(block.get("cookie_samesite") or defaults.cookie_samesite),
             max_failed_logins=int(block.get("max_failed_logins", defaults.max_failed_logins)),
             lockout_minutes=int(block.get("lockout_minutes", defaults.lockout_minutes)),
+            max_failed_logins_per_ip=int(block.get("max_failed_logins_per_ip",
+                                                   defaults.max_failed_logins_per_ip)),
             min_level_view=int(block.get("min_level_view", defaults.min_level_view)),
             min_level_edit=int(block.get("min_level_edit", defaults.min_level_edit)),
             min_level_run=int(block.get("min_level_run", defaults.min_level_run)),
             min_level_admin=int(block.get("min_level_admin", defaults.min_level_admin)),
+            reports_require_login=bool(block.get("reports_require_login",
+                                                 defaults.reports_require_login)),
         )
 
 
@@ -334,6 +360,10 @@ class WebApp:
         if head == "login":
             return self._post_login(request) if request.method == "POST" else self._get_login(request)
         if head == "logout":
+            # Only a form posted from this console signs out. A GET did, with no token, so any page
+            # - an <img src> on a wiki - could end a user's session (review 0.25.0, B6.3).
+            if request.method != "POST":
+                return Response.redirect(f"{self.prefix}/")
             return self._post_logout(request)
 
         session = self.current_session(request)
@@ -344,6 +374,18 @@ class WebApp:
                 return Response.json({"error": "not authenticated"}, status=401)
             return Response.redirect(f"{self.prefix}/login?next={quote(request.path)}")
 
+        if head == "password":
+            return self._route_password(request, session)
+        if session.get("must_change_password"):
+            # The first-run admin/admin (or an account an admin reset) does nothing else first.
+            if head == "api":
+                return Response.json({"error": "change your password first"}, status=403)
+            return Response.redirect(f"{self.prefix}/password")
+
+        if int(session["user_level"]) < int(self.settings.min_level_view):
+            # Parsed and never checked before (review 0.25.0, B6.3): raising it hid nothing.
+            raise Refused(403, f"Viewing the console needs level {self.settings.min_level_view}; "
+                               f"{session['username']} is level {session['user_level']}.")
         if not segments or head == "dashboard":
             return self._get_overview(request, session)
         if head == "app":
@@ -373,6 +415,11 @@ class WebApp:
         if name == "config":
             return Response.json(self._api_config(request))
         if name == "logs":
+            # Logs carry what every app printed - hosts, errors, at worst a secret an app let slip.
+            # Admin only (review 0.25.0, F2.1 / B6.3).
+            if not self._can(session, self.settings.min_level_admin):
+                return Response.json({"error": f"reading logs needs level {self.settings.min_level_admin}"},
+                                     status=403)
             return Response.json(self._api_logs(request))
         return Response.json({"error": f"no api endpoint /{'/'.join(rest)}"}, status=404)
 
@@ -388,14 +435,61 @@ class WebApp:
     def _get_login(self, request: Request) -> Response:
         if self.current_session(request) is not None:
             return Response.redirect(f"{self.prefix}/")
+        self.auth.ensure_bootstrap_admin()
         return Response.html(pages.login_page(
             prefix=self.prefix,
             next_url=request.first.get("next", ""),
             has_users=self.auth.has_any_user(),
+            first_run=self.auth.bootstrap_pending(),
         ))
+
+    def _route_password(self, request: Request, session: dict[str, Any]) -> Response:
+        """Change one's own password - forced at the first sign-in of the bootstrap admin.
+
+        Only the hash is stored, in this store. A recoverable copy in the secret store would now be
+        out of date, so the account's ``password_ref`` is cleared rather than left pointing at it.
+        """
+        forced = bool(session.get("must_change_password"))
+        if request.method != "POST":
+            return Response.html(pages.password_page(prefix=self.prefix, session=session, forced=forced))
+        self._require_csrf(request, session)
+        form = request.form
+        current, new, again = (form.get("current_password", ""), form.get("new_password", ""),
+                               form.get("new_password_again", ""))
+        error = ""
+        user, _reason = self.auth.authenticate(
+            username=session["username"], password=current, client_ip=request.client_ip,
+            user_agent=request.headers.get("user-agent", ""),
+            max_failed=self.settings.max_failed_logins, lockout_minutes=self.settings.lockout_minutes,
+            max_failed_per_ip=self.settings.max_failed_logins_per_ip)
+        if user is None:
+            error = "The current password is wrong."
+        elif new != again:
+            error = "The two new passwords are not the same."
+        elif new == current:
+            error = "The new password must differ from the current one."
+        else:
+            try:
+                web_auth.check_password_quality(new)
+            except web_auth.WebAuthError as exc:
+                error = str(exc)
+        if error:
+            return Response.html(pages.password_page(prefix=self.prefix, session=session,
+                                                     forced=forced, error=error), status=400)
+        self.auth.set_password(username=session["username"], password=new,
+                               actor=session["username"], revoke_sessions=True, password_ref="",
+                               must_change_password=False)
+        # Every session of the account ended with the change; this browser gets a fresh one.
+        issued = self.auth.issue_session(
+            web_user_id=int(session["web_user_id"]), session_days=self.settings.session_days,
+            client_ip=request.client_ip, user_agent=request.headers.get("user-agent", ""))
+        return Response.redirect(f"{self.prefix}/?password_changed=1").with_cookie(
+            self.settings.cookie_name, issued["token"], max_age=issued["max_age_seconds"],
+            secure=self.settings.cookie_secure, samesite=self.settings.cookie_samesite)
 
     def _post_login(self, request: Request) -> Response:
         form = request.form
+        self.auth.ensure_bootstrap_admin()
         user, reason = self.auth.authenticate(
             username=form.get("username", ""),
             password=form.get("password", ""),
@@ -403,16 +497,21 @@ class WebApp:
             user_agent=request.headers.get("user-agent", ""),
             max_failed=self.settings.max_failed_logins,
             lockout_minutes=self.settings.lockout_minutes,
+            max_failed_per_ip=self.settings.max_failed_logins_per_ip,
         )
         if user is None:
-            from db_ops.db.web_auth_store import REASON_LOCKED
+            from db_ops.db.web_auth_store import REASON_IP_THROTTLED, REASON_LOCKED
 
             # One message for every failure except the lockout. A lockout has to be
             # distinguishable or the user retries forever against a door that will not open for
             # fifteen minutes; the rest stay identical so the form cannot be used to find out who
             # has an account.
+            # A throttled address is told the same way, and for the same reason: it is a door
+            # that will not open for a while, whoever is asking.
             message = ("Too many failed attempts. This account is locked for "
                        f"{self.settings.lockout_minutes} minutes.") if reason == REASON_LOCKED \
+                else ("Too many failed attempts from this address. Try again in "
+                      f"{self.settings.lockout_minutes} minutes.") if reason == REASON_IP_THROTTLED \
                 else "Wrong username or password."
             # A failed login must not be instant: it is the cheapest possible rate limit against
             # a script, and a person notices nothing.
@@ -428,11 +527,7 @@ class WebApp:
             client_ip=request.client_ip,
             user_agent=request.headers.get("user-agent", ""),
         )
-        target = form.get("next") or f"{self.prefix}/"
-        if not target.startswith("/"):
-            # Never redirect to an absolute URL from a form field: that is an open redirect, and
-            # a login page is exactly where one gets used.
-            target = f"{self.prefix}/"
+        target = safe_next(form.get("next") or "", default=f"{self.prefix}/")
         return Response.redirect(target).with_cookie(
             self.settings.cookie_name, issued["token"],
             max_age=issued["max_age_seconds"],
@@ -442,6 +537,11 @@ class WebApp:
 
     def _post_logout(self, request: Request) -> Response:
         token = request.cookie(self.settings.cookie_name)
+        session = self.current_session(request)
+        if session is not None:
+            # The same token every other form carries. A session already gone has nothing to
+            # protect, and its browser still gets the cookie cleared below.
+            self._require_csrf(request, session)
         if token:
             self.auth.revoke_session(token, reason="logout")
         # Max-Age=0 clears it. Setting the same attributes it was written with matters: a browser
@@ -606,6 +706,8 @@ class WebApp:
             return Response.redirect(f"{back}?retired_ok=1")
 
         payload = self._submitted_payload(request)
+        self._require_sensitive_confirmation(source_file, collection, item_key, payload,
+                                             request, session)
 
         result = config_edit.save_record(
             self.config, source_file=source_file, collection=collection, payload=payload,
@@ -613,6 +715,40 @@ class WebApp:
             actor=session["username"], data_dir=self.data_dir, note=form.get("note", ""))
         return Response.redirect(
             f"{back}/{quote(collection)}/{quote(result['item_key'])}?saved={result['action']}")
+
+    def _require_sensitive_confirmation(self, source_file: str, collection: str,
+                                        item_key: str | None, payload: Any, request: Request,
+                                        session: dict[str, Any]) -> None:
+        """A change to what runs, or to who may run it, needs admin level and the password again.
+
+        See :mod:`db_ops.lib.config_exec_fields` (review 0.25.0, F9.1). The password is checked
+        against the account in this session, so a script running in the operator's browser - the
+        XSS case - cannot make the change without knowing it.
+        """
+        import json as _json
+
+        from db_ops.lib.config_exec_fields import sensitive_changes
+
+        before = None
+        if item_key not in (None, "new"):
+            row = self.config.get_item(source_file=source_file, collection=collection,
+                                       item_key=item_key)
+            if row is not None:
+                before = _json.loads(row["item_json"] or "{}")
+        changed = sensitive_changes(source_file, before, payload if isinstance(payload, dict) else None)
+        if not changed:
+            return
+        what = ", ".join(changed)
+        self._require_level(session, self.settings.min_level_admin, f"Changing {what}")
+        password = request.form.get("confirm_password") or ""
+        user, _reason = self.auth.authenticate(
+            username=session["username"], password=password, client_ip=request.client_ip,
+            user_agent=request.headers.get("user-agent", ""),
+            max_failed=self.settings.max_failed_logins,
+            lockout_minutes=self.settings.lockout_minutes)
+        if user is None:
+            raise Refused(403, f"Changing {what} decides what runs on the worker, or who may run it: "
+                               "enter your password in the confirmation box and save again.")
 
     def _submitted_payload(self, request: Request) -> Any:
         """The record the operator just edited — from the field grid, or from the JSON box.
@@ -869,7 +1005,8 @@ class WebApp:
             can_edit=self._can(session, self.settings.min_level_edit),
             can_run=self._can(session, self.settings.min_level_run) and self.requests is not None,
             notice=_dashboard_notice(request.first),
-            logs=self._logs_panel(app_code, request),
+            logs=(self._logs_panel(app_code, request)
+                  if self._can(session, self.settings.min_level_admin) else None),
             config_inline=self._inline_config(block, request),
         ))
 

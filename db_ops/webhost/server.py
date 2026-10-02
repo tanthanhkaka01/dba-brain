@@ -208,12 +208,46 @@ def make_handler(*, directory: str, mount: str, latest: str, latest_glob: str, r
                 self.wfile.write(payload)
             return True
 
+        def _report_login_redirect(self) -> bool:
+            """Send an anonymous request for a report page to the console's login (B6.2).
+
+            Returns True when a redirect was sent. Only with a console - without one there is no
+            login to send anybody to, and the listener is the reports alone, as before.
+            """
+            if console is None or not getattr(console.settings, "reports_require_login", False):
+                return False
+            from db_ops.webhost.app import Request
+
+            request = Request(
+                method=self.command, path=self._console_path(), query={},
+                headers={key.lower(): value for key, value in self.headers.items()},
+                body=b"", client_ip=self.client_address[0] if self.client_address else "")
+            session = console.current_session(request)
+            if session is not None and not session.get("must_change_password"):
+                return False
+            from urllib.parse import quote
+
+            # Signed in but still on the first-run password: change it first, like the console.
+            location = (f"{console.prefix}/password" if session is not None
+                        else f"{console.prefix}/login?next={quote(self.path, safe='/?=&')}")
+            self.send_response(303)
+            self.send_header("Location", location)
+            self.send_header("Content-Length", "0")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return True
+
+        def list_directory(self, path):  # noqa: ANN001, ANN201 - matches stdlib signature
+            """No directory listings: a report is reached by its link, not by browsing (B6.2)."""
+            self.send_error(403, "Directory listing is disabled")
+            return None
+
         def do_GET(self) -> None:  # noqa: N802 - stdlib naming
-            if not self._serve_console():
+            if not self._serve_console() and not self._report_login_redirect():
                 super().do_GET()
 
         def do_HEAD(self) -> None:  # noqa: N802 - stdlib naming
-            if not self._serve_console():
+            if not self._serve_console() and not self._report_login_redirect():
                 super().do_HEAD()
 
         def do_POST(self) -> None:  # noqa: N802 - stdlib naming

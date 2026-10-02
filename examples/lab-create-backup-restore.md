@@ -267,7 +267,10 @@ echo '{"restore_id": "PG_LAB_A_TO_B", "db_type": "postgresql",
 | SQL Server | `assets/restore/sqlserver/mssql_restore.sh` | `MSSQL_LAB_B` | `"env_secrets": {"MSSQL_PASSWORD": "MSSQL_LAB_B_PASSWORD", "BACKUP_ENCRYPTION_PASSWORD": "LAB_BACKUP_ENC"}`. `MSSQL_PASSWORD` is the **target's** `sa` |
 
 **Give every restore its own `target_backup_dir`.** The copy mirrors the source: a staged file the
-source no longer has is removed. Two entries sharing one folder would delete each other's files.
+source no longer has is removed. Two entries sharing one folder would delete each other's files, so
+the loader refuses that (and a directory less than three levels deep), and the copy only works in a
+directory marked `.dbops-staging` - an empty one, or an earlier copy of the same source, is marked
+on the first run.
 
 **Run it** (`/spbot_restore <id> LATEST` builds this):
 

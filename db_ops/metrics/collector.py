@@ -296,19 +296,31 @@ def collect_metrics(
     def run_group(group_targets: list[MetricTarget]) -> _Tally:
         group_tally = _Tally()
         for target in group_targets:
-            _collect_target(
-                target=target,
-                definitions=definitions,
-                overrides=overrides,
-                secrets=secrets,
-                store=store,
-                run_id=run_id,
-                started=started,
-                dry_run=dry_run,
-                force=force,
-                include_windowed=include_windowed,
-                tally=group_tally,
-            )
+            try:
+                _collect_target(
+                    target=target,
+                    definitions=definitions,
+                    overrides=overrides,
+                    secrets=secrets,
+                    store=store,
+                    run_id=run_id,
+                    started=started,
+                    dry_run=dry_run,
+                    force=force,
+                    include_windowed=include_windowed,
+                    tally=group_tally,
+                )
+            except Exception as exc:  # noqa: BLE001 - one target must not end the pass (F3.1).
+                from db_ops.lib import store_outage
+
+                if store_outage.is_transient(exc):
+                    raise  # the store is down: the whole pass is, and says so
+                # A mistyped `disabled_collector_types` raises by design; it used to fail the whole
+                # pass, lose every other group's tally and skip the estate-wide health rebuild.
+                # Now it is this target's error, named in the run message (review 0.25.0, F3.1).
+                group_tally.error_count += 1
+                group_tally.messages.append(
+                    f"{target.server_id}: not collected - {type(exc).__name__}: {exc}")
         return group_tally
 
     try:
@@ -1232,13 +1244,27 @@ def _metric_override_config(target: MetricTarget, metric_code: str) -> dict[str,
     return matched if isinstance(matched, dict) else {}
 
 
+#: Verdicts a threshold override never overrules. The thresholds grade a *number*; these are what the
+#: metric decided without one - the check failed, there was nothing to read, the database is offline
+#: and reports `0`. Re-graded by value, each became OK the moment any override with thresholds
+#: existed for that metric on the target (review 0.25.0, F3.2). Lowering one stays possible, said
+#: outright: `severity_map` runs after this.
+_VERDICTS_THRESHOLDS_DO_NOT_OVERRULE = frozenset({"CRITICAL", "ERROR", "NO_DATA"})
+
+
 def _apply_threshold_override(
     *, metric: MetricDefinition, target: MetricTarget, metric_value: str | None,
     status: str, message: str | None
 ) -> tuple[str, str | None]:
-    """Evaluate optional numeric thresholds from the canonical per-target override."""
+    """Evaluate optional numeric thresholds from the canonical per-target override.
+
+    They grade a row the metric itself left at OK, LOGGING or WARNING - raising or lowering it by
+    the number - and leave a CRITICAL, ERROR or NO_DATA verdict as the metric gave it.
+    """
     config = _metric_override_config(target, metric.metric_code)
     if "warning_threshold" not in config and "critical_threshold" not in config:
+        return status, message
+    if str(status or "").upper() in _VERDICTS_THRESHOLDS_DO_NOT_OVERRULE:
         return status, message
     value = _optional_float(metric_value)
     if value is None:

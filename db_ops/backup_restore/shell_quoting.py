@@ -86,8 +86,8 @@ def _ps_array(values: list[str]) -> str:
     return ", ".join(_ps_quote(value) for value in values)
 
 
-def _ps_quote(value: str) -> str:
-    return "'" + value.replace("'", "''") + "'"
+# One definition, the one that doubles typographic quotes too (review 0.25.0, F12.1).
+from db_ops.lib.powershell import quote_powershell as _ps_quote  # noqa: E402
 
 
 def _write_temp_powershell_script(script: str) -> Path:

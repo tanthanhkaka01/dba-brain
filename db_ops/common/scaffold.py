@@ -43,6 +43,8 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from db_ops.lib.json_io import atomic_write_text
+
 #: The store an install starts with. Rewritten by whoever moves to PostgreSQL later, which is a
 #: change of one value plus the block beside it.
 SQLITE_STORE = {
@@ -413,7 +415,8 @@ def write_guide(root: Path, *, force: bool = False) -> tuple[str, Path | None]:
             saved = root / GUIDE_BACKUP_DIR / f"AGENTS.{utc_file_stamp()}.md"
             saved.parent.mkdir(parents=True, exist_ok=True)
             saved.write_text(current, encoding="utf-8")
-    path.write_text(text, encoding="utf-8")
+    # Atomic (review 0.25.0, B9.2): the operator's edited guide is replaced, not truncated first.
+    atomic_write_text(path, text)
     return ("replaced" if saved else "written"), saved
 
 
@@ -639,8 +642,10 @@ def initialise(root: Path, *, app_name: str = "dbabrain", force: bool = False) -
         if path.exists() and not force:
             skipped.append(relative)
             continue
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(content, indent=2) + "\n", encoding="utf-8")
+        # The plaintext secrets source is the one file here that is created private; the rest are
+        # configuration the daemon reads, perhaps as another user than the one running `init`.
+        atomic_write_text(path, json.dumps(content, indent=2) + "\n",
+                          private=relative.startswith("secrets/"))
         written.append(relative)
 
     # The guide goes in last, and it is the one file `init` always refreshes: after `pip install -U`

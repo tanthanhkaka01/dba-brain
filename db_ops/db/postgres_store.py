@@ -92,6 +92,40 @@ def resolve_store_password(
     return postgres.resolved_password(key)
 
 
+#: libpq's sslmode values, and what each becomes for pg8000, which takes an ``ssl_context`` rather
+#: than a mode. The setting was read and never passed on, so every store connection was plaintext
+#: whatever it said (review 0.25.0, B5.5). ``disable``, ``allow`` and ``prefer`` - the default -
+#: still connect without TLS: pg8000 cannot try TLS and fall back, and turning it on for every
+#: existing store would refuse the ones that do not offer it.
+SSLMODES_WITHOUT_TLS = ("disable", "allow", "prefer")
+SSLMODES_WITH_TLS = ("require", "verify-ca", "verify-full")
+
+
+def ssl_context_for(sslmode: str):
+    """The ``ssl_context`` for ``sslmode``, or ``None`` for a plaintext connection.
+
+    ``require`` encrypts and checks nothing (libpq's meaning); ``verify-ca`` checks the chain against
+    the system's trust store (``SSL_CERT_FILE`` names another bundle); ``verify-full`` checks the
+    chain and that the name is the host's.
+    """
+    mode = str(sslmode or "prefer").strip().lower()
+    if mode in SSLMODES_WITHOUT_TLS:
+        return None
+    if mode not in SSLMODES_WITH_TLS:
+        raise PostgresStoreError(
+            f"sslmode {sslmode!r} in the postgresql block of data/store_config.json is not one of "
+            f"{', '.join(SSLMODES_WITHOUT_TLS + SSLMODES_WITH_TLS)}.")
+    import ssl
+
+    context = ssl.create_default_context()
+    if mode == "require":
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    elif mode == "verify-ca":
+        context.check_hostname = False
+    return context
+
+
 def connect(
     postgres: PostgresStoreConfig,
     *,
@@ -118,6 +152,7 @@ def connect(
             "of data/store_config.json."
         )
 
+    ssl_context = ssl_context_for(postgres.sslmode)
     try:
         conn = dbapi.connect(
             host=postgres.host,
@@ -127,6 +162,7 @@ def connect(
             database=target_database,
             timeout=int(postgres.connect_timeout_seconds or 10),
             application_name=postgres.application_name or "db_ops",
+            ssl_context=ssl_context,
         )
     except Exception as exc:  # noqa: BLE001 - driver raises a wide range of connect errors.
         raise PostgresStoreError(

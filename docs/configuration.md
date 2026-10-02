@@ -87,6 +87,7 @@ declaration files it reads. It holds no threshold, target or schedule.
 | `app_name` | The name this installation reports itself as. |
 | `timezone` | **Required.** The clock this node *shows* — see §3.1. Default `UTC`. |
 | `log_dir`, `runtime_dir` | Where logs and generated output go. Relative to this file. |
+| `output_retention_days` | Days a result file under `<runtime_dir>/output` is kept - query results, xlsx and config exports, often business data. Default `7`; `0` keeps them for ever. The daemon sweeps hourly, by age (0.26.0; before it, nothing removed them - review 0.25.0, F4.3). |
 | `console_level`, `file_level` | The two logging thresholds. |
 | `store_config_file` | Pointer to the runtime store declaration. Default `data/store_config.json`. |
 | `telegram_config_file` | Pointer to the delivery settings. Default `data/telegram_config.json`. |

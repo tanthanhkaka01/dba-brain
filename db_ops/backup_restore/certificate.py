@@ -166,7 +166,7 @@ def _pair_from_source_host(config: BackupRestoreConfig) -> tuple[bytes, bytes]:
     for suffix in ("cer", "pvk"):
         if windows:
             path = source.source_dir.rstrip("\\/") + f"\\{source.name}.{suffix}"
-            command = "[Convert]::ToBase64String([IO.File]::ReadAllBytes('" + path.replace("'", "''") + "'))"
+            command = "[Convert]::ToBase64String([IO.File]::ReadAllBytes(" + _ps_quote(path) + "))"
         else:
             path = source.source_dir.rstrip("/") + f"/{source.name}.{suffix}"
             command = "base64 -w0 " + shlex.quote(path)
@@ -190,7 +190,15 @@ def fetch_backup_certificate(config: BackupRestoreConfig) -> BackupCertificate:
         headers={"Authorization": f"Bearer {token}"},
         method="GET",
     )
-    context = None if config.certificate_api_verify_tls else ssl._create_unverified_context()
+    if config.certificate_api_verify_tls:
+        ca_file = str(getattr(config, "certificate_api_ca_file", "") or "")
+        context = ssl.create_default_context(cafile=ca_file) if ca_file else None
+    else:
+        # Stated in the entry, never the default (review 0.25.0, B5.4) - and said every time.
+        print(f"WARNING: {config.certificate_api_url}: TLS verification is off "
+              "(certificate_api_verify_tls: false) - the Vault token and the certificate's key "
+              "travel to whoever answers.", file=sys.stderr)
+        context = ssl._create_unverified_context()
     with request.urlopen(http_request, timeout=30, context=context) as response:  # noqa: S310 - internal Vault endpoint.
         raw = json.loads(response.read().decode("utf-8-sig"))
     data = raw.get("data", {}).get("data", {}) if isinstance(raw, dict) else {}
@@ -277,7 +285,14 @@ def build_add_certificate_script(*, certificate: BackupCertificate, config: Back
         "PvkPath": pvk_path,
     }
     lines = [f"${name} = {_ps_quote(str(value))}" for name, value in values.items()]
-    lines.append(f"$sqlAuthArgs = @({_ps_array(_build_sqlcmd_auth_args(config))})")
+    auth = _build_sqlcmd_auth_args(config)
+    if "-P" in auth:
+        # sqlcmd reads SQLCMDPASSWORD when there is no -P: the password stays in this script body
+        # (sent on stdin) and never becomes sqlcmd's command line on the target (review 0.25.0, F11.2).
+        at = auth.index("-P")
+        lines.append(f"$env:SQLCMDPASSWORD = {_ps_quote(auth[at + 1])}")
+        auth = auth[:at] + auth[at + 2:]
+    lines.append(f"$sqlAuthArgs = @({_ps_array(auth)})")
     return "\n".join([*lines, *_WINDOWS_IMPORT_BODY])
 
 

@@ -222,13 +222,46 @@ def test_age_and_recovery_window_agree_when_a_full_is_taken_daily():
 def test_age_deletes_a_full_that_the_window_rule_would_keep():
     """The documented difference, pinned so nobody has to take the docstring's word for it: the
     20-day-old full is the base for the 10-day-old diff, and `age` removes it anyway."""
-    files = [_file("full", 20, name="base"), _file("diff", 10, name="dependent")]
+    # A newer full exists, so the floor (B4.3) does not hold the old one back.
+    files = [_file("full", 20, name="base"), _file("diff", 10, name="dependent"),
+             _file("full", 3, name="newer")]
 
     by_age = plan_retention(files, retention_days=14, mode=AGE, now=NOW)
     by_window = plan_retention(files, retention_days=14, mode=RECOVERY_WINDOW, now=NOW)
 
     assert _paths(by_age["obsolete"]) == {"/backup/db/FULL/base_20260718_120000.bak"}
     assert by_window["counts"]["obsolete"] == 0
+
+
+# ----------------------------------------------------------------- the floor (review 0.25.0, B4.3)
+# Under `age`, a database whose backups had been failing for longer than the window lost every
+# backup it had left on the next `prune --apply`, newest full included.
+
+
+@pytest.mark.parametrize("mode", [AGE, RECOVERY_WINDOW])
+def test_the_newest_full_and_its_chain_survive_any_age(mode):
+    files = [_file("full", 40, name="older"), _file("full", 30, name="last"),
+             _file("diff", 25, name="d"), _file("log", 20, name="l")]
+
+    plan = plan_retention(files, retention_days=14, mode=mode, now=NOW)
+
+    assert _paths(plan["keep"]) == {
+        "/backup/db/FULL/last_20260708_120000.bak",
+        "/backup/db/DIFF/d_20260713_120000.bak",
+        "/backup/db/LOG/l_20260718_120000.bak"}
+    assert _paths(plan["obsolete"]) == {"/backup/db/FULL/older_20260628_120000.bak"}
+    reasons = {row["path"]: row["reason"] for row in plan["keep"]}
+    if mode == AGE:
+        assert "newest full of this database" in reasons["/backup/db/FULL/last_20260708_120000.bak"]
+
+
+def test_the_floor_is_per_database():
+    files = [_file("full", 30, database="Orders", name="o"), _file("full", 30, database="Sales", name="s1"),
+             _file("full", 2, database="Sales", name="s2")]
+
+    plan = plan_retention(files, retention_days=14, mode=AGE, now=NOW)
+
+    assert _paths(plan["obsolete"]) == {"/backup/Sales/FULL/s1_20260708_120000.bak"}
 
 
 def test_an_unknown_mode_is_refused_by_name():

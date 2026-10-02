@@ -69,6 +69,14 @@ function** (`db_ops/webhost/app.py::WebApp.handle`) with the socket handling lef
 
 ### Accounts and levels
 
+**First run.** On a store with no account at all, the first visit to the login page creates
+`admin` / `admin` at level 100, and its first sign-in goes straight to *Change password*: nothing
+else in the console - and no report page - opens until it is changed (at least 8 characters,
+different from the old one). Every other session of the account ends with the change. The same
+accounts sign in to the console and to the report pages. Passwords are kept only as a PBKDF2 hash
+in the running store (`web_users`); a change made from the console clears any recoverable copy
+the CLI had written to the secret store. A store that already has accounts gets no `admin`.
+
 Accounts live in the runtime store (`web_users`), not in a file. A password is stored only as a
 PBKDF2-HMAC-SHA256 encoding at the same 200 000 iterations the encrypted secret store uses
 (`db_ops/lib/web_auth.py`); the plaintext is never written anywhere.
@@ -79,10 +87,20 @@ level unlocks is set in `data/webhost_config.json`:
 
 | Setting | Default | Gates |
 | --- | --- | --- |
-| `min_level_view` | 1 | Signing in and reading the dashboard. |
+| `min_level_view` | 1 | Every console page (enforced since the 0.25.0 review; it was read and ignored). |
 | `min_level_edit` | 50 | Changing config records. |
 | `min_level_run` | 50 | Running an app from the console. |
-| `min_level_admin` | 90 | Account and session administration. |
+| `min_level_admin` | 90 | **Reading logs**; and, together with the user's password typed again, any change to what runs or who may run it (below). Console accounts and sessions are managed with `db.cli`, not from the console - it has no account pages. |
+| `reports_require_login` | true | The report pages on the same listener need a console session; `false` only behind a proxy that authenticates. |
+
+**What runs, and who may run it** (0.25.0 review, F9.1). A change to `app_commands.command_text`
+(and `working_dir`, `env`, `node_role`), `db_instances.cmd_access`, a SQL task's script or input,
+a bot command's action, a metric's SQL variants, a restore's script/env - and any change at all to
+`telegram_users.json`, `users.json`, `emergency_operations.json`, `webhost_config.json`,
+`store_config.json` or `data_files.json` - needs `min_level_admin` **and** the password in the
+confirmation box. Before, an edit account (or a script running in its browser) could set
+`command_text` to any shell line, and the daemon ran it as the worker within a second. The list is
+`db_ops/lib/config_exec_fields.py`.
 
 The password is also written to `data/encrypted_secret_text.json` under
 `WEB_CONSOLE_<USERNAME>`, so an operator can look it up instead of resetting it:
@@ -106,6 +124,18 @@ Failed logins are counted and an account locks for `lockout_minutes` after `max_
 attempts. Every attempt — success or failure, known username or not — is recorded in
 `web_login_attempts` with the IP and user agent.
 
+**One address cannot lock somebody else's account** (0.26.0). The per-account lock alone let anyone
+lock any account - the only admin's included - with eight wrong passwords, repeatably (review
+0.25.0, B3.3). An address is refused after `max_failed_logins_per_ip` failures (default 5, below the
+account's 8; `0` turns it off), before the account is looked at, so its attempts add nothing to the
+account's count; the page says "Too many failed attempts from this address". A refusal is not itself
+a failure: retrying while refused does not keep the address refused, and it is let in again once
+its real misses have left the window. **Both limits count
+failures inside `lockout_minutes`**, read from `web_login_attempts`: the account's running total
+outlived the lock it caused, so one miss after the lock expired relocked it, and an address held
+below the limit could still lock an account a few misses per window. A locked account costs the same
+password check as any failure, so the response time does not say "exists and locked".
+
 **The form tells the browser one thing for every failure**: "Wrong username or password." The
 store records *why* it actually failed, so an operator reading `web_login_attempts` can tell a
 typo from a disabled account; the page does not, because a login form that distinguishes them is
@@ -122,8 +152,13 @@ Signing in issues a random token, sets it as a cookie, and writes a `web_session
 - **The store never holds the token**, only its SHA-256 fingerprint. Reading `web_sessions` from a
   backup, a replica or a psql prompt does not let anyone log in as anybody.
 - The cookie is `HttpOnly` (unreachable from any script on the page) and `SameSite=Lax` (a
-  cross-site POST arrives without it). Set `cookie_secure: true` in `webhost_config.json` once the
-  console is behind HTTPS.
+  cross-site POST arrives without it). **The listener is plain HTTP on every interface, and a
+  session lasts months, so on any routed network the cookie crosses in clear**: put TLS in front
+  of the console (a reverse proxy) and set `cookie_secure: true` in `webhost_config.json`. The
+  default is `false` only so a first install on a private address can sign in at all.
+- **Signing out is a form, not a link** (0.26.0): `/logout` acts only on a POST carrying the
+  session's CSRF token. A GET goes to the dashboard - it used to sign out, so any page, an
+  `<img src>` on a wiki, could end a session (review 0.25.0, B6.3).
 - **Expiry is a property of the row, not of a job.** `resolve_session` retires any session it finds
   past its `expires_at`, so a stale session stops working whether or not a sweeper is running.
 - A session never outlives its account: disabling a user, or changing their password, revokes

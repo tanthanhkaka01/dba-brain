@@ -7,8 +7,7 @@ question had no owner.
 
 The rule the operator set on 2026-09-19 is deliberately blunt, so it can be checked at any hour::
 
-    free >= bytes_to_copy x factor        default 1.5, set 2.0 when the restored database
-                                          will live on the same filesystem as the staged files
+    free >= bytes_to_copy x factor        default 2.0, for every engine (1.5 until 0.26.0)
 
 These tests are that rule (:mod:`db_ops.lib.restore_space`, arithmetic only) and the refusal built
 on it (:mod:`db_ops.backup_restore.space`). The case that matters most is the last one: a restore
@@ -77,14 +76,14 @@ def test_the_check_is_on_for_an_entry_that_says_nothing():
     rule = restore_space.parse_space_check({})
 
     assert rule.enabled
-    assert rule.factor == 1.5
+    assert rule.factor == 2.0, "x2, for every engine, since 0.26.0"
     assert rule.on_unknown == "refuse"
+    assert rule.measure_restore is False, "only the copy is measured unless the entry asks"
 
 
-def test_an_entry_can_ask_for_double():
-    rule = restore_space.parse_space_check({"space_check": {"factor": 2.0}})
-
-    assert rule.factor == 2.0
+def test_an_entry_can_ask_for_more_or_for_less():
+    assert restore_space.parse_space_check({"space_check": {"factor": 3.0}}).factor == 3.0
+    assert restore_space.parse_space_check({"space_check": {"factor": 1.0}}).factor == 1.0
 
 
 def test_a_factor_below_one_is_refused_and_says_how_to_turn_the_check_off_instead():
@@ -97,9 +96,9 @@ def test_a_factor_below_one_is_refused_and_says_how_to_turn_the_check_off_instea
 
 
 def test_a_misspelled_field_is_refused_rather_than_ignored():
-    """`{"factory": 2.0}` accepted silently is a restore running at 1.5 while its config says 2."""
+    """`{"factory": 3.0}` accepted silently is a restore running at 2 while its config says 3."""
     with pytest.raises(restore_space.RestoreSpaceError) as caught:
-        restore_space.parse_space_check({"space_check": {"factory": 2.0}})
+        restore_space.parse_space_check({"space_check": {"factory": 3.0}})
 
     assert "factory" in str(caught.value)
 
@@ -134,7 +133,8 @@ def entry(monkeypatch):
 def _measured(monkeypatch, *, incoming, free):
     from db_ops.backup_restore import space
 
-    monkeypatch.setattr(space, "measure_incoming_bytes", lambda config: incoming)
+    monkeypatch.setattr(space, "measure_copy", lambda config, **_: (
+        None if incoming is None else space.CopyMeasure(to_write=incoming, staged=0)))
     monkeypatch.setattr(space, "measure_target_free_bytes", lambda config: free)
 
 
@@ -178,7 +178,7 @@ def test_a_copy_that_fits_returns_what_it_measured(monkeypatch, entry):
     result = space.check_free_space(entry, log=lambda _message: None)
 
     assert result["ok"] is True
-    assert result["required_bytes"] == int(10 * GIB * 1.5)
+    assert result["required_bytes"] == 20 * GIB
 
 
 def test_a_restore_that_cannot_be_measured_is_refused(monkeypatch, entry):

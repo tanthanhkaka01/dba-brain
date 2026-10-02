@@ -142,6 +142,25 @@ EXEC sys.sp_executesql @restoreSql;
     return text.strip()
 
 
+def online_guard(database: str) -> str:
+    """The batch's first lines on a full restore that may REPLACE: stop if the database is ONLINE.
+
+    ``REPLACE`` overwrites whatever holds that name, and the full template first sets it
+    ``SINGLE_USER WITH ROLLBACK IMMEDIATE`` - an ONLINE database on the wrong target lost its users'
+    work and then its data, and nothing asked (owner decision G2.10, 2026-10-01). A database that is
+    not ONLINE - RESTORING from an earlier drill, or absent - is what a restore is for. The request
+    says ``overwrite_existing: true`` when overwriting an ONLINE one is the point, as a repeated
+    drill's is. ``RAISERROR`` + ``RETURN`` rather than ``THROW``: the guard runs on 2008 R2 too.
+    """
+    literal = str(database).replace("'", "''")
+    message = (f"[{database}] exists and is ONLINE on this server; a full restore would overwrite "
+               "it. State overwrite_existing: true on the restore entry when that is the intent.")
+    message = message.replace("%", "%%").replace("'", "''")
+    return (f"IF DB_ID(N'{literal}') IS NOT NULL\n"
+            f"    AND DATABASEPROPERTYEX(N'{literal}', N'Status') = N'ONLINE'\n"
+            f"BEGIN\n    RAISERROR(N'{message}', 16, 1);\n    RETURN;\nEND;\n")
+
+
 def statement(level: str, *, database: str, path: str, recovery: bool = False, stopat: str = "",
               replace: bool = True, move: dict[str, str] | None = None,
               move_files: dict[str, str] | None = None, stats: int = 10) -> str:
@@ -195,16 +214,23 @@ def build_statements(level: str, request: dict[str, Any], paths: list[str]) -> l
                            and str(move_files.get("log") or "").strip()):
         raise RestoreStepError('move_files needs both "data" and "log": the two paths on the target.')
 
+    replace = bool(request.get("replace", True))
+    guarded = level == FULL and replace and request.get("overwrite_existing") is not True
     statements: list[str] = []
     for index, path in enumerate(paths, start=1):
         last = index == len(paths)
         first = index == 1
-        statements.append(statement(
+        text = statement(
             level, database=database, path=path, recovery=last and with_recovery,
             stopat=stopat if last else "",
-            replace=first and bool(request.get("replace", True)),
+            replace=first and replace,
             move=move if first else None, move_files=move_files if first else None,
-            stats=int(request.get("stats") or 10)))
+            stats=int(request.get("stats") or 10))
+        if first and guarded:
+            # In the same batch, before anything the statement does - the full template's first act
+            # is to throw the database's users out.
+            text = "USE master;\n" + online_guard(database) + text
+        statements.append(text)
     return statements
 
 

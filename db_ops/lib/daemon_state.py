@@ -47,8 +47,10 @@ def record_start(runtime_dir: str | Path, *, version: str = "", node_role: str =
         "node_role": node_role,
     }
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, indent=1) + "\n", encoding="utf-8")
+        from db_ops.lib.json_io import atomic_write_text
+
+        # Atomic (review 0.25.0, B9.2): `self-status` reads this while the daemon writes it.
+        atomic_write_text(path, json.dumps(payload, indent=1) + "\n")
     except OSError:
         pass
     return path

@@ -130,7 +130,8 @@ def test_a_planned_restore_into_a_container_has_no_separate_log_step(monkeypatch
     monkeypatch.setattr(restore_by_id, "_list_backup_files", lambda request: {
         "files": [{"path": "/in/base/a_FULL"}] if "full" in request["kinds"] else [],
         "newest_finished_at": "2026-09-24T10:00:00Z"})
-    job = SimpleNamespace(restore_id="R", target_backup_dir="/in", target_visible_dir="", backup_dir="/o", env={})
+    job = SimpleNamespace(restore_id="R", server_id="SRC", target_server_id="TGT", target_backup_dir="/in",
+                          target_visible_dir="", backup_dir="/o", env={})
 
     steps = restore_by_id._plan_postgresql(job, {}, point_in_time="", data_dir=None,
                                            host={"runtime": "docker", "host": "h", "container": "c"})

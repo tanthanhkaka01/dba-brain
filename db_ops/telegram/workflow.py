@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,9 @@ def run_bot_workflow(
     send_per_chat: int = 5,
     send_threads: int = 10,
     pauses_path: str | Path | None = None,
+    budget_seconds: float | None = None,
+    budget_started_at: float | None = None,
+    save_offset: Callable[[Any], None] | None = None,
 ) -> dict[str, Any]:
     updates_result = fetch_and_save_updates(
         bot_token=bot_token,
@@ -39,6 +43,12 @@ def run_bot_workflow(
         data_dir=data_dir,
         sqlite_path=sqlite_path,
     )
+    if save_offset is not None:
+        # Now, not when the workflow returns. The messages are in the store, so Telegram need not
+        # send them again; waiting for the end meant any later step that raised - or the daemon
+        # killing the run at its timeout - kept the old offset, and every run re-read the same
+        # `limit` updates while the ones behind them were never fetched: a bot that stopped hearing.
+        save_offset(updates_result.get("next_update_offset"))
     command_messages_result = save_command_messages_from_messages(
         sqlite_path=sqlite_path,
         command_prefix=command_prefix,
@@ -49,7 +59,15 @@ def run_bot_workflow(
         config_path=config_path,
         limit=command_limit,
     )
+    def delete_message(chat_id: str, message_id: int) -> None:
+        from db_ops.telegram.api import call_telegram_api
+
+        call_telegram_api(bot_token=bot_token, method_name="deleteMessage",
+                          payload={"chat_id": chat_id, "message_id": message_id}, api_url=api_url,
+                          timeout_seconds=10)
+
     conversation_result = process_pending_conversation_messages(
+        delete_message=delete_message,
         sqlite_path=sqlite_path,
         commands_path=commands_path,
         config_path=config_path,
@@ -66,6 +84,8 @@ def run_bot_workflow(
         send_per_chat=send_per_chat,
         send_threads=send_threads,
         pauses_path=pauses_path,
+        budget_seconds=budget_seconds,
+        budget_started_at=budget_started_at,
     )
     return {
         "ok": True,

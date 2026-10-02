@@ -89,6 +89,30 @@ def decode(raw: bytes | None) -> str:
     return (raw or b"").decode("utf-8", errors="replace")
 
 
+def _envelope(text: str) -> Any:
+    """The JSON object the command printed - the whole of stdout, or the last object in it.
+
+    The envelope is printed last, but not always alone: a native tool the command shells out to
+    writes to the same stdout, and one line ahead of the JSON made the whole answer unreadable - a
+    command that had answered was recorded as one that had not (review 0.25.0, F1.2). So when the
+    whole text is not JSON, the last object that starts a line and runs to the end is taken. ``None``
+    when there is none.
+    """
+    try:
+        return json.loads(text)
+    except ValueError:
+        pass
+    starts = [0] + [index + 1 for index, char in enumerate(text) if char == "\n"]
+    for start in reversed(starts):
+        if text[start:start + 1] != "{":
+            continue
+        try:
+            return json.loads(text[start:])
+        except ValueError:
+            continue
+    return None
+
+
 def read_answer(command: str, *, returncode: int | None, stdout: str,
                 stderr: str) -> tuple[bool, dict[str, Any], str]:
     """``(success, data, error)`` from the envelope a command printed.
@@ -97,9 +121,8 @@ def read_answer(command: str, *, returncode: int | None, stdout: str,
     command, it is no answer, and the two must not be recorded as the same thing.
     """
     text = (stdout or "").strip()
-    try:
-        answer = json.loads(text)
-    except ValueError:
+    answer = _envelope(text)
+    if not isinstance(answer, dict):
         detail = (stderr or text or "").strip()[:400]
         raise CommonCliError(f"{command} exited {returncode} without a JSON response: {detail}") from None
     data = answer.get("data")

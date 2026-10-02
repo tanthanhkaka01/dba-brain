@@ -167,6 +167,7 @@ def test_the_copy_boundaries_are_announced_by_whoever_does_the_copy(monkeypatch)
     monkeypatch.setattr("db_ops.backup_restore.restore_script.load_script_restores",
                         lambda _p=None: [job])
     monkeypatch.setattr(module, "_host_block", lambda job, **_: {"runtime": "linux", "host": "h"})
+    monkeypatch.setattr(module, "assert_target_is_not_source", lambda *a, **k: None)
     monkeypatch.setattr(module, "_PLANNERS", {"oracle": lambda *a, **k: []})
     monkeypatch.setattr("db_ops.backup_restore.backup.resolve_ssh_target",
                         lambda *a, **k: SimpleNamespace(host="h", port=22, username="u",

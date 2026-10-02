@@ -13,28 +13,100 @@ a byte is moved:
 free >= bytes_to_copy x factor
 ```
 
-`bytes_to_copy` is the same file selection `copy-backup` will make — same window, same patterns — and
-`free` is read where the files will land (a UNC share or local path with `disk_usage`; a Linux target
-with `df -Pk` over the SSH session the copy itself uses). The rule is `db_ops/lib/restore_space.py`;
-the measuring is `db_ops/backup_restore/space.py`.
+`bytes_to_copy` is the same file selection `copy-backup` will make — same window, same patterns —
+**less the files the target already holds at their size** (0.26.0: the copy leaves those alone, so
+they take no room; a forced copy to a Linux target writes each again beside itself, and is counted
+the largest of them). `free` is read where the files will land (a UNC share or local path with
+`disk_usage`; a Linux target with `df -Pk` over the SSH session the copy itself uses). The rule is
+`db_ops/lib/restore_space.py`; the measuring is `db_ops/backup_restore/space.py`.
+
+**That is the whole rule, on every engine: the copy, at x2** (the operator, 2026-10-02). The factor
+defaults to **2.0** for SQL Server, PostgreSQL and Oracle alike (1.5 until 0.26.0), and the database
+a backup restores to is not measured: the engineer who sets up a restore knows the disk has to hold
+it. A compressed backup's size is not the size of the database inside it - a 56.8 GiB chain restored
+to 366.6 GB on 2026-10-01 - so an entry whose target is tight can ask for more:
+
+**`"measure_restore": true` - once more before each database's first RESTORE: does the database
+fit?** (0.26.0, off unless the entry says so)
+
+```
+free >= (files_the_backup_holds - files_of_the_database_it_overwrites) x factor
+```
+
+Read in one read-only batch on the target's own SQL Server, through the `sqlcmd` the restore is about
+to use: `RESTORE FILELISTONLY` of the FULL (and of the DIFF, when one is applied - its files are the
+later size) for what is created, `sys.master_files` for the database's files at the two paths the
+restore moves to, and `sys.dm_os_volume_stats` for the free space of the volume the data path is on.
+It is asked of the instance because the path is the instance's - in a container it is not a path on
+the host. A drill run again over its own last restore therefore needs only what the database grew by.
+
+```
+restore-db restore_id=DRILL database=Payroll_Main restore room: 366.6 GiB of database files to
+  create, x2 = 733.2 GiB needed, 394.0 GiB free - SHORT BY 339.2 GiB on /var/opt/mssql
+```
+
+A measured shortfall fails that database before any `RESTORE` is sent, like any other step of it; the
+other databases of the entry are still tried, and the staged backups are kept. **A measurement that
+could not be made is held to `on_unknown`**, as the copy's is: the entry asked for it by name, so it
+is refused unless the entry also says `proceed`. An instance older than 2008 R2 SP1 has no volume
+view, a login without `VIEW SERVER STATE` may not read it, and a data path on a volume that holds no
+database file yet is not listed - an entry for such a target leaves `measure_restore` out.
+
+**Only a share-driven SQL Server restore can be measured.** PostgreSQL and Oracle - every
+script-driven entry - cannot be asked what a backup holds yet, so `measure_restore: true` on one is
+refused when the configuration is read (*not supported for a script-driven restore yet*), rather
+than accepted and not kept.
+
+**A script-driven restore onto another machine is checked in its copy (0.26.0).** The entries that
+hand their backup to another host and restore it there (`restore-by-id`: PostgreSQL, Oracle, SQL
+Server in a container) carried the same `space_check` in the reference - *absent means on* - and
+nothing read it: the copy took whatever the chain held. The rule (the operator, 2026-10-02): the
+restore script checks nothing itself; the tool has checked before the script runs. So
+`common.cli copy-backup-dir` takes the entry's `space_check` and, once it knows which files it will
+write and before the first one moves, asks the target `df`: `free >= bytes still to copy x factor`.
+A file the target already holds is not counted, so a drill run again is asked about its new
+increment. A shortfall fails the restore at its copy (*will not fit ... No file was copied*); a
+target that cannot be measured is refused unless the entry says `on_unknown: proceed`. Not measured:
+what the engine's own restore then builds from those files, and an in-place drill, which copies
+nothing - that is the engineer's to size, as on every engine.
 
 Per entry, in `restore_config.json`:
 
 ```json
-"space_check": {"enabled": true, "factor": 2.0, "on_unknown": "refuse"}
+"space_check": {"enabled": true, "factor": 2.0, "on_unknown": "refuse", "measure_restore": false}
 ```
+
+These are the defaults - an entry that says nothing is checked exactly so.
 
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `enabled` | `true` | **On for an entry that says nothing.** A check that has to be switched on protects only the entries somebody remembered |
-| `factor` | `1.5` | Must be >= 1.0. Use **2.0** when the restored database will live on the same filesystem as the staged backup files — the shape that emptied the disk |
+| `factor` | `2.0` | Must be >= 1.0. `free >= bytes still to copy x factor`, the same for every engine (1.5 until 0.26.0). `1.0` asks only that it fits. Also the margin of the restore's measurement, when the entry asks for one |
 | `on_unknown` | `refuse` | What to do when a number could not be read. `proceed` is allowed and says so in the log on every run |
+| `measure_restore` | `false` | `true`: also measure the database each restore builds, before its first `RESTORE` (above). Share-driven SQL Server only; refused on a script-driven entry |
+
+**The copy's check reads the source the way the copy does (0.26.0).** A copy reads its source one of
+four ways (`copy_backup.copy_engine`): a Linux node through `smb-list` (`smbclient`), a Windows node
+copying share to share through `smb-list` too, and the other two as a path. The check used to walk
+the source as a path whatever the copy did - and to a Linux node a UNC path is no folder at all: it
+found nothing, counted **0 bytes** and said *fits*, on every restore the container worker ran. It now
+asks the copy's own engine for the selection and its sizes (`copy_backup.selected_backup_sizes`), and
+a source that cannot be read - a share that refuses the login, a folder that is not there, a listing
+with no sizes - is **unmeasured, not empty**: held to `on_unknown`, with the reason in the log line.
+On a Windows node the share's login is stored before the look, as the copy stores it.
+
+**A Linux node also needs room for what it fetches.** It cannot hand a share to the target: it
+downloads what it will transfer into its own temp folder, sends it on and removes it - on a container
+worker, the disk the runtime store shares. Before the copy the check says how much passes through
+that folder and how much is free there, and refuses a fetch that cannot fit (*will not fit on this
+node ... Nothing was copied*). Only whether it fits, without the factor: the bytes are there for the
+length of the copy. `TMPDIR` names another folder.
 
 A refusal names both numbers and what can be changed, and nothing has been copied when it fires:
 
 ```
-restore_id=DRILL will not fit: 115.0 GiB to copy, x1.5 = 172.5 GiB needed, 92.0 GiB free
-  - SHORT BY 80.5 GiB. Free 80.5 GiB on //target/import, lower space_check.factor (now 1.5),
+restore_id=DRILL will not fit: 115.0 GiB to copy, x2 = 230.0 GiB needed, 92.0 GiB free
+  - SHORT BY 138.0 GiB. Free 138.0 GiB on //target/import, lower space_check.factor (now 2),
   or restore somewhere else. Nothing was copied.
 ```
 
@@ -51,8 +123,29 @@ value in them - until 0.25.0 they were read on the entry and described nowhere t
 FULL is weekly needs a window that reaches it: `copy_recent_hours: 192` (a week and a day), with a
 `cleanup_retention` no shorter, or the staging cleanup removes what the next copy brings back.
 `--copy-hours` on `workflow` / `restore-workflow` overrides it for one run; unset, each entry copies
-by its own. Until 0.25.0 the flag defaulted to 24 and always won, so `copy_recent_hours` was parsed
+by its own. `0` (or less) is "every matching file", and for a point-in-time restore that means every
+file up to the moment. Until 0.25.0 the flag defaulted to 24 and always won, so `copy_recent_hours` was parsed
 and never used by a scheduled, manual or `/spbot_restore` run.
+
+**A SQL Server restore copies its chain, not its window (0.26.0).** Before the copy, each mapped
+database's backups on the source are listed and the restore's own rule picks the chain: the newest
+FULL at or before the moment (now, or the point in time), the newest DIFF after it and at or before
+the moment, and the LOGs after that - for a point in time, up to and including the first LOG that
+reaches it, which is written after the moment (`db_ops/lib/sqlserver_backup_chain.py`). Only those
+files are copied, and the space check counts the same list. On 2026-10-01 the window copy of the
+100.250 drill was **527.9 GiB** - eight days of daily DIFFs and hourly LOGs, because the window had to
+reach a weekly FULL - for a chain of **56.8 GiB**, and the space check refused it. All three copy
+paths take the chain: the Windows node's listing of the share, the Windows target's share listing,
+and the Linux node's `smbclient` listing. `copy_recent_hours` is now the fallback for a database the
+chain cannot be settled for (no FULL at or before the moment, or no `FULL` / `DIFF` / `LOG` folders),
+and still how old a staged FULL the restore step takes - so keep it reaching the newest FULL.
+
+**`copy_selection` chooses which of the two the copy takes** (the operator, 2026-10-01), on the
+`backup_restore` block and, overriding it, on a restore entry: `"chain"` (the default) or
+`"window"` - every file of `copy_recent_hours`, as before 0.26.0, for a target that must hold every
+restore point of the range and has the room. The space check counts whichever list is copied, so a
+`window` entry that will not fit is refused before the first byte. Any other value is refused when
+the configuration is read (`config.COPY_SELECTIONS`).
 
 **The free space is read where the staged files will land, even before that folder exists.** The
 copy makes the staging folder, and it runs after this check - so on a target never restored to,
@@ -455,6 +548,11 @@ different question from "did the backup run".
 Measured on 2026-08-07 across the 9 active jobs: 6 pruned, 3 skipped, 10 obsolete WAL files found
 on `CLOUD_PG_WAL` at its 7-day window, nothing deleted (report mode).
 
+**Each database's newest full, and everything after it, is always kept** (0.25.0 review), in both
+modes, with the reason `the newest full of this database - kept regardless of age`. Under `age`, a
+database whose backups had been failing for longer than the window lost every backup it had left on
+the next `--apply`.
+
 ### The restore staging folder — age **and** obsolete
 
 `delete-backup` (inside `restore-workflow`) clears the import share. It has always deleted by age
@@ -476,6 +574,19 @@ Linux one component, no split at `\` - and read the chain by walking the UNC pat
 node cannot: every aged file was held back as `still_needed` and the share was never cleaned. Safe,
 but it filled. A Windows node was unaffected, and so was a Linux target (the SSH engine). Found by
 `ci` on the 0.24.0 release commit, whose runners are Linux.
+
+**Only what this entry staged** (0.26.0). The cleanup recursed every `*.bak` / `*.trn` under the
+import root, so a root set one level too high - onto the target host's own backup or data directory
+- had that host's own backups deleted by age, and the guard only refused the source's folder or a
+one-component path (`/data` passed). The copy writes under `<root>/<mapped source database>/`, so all
+three engines now consider only files there; an entry that maps no database needs a Linux root at
+least three levels below `/` (`/opt/db_ops/staging`), or it is refused before anything is listed
+(review 0.25.0, B4.2).
+
+**Only a full anchors a chain** (0.25.0 review). A SQL Server differential is a `.bak` like the full
+it restores onto; classified by extension, the newest DIFF became the anchor and the FULL was
+deleted as obsolete once it passed the retention. The kind is read from the folder
+(`FULL`/`DIFF`/`LOG`…), the name (`_DIFF_`, `_INCR_`, `_LOG_`) and the extension (`.trn`).
 
 **A chain is per database, not per directory.** One staging directory holds every database copied
 from a source (`<source>/<database>/<FULL|LOG>/`), so "the newest full" has to be asked once per
@@ -1150,6 +1261,54 @@ matched nothing in `db_instances.json`. `source` and `target` now hold connectio
 `instance-add` with `"active": false` — rather than named by a label: the restore then points at a
 record that says what the machine is, and switching it on later is one field.
 
+### Nothing about the target is taken from the source (0.25.0 review)
+
+A script-driven entry states its target in full, or it does not load:
+
+| Entry | Required |
+| --- | --- |
+| every entry | `server_id`, `db_type`, `target_server_id`, `backup_dir`, `script` |
+| target on another machine | `target_backup_dir` (its own, ≥ 3 levels deep, not shared or nested with another entry on that target), `source_backup_host_dir` |
+| target on the source's machine (`target_server_id` = `server_id`) | `target_container`, `target_visible_dir`; SQL Server also `env.MSSQL_PORT` |
+
+**An entry that is switched off does not stop the others (0.26.0).** The table is enforced on an
+**active** entry, and an active entry that fails it refuses the whole file - it is about to run.
+An entry with `"active": false` runs nothing, so one that fails the table is kept out of the list
+instead (`ScriptRestores.unusable`): `list-restores` shows it under *Inactive and incomplete* with
+what it lacks, asking for it by id (`restore-workflow --restore-id`, `/spbot_restore`) answers with
+that reason, and every other entry loads. Until then one retired drill with no `target_server_id`,
+or a two-level staging folder, stopped every script-driven restore on the node - the scheduled
+pass, the listing, and registering a new entry. Where an active entry and an inactive one share a
+staging folder, the inactive one yields. An entry being registered (`restore-add`) is held to the
+table whether it is active or not. A duplicate `restore_id` is still refused for the whole file.
+
+Optional, on an entry whose target is another machine: **`copy_mode`** - `auto` (the default: one
+`tar` stream, and file by file over SFTP when tar cannot be used on either end), `tar` or `sftp`.
+The copy's answer and the `COPY_DONE` message say which way ran; pinned to `tar`, a stream that
+cannot be used fails the copy instead of taking hours file by file. Any other value is refused when
+the entry is read (0.26.0, owner decision G4 - `docs/13_common.md`, *A fallback in how*).
+
+The SMB-path drill (`restore-workflow`, `restore_config.json`) compares its hosts the same way
+since 0.26.0: the source's `credential_target` and share host against the target's
+`credential_target`, import share and `restore_sql_instance_on_vm` are one machine when the strings
+match **or** a resolved address is shared - `\\PRODSQL\...` against `192.0.2.50,1433` passed while
+both were the production server (review 0.25.0, B4.6). Loopback never counts (`localhost` is the
+target VM), and a name that does not resolve is compared as a string, as before.
+
+Before any step, `restore_by_id` refuses a target that is the source instance: the same machine
+(by name or resolved address) with the same container or none, or - for SQL Server - the source's
+port. An entry with only `target_container` used to mean "a container on the source host", and the
+SQL Server plan then connected to the source's own port and ran `RESTORE ... REPLACE` there.
+
+**The staging directory is marked.** The copy mirrors the source and the prune deletes by age, so
+both act only on a directory holding `.dbops-staging`. An empty directory is marked on first use, and
+a staging folder from before 0.25.0 is adopted by itself: it shares files with its source, so the
+copy marks it and goes on. Only a directory holding files the source does not have, with no marker,
+is refused (nothing copied, nothing deleted), with the `touch` command that marks it.
+
+**An unknown chain is not copied whole.** A PostgreSQL source with no `_FULL`, or an Oracle source
+whose RMAN preview names no piece, fails the transfer with the reason.
+
 ## The Transfer Copies the Chain, Not the Backup History
 
 A drill needs the pieces it will actually restore from, and nothing else. How that set is decided
@@ -1229,9 +1388,10 @@ from one lab host restored into another) failed six ways before any data arrived
 - **A backup that cannot be read is named, not skipped.** Only a file SQL Server says is not a
   backup (Msg 3241-3243 - the exported certificate beside the set) is skipped; anything else fails
   the listing with the file's path. Both faults above used to read *no databases found*.
-- **The plan connects to the target's own port** - its `db_instances.json` record, or
-  `env.MSSQL_PORT` for a target named by a host record. It was always 1433, which on a host running a
-  1433 and an 11433 lab is the other instance.
+- **The plan connects to the target's own port** - `env.MSSQL_PORT`, or the target's own
+  `db_instances.json` record. It was always 1433, which on a host running a 1433 and an 11433 lab is
+  the other instance. Since the 0.25.0 review there is no default at all: a target whose port is not
+  stated is refused, and so is the source's own port on the source's machine.
 - **A failed restore says why.** The reason is appended to the event message and shown as
   `error_text=` under *Restore workflow FAILED.*; before, it was only in `job_runs.error_text`.
 
@@ -1463,9 +1623,12 @@ now always something. The `--delete-hours` / `--hours` spellings still work and 
 3600 in the open (`cli._retention_override`), rather than the configured seconds being divided
 down somewhere inside the workflow.
 
-Whole days are still derived at the two edges that only speak days: `RETENTION_DAYS` in the backup
-scripts' environment, and the day-based planner in `db_ops/lib/backupfiles_retention.py`. Neither
-is a second setting — `BackupJob.retention_days` is a read-only property over this one.
+Whole days are still derived at the one edge that only speaks days: `RETENTION_DAYS` in the
+backup scripts' environment. It is not a second setting — `BackupJob.retention_days` is a read-only
+property over this one. The prune planner (`db_ops/lib/backupfiles_retention.py`) takes the seconds
+as they are since 0.26.0: converted to whole days, anything under a day became 0 and 0 became the
+14-day default, so a two-hour lab retention kept two weeks of backups without a word (review 0.25.0,
+B4.4). Its answer names the window in the unit it was given (`window`: `"8-day"`, `"7200-second"`).
 
 Both phases announce themselves to the store (`DELETE_START` / `DELETE_DONE`) with
 `files_considered` / `deleted` / `skipped`. Until 2026-09-11 the cleanup wrote nothing at all: across
@@ -1563,6 +1726,16 @@ Two properties are deliberate:
   volume. **`"checkdb": false` on the restore entry skips the check** (default `true`); the run then
   logs `dbcc-checkdb skipped … reason=checkdb_false_on_the_entry` and its step says so. Until
   2026-09-24 the check had no switch and a failed one was reported as *restore failed*.
+- *[DB] exists and is ONLINE on this server; a full restore would overwrite it* (0.26.0): the
+  database is ONLINE on the target and the entry does not say `"overwrite_existing": true`. A full
+  restore `REPLACE`s the database after setting it `SINGLE_USER WITH ROLLBACK IMMEDIATE`, so an entry
+  aimed at the wrong server threw out its users and overwrote their data with nothing asked (owner
+  decision G2.10). The check runs inside the restore's own batch, before anything else; a database
+  RESTORING from an earlier run, or absent, is restored as before. A drill that runs again over its
+  own last restore states `"overwrite_existing": true` - SMB and script entries alike.
+- *env.MSSQL_USER is not stated, so the restore logs in as sa* (a warning in the answer, 0.26.0): a
+  script-driven SQL Server entry still logs in as `sa` when it names no login, and the next release
+  refuses it (G2.11). State `"env": {"MSSQL_USER": "..."}`.
 - PITR fails with "no log backups found": log backups are required in the import folder covering the target point in time; verify that log files were copied with `copy-backup` before using `--point-in-time`.
 - PITR fails with "cannot parse point-in-time": use the exact format `YYYY-MM-DD HH:MM:SS +HH:MM` (space before the timezone offset, not a colon-less `+HHMM`).
 - `--restore-id` not found: the value must match the `restore_id` key exactly (case-sensitive) in `restore_config.json`.

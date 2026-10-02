@@ -27,7 +27,9 @@ from db_ops.control._support import (
     DEFAULT_REMOTE_DIR,
     ssh_connect,
 )
+from db_ops.lib.json_io import atomic_write_text
 from db_ops.lib.paths import OPERATOR_ASSET_KINDS
+from db_ops.lib.secret_text import write_secret_file
 from db_ops.lib.data_files import known_names, pullable_names
 
 
@@ -290,18 +292,9 @@ def _detect_json_indent(text: str, default: int = 4) -> int:
 
 
 def _write_json_atomic(path: Path, data: dict, *, indent: int = 4) -> None:
-    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
-    os.close(fd)
-    try:
-        with open(tmp, "w", encoding="utf-8", newline="\n") as handle:
-            handle.write(json.dumps(data, ensure_ascii=False, indent=indent) + "\n")
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    # Through the one atomic writer, which keeps the replaced file's mode and owner: this copy made
+    # every merged file 0600 and owned by whoever ran the deploy (review 0.25.0, B9.2).
+    atomic_write_text(path, json.dumps(data, ensure_ascii=False, indent=indent) + "\n")
 
 
 def merge_worker_secrets(
@@ -619,10 +612,9 @@ def _merge_secret_stores_from_files(
         return "WOULD"
 
     if encrypted_added:
-        local.write_text(
-            json.dumps(encrypt_secret_text(merged, resolved_key), indent=2, ensure_ascii=False)
-            + "\n",
-            encoding="utf-8",
+        write_secret_file(
+            local,
+            json.dumps(encrypt_secret_text(merged, resolved_key), indent=2, ensure_ascii=False) + "\n",
         )
         print(
             f"           encrypted store added {len(encrypted_added)} ref(s): "
@@ -632,11 +624,7 @@ def _merge_secret_stores_from_files(
     if master_only:
         print(f"           kept {len(master_only)} master-only ref(s)", flush=True)
     if plaintext is not None and plaintext_added:
-        plaintext.parent.mkdir(parents=True, exist_ok=True)
-        plaintext.write_text(
-            json.dumps(merged, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
+        write_secret_file(plaintext, json.dumps(merged, indent=2, ensure_ascii=False) + "\n")
         print(
             f"           plaintext source added {len(plaintext_added)} ref(s): "
             f"{', '.join(plaintext_added)}",

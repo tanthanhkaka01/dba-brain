@@ -26,6 +26,7 @@ from typing import Any
 
 from db_ops.lib.json_io import load_json_file
 from db_ops.lib.paths import DEFAULT_DATA_DIR, PACKAGE_DIR, reference_file
+from db_ops.lib.stated_facts import FALLBACK_KIND, fallbacks
 
 #: The file, by the name it has in every one of its three homes.
 FILENAME = "shared_config_objects.json"
@@ -123,7 +124,9 @@ VIOLATION_KINDS = ("missing", "value", "unknown")
 #: reported 110 routing levels as deprecated.
 DEPRECATED_KIND = "deprecated"
 UNLISTED_KIND = "unlisted"
-NOTICE_KINDS = (DEPRECATED_KIND, UNLISTED_KIND)
+#: ``FALLBACK_KIND`` - a record that leaves which-thing facts to a default (``lib.stated_facts``):
+#: reported in this release, refused in the next (the owner's no-fallback rule, phase 1).
+NOTICE_KINDS = (DEPRECATED_KIND, UNLISTED_KIND, FALLBACK_KIND)
 
 _TRUE_TEXT = {"1", "true", "yes", "y", "on"}
 _FALSE_TEXT = {"0", "false", "no", "n", "off"}
@@ -484,6 +487,7 @@ def check_data_dir(data_dir: str | Path | None = None) -> dict[str, Any]:
                                          reference=reference):
                     (notices if item["kind"] in NOTICE_KINDS else findings).append(item)
 
+    notices.extend(fallbacks(root))
     return {
         "data_dir": str(root),
         "records_walked": checked_records,

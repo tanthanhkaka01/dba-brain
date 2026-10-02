@@ -796,8 +796,8 @@ CHECK_SECRET_USAGE = (
     "Tries to authenticate with each secret in the store and reports what happened. A secret is\n"
     "resolved to a target by walking every config that can name it - db_instances (a database\n"
     "login or a cmd_access OS login), docker_db_connections (which carries the published\n"
-    "non-default port), restore_config, users.json remote_credentials - and only then the\n"
-    "standard key name.\n"
+    "non-default port), restore_config, users.json remote_credentials. Never the ref's own name:\n"
+    "a secret is sent only to a host the configuration names for it.\n"
     "\n"
     "When cmd_access does not state a method the protocol is PROBED: SSH on 22, then WinRM on\n"
     "5985/5986. The estate is mixed, and asking an Ubuntu host over WinRM reports it unreachable\n"
@@ -810,13 +810,12 @@ CHECK_SECRET_USAGE = (
     "Fields (all optional):\n"
     "  refs             list of password_ref names to check\n"
     "  match            regex matched against password_ref NAMES\n"
-    "  allow_name_host  derive the host from the standard key name when no config names the ref\n"
-    "                   (default true - this command only reads, so a guess costs nothing)\n"
     "  timeout_seconds  connect timeout (default 8)\n"
+    "  allow_name_host  removed in 0.26.0 - a request carrying true is refused\n"
     "\n"
     "Statuses: OK | AUTH_FAILED | UNREACHABLE | CONNECT_FAILED | NOT_A_LOGIN (key material or a\n"
-    "service token - there is nothing to log in to) | NO_TARGET (a config names it but carries no\n"
-    "host) | UNKNOWN_REF. Exit 1 if any secret resolved to NO_TARGET.\n"
+    "service token - there is nothing to log in to) | NO_TARGET (no config names the ref, or the\n"
+    "one that does carries no host) | UNKNOWN_REF. Exit 1 if any secret resolved to NO_TARGET.\n"
 )
 
 PROBE_HOST_USAGE = (
@@ -1675,6 +1674,32 @@ def _read_key_flags(rest: list[str], usage: str, command: str) -> tuple[str | No
     return key, key_base64, 0
 
 
+
+def _config_data_dir(config_path: str, *, named: bool) -> Path | None:
+    """The data dir a secret-touching command reads: the named config's own, or this node's.
+
+    These four looked for ``data_dir`` on the loaded config - a field it does not have - and fell
+    back to the process's default data dir when the config could not be read: ``rotate-password
+    --config D:/other/config.json`` read and rewrote the secret store of whatever root the process
+    stood in (owner decision G3.1). A named config must load, and its own ``data/`` is used; with
+    none named, ``None``: the node's own data dir, as ``data_sources`` resolves it for every other
+    config-file command (``DB_OPS_HOME`` / ``DB_OPS_DATA_DIR``).
+    """
+    from db_ops.lib.config import load_config
+    from db_ops.lib.paths import resolve_data_dir
+
+    if not named:
+        return None
+    path = Path(config_path).expanduser()
+    load_config(path)
+    return resolve_data_dir(tool_root=path.resolve().parent)
+
+
+def _unreadable_config(config_path: str, exc: BaseException) -> str:
+    return (f"--config {config_path} cannot be read ({exc}). Nothing was done: the data dir comes "
+            "from the config named, never from a default.")
+
+
 def _rotate_password_command(argv: list[str]) -> int:
     """``rotate-password`` — the CLI face of :mod:`db_ops.common.password_rotation`.
 
@@ -1691,6 +1716,7 @@ def _rotate_password_command(argv: list[str]) -> int:
 
     source = ""
     config_path = "config.json"
+    config_named = False
     key = key_base64 = None
     rest = list(argv)
     while rest:
@@ -1700,6 +1726,7 @@ def _rotate_password_command(argv: list[str]) -> int:
             return 0
         if token == "--config":
             config_path = rest.pop(0) if rest else config_path
+            config_named = True
         elif token == "--key":
             key = rest.pop(0) if rest else None
         elif token in {"--key-base64", "--key_base64"}:
@@ -1723,21 +1750,31 @@ def _rotate_password_command(argv: list[str]) -> int:
     if request is None:
         return code
 
-    from db_ops.lib.config import load_config
 
     try:
-        config = load_config(config_path)
-        data_dir = getattr(config, "data_dir", None)
-    except Exception:  # noqa: BLE001 - the data dir falls back to the package default.
-        data_dir = None
+        data_dir = _config_data_dir(config_path, named=config_named)
+    except Exception as exc:  # noqa: BLE001 - every unreadable config is the same refusal.
+        from db_ops.lib import response as _response
+
+        return _response.emit(_response.fail("rotate-password", _unreadable_config(config_path, exc)))
 
     try:
-        outcome = password_rotation.rotate(request, data_dir=data_dir)
+        # Each new password is stored the moment it is verified, before the next ref is touched,
+        # and a store failure rolls that change back. Storing them all after every change had run
+        # lost every password after the first store error (review 0.25.0, F11.1).
+        persist = None
         if not request.get("dry_run"):
             plaintext = request.get("plaintext_store", "secrets/secret_text.json")
-            outcome["stored"] = password_rotation.persist_rotated(
-                outcome, data_dir=data_dir, plaintext_store=plaintext or None
-            )
+            persist = password_rotation.store_writer(data_dir=data_dir,
+                                                     plaintext_store=plaintext or None)
+        outcome = password_rotation.rotate(request, data_dir=data_dir, persist=persist)
+        if persist is not None:
+            outcome["stored"] = sum(1 for item in outcome.get("results", []) if item.get("stored"))
+            stranded = [item["password_ref"] for item in outcome.get("results", [])
+                        if item.get("_new_password")]
+            if stranded:
+                # Store write AND rollback failed: the database holds a password nobody has.
+                outcome["stranded"] = stranded
     except password_rotation.PasswordRotationError as exc:
         return response.emit(response.fail("rotate-password", str(exc)))
     except Exception as exc:  # noqa: BLE001 - report as a response like every other command.
@@ -1757,6 +1794,10 @@ def _rotate_password_command(argv: list[str]) -> int:
     reason = str(safe.get("error") or "") or (
         "; ".join(f"{item.get('ref') or item.get('credential_name')}: {item.get('error')}"
                   for item in failed) or "rotation did not succeed")
+    if outcome.get("stranded"):
+        reason = ("LOCKED OUT: the new password of " + ", ".join(outcome["stranded"])
+                  + " could not be stored and the rollback failed - reset it on the server by hand. "
+                  + reason)
     return response.emit(response.fail(
         "rotate-password", reason, message=message + ".", data=safe,
         metrics={"rotated": len(rotated), "failed": len(failed)}))
@@ -1831,6 +1872,7 @@ def _check_secret_literals_command(argv: list[str]) -> int:
 
     source = ""
     config_path = "config.json"
+    config_named = False
     key = None
     key_base64 = None
     rest = list(argv)
@@ -1841,6 +1883,7 @@ def _check_secret_literals_command(argv: list[str]) -> int:
             return 0
         if token == "--config":
             config_path = rest.pop(0) if rest else config_path
+            config_named = True
         elif token == "--key":
             key = rest.pop(0) if rest else None
         elif token in {"--key-base64", "--key_base64"}:
@@ -1856,13 +1899,14 @@ def _check_secret_literals_command(argv: list[str]) -> int:
     if request is None:
         return code
 
-    from db_ops.lib.config import load_config
     from db_ops.common import secret_literals as _sl  # noqa: F401 - imported above, kept explicit
 
     try:
-        data_dir = getattr(load_config(config_path), "data_dir", None)
-    except Exception:  # noqa: BLE001 - fall back to the package default data dir.
-        data_dir = None
+        data_dir = _config_data_dir(config_path, named=config_named)
+    except Exception as exc:  # noqa: BLE001 - every unreadable config is the same refusal.
+        from db_ops.lib import response as _response
+
+        return _response.emit(_response.fail("check-secret-literals", _unreadable_config(config_path, exc)))
 
     try:
         resolved = resolve_cli_key(key, key_base64)
@@ -1904,6 +1948,7 @@ def _check_identifiers_command(argv: list[str]) -> int:
 
     source = ""
     config_path = "config.json"
+    config_named = False
     rest = list(argv)
     while rest:
         token = rest.pop(0)
@@ -1912,6 +1957,7 @@ def _check_identifiers_command(argv: list[str]) -> int:
             return 0
         if token == "--config":
             config_path = rest.pop(0) if rest else config_path
+            config_named = True
         elif not source:
             source = token
         else:
@@ -1922,13 +1968,14 @@ def _check_identifiers_command(argv: list[str]) -> int:
     if request is None:
         return code
 
-    from db_ops.lib.config import load_config
     from db_ops.lib import response
 
     try:
-        data_dir = getattr(load_config(config_path), "data_dir", None)
-    except Exception:  # noqa: BLE001 - fall back to the package default data dir.
-        data_dir = None
+        data_dir = _config_data_dir(config_path, named=config_named)
+    except Exception as exc:  # noqa: BLE001 - every unreadable config is the same refusal.
+        from db_ops.lib import response as _response
+
+        return _response.emit(_response.fail("check-identifiers", _unreadable_config(config_path, exc)))
 
     try:
         outcome = identifier_scan.scan(request, data_dir=data_dir)
@@ -1972,6 +2019,7 @@ def _check_secret_command(argv: list[str]) -> int:
 
     source = ""
     config_path = "config.json"
+    config_named = False
     key = key_base64 = None
     rest = list(argv)
     while rest:
@@ -1981,6 +2029,7 @@ def _check_secret_command(argv: list[str]) -> int:
             return 0
         if token == "--config":
             config_path = rest.pop(0) if rest else config_path
+            config_named = True
         elif token == "--key":
             key = rest.pop(0) if rest else None
         elif token in {"--key-base64", "--key_base64"}:
@@ -2001,12 +2050,13 @@ def _check_secret_command(argv: list[str]) -> int:
     if request is None:
         return code
 
-    from db_ops.lib.config import load_config
 
     try:
-        data_dir = getattr(load_config(config_path), "data_dir", None)
-    except Exception:  # noqa: BLE001 - fall back to the package default data dir.
-        data_dir = None
+        data_dir = _config_data_dir(config_path, named=config_named)
+    except Exception as exc:  # noqa: BLE001 - every unreadable config is the same refusal.
+        from db_ops.lib import response as _response
+
+        return _response.emit(_response.fail("check-secret", _unreadable_config(config_path, exc)))
 
     from db_ops.lib import response
 

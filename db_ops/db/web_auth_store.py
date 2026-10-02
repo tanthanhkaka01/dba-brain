@@ -52,7 +52,12 @@ from db_ops.db.store import ensure_sqlite_column
 from db_ops.lib import web_auth
 
 #: 2 — added web_users.password_ref, the secret-store entry holding a recoverable copy.
-WEB_AUTH_SCHEMA_VERSION = 2
+#: 3 — added web_users.must_change_password, set on the bootstrap admin (0.25.0 review).
+WEB_AUTH_SCHEMA_VERSION = 3
+
+#: The account a store with no users at all gets on first use, to be changed at its first sign-in.
+BOOTSTRAP_USERNAME = "admin"
+BOOTSTRAP_PASSWORD = "admin"
 
 #: Why a login was refused. Recorded per attempt, and deliberately *not* what the user is told —
 #: see :meth:`WebAuthStore.authenticate`.
@@ -61,12 +66,18 @@ REASON_NO_USER = "no_such_user"
 REASON_DISABLED = "account_disabled"
 REASON_BAD_PASSWORD = "bad_password"
 REASON_LOCKED = "locked_out"
+REASON_IP_THROTTLED = "ip_throttled"
 
 #: Failed attempts before an account is locked, and for how long. Modest numbers: this is an
 #: internal tool behind the office network, so the lockout is there to stop an online guessing
 #: run, not to survive a determined offline attack — the KDF does that.
 DEFAULT_MAX_FAILED = 8
 DEFAULT_LOCKOUT_MINUTES = 15
+#: Failed attempts from one address, inside the same window, before that address is refused. Below
+#: the account's number on purpose: the per-account lock alone let anyone lock any account - the
+#: only admin's included - with eight wrong passwords, repeatably (review 0.25.0, B3.3). One address
+#: now stops before it can lock anything. 0 turns it off.
+DEFAULT_MAX_FAILED_PER_IP = 5
 
 
 class WebAuthError(RuntimeError):
@@ -145,6 +156,12 @@ class WebAuthStore:
                 column_name="password_ref",
                 column_sql="password_ref TEXT NOT NULL DEFAULT ''",
             )
+            ensure_sqlite_column(
+                conn,
+                table_name="web_users",
+                column_name="must_change_password",
+                column_sql="must_change_password INTEGER NOT NULL DEFAULT 0",
+            )
             backend_mod.record_schema_version(conn, "WebAuthStore", WEB_AUTH_SCHEMA_VERSION)
         backend_mod.mark_schema_ready("WebAuthStore", self.target)
 
@@ -153,12 +170,13 @@ class WebAuthStore:
     # ------------------------------------------------------------------ #
     def create_user(self, *, username: str, password: str, level: int,
                     display_name: str = "", email: str = "", actor: str = "",
-                    note: str = "", password_ref: str = "") -> int:
+                    note: str = "", password_ref: str = "", must_change_password: bool = False,
+                    check_quality: bool = True) -> int:
         """Register an account. Refuses a username that is already active."""
         self.initialize()
         name = web_auth.normalize_username(username)
         user_level = web_auth.coerce_level(level)
-        encoded = web_auth.hash_password(password)
+        encoded = web_auth.hash_password(password, check_quality=check_quality)
         if self.get_user(name) is not None:
             raise WebAuthError(
                 f"User '{name}' already exists and is active. Change its password or level "
@@ -168,16 +186,19 @@ class WebAuthStore:
                 """
                 INSERT INTO web_users
                     (username, display_name, email, password_hash, password_ref, user_level,
-                     is_active, failed_login_count, created_at, updated_at, created_by, note)
-                VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?, ?)
+                     is_active, failed_login_count, created_at, updated_at, created_by, note,
+                     must_change_password)
+                VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?, ?, ?)
                 """,
                 (name, str(display_name or ""), str(email or ""), encoded, str(password_ref),
-                 user_level, utc_text(utc_now()), utc_text(utc_now()), str(actor), str(note)),
+                 user_level, utc_text(utc_now()), utc_text(utc_now()), str(actor), str(note),
+                 1 if must_change_password else 0),
             )
             return int(cursor.lastrowid)
 
     def set_password(self, *, username: str, password: str, actor: str = "",
-                     revoke_sessions: bool = True, password_ref: str | None = None) -> int:
+                     revoke_sessions: bool = True, password_ref: str | None = None,
+                     must_change_password: bool = False) -> int:
         """Replace an account's password.
 
         Existing sessions are revoked by default, and that default is the point: a password is
@@ -193,12 +214,13 @@ class WebAuthStore:
                 """
                 UPDATE web_users
                 SET password_hash = ?, password_ref = ?, failed_login_count = 0,
-                    locked_until = NULL, updated_at = ?, updated_by = ?
+                    locked_until = NULL, updated_at = ?, updated_by = ?, must_change_password = ?
                 WHERE web_user_id = ?
                 """,
                 (encoded,
                  str(password_ref) if password_ref is not None else str(user["password_ref"] or ""),
-                 utc_text(utc_now()), str(actor), int(user["web_user_id"])),
+                 utc_text(utc_now()), str(actor), 1 if must_change_password else 0,
+                 int(user["web_user_id"])),
             )
         if revoke_sessions:
             self.revoke_user_sessions(int(user["web_user_id"]), reason="password changed")
@@ -234,6 +256,30 @@ class WebAuthStore:
             )
         self.revoke_user_sessions(int(user["web_user_id"]), reason="account disabled")
         return int(user["web_user_id"])
+
+    def ensure_bootstrap_admin(self) -> bool:
+        """On a store with no account at all, create ``admin`` / ``admin`` (level 100), to be changed
+        at its first sign-in. Returns True when it was created.
+
+        Only when the table is empty - disabled rows included - so a deployment that removed or
+        renamed its admin never gets one back by itself. The password is stored as a PBKDF2 hash
+        in this store like every other; nothing is written to the secret store.
+        """
+        self.initialize()
+        with self.connect() as conn:
+            row = conn.execute("SELECT COUNT(*) AS n FROM web_users").fetchone()
+        if int(row["n"] or 0):
+            return False
+        self.create_user(username=BOOTSTRAP_USERNAME, password=BOOTSTRAP_PASSWORD, level=100,
+                         display_name="Administrator", actor="bootstrap",
+                         note="created on first run; password must be changed at first sign-in",
+                         must_change_password=True, check_quality=False)
+        return True
+
+    def bootstrap_pending(self) -> bool:
+        """Is the first-run ``admin`` still waiting for its first password change?"""
+        user = self.get_user(BOOTSTRAP_USERNAME)
+        return user is not None and bool(int(user["must_change_password"] or 0))
 
     def get_user(self, username: str) -> Any | None:
         """The **active** account for a username, or ``None``."""
@@ -276,7 +322,8 @@ class WebAuthStore:
     # ------------------------------------------------------------------ #
     def authenticate(self, *, username: str, password: str, client_ip: str = "",
                      user_agent: str = "", max_failed: int = DEFAULT_MAX_FAILED,
-                     lockout_minutes: int = DEFAULT_LOCKOUT_MINUTES) -> tuple[Any | None, str]:
+                     lockout_minutes: int = DEFAULT_LOCKOUT_MINUTES,
+                     max_failed_per_ip: int = DEFAULT_MAX_FAILED_PER_IP) -> tuple[Any | None, str]:
         """Check a credential. Returns ``(user_row_or_None, reason)``.
 
         The **reason is for the log, not for the browser.** Every failure path returns a distinct
@@ -287,13 +334,27 @@ class WebAuthStore:
 
         A password check runs even when the username is unknown, against a throwaway hash. Without
         it the response time alone answers "does this account exist" — the same question the
-        message above refuses to answer.
+        message above refuses to answer. A locked account and a throttled address cost the same
+        check, for the same reason: the locked path skipped it, and its speed said "exists, locked".
+
+        Both limits count failures **inside the lockout window**, from ``web_login_attempts``. The
+        account's count was a running total that a lock's expiry did not reset, so one more miss
+        relocked it at once; and an address held below the account's limit could still lock it
+        slowly, a few misses per window (review 0.25.0, B3.3).
         """
         self.initialize()
         try:
             name = web_auth.normalize_username(username)
         except web_auth.WebAuthError:
             return None, REASON_NO_USER
+
+        window_start = utc_text(utc_now() - timedelta(minutes=max(1, int(lockout_minutes))))
+        ip = str(client_ip or "")[:64]
+        if ip and max_failed_per_ip > 0 and self._failures_from(ip, since=window_start) >= max_failed_per_ip:
+            # Refused before the account is looked at, so this address adds nothing to its count.
+            web_auth.verify_password(str(password or ""), _dummy_hash())
+            self._record_attempt(None, name, False, REASON_IP_THROTTLED, client_ip, user_agent)
+            return None, REASON_IP_THROTTLED
 
         user = self.get_user(name)
         if user is None:
@@ -304,12 +365,14 @@ class WebAuthStore:
 
         locked_until = parse_utc(user["locked_until"])
         if locked_until is not None and locked_until > utc_now():
+            web_auth.verify_password(str(password or ""), _dummy_hash())
             self._record_attempt(int(user["web_user_id"]), name, False, REASON_LOCKED,
                                  client_ip, user_agent)
             return None, REASON_LOCKED
 
         if not web_auth.verify_password(str(password or ""), str(user["password_hash"])):
-            self._register_failure(user, max_failed=max_failed, lockout_minutes=lockout_minutes)
+            self._register_failure(user, max_failed=max_failed, lockout_minutes=lockout_minutes,
+                                   since=window_start)
             self._record_attempt(int(user["web_user_id"]), name, False, REASON_BAD_PASSWORD,
                                  client_ip, user_agent)
             return None, REASON_BAD_PASSWORD
@@ -329,8 +392,12 @@ class WebAuthStore:
         self._record_attempt(int(user["web_user_id"]), name, True, REASON_OK, client_ip, user_agent)
         return self.get_user_by_id(int(user["web_user_id"])), REASON_OK
 
-    def _register_failure(self, user: Any, *, max_failed: int, lockout_minutes: int) -> None:
-        failed = int(user["failed_login_count"] or 0) + 1
+    def _register_failure(self, user: Any, *, max_failed: int, lockout_minutes: int,
+                          since: str) -> None:
+        # The misses inside the window since the last success, and this one. Not the stored running
+        # total: that outlived the lock it caused, and a single miss after it expired relocked.
+        last_login = str(user["last_login_at"] or "")
+        failed = self._account_failures(int(user["web_user_id"]), since=max(since, last_login)) + 1
         locked_until = None
         if max_failed > 0 and failed >= max_failed:
             locked_until = utc_text(utc_now() + timedelta(minutes=max(1, int(lockout_minutes))))
@@ -340,6 +407,26 @@ class WebAuthStore:
                 "WHERE web_user_id = ?",
                 (failed, locked_until, utc_text(utc_now()), int(user["web_user_id"])),
             )
+
+    def _failures_from(self, client_ip: str, *, since: str) -> int:
+        # The attempts that tried something - not the refusals this limit itself answered. Counted,
+        # those kept the door shut for as long as anybody knocked: five retries while refused were
+        # five more failures, and "try again in 15 minutes" moved 15 minutes away each time - for
+        # everyone behind that address. The account's own count never included its lock's refusals.
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT count(*) AS n FROM web_login_attempts "
+                "WHERE client_ip = ? AND succeeded = 0 AND reason <> ? AND attempted_at >= ?",
+                (client_ip, REASON_IP_THROTTLED, since)).fetchone()
+        return int(row["n"] or 0)
+
+    def _account_failures(self, web_user_id: int, *, since: str) -> int:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT count(*) AS n FROM web_login_attempts "
+                "WHERE web_user_id = ? AND reason = ? AND attempted_at > ?",
+                (web_user_id, REASON_BAD_PASSWORD, since)).fetchone()
+        return int(row["n"] or 0)
 
     def _record_attempt(self, web_user_id: int | None, username: str, succeeded: bool,
                         reason: str, client_ip: str, user_agent: str) -> None:
@@ -415,7 +502,8 @@ class WebAuthStore:
         with self.connect() as conn:
             row = conn.execute(
                 """
-                SELECT s.*, u.username, u.display_name, u.user_level, u.is_active AS user_is_active
+                SELECT s.*, u.username, u.display_name, u.user_level, u.is_active AS user_is_active,
+                       u.must_change_password
                 FROM web_sessions s
                 JOIN web_users u ON u.web_user_id = s.web_user_id
                 WHERE s.token_fingerprint = ? AND s.is_active = 1
@@ -448,6 +536,7 @@ class WebAuthStore:
             "display_name": str(row["display_name"] or ""),
             "user_level": int(row["user_level"]),
             "csrf_token": str(row["csrf_token"]),
+            "must_change_password": bool(int(row["must_change_password"] or 0)),
             "issued_at": str(row["issued_at"]),
             "expires_at": str(row["expires_at"]),
         }
@@ -584,6 +673,7 @@ CREATE TABLE IF NOT EXISTS web_users
     email TEXT NOT NULL DEFAULT '',
     password_hash TEXT NOT NULL,
     password_ref TEXT NOT NULL DEFAULT '',
+    must_change_password INTEGER NOT NULL DEFAULT 0,
     user_level INTEGER NOT NULL DEFAULT 1 CHECK (user_level BETWEEN 1 AND 100),
     is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
     failed_login_count INTEGER NOT NULL DEFAULT 0,
@@ -642,4 +732,6 @@ CREATE INDEX IF NOT EXISTS ix_web_login_attempts_user
     ON web_login_attempts (web_user_id, attempted_at);
 CREATE INDEX IF NOT EXISTS ix_web_login_attempts_username
     ON web_login_attempts (username_tried, attempted_at);
+CREATE INDEX IF NOT EXISTS ix_web_login_attempts_ip
+    ON web_login_attempts (client_ip, attempted_at);
 """

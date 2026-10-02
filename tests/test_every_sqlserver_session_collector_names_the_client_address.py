@@ -35,3 +35,16 @@ def test_the_2008r2_sleeping_transaction_collector_is_one_of_them():
 @pytest.mark.parametrize("path", _joining_collectors(), ids=lambda p: str(p.relative_to(COLLECTORS)))
 def test_a_collector_that_joins_the_connection_names_the_client_address(path):
     assert "client_ip=" in _live_sql(path)
+
+
+def _naming_collectors() -> list[Path]:
+    return sorted(p for p in COLLECTORS.rglob("*.sql") if "host=" in _live_sql(p))
+
+
+@pytest.mark.parametrize("path", _naming_collectors(), ids=lambda p: str(p.relative_to(COLLECTORS)))
+def test_a_collector_that_names_the_client_host_names_its_address_too(path):
+    """The rule above keys on the join, and so missed the collectors that had none: the long-running
+    (004) and long-waiting (026) requests had their join only in a commented-out draft, and a
+    QUERY_LONG_RUNNING alert on 2026-10-01 named `host=hrms-backend` and no address (0.26.0 §1.75).
+    A message that says which host the client claims to be says where it actually connected from."""
+    assert "client_ip=" in _live_sql(path)

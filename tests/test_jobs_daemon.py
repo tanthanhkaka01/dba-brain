@@ -238,8 +238,9 @@ def test_daemon_appends_key_base64_to_spawned_command(tmp_path, monkeypatch):
         forwarded_key_args=daemon.ForwardedKeyArgs("--key-base64", "QUJDRA=="),
     )
 
+    # The key is in the child's environment, never in its argv (review 0.25.0, B2.4).
     assert [_after_interpreter(c) for c in started] == [
-        "-m db_ops.telegram.cli --config config.json --key-base64 QUJDRA== run-workflow"]
+        "-m db_ops.telegram.cli --config config.json run-workflow"]
 
 
 def test_daemon_sets_secret_key_env_for_spawned_restore_command(tmp_path, monkeypatch):
@@ -270,11 +271,11 @@ def test_daemon_sets_secret_key_env_for_spawned_restore_command(tmp_path, monkey
         forwarded_key_args=daemon.ForwardedKeyArgs("--key-base64", "c2VjcmV0LXBocmFzZQ=="),
     )
 
-    assert _after_interpreter(started[0][0]).startswith("-m db_ops.metrics.cli --key-base64")
+    assert "--key" not in started[0][0] and "c2VjcmV0" not in started[0][0]
     assert started[0][1] == "secret-phrase"
 
 
-def test_daemon_appends_plain_key_to_spawned_command(tmp_path, monkeypatch):
+def test_a_plain_key_never_reaches_the_spawned_command_line(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     write_app_commands(
         data_dir,
@@ -297,11 +298,8 @@ def test_daemon_appends_plain_key_to_spawned_command(tmp_path, monkeypatch):
         forwarded_key_args=daemon.ForwardedKeyArgs("--key", "plain key"),
     )
 
-    tail = [_after_interpreter(c) for c in started]
-    if daemon.os.name == "nt":
-        assert tail == ['-m db_ops.metrics.cli --config config.json --key "plain key" collect']
-    else:
-        assert tail == ["-m db_ops.metrics.cli --config config.json --key 'plain key' collect"]
+    assert [_after_interpreter(c) for c in started] == ["-m db_ops.metrics.cli --config config.json collect"]
+    assert all("plain key" not in c for c in started)
 
 
 def test_daemon_does_not_append_key_when_not_supplied(tmp_path, monkeypatch):

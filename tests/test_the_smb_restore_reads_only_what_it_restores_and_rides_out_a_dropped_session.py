@@ -186,8 +186,10 @@ def test_a_container_runs_its_own_sqlcmd():
     request = {"instance": "localhost,1433", "sql": "SELECT 1", "container": "MSSQL_1433",
                "username": "sa", "password": "pw"}
     argv = sqlcmd_run.local_argv(request)
-    assert argv[:4] == ["docker", "exec", "MSSQL_1433", sqlcmd_run.CONTAINER_SQLCMD]
-    assert argv[4:6] == ["-S", "localhost,1433"]
+    # `-e SQLCMDPASSWORD` names the variable only; the value comes from docker's environment (F11.2).
+    assert argv[:6] == ["docker", "exec", "-e", "SQLCMDPASSWORD", "MSSQL_1433", sqlcmd_run.CONTAINER_SQLCMD]
+    assert argv[6:8] == ["-S", "localhost,1433"]
+    assert "pw" not in argv
 
 
 def test_a_named_sqlcmd_path_is_used_inside_the_container_as_given():

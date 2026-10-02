@@ -59,22 +59,23 @@ def resolve_ssh_password(
     key_base64: str | None = None,
     data_dir: str | Path | None = None,
 ) -> str:
-    """Resolve an SSH password: explicit value > env var > encrypted secret store ref.
+    """Resolve an SSH password: the explicit value, or a ref in the encrypted secret store.
 
-    ``password_env`` names an environment variable holding the value (nothing sensitive on
-    argv); ``password_ref`` is a ref in the encrypted secret store, decrypted with
-    ``key``/``key_base64`` or the ``DB_OPS_SECRET_KEY`` env. Raises :class:`SshError` when
-    none yields a value."""
+    ``password_env`` is the old spelling of ``password_ref`` and is read as one - not as an
+    environment variable (owner decision G3.5): ``sre``'s ``--password-ref`` was an alias of it, so
+    a ref given there was only ever looked up in the environment. The ref is decrypted with
+    ``key``/``key_base64`` or the ``DB_OPS_SECRET_KEY`` env. Raises :class:`SshError` when neither
+    yields a value."""
     if password:
         return password
-    if password_env:
-        env_value = os.environ.get(password_env, "").strip()
-        if env_value:
-            return env_value
+    if password_ref and password_env and password_ref != password_env:
+        raise SshError(f"password_ref {password_ref!r} and password_env {password_env!r} name two "
+                       "different secrets; state one.")
+    password_ref = password_ref or password_env
     if not password_ref:
         raise SshError(
-            "SSH needs a password (value / env var) or password_ref (a ref in the encrypted "
-            "secret store), or use key-based auth instead."
+            "SSH needs a password or password_ref (a ref in the encrypted secret store), or use "
+            "key-based auth instead."
         )
     from db_ops.lib.secret_text import resolve_cli_key
 

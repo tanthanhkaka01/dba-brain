@@ -618,6 +618,15 @@ def run_backup(
                 job=item, status="error", exit_code=None, duration_ms=0,
                 stdout="", stderr=str(exc), error_text=str(exc),
             )
+        except Exception as exc:  # noqa: BLE001 - one job's failure must not stop the pass.
+            # A `common.cli` child that printed no JSON (crash, OOM, import error) raises
+            # CommonCliError - a RuntimeError - which used to leave this function: every job after
+            # it in the pass was skipped and its own row stayed RUNNING (review 0.25.0, F10.1).
+            text = f"{type(exc).__name__}: {exc}"
+            result = BackupRunResult(
+                job=item, status="error", exit_code=None, duration_ms=0,
+                stdout="", stderr=text, error_text=text,
+            )
 
         # Only after the data backup succeeded, and never able to change its verdict: a metadata
         # export that could not read sys.credentials must not turn a good backup into a failed

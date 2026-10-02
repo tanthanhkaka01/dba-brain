@@ -91,10 +91,19 @@ def test_the_scaffold_writes_the_ladder_into_a_new_tool_root(tmp_path: Path) -> 
 
 
 def test_an_install_with_no_ladder_of_its_own_is_priced_by_the_packaged_one(tmp_path) -> None:
-    """The case that was broken: installed, not yet initialised, every command refused."""
-    rules = confirm.load_operation("kill-spid", path=tmp_path / "nothing here.json")
+    """The case that was broken: installed, not yet initialised, every command refused. The node's
+    ladder is read app-side, and an absent one is the shipped ladder."""
+    from db_ops.lib.data_sources import request_fill
+
+    rules = request_fill.operation_rules("kill-spid", data_dir=tmp_path / "data")
 
     assert rules["confirmations"] == 1, "an absent ladder must fall back, not price at strictest"
+
+
+def test_a_ladder_named_and_missing_is_refused(tmp_path) -> None:
+    """A caller that names its own ladder must not be priced by another one without a word (G3.6)."""
+    with pytest.raises(FileNotFoundError, match="does not exist"):
+        confirm.load_operation("kill-spid", path=tmp_path / "nothing here.json")
 
 
 def test_a_ladder_that_will_not_parse_is_still_the_strictest(tmp_path) -> None:

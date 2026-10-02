@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Entrypoint for the DBA Ops Assistant container.
 #
-#   daemon [args...]  run the app-command scheduler (default CMD). Extra args are
-#                     forwarded to the daemon, e.g. the decryption passphrase:
-#                       docker compose run -d --name db_ops_daemon db_ops \
-#                         daemon --key "<passphrase>"
+#   daemon [args...]  run the app-command scheduler (default CMD). Give the decryption passphrase
+#                     in the environment, never as an argument (it would be in `ps` and
+#                     `docker inspect` for the container's life):
+#                       read -rs DB_OPS_SECRET_KEY && export DB_OPS_SECRET_KEY
+#                       docker compose run -d --name db_ops_daemon -e DB_OPS_SECRET_KEY db_ops daemon
 #   shell             drop into an interactive bash shell
 #   <command...>      exec verbatim, e.g.:
 #                       docker run --rm db_ops \
@@ -13,7 +14,7 @@
 # DB_OPS_CONFIG       config path passed to the daemon (default: config.json)
 # DB_OPS_DAEMON_DELAY daemon scan delay in seconds (default: 2)
 #
-# The decryption passphrase is supplied at runtime via --key and is never stored
+# The decryption passphrase is supplied at runtime in DB_OPS_SECRET_KEY and is never stored
 # in the image, compose file, or any env file.
 set -euo pipefail
 

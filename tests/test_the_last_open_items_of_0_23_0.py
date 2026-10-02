@@ -98,6 +98,7 @@ def test_the_restore_finishes_with_a_warning_naming_it(monkeypatch):
     job = SimpleNamespace(restore_id="R", db_type="sqlserver", env_secrets={}, is_remote=False, label="L")
     monkeypatch.setattr(restore_script, "load_script_restores", lambda _p=None: [job])
     monkeypatch.setattr(restore_by_id, "_host_block", lambda j, **_: {"host": "h"})
+    monkeypatch.setattr(restore_by_id, "assert_target_is_not_source", lambda *a, **k: None)
 
     def planner(*a, **k):
         restore_by_id._UNREADABLE.add("/in/DB/FULL/newest.bak")

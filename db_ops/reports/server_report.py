@@ -32,6 +32,8 @@ from db_ops.lib.coerce import as_float
 
 import datetime
 import json
+
+from db_ops.lib.html_json import json_for_html
 import math
 import re
 from pathlib import Path
@@ -2651,7 +2653,7 @@ def render_page(*, servers: list[dict], snapshot_date: str, stamp: str,
                 index_usage=page_banner.pick_index_usage(
                     path.name for path in Path(report_dir).glob("index-usage_*.htm*")))),
         "__INVENTORY_HREF__": inventory_href,
-        "__SERVERS__": json.dumps(servers, ensure_ascii=False, separators=(",", ":")),
+        "__SERVERS__": json_for_html(servers, separators=(",", ":")),
     }
     for key, value in replacements.items():
         html = html.replace(key, value)

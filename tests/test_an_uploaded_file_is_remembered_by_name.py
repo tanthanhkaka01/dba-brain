@@ -48,8 +48,10 @@ def test_the_file_name_is_recorded_and_the_listing_shows_it(tmp_path, monkeypatc
     _write(tmp_path / "telegram_groups.json", "telegram_groups", [])
     sqlite_path = tmp_path / "runtime.sqlite"
     store = DbOpsStore(sqlite_path)
+    # `max_bytes` is the parameter's own size cap (review 0.25.0, F8.3): the processor always passes
+    # it, and a stand-in that does not take it fails the download instead of answering.
     monkeypatch.setattr(command_processor, "_download_document_base64",
-                        lambda document, *, config_path: WORKBOOK)
+                        lambda document, *, config_path, max_bytes=None: WORKBOOK)
 
     def post(message_id, text, raw):
         store.upsert_telegram_messages([{

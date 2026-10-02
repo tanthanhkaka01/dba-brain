@@ -110,7 +110,7 @@ def check_password_quality(password: str) -> str:
 
 
 def hash_password(password: str, *, iterations: int | None = None,
-                  salt: bytes | None = None) -> str:
+                  salt: bytes | None = None, check_quality: bool = True) -> str:
     """Encode a password as ``pbkdf2_sha256$<iterations>$<salt>$<hash>``.
 
     The cost defaults to :data:`PBKDF2_ITERATIONS` **read at call time**, not bound when this
@@ -122,7 +122,9 @@ def hash_password(password: str, *, iterations: int | None = None,
     random one, which is what stops two users with the same password sharing a hash.
     """
     iterations = PBKDF2_ITERATIONS if iterations is None else int(iterations)
-    text = check_password_quality(password)
+    # `check_quality=False` is for the one bootstrap account (admin/admin), which must be changed
+    # at its first sign-in; every password a person chooses goes through the rule.
+    text = check_password_quality(password) if check_quality else str(password or "")
     if iterations < 1000:
         raise WebAuthError("iterations must be at least 1000.")
     raw_salt = salt if salt is not None else secrets.token_bytes(_SALT_BYTES)

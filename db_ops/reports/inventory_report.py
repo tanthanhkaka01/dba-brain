@@ -25,6 +25,8 @@ from db_ops.lib.inventory_render import DEFAULT_INVENTORY, DISK_CRIT_PCT, DISK_W
 
 import datetime
 import json
+
+from db_ops.lib.html_json import json_for_html
 import re
 from pathlib import Path
 
@@ -1062,11 +1064,11 @@ def render_html(scope, models, triage, date_iso, linked_servers=None, report_dir
             .replace("__SNAPSHOT_DATE__", date_iso)
             .replace("__UTC_OFFSET_MINUTES__", str(offset_minutes()))
             .replace("__UTC_OFFSET_LABEL__", format_offset(offset_minutes()))
-            .replace("__SCOPE__", json.dumps(scope, ensure_ascii=False))
-            .replace("__SERVERS__", json.dumps(models, ensure_ascii=False, indent=2))
-            .replace("__TRIAGE__", json.dumps(triage, ensure_ascii=False, indent=2))
+            .replace("__SCOPE__", json_for_html(scope))
+            .replace("__SERVERS__", json_for_html(models, indent=2))
+            .replace("__TRIAGE__", json_for_html(triage, indent=2))
             .replace("__LINKED_SERVERS__",
-                     json.dumps(linked_servers or [], ensure_ascii=False, indent=2)))
+                     json_for_html(linked_servers or [], indent=2)))
 
 
 # --------------------------------------------------------------------------- #

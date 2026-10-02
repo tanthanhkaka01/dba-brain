@@ -120,6 +120,7 @@ R38-R45 keep their numbers and stand with the other layer rules; R43 is R11's si
 | R28 | [Telegram severity is tagged once, centrally; messages split under 4096](#r28) | absolute | - |
 | R29 | [The Telegram queue moves one row per call](#r29) | absolute | - |
 | R30 | [An `async` run never repeats claimed work](#r30) | absolute | - |
+| R47 | [A restore names its target; nothing about it is taken from the source](#r47) | absolute | - |
 
 ### 5. Code, tests and documentation
 
@@ -622,6 +623,19 @@ A scheduled `async` run never repeats a job another run has started or finished;
 **Mark:** absolute.
 
 ## 5. Code, tests and documentation
+
+### R47
+
+A restore names its target - `target_server_id`, and for an in-place restore `target_container`, `target_visible_dir` and, on SQL Server, `env.MSSQL_PORT`. Nothing about the target is derived from the source, and a target that is the source instance is refused before any step.
+
+**Guard:**
+
+- `tests/test_a_restore_never_takes_the_source_as_its_target.py::test_the_source_container_is_refused_as_the_target`
+- `tests/test_a_restore_never_takes_the_source_as_its_target.py::test_the_guard_runs_before_any_step`
+- `tests/test_a_restore_never_takes_the_source_as_its_target.py::test_no_port_is_guessed`
+- `tests/test_a_restore_never_takes_the_source_as_its_target.py::test_the_host_block_never_falls_back_to_the_source`
+
+**Mark:** absolute - the owner's decision of 2026-10-01 (review 0.25.0, B4.5 / G2). Before it, an entry with only `target_container` meant "a container on the source host", and the SQL Server plan connected to the source host's own port and ran `RESTORE ... REPLACE` on the source instance.
 
 ### R31
 

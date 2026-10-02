@@ -106,6 +106,10 @@ class PythonResult:
         }
 
 
+#: Never handed to an `input` script.
+_WITHHELD_FROM_FETCHERS = ("DB_OPS_SECRET_KEY", "DB_OPS_KEY_BASE64", "SQLCMDPASSWORD")
+
+
 def resolve_script(script_path: str, *, tool_root: Path) -> Path:
     """The script, as an absolute path under the tool root.
 
@@ -165,6 +169,11 @@ def run(source: PythonSource, *, tool_root: Path,
     args = substitute(source.args, {**(target or {}), **dict(parameter_values or {})})
 
     environment = dict(os.environ)
+    # The fetcher is an HTTP client or vendor code: it never needs the passphrase that decrypts
+    # every credential in the estate, which the daemon put in this process's environment
+    # (review 0.25.0, F4.2).
+    for name in _WITHHELD_FROM_FETCHERS:
+        environment.pop(name, None)
     # Pinned for the same reason `transport.common_cli.spawn` pins it, and this end matters more: the
     # script prints JSON with `ensure_ascii=False`, so a Vietnamese name reaches stdout as UTF-8
     # bytes. Left to `locale.getpreferredencoding()` the child would encode cp1252 on this

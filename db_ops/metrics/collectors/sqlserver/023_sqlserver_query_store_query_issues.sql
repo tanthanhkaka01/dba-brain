@@ -14,11 +14,39 @@ DECLARE @p_FromLocal      datetime = DATEADD(HOUR, -6, GETDATE());
 DECLARE @p_ToLocal        datetime = GETDATE();
 DECLARE @p_AlertFromLocal datetime = DATEADD(MINUTE, -30, GETDATE());
 
+-- A third window, used by ONE finding only (QUERY_PLAN_REGRESSED_FREQUENT, below): how far back
+-- the cheapest plan of a query is looked for. Six hours is not enough there - a plan flip that
+-- survives the night has no good plan left inside the scan by morning, the bad plan becomes its
+-- own baseline and the finding goes quiet while the query is still slow. It is read for the few
+-- candidate queries only, so its depth costs almost nothing.
+DECLARE @p_BaselineFromLocal datetime = DATEADD(DAY, -7, GETDATE());
+
+-- Query Store keeps its times in UTC. The offset is taken from the server's own clock instead of a
+-- named time zone: a hard-coded zone silently shifts every window on a server that lives elsewhere.
+DECLARE @p_UtcOffsetMin    int      = DATEDIFF(MINUTE, GETUTCDATE(), GETDATE());
+DECLARE @p_FromUtc         datetime = DATEADD(MINUTE, -@p_UtcOffsetMin, @p_FromLocal);
+DECLARE @p_ToUtc           datetime = DATEADD(MINUTE, -@p_UtcOffsetMin, @p_ToLocal);
+DECLARE @p_BaselineFromUtc datetime = DATEADD(MINUTE, -@p_UtcOffsetMin, @p_BaselineFromLocal);
+
+-- QUERY_PLAN_REGRESSED_FREQUENT: a SMALL query on a worse plan, executed often. Every other
+-- finding in this file is about one execution being huge (>= 300 M reads, >= 1,800 s); none of
+-- them can see a statement that went from 25 ms to 1,300 ms and ran 2,000 times in the hour,
+-- although that is 43 minutes of CPU and made every caller ten times slower. It needs all three:
+-- the plan now running costs several times the cheapest plan the same query has used, it has run
+-- often enough for that average to mean something, and the CPU it burned recently is material.
+DECLARE @p_FreqMinExecutions   int   = 20;    -- per plan, recent and baseline alike
+DECLARE @p_FreqWarnCpuRatio    float = 5;     -- recent avg CPU / cheapest other plan's avg CPU
+DECLARE @p_FreqWarnTotalCpuSec float = 300;   -- CPU burned by this plan in the recent rows
+DECLARE @p_FreqCritCpuRatio    float = 10;
+DECLARE @p_FreqCritTotalCpuSec float = 1200;
+
 DECLARE @sql nvarchar(max);
 DECLARE @db sysname;
 
 IF OBJECT_ID('tempdb..#qs_db') IS NOT NULL DROP TABLE #qs_db;
 IF OBJECT_ID('tempdb..#qs_raw') IS NOT NULL DROP TABLE #qs_raw;
+IF OBJECT_ID('tempdb..#qs_cand') IS NOT NULL DROP TABLE #qs_cand;
+IF OBJECT_ID('tempdb..#qs_base') IS NOT NULL DROP TABLE #qs_base;
 
 CREATE TABLE #qs_db
 (
@@ -86,8 +114,23 @@ CREATE TABLE #qs_raw
     avg_duration_sec decimal(38, 6),
     max_duration_sec decimal(38, 6),
     avg_cpu_sec decimal(38, 6),
-    max_cpu_sec decimal(38, 6),
-    query_sql_text nvarchar(max)
+    max_cpu_sec decimal(38, 6)
+);
+
+-- Queries worth a baseline lookup, and the per-plan baseline read for them.
+CREATE TABLE #qs_cand
+(
+    database_name sysname,
+    query_id bigint
+);
+
+CREATE TABLE #qs_base
+(
+    database_name sysname,
+    query_id bigint,
+    plan_id bigint,
+    executions bigint,
+    avg_cpu_sec float
 );
 
 DECLARE db_cur CURSOR LOCAL FAST_FORWARD FOR
@@ -99,15 +142,17 @@ FETCH NEXT FROM db_cur INTO @db;
 
 WHILE @@FETCH_STATUS = 0
 BEGIN
+    -- The query text is deliberately not read: it used to be copied into #qs_raw once per
+    -- runtime-stats row (nvarchar(max), thousands of rows) and was never part of the message.
+    -- query_store_plan already carries query_id, so two catalog views are enough.
     SET @sql = N'
     SELECT
         N''' + REPLACE(@db, '''', '''''') + N''' AS database_name,
-        qsq.query_id,
+        qsp.query_id,
         qsp.plan_id,
         rs.runtime_stats_id,
-        CONVERT(datetime,
-            rs.last_execution_time AT TIME ZONE ''UTC''
-            AT TIME ZONE ''SE Asia Standard Time''
+        DATEADD(MINUTE, @utc_offset_min,
+            CONVERT(datetime, SWITCHOFFSET(rs.last_execution_time, ''+00:00''))
         ) AS last_execution_time_local,
         rs.count_executions,
         rs.avg_logical_io_reads,
@@ -115,31 +160,79 @@ BEGIN
         rs.avg_duration / 1000000.0 AS avg_duration_sec,
         rs.max_duration / 1000000.0 AS max_duration_sec,
         rs.avg_cpu_time / 1000000.0 AS avg_cpu_sec,
-        rs.max_cpu_time / 1000000.0 AS max_cpu_sec,
-        qt.query_sql_text
-    FROM ' + QUOTENAME(@db) + N'.sys.query_store_query_text qt
-    JOIN ' + QUOTENAME(@db) + N'.sys.query_store_query qsq
-        ON qt.query_text_id = qsq.query_text_id
-    JOIN ' + QUOTENAME(@db) + N'.sys.query_store_plan qsp
-        ON qsq.query_id = qsp.query_id
+        rs.max_cpu_time / 1000000.0 AS max_cpu_sec
+    FROM ' + QUOTENAME(@db) + N'.sys.query_store_plan qsp
     JOIN ' + QUOTENAME(@db) + N'.sys.query_store_runtime_stats rs
         ON qsp.plan_id = rs.plan_id
-    WHERE rs.last_execution_time >= CONVERT(datetime, CAST(@from_local AS datetime) AT TIME ZONE ''SE Asia Standard Time'' AT TIME ZONE ''UTC'')
-      AND rs.last_execution_time <= CONVERT(datetime, CAST(@to_local AS datetime) AT TIME ZONE ''SE Asia Standard Time'' AT TIME ZONE ''UTC'');
+    WHERE rs.last_execution_time >= @from_utc
+      AND rs.last_execution_time <= @to_utc;
     ';
 
     INSERT INTO #qs_raw
     EXEC sp_executesql
         @sql,
-        N'@from_local datetime, @to_local datetime',
-        @from_local = @p_FromLocal,
-        @to_local = @p_ToLocal;
+        N'@from_utc datetime, @to_utc datetime, @utc_offset_min int',
+        @from_utc = @p_FromUtc,
+        @to_utc = @p_ToUtc,
+        @utc_offset_min = @p_UtcOffsetMin;
 
     FETCH NEXT FROM db_cur INTO @db;
 END;
 
 CLOSE db_cur;
 DEALLOCATE db_cur;
+
+-- Baseline for QUERY_PLAN_REGRESSED_FREQUENT. Only a query whose plan burned a material amount
+-- of CPU in the rows touched inside the alert window is a candidate, so this second read is a
+-- handful of query_ids per database and usually none at all.
+INSERT INTO #qs_cand (database_name, query_id)
+SELECT DISTINCT r.database_name, r.query_id
+FROM
+(
+    SELECT database_name, query_id, plan_id
+    FROM #qs_raw
+    WHERE last_execution_time_local >= @p_AlertFromLocal
+    GROUP BY database_name, query_id, plan_id
+    HAVING SUM(avg_cpu_sec * ISNULL(count_executions, 0)) >= @p_FreqWarnTotalCpuSec
+       AND SUM(ISNULL(count_executions, 0)) >= @p_FreqMinExecutions
+) AS r;
+
+DECLARE base_cur CURSOR LOCAL FAST_FORWARD FOR
+SELECT DISTINCT database_name
+FROM #qs_cand;
+
+OPEN base_cur;
+FETCH NEXT FROM base_cur INTO @db;
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    SET @sql = N'
+    SELECT
+        @db_name AS database_name,
+        qsp.query_id,
+        qsp.plan_id,
+        SUM(rs.count_executions) AS executions,
+        SUM(rs.avg_cpu_time * rs.count_executions) / NULLIF(SUM(rs.count_executions), 0) / 1000000.0 AS avg_cpu_sec
+    FROM ' + QUOTENAME(@db) + N'.sys.query_store_plan qsp
+    JOIN ' + QUOTENAME(@db) + N'.sys.query_store_runtime_stats rs
+        ON qsp.plan_id = rs.plan_id
+    WHERE qsp.query_id IN (SELECT c.query_id FROM #qs_cand c WHERE c.database_name = @db_name)
+      AND rs.last_execution_time >= @base_from_utc
+    GROUP BY qsp.query_id, qsp.plan_id;
+    ';
+
+    INSERT INTO #qs_base
+    EXEC sp_executesql
+        @sql,
+        N'@db_name sysname, @base_from_utc datetime',
+        @db_name = @db,
+        @base_from_utc = @p_BaselineFromUtc;
+
+    FETCH NEXT FROM base_cur INTO @db;
+END;
+
+CLOSE base_cur;
+DEALLOCATE base_cur;
 
 ;WITH plan_agg AS
 (
@@ -153,10 +246,35 @@ DEALLOCATE db_cur;
         MAX(max_duration_sec) AS max_duration_sec,
         MAX(max_cpu_sec) AS max_cpu_sec,
         MAX(max_logical_io_reads) AS max_logical_io_reads,
-        AVG(avg_duration_sec) AS avg_duration_sec,
-        AVG(avg_cpu_sec) AS avg_cpu_sec,
-        AVG(avg_logical_io_reads) AS avg_logical_io_reads
+        -- Weighted by executions. A plain AVG over the interval rows gives an hour with one
+        -- execution the same say as an hour with ten thousand.
+        SUM(avg_duration_sec * ISNULL(count_executions, 0)) / NULLIF(SUM(ISNULL(count_executions, 0)), 0) AS avg_duration_sec,
+        SUM(avg_cpu_sec * ISNULL(count_executions, 0)) / NULLIF(SUM(ISNULL(count_executions, 0)), 0) AS avg_cpu_sec,
+        SUM(avg_logical_io_reads * ISNULL(count_executions, 0)) / NULLIF(SUM(ISNULL(count_executions, 0)), 0) AS avg_logical_io_reads
     FROM #qs_raw
+    GROUP BY database_name, query_id, plan_id
+),
+-- What the plan did in the rows touched INSIDE the alert window. The findings below are judged on
+-- these numbers, not on the six-hour maxima: judged on the six hours, a plan that had one heavy
+-- execution at 09:00 and has run normally ever since is re-reported every 15 minutes until 15:00,
+-- because its newest execution keeps landing inside the alert window while its maximum never moves.
+-- A runtime-stats row spans one Query Store interval, so "recent" reaches back to the start of the
+-- interval the alert window falls in - at most one interval, not six hours.
+recent_agg AS
+(
+    SELECT
+        database_name,
+        query_id,
+        plan_id,
+        SUM(ISNULL(count_executions, 0)) AS recent_executions,
+        MAX(last_execution_time_local) AS last_execution_time_local,
+        MAX(max_duration_sec) AS max_duration_sec,
+        MAX(max_cpu_sec) AS max_cpu_sec,
+        MAX(max_logical_io_reads) AS max_logical_io_reads,
+        SUM(avg_cpu_sec * ISNULL(count_executions, 0)) AS recent_total_cpu_sec,
+        SUM(avg_cpu_sec * ISNULL(count_executions, 0)) / NULLIF(SUM(ISNULL(count_executions, 0)), 0) AS recent_avg_cpu_sec
+    FROM #qs_raw
+    WHERE last_execution_time_local >= @p_AlertFromLocal
     GROUP BY database_name, query_id, plan_id
 ),
 query_best AS
@@ -186,15 +304,21 @@ detail AS
               AND p2.plan_id <> p.plan_id
             ORDER BY p2.max_logical_io_reads ASC, p2.max_duration_sec ASC
         ),
-        p.runtime_stats_count,
-        p.executions,
+        h.runtime_stats_count,
+        h.executions,
         p.last_execution_time_local,
-        p.avg_duration_sec,
+        h.avg_duration_sec,
         p.max_duration_sec,
-        p.avg_cpu_sec,
+        h.avg_cpu_sec,
         p.max_cpu_sec,
-        p.avg_logical_io_reads,
+        h.avg_logical_io_reads,
         p.max_logical_io_reads,
+        p.recent_executions,
+        p.recent_total_cpu_sec,
+        p.recent_avg_cpu_sec,
+        b.best_avg_cpu_sec,
+        b.best_cpu_plan_id,
+        cpu_ratio = p.recent_avg_cpu_sec / NULLIF(b.best_avg_cpu_sec, 0),
         q.plan_count,
         q.best_logical_reads,
         logical_read_ratio =
@@ -255,6 +379,12 @@ detail AS
                 WHEN p.max_duration_sec >= 1800
                 THEN 'QUERY_LONG_DURATION_OTHER'
 
+                -- small query, worse plan, executed often (see the thresholds at the top)
+                WHEN p.recent_executions >= @p_FreqMinExecutions
+                     AND p.recent_total_cpu_sec >= @p_FreqWarnTotalCpuSec
+                     AND p.recent_avg_cpu_sec / NULLIF(b.best_avg_cpu_sec, 0) >= @p_FreqWarnCpuRatio
+                THEN 'QUERY_PLAN_REGRESSED_FREQUENT'
+
                 ELSE 'OK'
             END,
         severity =
@@ -307,28 +437,47 @@ detail AS
                 WHEN p.max_duration_sec >= 1800
                 THEN 'WARNING'
 
+                WHEN p.recent_executions >= @p_FreqMinExecutions
+                     AND p.recent_total_cpu_sec >= @p_FreqCritTotalCpuSec
+                     AND p.recent_avg_cpu_sec / NULLIF(b.best_avg_cpu_sec, 0) >= @p_FreqCritCpuRatio
+                THEN 'CRITICAL'
+
+                WHEN p.recent_executions >= @p_FreqMinExecutions
+                     AND p.recent_total_cpu_sec >= @p_FreqWarnTotalCpuSec
+                     AND p.recent_avg_cpu_sec / NULLIF(b.best_avg_cpu_sec, 0) >= @p_FreqWarnCpuRatio
+                THEN 'WARNING'
+
                 ELSE 'OK'
             END
     
-    FROM plan_agg p
+    FROM recent_agg p
+    JOIN plan_agg h
+        ON h.database_name = p.database_name
+       AND h.query_id = p.query_id
+       AND h.plan_id = p.plan_id
     JOIN query_best q
         ON q.database_name = p.database_name
        AND q.query_id = p.query_id
+    -- The cheapest OTHER plan of the same query over the baseline window, by average CPU. Another
+    -- plan, never this one: a plan compared with its own history has ratio ~1 by construction.
+    OUTER APPLY
+    (
+        SELECT TOP 1
+            best_avg_cpu_sec = bb.avg_cpu_sec,
+            best_cpu_plan_id = bb.plan_id
+        FROM #qs_base bb
+        WHERE bb.database_name = p.database_name
+          AND bb.query_id = p.query_id
+          AND bb.plan_id <> p.plan_id
+          AND bb.executions >= @p_FreqMinExecutions
+          AND bb.avg_cpu_sec > 0
+        ORDER BY bb.avg_cpu_sec ASC
+    ) AS b
 ),
 issue_rows AS
 (
     SELECT TOP 100
-        d.*,
-        query_sql_text =
-        (
-            SELECT TOP 1
-                LEFT(REPLACE(REPLACE(r.query_sql_text, CHAR(13), ' '), CHAR(10), ' '), 1500)
-            FROM #qs_raw r
-            WHERE r.database_name = d.database_name
-              AND r.query_id = d.query_id
-              AND r.plan_id = d.plan_id
-            ORDER BY r.max_duration_sec DESC, r.max_logical_io_reads DESC
-        )
+        d.*
     FROM detail d
     WHERE d.severity IN ('WARNING', 'CRITICAL')
       -- The baseline behind d came from the full 6 hours; only the last execution decides whether
@@ -348,6 +497,7 @@ SELECT
             WHEN 'QUERY_HEAVY_CPU' THEN 'query_store_heavy_cpu'
             WHEN 'QUERY_HEAVY_READS' THEN 'query_store_heavy_reads'
             WHEN 'QUERY_LONG_DURATION_OTHER' THEN 'query_store_long_duration_other'
+            WHEN 'QUERY_PLAN_REGRESSED_FREQUENT' THEN 'query_store_plan_regressed_frequent'
             ELSE 'query_store_other'
         END
         AS varchar(256)
@@ -361,6 +511,7 @@ SELECT
             WHEN 'QUERY_HEAVY_CPU' THEN CAST(CAST(max_cpu_sec AS decimal(18,2)) AS varchar(32))
             WHEN 'QUERY_HEAVY_READS' THEN CAST(CAST(max_logical_io_reads AS decimal(38,0)) AS varchar(32))
             WHEN 'QUERY_LONG_DURATION_OTHER' THEN CAST(CAST(max_duration_sec AS decimal(18,2)) AS varchar(32))
+            WHEN 'QUERY_PLAN_REGRESSED_FREQUENT' THEN CAST(CAST(cpu_ratio AS decimal(18,2)) AS varchar(32))
             ELSE '0'
         END
         AS varchar(32)
@@ -374,6 +525,7 @@ SELECT
             WHEN 'QUERY_HEAVY_CPU' THEN 'cpu_sec'
             WHEN 'QUERY_HEAVY_READS' THEN 'logical_reads'
             WHEN 'QUERY_LONG_DURATION_OTHER' THEN 'duration_sec'
+            WHEN 'QUERY_PLAN_REGRESSED_FREQUENT' THEN 'cpu_ratio'
             ELSE 'queries'
         END
         AS varchar(32)
@@ -389,14 +541,23 @@ SELECT
         + ', plan_count=' + CAST(plan_count AS varchar(20))
         + ', last_execution_time=' + CONVERT(varchar(19), last_execution_time_local, 120)
         + ', issue_type=' + issue_type
-        + ', avg_duration_sec=' + CAST(avg_duration_sec AS varchar(40))
+        + ', avg_duration_sec=' + ISNULL(CAST(CAST(avg_duration_sec AS decimal(38,6)) AS varchar(40)), 'NULL')
         + ', max_duration_sec=' + CAST(max_duration_sec AS varchar(40))
-        + ', avg_cpu_sec=' + CAST(avg_cpu_sec AS varchar(40))
+        + ', avg_cpu_sec=' + ISNULL(CAST(CAST(avg_cpu_sec AS decimal(38,6)) AS varchar(40)), 'NULL')
         + ', max_cpu_sec=' + CAST(max_cpu_sec AS varchar(40))
-        + ', avg_logical_reads=' + CAST(CAST(avg_logical_io_reads AS decimal(38,0)) AS varchar(40))
+        + ', avg_logical_reads=' + ISNULL(CAST(CAST(avg_logical_io_reads AS decimal(38,0)) AS varchar(40)), 'NULL')
         + ', max_logical_reads=' + CAST(CAST(max_logical_io_reads AS decimal(38,0)) AS varchar(40))
         + ', best_logical_reads=' + ISNULL(CAST(CAST(best_logical_reads AS decimal(38,0)) AS varchar(40)), 'NULL')
         + ', logical_read_ratio=' + ISNULL(CAST(CAST(logical_read_ratio AS decimal(18,2)) AS varchar(40)), 'NULL')
+        -- The frequency finding's own evidence: what the plan did recently, and what it is
+        -- measured against. Printed on every row so two findings on one query read the same way.
+        + ', recent_executions=' + CAST(recent_executions AS varchar(20))
+        + ', recent_total_cpu_sec=' + ISNULL(CAST(CAST(recent_total_cpu_sec AS decimal(18,2)) AS varchar(40)), 'NULL')
+        + ', recent_avg_cpu_sec=' + ISNULL(CAST(CAST(recent_avg_cpu_sec AS decimal(18,6)) AS varchar(40)), 'NULL')
+        + ', best_avg_cpu_sec=' + ISNULL(CAST(CAST(best_avg_cpu_sec AS decimal(18,6)) AS varchar(40)), 'NULL')
+        + ', best_cpu_plan_id=' + ISNULL(CAST(best_cpu_plan_id AS varchar(30)), 'NULL')
+        + ', cpu_ratio=' + ISNULL(CAST(CAST(cpu_ratio AS decimal(18,2)) AS varchar(40)), 'NULL')
+        + ', cpu_baseline_window=last_7_days'
         -- Both windows are printed because a reader who sees a 6-hour baseline next to a
         -- 30-minute alert window can tell "this just happened" from "this is what it is
         -- compared against" - which is the difference the repeated alerts hid.
@@ -405,7 +566,6 @@ SELECT
         + ', checked_window=last_6_hours'
         + ', checked_from=' + CONVERT(varchar(19), @p_FromLocal, 120)
         + ', checked_to=' + CONVERT(varchar(19), @p_ToLocal, 120)
-        -- + ', query_text=' + ISNULL(query_sql_text, 'NULL')
         AS varchar(4000)
     ) AS message
 FROM issue_rows

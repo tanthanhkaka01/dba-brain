@@ -25,9 +25,19 @@ SQLSERVER_DEFAULT_INSTANCE = "MSSQLSERVER"
 #: SQL Server's own error numbers, as the driver prints them: `... (4060) (SQLDriverConnect)`.
 _DATABASE_MISSING = ("(4060)", "cannot open database")
 _LOGIN_FAILED = ("(18456)", "login failed for user")
+#: The statement ran out of time on a connection that had opened - checked BEFORE `_UNREACHABLE`,
+#: because ODBC reports both timeouts under one SQLSTATE: HYT00 is *Login* timeout expired and also
+#: *Query* timeout expired. On 2026-10-01 a 20 s query timeout on a healthy lab read *could not reach
+#: ... the instance is down* (0.26.0 §1.73).
+_STATEMENT_TIMEOUT = ("query timeout expired", "canceling statement due to statement timeout",
+                      "ora-01013")
+#: The last is pg8000's whole sentence for a host that does not answer - *Can't create a connection
+#: to host H and port P (timeout is 30 ...)* - which has none of the other words in it. On the
+#: 0.26.0 soak (2026-10-02) the SQL Server and Oracle drills of a lab that had gone down said *could
+#: not reach ... the instance is down*, and the PostgreSQL ones printed the driver's text raw.
 _UNREACHABLE = ("08001", "hyt00", "08s01", "tcp provider", "named pipes provider", "login timeout expired",
                 "server was not found", "network-related", "could not open a connection",
-                "timed out", "connection refused")
+                "timed out", "connection refused", "can't create a connection to host")
 
 
 def is_sqlserver(db_type: str) -> bool:
@@ -56,8 +66,11 @@ def location(*, server_id: str, db_type: str, instance_name: str | None = None,
 
 def classify_connect_failure(text: str) -> str | None:
     """``database`` (it does not exist, or this login cannot open it), ``login``, ``unreachable``,
-    or ``None`` when the failure is not about connecting at all (a SQL error inside the script)."""
+    ``statement_timeout`` (connected, and the statement ran out of time), or ``None`` when the
+    failure is not about connecting at all (a SQL error inside the script)."""
     lowered = str(text or "").lower()
+    if any(marker in lowered for marker in _STATEMENT_TIMEOUT):
+        return "statement_timeout"
     if any(marker in lowered for marker in _DATABASE_MISSING):
         return "database"
     if any(marker in lowered for marker in _LOGIN_FAILED):

@@ -19,28 +19,308 @@ do about it. Not the internal refactor that made it possible.
 
 ### Added
 
+- **`check-objects` names every active record that leaves a which-thing fact to a default** - a
+  `fallback` notice per field, with what is assumed until then: an instance's `platform`, an SSH
+  `auth_type`, a `port`, a PostgreSQL database or an Oracle service, a script restore's
+  `env.MSSQL_USER`, a container restore's `sqlcmd_path`, a certificate API's token ref. Phase 1 of
+  the owner's no-fallback rule: reported now, refused in the next release (review notes G).
+- **A step down in how something is done is said in the answer, and the copy's can be pinned**
+  (owner decision G4). `copy-backup-dir` answers `copy_mode` (`tar` / `sftp` / `none`) and
+  `copy_fell_back`, and a restore's `COPY_DONE` says *file by file over SFTP* when the tar stream
+  could not be used - it was a line on stderr, for a copy that takes hours instead of minutes.
+  `"copy_mode": "tar"` on a script-driven restore entry (or in the request) forbids the step down;
+  `"sftp"` skips tar. `relay-file` and `send-file` answer `replace_mode` (`posix-rename` /
+  `remove+rename`), and `run-cmd` over WinRM answers `backend` (`pypsrp` / `powershell`). A SQL
+  Server connection already said (`run-sql` `tool.actual`) and could be pinned (`sqlserver_driver`).
+- **Transport switches that verify the machine** (review 0.25.0, B5.5; the defaults are unchanged):
+  `"sqlserver_tls_verify": true` on an instance makes every metric and `run-sql` connect with
+  `Encrypt=yes;TrustServerCertificate=no`, ODBC Driver 17/18 only, and no fallback to plaintext or
+  pymssql; the PostgreSQL store's `sslmode` now means what libpq means (`require`, `verify-ca`,
+  `verify-full`). `docs/security.md` §5a has the table, WinRM's `ssl`/`cert_validation` included.
+- **`sre ssh --stdin`** reads the remote command from stdin and sends it as a script, so a command
+  carrying a password is in no argument list here or on the bastion; the lab AG tool uses it (B8.1).
+- **`max_file_bytes`** on a bot command parameter that takes a file caps the attachment (review 0.25.0,
+  F8.3); absent, Telegram's own limit applies as before.
 - **`python -m db_ops.sql_tasks.cli close-run --sql-run-id N --reason "..." --confirm yes`** closes
   one SQL task run left `running` by a process that no longer exists, and releases its target. It
   closes a row only while it is still `running`, and is never prompted for.
 
 ### Changed
 
+- **A restore's space check asks for twice the bytes it copies, on every engine, and a staged file
+  is not counted twice** (§1.76). `space_check.factor` defaults to **2.0** (it was 1.5) for SQL
+  Server, PostgreSQL and Oracle alike; an entry that states its own factor is unchanged. The check
+  counts only the files still to stage, so a drill's second run is no longer refused by its own
+  chain. **Action:** *Upgrading*, step 8.
+- **Measuring the database a restore builds is opt-in.** A compressed backup says little about what
+  it restores to - a 56.8 GiB chain passed at x2, restored to 366.6 GB and left its target at 96% -
+  but the engineer who sets up a restore knows the disk has to hold the database, so by default only
+  the copy is measured. `"space_check": {"measure_restore": true}` on a share-driven SQL Server entry
+  asks the target, before each database's first `RESTORE`, what the backup's files are (`RESTORE
+  FILELISTONLY`), what the database being overwritten already occupies, and what is free on the data
+  volume: `free >= added x factor`, or that database is refused before any statement; a measurement
+  that cannot be made is held to `on_unknown`. A script-driven entry (PostgreSQL, Oracle) that sets
+  it is refused when it is read - they cannot be measured yet.
+- **`check-secret` no longer sends a secret to a host read from the ref's name.** A ref no
+  configuration names answers `NO_TARGET` with what to add; `allow_name_host: true` is refused.
+  `rotate-password` stopped in the same release (G3.4). **Action:** *Upgrading*, step 9.
 - **The tool root has an identity of its own** - `runtime/node_identity`, written once. The daemon
   hands it to every process it starts, and each run records it beside its host and pid.
+- **Three unreachable metrics modules are gone**: `db_ops.metrics.health`, `.message` and `.notify`
+  - an old notification path no command reached, which read `data/db_instances.example.json` and
+  labelled a local time `TimeUTC:`. The `db_ops.metrics` package no longer re-exports their names;
+  `status_os` / `status_db` / `status_connect` in the inventory still load and are read by nothing
+  (review 0.25.0, F3.3).
+
+### Changed - action required before upgrading
+
+- **No password is read from the environment for anything a request names** (owner decision G3.5).
+  `password_env` - on an SSH or WinRM login, in `sre_config.json`'s `<name>_password_env`, in a
+  credential object, `sre --password-ref/--password-env` - is now the old spelling of
+  `password_ref`: a key in the secret store. A ref is no longer looked up in the environment under
+  its own name either, and `run-sql` refuses a `connection.password_ref` it is not given a
+  `password` for. A password kept only in an environment variable must go into the store
+  (`db-ops encrypt-secret` / `common.cli secret-set`) before upgrading. Database logins the apps
+  read from `users.json` still take an environment variable of the ref's name first; none may name
+  one of the node's own keys.
+- **`rotate-password` changes a password only on the instance the inventory names for it**
+  (G3.4): `allow_name_host` is refused, and a ref no `db_instance` uses is skipped with what to add.
+- **`rotate-password`, `check-secret`, `check-secret-literals` and `check-identifiers` read the data
+  dir of the `--config` they are given, and refuse one that cannot be read** (G3.1). They read the
+  process's default data dir whatever config was named, and fell back to it when the config could
+  not be read. A named confirmation-ladder path that is missing is refused too (G3.6).
+- **A full SQL Server restore over a database that is ONLINE on its target is refused unless the
+  entry says `"overwrite_existing": true`** (owner decision G2.10). `REPLACE` overwrote it after
+  throwing its users out, and nothing asked. Every drill that runs again over its own last restore -
+  which is every scheduled drill - needs the field; without it the next run stops at its first full
+  restore and names the field. A database RESTORING or absent is restored as before. Script-driven
+  SQL Server entries should also state `env.MSSQL_USER`: still `sa` when absent in this release, with
+  a warning in the answer, refused in the next (G2.11).
+- **A restore names its target; nothing about the target is taken from the source.** Every
+  script-driven entry in `restore_config.json` needs `db_type` and `target_server_id` - also for a
+  restore onto the source's own machine, where it is the source's id, stated. Such an in-place entry
+  also needs `target_container`, `target_visible_dir` (the backup directory as the target container
+  sees it) and, for SQL Server, `env.MSSQL_PORT`. An entry with only `target_container` used to mean
+  "the source host", and a SQL Server restore then connected to the **source's** port and ran
+  `RESTORE ... REPLACE` on production. `restore_by_id` - the scheduler's path - now refuses a target
+  that is the source instance (same machine and same or no container, or the source's SQL port)
+  before any step runs. The SQL port is never guessed (no 1433 default), and the staged directory is
+  never the source's `backup_dir`. The loader names the entry and the missing field: run
+  `backup-restore list-restores` after upgrading and fix what it names, one entry at a time. An
+  **inactive** entry that lacks them stops nothing: it is listed under *Inactive and incomplete*
+  with its reason, and the rest of the file loads.
+- **A cross-machine restore stages only into a directory marked as db_ops's own.** The copy mirrors
+  the source (a staged file the source no longer has is deleted) and the prune deletes by age, so a
+  `target_backup_dir` pointed at anything else was emptied. A new, empty directory is marked
+  (`.dbops-staging`) on first use, and an existing staging copy of the same source (it shares a file
+  with the source) is adopted and marked by itself - nothing to do on upgrade. A directory that holds
+  files the source does not have, and no marker, is refused with the `touch` command that marks it.
+  `target_backup_dir` must be at least three levels deep, and two entries on one target may not
+  share or nest one.
+- **A transfer whose restore chain is unknown is refused, not copied whole**: a PostgreSQL source
+  with no `_FULL`, an Oracle source whose RMAN preview names no piece (or no source container).
+
+- **The daemon's passphrase goes in its environment, not its command line.** Start it with
+  `DB_OPS_SECRET_KEY` exported and `-e DB_OPS_SECRET_KEY` (docs/11, step 3); `control deploy` does
+  this for you. Children get the key in `DB_OPS_SECRET_KEY` only, never `--key` in their argv.
+- **Report pages need a console login** (`web.reports_require_login`, default true) and directories
+  are never listed. A link to a report from Telegram asks for a login once per browser. Same
+  accounts as the console. A store with no account gets `admin` / `admin` on first run, and that
+  first sign-in must change the password before any page or report opens.
+- **Console changes to what runs, or to who may run it, need admin level and the password again**:
+  `app_commands` command/working dir/env/role, `cmd_access`, SQL task scripts and inputs, bot
+  actions, metric SQL variants, restore scripts, and every change to `telegram_users.json`,
+  `users.json`, `emergency_operations.json`, `webhost_config.json`, `store_config.json`,
+  `data_files.json`. Logs are admin-only; `min_level_view` is enforced.
+- **Bot actions that run free SQL sit higher**: `/spbot_add_sql` 100, `/spbot_sql_to_xlsx` and
+  `/spbot_sql_export` 50 in the shipped catalogue. A node's own file is used as written; one that
+  still says 10 gets a warning in the log naming the fix.
+- **The Vault certificate fetch verifies TLS by default**; name an internal CA with
+  `certificate_api_ca_file`.
+- **A request's `rules` can only make an operation harder to confirm.**
+
+### Security
+- Estate data in a report (database, job, login names) can no longer close the page's `<script>`
+  block and run script on the console's origin.
+- The login no longer redirects to another site (`next=//evil.example`).
+- No password is an argument any more: `sqlcmd` (`SQLCMDPASSWORD`), the SQL Server backup/restore
+  scripts (secret batches on stdin or a private temp file), the SRE bastion scripts and MySQL check
+  (stdin), the daemon and deploy (environment). `user-password-show` no longer writes the password
+  into `webhost_runtime.log`. An `input` fetcher no longer inherits `DB_OPS_SECRET_KEY`.
+- A password typed to the bot is redacted in the store and deleted from the chat.
+- A bot value cannot add keys to the JSON request it is put in; a request cannot name the node's
+  own keys as a password; service names are validated; PowerShell quoting doubles typographic
+  quotes; `delete-files` refuses `..`.
+- The secret stores are written atomically, under a lock, and created `0600`.
 
 ### Fixed
 
+- **On a Linux node the restore copy's space check measured nothing.** It walked the source share as
+  a path, which a Linux node cannot do: it found no files, counted 0 bytes and said *fits* on every
+  share-driven SQL Server restore the container worker ran. The check now asks the copy's own engine
+  for its selection and sizes (`smb-list` on a Linux node), a source that cannot be read is
+  *unmeasured* - held to `space_check.on_unknown` - instead of empty, and what a Linux node fetches
+  must fit in its own temp folder before it starts. **Action:** see *Upgrading*, step 6, in the
+  release note - entries that passed unmeasured are now held to their factor.
+- **A restore onto another machine checks the room before it copies.** A script-driven entry's
+  `space_check` was described as on by default and read by nothing: the copy between the two hosts
+  took whatever the chain held. `copy-backup-dir` now takes the entry's `space_check` and refuses,
+  before the first file moves, a copy whose files do not fit the target's free space times the
+  factor - the tool checks, the restore script does not. **Action:** *Upgrading*, step 7.
+- **`QUERY_STORE_QUERY_ISSUES` sees a small query on a worse plan, run often**, and stops repeating
+  itself. New finding `QUERY_PLAN_REGRESSED_FREQUENT`: a plan with 20 or more recent executions that
+  burned 300 s of CPU at 5 times the average of the cheapest other plan of the same query (WARNING;
+  CRITICAL at 1,200 s and 10 times), against a seven-day baseline read only for queries already past
+  the CPU threshold - so a bad plan that survives the night does not become its own baseline. Every
+  finding is judged on the recent rows instead of the six-hour maximum: one heavy execution at 09:00
+  was reported again every 15 minutes for six hours. Averages are weighted by execution count, the
+  server's own UTC offset replaces a hard-coded time zone, and the query text - copied for every row
+  and never shown - is no longer read.
+- **The PostgreSQL store's `sslmode` was read and never used**: every store connection was plaintext
+  whatever it said. It is passed to the driver now; `prefer`, the default, still connects without TLS,
+  as before (B5.5).
+- **A link can no longer sign anyone out of the console.** `/logout` acted on a GET with no token; it
+  is a POST carrying the session's CSRF token now (B6.3).
+- **Result files no longer pile up.** Query results, xlsx and config exports under `runtime/output`
+  were never removed; the daemon now deletes them after `output_retention_days` (`config.json`,
+  default 7; 0 keeps them) (review 0.25.0, F4.3).
+- **A long report alert is a duplicate of itself.** The dedupe window matched `source_id` exactly, and
+  a message queued in parts is stored as `<id>:part:<n>`, so it never matched; the parts match now
+  (F7.2).
+- **One address can no longer lock somebody else's console account.** Eight wrong passwords from
+  anyone locked any account, the only admin's included, repeatably. An address is refused after
+  `max_failed_logins_per_ip` failures (default 5, below the account's 8); both limits count failures
+  inside `lockout_minutes`, so an expired lock no longer relocks on the next miss; a refusal is not
+  itself counted, so retrying while refused does not keep an address refused; and a locked
+  account costs the same password check as any failure (review 0.25.0, B3.3).
+- **Logs rotate every night on a Windows master.** The daemon held `errors.log` and `jobs.log` open, and
+  Windows refuses to rename an open file, so the nightly archive failed silently and the files grew
+  without bound. Records are written open-append-close there, and a failed rename is retried on the
+  next line (review 0.25.0, F2.2).
+- **A log record is one line.** A newline in a message or an appended traceback made unprefixed lines
+  that the log tail filed under the record before; the files write it as `\n` (F2.3).
+- **A threshold override no longer turns a CRITICAL, ERROR or NO_DATA verdict into OK.** Thresholds
+  grade the number of a row the metric left at OK, LOGGING or WARNING; to lower a verdict, use
+  `severity_map` (F3.2).
+- **A container restart months ago no longer warns on every pass.** `DOCKER_CONTAINER_STATS` warns while
+  the current run is younger than `DOCKER_RESTART_WARN_MINUTES` (60), and a tab or newline in a docker
+  field no longer makes the metric's output invalid JSON (F3.4).
+- **A WinRM command with no deadline is no longer cut at 30 seconds.** "No timeout" became the
+  connect timeout over WinRM only, so a patch step or a host operation that set none stopped half a
+  minute in; the connect timeout now bounds one round trip (review 0.25.0, B5.3).
+- **Secret and state files are replaced whole.** The deploy's secret merge, the docker-db registry, the
+  store declaration, the daemon's state file and scaffolded files were truncated first and written in
+  place - a failure mid-write lost the file - and a new plaintext secret source was created
+  world-readable. All go through the atomic writer now; secret files are created `0600`, and any
+  other new file with the mode a plain write gives it, so the configuration `init` creates stays
+  readable by a daemon running as another user (F6.2, B9.2).
+- **A `--remote-dir` or `--container` with a space in it no longer breaks a deploy half way**: every
+  name reaches the worker's shell quoted (F6.3).
+- **A restore target's cleanup deletes only what its own copy staged.** It recursed every `*.bak` /
+  `*.trn` under the import root, so a root set one level too high had the target host's own backups
+  deleted by age; `/data` passed the guard. Only `<root>/<mapped database>/` is cleaned now, and an
+  entry mapping no database needs a root three levels below `/` (review 0.25.0, B4.2).
+- **A `cleanup_retention` under one day is kept as given.** The prune planner reasoned in whole days, so
+  7200 s became 0 and then the 14-day default, without a word; it takes the seconds now (B4.4).
+- **A restore target that is the source under another name is refused.** The SMB-path guard compared
+  strings, so the production server as a name in one field and as its IP or FQDN in another passed;
+  hosts are compared by resolved address too, loopback excepted (B4.6).
+- **A timed-out app command stops with everything it started.** The daemon killed the shell it
+  launched and the app - on a Windows master behind `cmd.exe` - kept running with its `common.cli`
+  children after the run was closed and its claim released. Each app now starts as the head of its own
+  process tree, and a timeout, a refused claim and a daemon stop end the whole tree - only a tree
+  whose head still carries the start time read at launch, so a reused PID is never walked (review
+  0.25.0, B2.3, F1.1).
+- **A stopping daemon stops its children before closing their rows**, a SIGTERM during start-up no
+  longer fails, and a `running` row of a removed app command is closed at start-up (B2.5).
+- **A `common.cli` answer behind a native tool's output line is read**, not lost (F1.2).
+- **A long Telegram message cut by a rate limit resumes where it stopped** instead of showing the chat
+  the delivered parts again, and a failed queue row keeps its `document_path` and buttons (review
+  0.25.0, B1.2, B3.2).
+- **An operator's `group-level` / `user-level` change is no longer overwritten** by the Telegram
+  workflow writing the same file a moment later: both take the file's lock (F8.2).
+- **A Telegram document with a long caption is delivered** - a caption over 1024 characters (a SQL
+  task's workbook with its status block) was refused, retried and failed, and the file was lost. The
+  caption is cut at a line inside the limit and the whole text follows as a message; a rate limit on
+  that text resumes at the text and never sends the file again (review 0.25.0, B1.1).
+- **The bot's background-task poller never kills a stranger's process, and a timeout stops the whole
+  command.** It trusted a bare PID - reused once the task ended - and killed whatever held it at the
+  timeout; it killed only the wrapper and left the command running. The exit-code file is read
+  first, the process start time recorded at launch must match, and a timeout stops the tree (B1.6).
+- **An interrupted bot command is never run again by itself.** A command whose pass was killed mid-run
+  was re-run fifteen minutes later with nobody asking - destructive ones included. It is closed and
+  its sender told to check and send it again (B3.1).
+- **A staging cleanup no longer deletes the full a newer differential restores onto.** A SQL Server
+  differential is a `.bak` too, and was taken for the chain's full: once the full passed
+  `cleanup_retention`, every run deleted it. Only a full anchors a chain now (by folder, name and
+  extension).
+- **`prune --apply` never deletes a database's newest full**, nor anything after it, in either
+  retention mode. Under `age`, a database whose backups had been failing for longer than the
+  window lost every backup it had left.
+- **One item that fails in an unexpected way no longer stops the rest of its pass**: a backup whose
+  `common.cli` child crashed (its row was also left `RUNNING`), a SQL task whose SQL file is missing
+  (now recorded and alerted as that task's failure), a metrics target with a config error (the pass
+  failed and `target_health` was rebuilt for nobody), a report that raised. A store outage still
+  stops the pass.
+- **`rotate-password` stores each new password before it changes the next one**, and rolls the
+  change back if storing fails; the refs after it are not started. It changed every password first
+  and stored them afterwards, so one store error lost the new password of every ref after it.
+- **The Telegram send pass has a budget again: half of the workflow's own timeout**, not the fixed
+  180 s of 0.24.0: past it no chat starts another message and the rest stay queued, in order, for
+  the next pass. The daemon now tells every app command the timeout it will be killed at, in
+  `DB_OPS_APP_TIMEOUT_SECONDS`; a pass run by hand has no budget (review 0.25.0, A2).
+- **A message Telegram accepted is never sent a second time because the store was busy.** Recording
+  "sent" shared the send's retry loop, so a store write that failed (`database is locked`, likelier
+  with ten send threads) sent the message again.
+- **A message a killed pass left half-sent is delivered.** A row the daemon killed the pass in the
+  middle of stayed "in flight" for good; a pass now puts such rows back in the queue after 15
+  minutes (or twice the workflow's timeout), accepting that Telegram may already have had one.
+- **One chat that fails a pass no longer costs the others** their counts or the pauses Telegram had
+  just imposed on them.
+- **The bot keeps hearing commands when a later step of its workflow fails.** The update offset was
+  saved only when the whole workflow returned, so a failure after the updates were read, or the
+  daemon's timeout, re-read the same 20 updates on every run and never the ones behind them. It is
+  saved as soon as the updates are stored. `telegram_config.json`, `telegram_groups.json` and
+  `telegram_users.json` are rewritten atomically.
+- **One app command that cannot be started no longer stops the daemon.** A missing `working_dir` or a
+  failed spawn ended the scheduler - and, under `restart: unless-stopped`, looped so that no command
+  listed after the bad one ever ran. It is recorded as that command's `error` run and retried on its
+  `retry_interval`. A child that outlives SIGKILL for five seconds no longer ends the daemon either.
+- **A point-in-time restore of an entry with `copy_recent_hours` 0 copies every file up to the
+  moment**; it built a zero-wide window and copied nothing.
 - **A container recreated under a new host name frees the runs its predecessor left open at once.**
   They used to hold their task's target for the run's timeout plus an hour, because the new host
   name read as another machine whose processes cannot be checked. Rows written by 0.25.0 and earlier
   carry no identity, so the upgrade *to* 0.26.0 still waits for them (or use `close-run`).
-- **A SQL task run ends at twice its timeout at the latest.** The timeout reached the driver as a
-  per-call query timeout, which restarts on every batch and result set, and the `run-sql` process
-  itself had no deadline - one run went 13 hours on a 2-hour timeout. It is now stopped at twice the
-  timeout plus the connect timeout, and fails saying so.
+- **A SQL task run past its timeout is over.** The timeout reached the driver as a per-call query
+  timeout, which restarts on every batch and result set; the `run-sql` process had no deadline; and
+  a `running` row whose process was alive was never closed - one run went 13 hours on a 2-hour
+  timeout, and its target did not run again until the container was stopped. Now, when a task is
+  next scanned (or run by hand), a run of it still `running` past its `timeout` is closed as an
+  *error by timeout* and its process stopped first, so no second copy starts on top of it; a run
+  nothing else looks at is still stopped by its own deadline at twice the timeout plus the connect
+  timeout. **Action:** `timeout` now bounds the whole run of a target - *Upgrading*, step 10.
+- **A SQL Server restore copies only the chain it applies** - the newest FULL at or before the moment,
+  its newest DIFF and the LOGs after (for a point in time, up to the LOG that carries it) - instead of
+  every backup written in `copy_recent_hours`. A weekly FULL made that eight days of DIFFs and LOGs:
+  527.9 GiB copied for a 56.8 GiB chain, and the space check refused. The space check counts the chain.
+  `copy_recent_hours` is the fallback for a database whose chain cannot be settled.
+- **`copy_selection` on a restore entry** (and on the `backup_restore` block): `"chain"` (default)
+  copies only the backups the restore applies; `"window"` copies every file of `copy_recent_hours`,
+  as before. The space check counts the same list.
+- **A restore's instance metadata replays onto a lab target.** The replay target was looked up
+  among the monitored instances only, so an inactive lab with metrics off was never found and
+  no login was replayed; it is now looked up in the whole inventory, and a container is matched on
+  `container_name` too.
+- **A SQL task whose statement runs out of time says so** - *a statement ran past this target's
+  timeout* - instead of *could not reach ... the instance is down* (ODBC reports both under HYT00).
 - **`create-db-docker --install-docker` installs Docker on a host that cannot reach get.docker.com**
   from its distro packages (`docker.io` + `docker-compose-v2`). A failed download used to pass as a
   finished install, and the command then called Docker installed-but-unusable on a host that had none.
+- **The long-running and long-waiting request metrics name the client's address** - `client_ip=`
+  in `QUERY_LONG_RUNNING` and `QUERY_LONG_WAITING_OR_ROLLBACK_REQUESTS` on SQL Server (both variants).
+  0.25.0 added it to the metrics that already joined `sys.dm_exec_connections`, and these two had the
+  join only in a commented-out draft.
 - **The SQL Server 2008 R2 sleeping-open-transaction metric names the client's address**
   (`client_ip=`), as the current variant has since 0.25.0.
 

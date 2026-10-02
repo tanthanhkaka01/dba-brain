@@ -6,6 +6,7 @@ to the worker over SFTP, and (re)start the worker daemon. Ported from the standa
 from __future__ import annotations
 
 import base64
+import shlex
 import shutil
 import time
 from pathlib import Path
@@ -199,7 +200,7 @@ def _remote_subdirs(client, remote_dir: str) -> dict[str, list[str]]:
     found: dict[str, list[str]] = {}
     for owned in BUNDLE_OWNED_DIRS:
         rc, out, _err = ssh_capture(
-            client, f"find {remote_dir}/{owned} -mindepth 1 -maxdepth 1 -type d"
+            client, f"find {shlex.quote(f'{remote_dir}/{owned}')} -mindepth 1 -maxdepth 1 -type d"
         )
         if rc != 0:
             # A first deploy has no such directory yet; there is nothing to compare against.
@@ -220,9 +221,10 @@ def prune_superseded_dirs(client, bundle: Path, remote_dir: str) -> dict[str, li
     print("  Left in place they would shadow what the new image ships, which is what happened "
           "on 2026-08-22.")
     for owned, names in superseded.items():
-        ssh_run(client, f"mkdir -p {quarantine}/{owned}", quiet=True)
+        ssh_run(client, f"mkdir -p {shlex.quote(f'{quarantine}/{owned}')}", quiet=True)
         for name in names:
-            ssh_run(client, f"mv {remote_dir}/{owned}/{name} {quarantine}/{owned}/{name}")
+            ssh_run(client, f"mv {shlex.quote(f'{remote_dir}/{owned}/{name}')} "
+                            f"{shlex.quote(f'{quarantine}/{owned}/{name}')}")
     return superseded
 
 
@@ -244,10 +246,13 @@ def copy_bundle(*, host: str, user: str, password: str, port: int = 22,
         # `archive_command` failed on every WAL segment from that moment. Nothing alerted on the
         # deploy; the only symptom was archived_count freezing while failed_count climbed into the
         # thousands, i.e. recoverability was gone with the database still healthy.
+        # Every name quoted (review 0.25.0, F6.3): they come from the operator's flags, and a
+        # directory with a space in it broke the deploy half way rather than at the start.
+        directory, owner = shlex.quote(remote_dir), shlex.quote(f"{user}:{user}")
         ssh_run(client,
-                f"mkdir -p {remote_dir} && chown {user}:{user} {remote_dir} && "
-                f"find {remote_dir} -mindepth 1 -maxdepth 1 ! -name {CONTAINER_DATA_DIR_NAME} "
-                f"-exec chown -R {user}:{user} {{}} +",
+                f"mkdir -p {directory} && chown {owner} {directory} && "
+                f"find {directory} -mindepth 1 -maxdepth 1 ! -name {CONTAINER_DATA_DIR_NAME} "
+                f"-exec chown -R {owner} {{}} +",
                 sudo=True)
         print(f"Uploading bundle -> {host}:{remote_dir} (overwrites config/data/sql/image; "
               "keeps logs/ and runtime/db_ops.sqlite) ...")
@@ -255,8 +260,9 @@ def copy_bundle(*, host: str, user: str, password: str, port: int = 22,
         # After the upload, not before: the comparison is against what was actually shipped, and a
         # transfer that dies half way leaves the worker's old directories where they were.
         prune_superseded_dirs(client, bundle, remote_dir)
-        ssh_run(client, f"mkdir -p {remote_dir}/logs {remote_dir}/runtime", quiet=True)
-        ssh_run(client, f"ls -la {remote_dir}")
+        ssh_run(client, f"mkdir -p {shlex.quote(f'{remote_dir}/logs')} {shlex.quote(f'{remote_dir}/runtime')}",
+                quiet=True)
+        ssh_run(client, f"ls -la {directory}")
     finally:
         client.close()
 
@@ -331,14 +337,34 @@ def push_selected(*, host: str, user: str, password: str, port: int = 22,
 GRACEFUL_STOP_SECONDS = 60
 
 
-def _daemon_key_arg(key_base64: str | None, key: str | None) -> str:
+def _daemon_secret_key(key_base64: str | None, key: str | None) -> str:
+    """The passphrase the daemon will decrypt with, in clear - only ever sent on stdin."""
     if key_base64:
-        return f"--key_base64 {key_base64}"
+        return base64.b64decode(key_base64.encode()).decode()
     if key:
-        return f"--key_base64 {base64.b64encode(key.encode()).decode()}"
+        return key
     import getpass
-    plain = getpass.getpass("Secret passphrase (base64-encoded for the daemon): ")
-    return f"--key_base64 {base64.b64encode(plain.encode()).decode()}"
+    return getpass.getpass("Secret passphrase for the worker daemon: ")
+
+
+def daemon_start_script(*, remote_dir: str, node_role: str, container: str, secret_key: str) -> str:
+    """The shell that starts the worker's daemon, with the passphrase in its environment only.
+
+    It used to be `... db_ops daemon --key_base64 <base64>`: the value sat in the container's
+    command for its whole life - `docker inspect`, `ps` on the host - and the daemon then copied it
+    onto every child's command line (review 0.25.0, F6.1 / B2.4). Base64 is not protection. This
+    script travels on stdin, the value never reaches an argv, and `-e DB_OPS_SECRET_KEY` (a name,
+    no value) hands the container the variable the script exported.
+    """
+    encoded = base64.b64encode(secret_key.encode()).decode()
+    return "\n".join([
+        "set -e",
+        f"DB_OPS_SECRET_KEY=\"$(printf %s {shlex.quote(encoded)} | base64 -d)\"",
+        "export DB_OPS_SECRET_KEY",
+        f"cd {shlex.quote(remote_dir)}",
+        f"docker compose run -e DB_OPS_NODE_ROLE={shlex.quote(node_role)} -e DB_OPS_SECRET_KEY "
+        f"-d --service-ports --name {shlex.quote(container)} db_ops daemon",
+    ]) + "\n"
 
 
 def reclaim_worker_files(*, host: str, user: str, password: str, port: int = 22,
@@ -372,8 +398,8 @@ def reclaim_worker_files(*, host: str, user: str, password: str, port: int = 22,
         # A directory the worker does not have is skipped, so a fresh host is silent, not an error.
         rc = ssh_run(
             client,
-            f"for d in {remote_dir}/data {remote_dir}/assets; do "
-            f"[ -d \"$d\" ] && chown -R {user}:{user} \"$d\"; done; true",
+            f"for d in {shlex.quote(f'{remote_dir}/data')} {shlex.quote(f'{remote_dir}/assets')}; do "
+            f"[ -d \"$d\" ] && chown -R {shlex.quote(f'{user}:{user}')} \"$d\"; done; true",
             sudo=True,
             check=False,
         )
@@ -390,12 +416,12 @@ def start_daemon(*, host: str, user: str, password: str, port: int = 22,
                  remote_dir: str = DEFAULT_REMOTE_DIR, container: str = DEFAULT_CONTAINER,
                  key_base64: str | None = None, key: str | None = None,
                  node_role: str = "worker") -> None:
-    key_arg = _daemon_key_arg(key_base64, key)
+    secret_key = _daemon_secret_key(key_base64, key)
     remote_tar = f"{remote_dir}/{IMAGE_TAR_NAME}"
     client = ssh_connect(host, user, password, port)
     try:
         print("\n[1/4] Loading image ...")
-        ssh_run(client, f"docker load -i {remote_tar}")
+        ssh_run(client, f"docker load -i {shlex.quote(remote_tar)}")
         print("\n[2/4] Replacing existing container (if any) ...")
         # `docker stop` first, then remove. `rm -f` is SIGKILL: it takes the daemon and every
         # child it launched down mid-statement, and a child killed that way never writes its
@@ -404,19 +430,22 @@ def start_daemon(*, host: str, user: str, password: str, port: int = 22,
         # paged CRITICAL about a backup that had been fine. `stop` sends SIGTERM and waits, so an
         # in-flight run gets its chance to finish and record itself; the wait is bounded so a
         # wedged process still cannot hold a deploy hostage.
-        ssh_run(client, f"docker stop -t {GRACEFUL_STOP_SECONDS} {container} 2>/dev/null || true")
-        ssh_run(client, f"docker rm -f {container} 2>/dev/null || true")
+        name = shlex.quote(container)
+        ssh_run(client, f"docker stop -t {GRACEFUL_STOP_SECONDS} {name} 2>/dev/null || true")
+        ssh_run(client, f"docker rm -f {name} 2>/dev/null || true")
         print(f"\n[3/4] Starting daemon (node_role={node_role}, passphrase hidden) ...")
         # --service-ports publishes the compose `ports:` mapping (8080) so the webhost
         # app_command the daemon launches inside this container is reachable from outside.
-        ssh_run(client,
-                f"cd {remote_dir} && docker compose run -e DB_OPS_NODE_ROLE={node_role} "
-                f"-d --service-ports --name {container} db_ops daemon {key_arg}",
-                quiet=True)
-        ssh_run(client, f"docker update --restart unless-stopped {container}", quiet=True)
+        started = client.run_script(daemon_start_script(
+            remote_dir=remote_dir, node_role=node_role, container=container, secret_key=secret_key))
+        if not started.ok:
+            raise SystemExit(f"Starting the daemon failed (exit {started.exit_code}): "
+                             f"{(started.stderr or started.stdout).strip()[:400]}")
+        ssh_run(client, f"docker update --restart unless-stopped {name}", quiet=True)
         print("\n[4/5] Verifying ...")
-        ssh_run(client, f"docker ps --filter name={container} --format '{{{{.Names}}}} | {{{{.Status}}}}'")
-        ssh_run(client, f"docker exec {container} python -c \"import db_ops; print('version=', db_ops.__version__)\"")
+        ssh_run(client, f"docker ps --filter {shlex.quote('name=' + container)} "
+                        f"--format '{{{{.Names}}}} | {{{{.Status}}}}'")
+        ssh_run(client, f"docker exec {name} python -c \"import db_ops; print('version=', db_ops.__version__)\"")
         print("\n[5/5] Pruning superseded images ...")
         _prune_old_images(client, keep=KEEP_IMAGE_VERSIONS)
     finally:

@@ -52,10 +52,17 @@
         END AS real_wait,
         s.login_name,
         s.host_name,
+        c.client_net_address AS client_ip,
         s.program_name
     FROM sys.dm_exec_requests r
     JOIN sys.dm_exec_sessions s
         ON r.session_id = s.session_id
+    -- The request's own connection (one row per request, MARS included), for client_ip: host_name
+    -- is whatever the client says it is; client_net_address is where SQL Server saw it come from.
+    -- 0.25.0 added it to every collector that already joined this view and missed these, whose
+    -- join was only in a commented-out draft (0.26.0 section 1.75).
+    LEFT JOIN sys.dm_exec_connections c
+        ON c.connection_id = r.connection_id
     WHERE
         s.is_user_process = 1
         AND r.session_id <> @@SPID
@@ -198,6 +205,7 @@ SELECT
             ISNULL(CAST(MAX(CASE WHEN rn = 1 THEN total_elapsed_time END) / 1000 AS varchar(20)), '') +
         ', login=' + ISNULL(MAX(CASE WHEN rn = 1 THEN login_name END), '') +
         ', host=' + ISNULL(MAX(CASE WHEN rn = 1 THEN host_name END), '') +
+        ', client_ip=' + ISNULL(CAST(MAX(CASE WHEN rn = 1 THEN client_ip END) AS varchar(48)), '') +
         ', app=' + ISNULL(MAX(CASE WHEN rn = 1 THEN program_name END), '')
     AS varchar(max)) AS message
 FROM ranked

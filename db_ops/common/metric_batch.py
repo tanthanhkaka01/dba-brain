@@ -136,6 +136,7 @@ def _connect(target: dict[str, Any], database: str, *, timeout: int) -> Any:
             username=str(target.get("username") or ""),
             password=str(target.get("password") or ""),
             sqlserver_driver=str(target.get("sqlserver_driver") or "").strip(),
+            sqlserver_tls_verify=target.get("sqlserver_tls_verify") is True,
             connect_timeout_seconds=min(DEFAULT_CONNECT_TIMEOUT_SECONDS, timeout),
             statement_timeout_seconds=timeout,
             # Metric SQL is read-only, and it catches per-database errors inside a cursor. Inside a

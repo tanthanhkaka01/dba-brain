@@ -464,6 +464,12 @@ the killed row was never latest again, so it never came back through here — no
 alert, and two runs that had died sat in `running` for the rest of the day. What the operator saw
 was runs that had *stopped failing*, which is the worse of the two.
 
+**A statement that runs out of time says so (0.26.0).** ODBC reports a login timeout and a query
+timeout under one SQLSTATE, `HYT00`, and both used to read *could not reach ... the instance is
+down*. A query timeout (and PostgreSQL's *canceling statement due to statement timeout*, Oracle's
+`ORA-01013`) is now *a statement ran past this target's timeout (Ns)*, the instance answered
+(`lib/sql_task_target.classify_connect_failure`, `statement_timeout`).
+
 **A run cannot outlive twice its timeout (0.26.0).** The target's `timeout` reaches the driver as a
 query timeout, which is per call: it restarts on every batch and every `nextset()`, so a procedure
 answering a stream of small results never trips it. The `run-sql` child was started with no
@@ -474,6 +480,27 @@ connect timeout** (`run_deadline_seconds`), and kills it there; the run fails wi
 deadline of Ns and was stopped*. Twice, not once, because the timeout bounds the statements and a
 task of several batches may legitimately take longer in total. Killing the child closes its
 connection; the next bullet still applies to what the server does with a statement in flight.
+
+**A run past its timeout is over (0.26.0, the operator, 2026-10-02).** The deadline above stops a
+run that nothing else is looking at. When the task is looked at again - the scheduled scan sweeps
+every task at its start, and `run-sql-id` sweeps the task it is about to run - a run of it still
+`running` past its target's `timeout` is closed: `status=error`, *error by timeout*, with the two
+clock readings and what was done about its process. Until then such a row was held for as long
+as its process was alive, and the row is the claim, so the target did not run again.
+
+- **The owner is stopped before the row is closed.** A row closed under a process still working
+  frees the claim for a second copy on top of the first - eight duplicate production runs on
+  2026-09-08 came from exactly that. So the scan that holds the overdue run, and the `run-sql`
+  child under it, are stopped first (`process_liveness.stop_process_and_children`), and only a
+  process that still carries the start time its claim recorded (`claim_started`): a pid alone is
+  whoever holds the number now.
+- **What the message says about the process:** *was stopped*; *had already ended*; *is on
+  another host and cannot be stopped from here*; or *was left running - the claim records no
+  start time* (a run claimed by 0.25.0 or earlier).
+- **`timeout` therefore bounds the whole run of a target** - every file of a `folder` task
+  together - not each statement. A task whose runs legitimately take longer needs a larger
+  `timeout`; `0` means none, and such a run is never closed on age.
+- A target with `alert_on_error` is told, as for any failed run.
 
 Two things this **cannot** do, and both have bitten:
 

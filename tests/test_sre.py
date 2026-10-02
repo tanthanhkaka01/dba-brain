@@ -286,8 +286,12 @@ def test_a_dry_run_never_shows_the_mysql_admin_password():
     """The hop to a node quotes the quoted password again ('"'"'secret'"'"'), and the old
     `--password=` redaction did not match that - so `--dry-run` printed it in full."""
     config = _make_config()
-    command = check_mysql_cluster(config, dry_run=True)[2]["command"]
-    assert "mysqlsh" in command
+    request = check_mysql_cluster(config, dry_run=True)[2]
+    # A script on stdin now (review 0.25.0, F5): the password reaches mysqlsh on its own stdin,
+    # never as `--password=`, and is still masked in a dry run.
+    command = request["script"]
+    assert "command" not in request
+    assert "mysqlsh --passwords-from-stdin" in command and "--password=" not in command
     assert "secret" not in command
     assert "***" in command
 
@@ -302,8 +306,10 @@ def test_a_dry_run_never_shows_the_guest_password(tmp_path):
         database_defaults=_MYSQL_DEFAULTS, vmware=_BASE_VMWARE,
         automation={"bash_dir": str(bash_dir)})
     result = run_bastion_script(config, script_name="bootstrap", args=["mysql"], dry_run=True)
-    assert "GUEST_BECOME_PASS=***" in result["command"]
-    assert "guest-pw-1" not in result["command"]
+    # Sent as a script on stdin (review 0.25.0, F5): not in the bastion's process table.
+    assert "command" not in result
+    assert "GUEST_BECOME_PASS=***" in result["script"]
+    assert "guest-pw-1" not in result["script"]
 
 
 def test_a_command_that_never_ran_keeps_ssh_s_exit_code(monkeypatch):

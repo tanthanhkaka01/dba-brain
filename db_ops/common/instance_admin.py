@@ -31,6 +31,7 @@ from db_ops.lib import data_sources
 from db_ops.lib import field_names
 from db_ops.lib import secret_text as _secret_text
 from db_ops.lib import sql_access as _sql_access
+from db_ops.lib.file_lock import FileLock
 from db_ops.lib.json_io import atomic_write_text
 
 #: Fields every target needs, whatever the engine. Anything else is optional and passed through, so
@@ -306,16 +307,21 @@ def _store_secret(root: Path, ref: str, value: str, key: str) -> str:
     target needs. Doing it through the bulk path would mean writing that plaintext file first.
     """
     path = data_sources.secret_text_path(root)
-    existing: dict[str, str] = {}
-    if path.exists():
-        try:
-            existing = dict(_secret_text.load_secret_text_file(path, key=key))
-        except Exception as exc:  # noqa: BLE001 - a wrong passphrase must say so, not overwrite.
-            raise InstanceAdminError(
-                f"the existing secret store at {path.name} could not be opened with this "
-                f"passphrase ({exc}). Nothing was written - overwriting it would lose every "
-                "secret already in it.") from exc
-    existing[ref] = value
-    blob = _secret_text.encrypt_secret_text(existing, key)
-    atomic_write_text(path, json.dumps(blob, ensure_ascii=False, indent=2) + "\n")
+    # Under the store's lock, as every other writer of it (review 0.25.0, B9.1). This one was left
+    # out: it read, added and wrote back with nothing between it and a console password change or a
+    # rotation, and whichever wrote second kept only its own change.
+    with FileLock(path):
+        existing: dict[str, str] = {}
+        if path.exists():
+            try:
+                existing = dict(_secret_text.load_secret_text_file(path, key=key))
+            except Exception as exc:  # noqa: BLE001 - a wrong passphrase must say so, not overwrite.
+                raise InstanceAdminError(
+                    f"the existing secret store at {path.name} could not be opened with this "
+                    f"passphrase ({exc}). Nothing was written - overwriting it would lose every "
+                    "secret already in it.") from exc
+        existing[ref] = value
+        blob = _secret_text.encrypt_secret_text(existing, key)
+        # The store's own writer: a store this creates is private, as every other way of making one.
+        _secret_text.write_secret_file(path, json.dumps(blob, ensure_ascii=False, indent=2) + "\n")
     return str(path)

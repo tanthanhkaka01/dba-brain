@@ -12,7 +12,7 @@ from pathlib import Path
 from db_ops.lib.config import StoreConfig
 from db_ops.db.job_runs import JobRun
 from db_ops.lib.rows import row_value
-from db_ops.lib import node_identity, run_claim
+from db_ops.lib import node_identity, process_liveness, run_claim
 from db_ops.db import backend as backend_mod
 from db_ops.db.backend import StoreTarget
 
@@ -37,6 +37,18 @@ def _claim_pid(metadata: dict) -> int:
         return int(raw) if raw is not None else os.getpid()
     except (TypeError, ValueError):
         return os.getpid()
+
+
+def _claim_started(metadata: dict) -> str:
+    """When the claiming process started, or ``""`` when that cannot be read.
+
+    Written beside the pid so that whoever later has to stop this run can tell its process from a
+    newer one holding the same number (``run_claim.STARTED_FIELD``). Never a reason to fail a claim.
+    """
+    try:
+        return process_liveness.process_start_marker(_claim_pid(metadata)) or ""
+    except Exception:  # noqa: BLE001 - a marker that cannot be read is simply not recorded.
+        return ""
 
 
 class RunAlreadyClaimed(RuntimeError):
@@ -260,7 +272,8 @@ class DbOpsStore:
         host_name = item.host_name or socket.gethostname()
         if running:
             metadata.update(run_claim.claim_fields(pid=_claim_pid(metadata), host=host_name,
-                                                   node=node_identity.current()))
+                                                   node=node_identity.current(),
+                                                   started=_claim_started(metadata)))
         metadata_json = json.dumps(metadata, ensure_ascii=False, sort_keys=True)
         try:
             with self.connect() as conn:
@@ -574,7 +587,8 @@ class DbOpsStore:
                         command_status,
                         reply_message_id,
                         processed_at,
-                        raw_json
+                        raw_json,
+                        claimed_at
                     FROM telegram_command_messages
                     WHERE command_status = 0
                     ORDER BY message_date ASC, telegram_command_message_id ASC
@@ -903,6 +917,28 @@ class DbOpsStore:
                 ),
             )
             return int(cursor.lastrowid)
+
+    def redact_telegram_message(self, *, telegram_message_id: int, replacement: str = "***") -> int:
+        """Replace one stored message's text - its row and the command copy of it - with ``replacement``.
+
+        A password answered to the bot was masked in the step trail only; ``telegram_messages`` and
+        ``telegram_command_messages`` kept it verbatim, in ``text`` and in ``raw_json``, readable
+        from the console and any psql prompt (review 0.25.0, F8.4). Returns rows changed.
+        """
+        self.initialize()
+        changed = 0
+        with self.connect() as conn:
+            for table in ("telegram_messages", "telegram_command_messages"):
+                rows = conn.execute(
+                    f"SELECT raw_json FROM {table} WHERE telegram_message_id = ?;",
+                    (int(telegram_message_id),)).fetchall()
+                for row in rows:
+                    raw = _redacted_raw_json(row["raw_json"], replacement)
+                    cursor = conn.execute(
+                        f"UPDATE {table} SET text = ?, raw_json = ? WHERE telegram_message_id = ?;",
+                        (replacement, raw, int(telegram_message_id)))
+                    changed += int(cursor.rowcount or 0)
+        return changed
 
     def finish_telegram_workflow_step(
         self,
@@ -1458,23 +1494,29 @@ class DbOpsStore:
         Counts a message in any non-terminal or delivered state (``send_status`` 0/1/2): one still
         waiting in the queue is exactly as much a duplicate as one already sent, and skipping
         queued rows is how a stuck queue turns into a burst of identical messages when it drains.
+
+        A message too long for one Telegram body is queued as ``<source_id>:part:<n>``, and the
+        exact match never found those - so a long alert was never a duplicate of itself (review
+        0.25.0, F7.2). The parts match too, by an exact prefix rather than ``LIKE``, whose ``_``
+        would match any character in an id like ``metrics_latest:critical:LAB_01``.
         """
         self.initialize()
         cutoff = (datetime.now(timezone.utc)
                   - timedelta(seconds=int(within_seconds))).strftime("%Y-%m-%dT%H:%M:%SZ")
         placeholders = ",".join("?" for _ in source_types)
+        parts_prefix = f"{source_id}:part:"
         with self.connect() as conn:
             row = conn.execute(
                 f"""
                 SELECT 1
                 FROM telegram_send_messages
                 WHERE source_type IN ({placeholders})
-                  AND source_id = ?
+                  AND (source_id = ? OR substr(source_id, 1, ?) = ?)
                   AND row_ins_date >= ?
                   AND send_status IN (0, 1, 2)
                 LIMIT 1;
                 """,
-                (*source_types, source_id, cutoff),
+                (*source_types, source_id, len(parts_prefix), parts_prefix, cutoff),
             ).fetchone()
         return row is not None
 
@@ -1822,18 +1864,51 @@ class DbOpsStore:
                 (send_tlgmsg_id,),
             ).fetchone()
 
-    def mark_telegram_send_message_processing(self, *, send_tlgmsg_id: int) -> None:
+    def mark_telegram_send_message_processing(self, *, send_tlgmsg_id: int) -> bool:
+        """Take a pending row for sending. True when this caller took it.
+
+        ``send_date`` is stamped here too: it is when the row went in flight, which is what
+        :meth:`requeue_stale_telegram_send_messages` measures. The sent/failed updates overwrite it.
+        """
         self.initialize()
         with self.connect() as conn:
-            conn.execute(
+            cursor = conn.execute(
                 """
                 UPDATE telegram_send_messages
-                SET send_status = 2
+                SET send_status = 2,
+                    send_date = ?
                 WHERE send_tlgmsg_id = ?
                   AND send_status = 0;
                 """,
-                (send_tlgmsg_id,),
+                (utc_now_text(), send_tlgmsg_id),
             )
+            return cursor.rowcount == 1
+
+    def requeue_stale_telegram_send_messages(self, *, older_than_seconds: int) -> int:
+        """Put rows left in flight (``send_status = 2``) back in the queue. Returns how many.
+
+        A row is in flight only while a send pass holds it, and a pass is a process the daemon kills
+        at its timeout - with no chance to put the row back. Nothing else ever moves a row out of
+        ``2``, so such a message was lost without a word. Past ``older_than_seconds`` no pass can
+        still own it; it goes back to ``0``, accepting that Telegram may already have had it: a
+        possible second copy beats a message nobody receives. A row with no ``send_date`` was put in
+        flight before that was stamped, and is treated as stale.
+        """
+        self.initialize()
+        cutoff = (datetime.now(timezone.utc)
+                  - timedelta(seconds=int(older_than_seconds))).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with self.connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE telegram_send_messages
+                SET send_status = 0,
+                    send_date = NULL
+                WHERE send_status = 2
+                  AND (send_date IS NULL OR send_date < ?);
+                """,
+                (cutoff,),
+            )
+            return int(cursor.rowcount or 0)
 
     def mark_telegram_send_message_sent(self, *, send_tlgmsg_id: int, message_id: int | None) -> None:
         self.initialize()
@@ -1868,9 +1943,17 @@ class DbOpsStore:
                 )
 
     def mark_telegram_send_message_failed(self, *, send_tlgmsg_id: int, fail_text: str) -> None:
+        """Mark a row failed, ``fail_text`` merged into its metadata.
+
+        It replaced the whole object with ``{"fail_text": ...}``, dropping `document_path`,
+        `reply_markup`, the level and the SQL task id - so a failed report row no longer said which
+        file it had carried (review 0.25.0, B3.2), the very loss `reset_..._pending` says it avoids.
+        """
         self.initialize()
-        metadata_json = json.dumps({"fail_text": fail_text}, ensure_ascii=False, sort_keys=True)
         with self.connect() as conn:
+            metadata = self._send_row_metadata(conn, send_tlgmsg_id)
+            metadata["fail_text"] = fail_text
+            metadata_json = json.dumps(metadata, ensure_ascii=False, sort_keys=True)
             conn.execute(
                 """
                 UPDATE telegram_send_messages
@@ -1883,7 +1966,22 @@ class DbOpsStore:
                 (utc_now_text(), metadata_json, send_tlgmsg_id),
             )
 
-    def reset_telegram_send_message_pending(self, *, send_tlgmsg_id: int, fail_text: str) -> None:
+    @staticmethod
+    def _send_row_metadata(conn: Any, send_tlgmsg_id: int) -> dict[str, Any]:
+        row = conn.execute(
+            "SELECT metadata_json FROM telegram_send_messages WHERE send_tlgmsg_id = ?;",
+            (send_tlgmsg_id,),
+        ).fetchone()
+        if row is None:
+            return {}
+        try:
+            parsed = json.loads(str(row["metadata_json"] or "{}"))
+        except (json.JSONDecodeError, TypeError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    def reset_telegram_send_message_pending(self, *, send_tlgmsg_id: int, fail_text: str,
+                                            extra: dict[str, Any] | None = None) -> None:
         """Put a row back in the queue, keeping what it is.
 
         ``last_fail_text`` is **merged** into the existing metadata, not written over it. This
@@ -1894,19 +1992,9 @@ class DbOpsStore:
         """
         self.initialize()
         with self.connect() as conn:
-            row = conn.execute(
-                "SELECT metadata_json FROM telegram_send_messages WHERE send_tlgmsg_id = ?;",
-                (send_tlgmsg_id,),
-            ).fetchone()
-            metadata: dict[str, Any] = {}
-            if row is not None:
-                try:
-                    parsed = json.loads(str(row["metadata_json"] or "{}"))
-                except (json.JSONDecodeError, TypeError):
-                    parsed = {}
-                if isinstance(parsed, dict):
-                    metadata = parsed
+            metadata = self._send_row_metadata(conn, send_tlgmsg_id)
             metadata["last_fail_text"] = fail_text
+            metadata.update(extra or {})
             conn.execute(
                 """
                 UPDATE telegram_send_messages
@@ -1946,7 +2034,8 @@ class DbOpsStore:
             # in beside it so the next scan can ask whether the owner is still alive instead of
             # reaping the row on age and starting a second copy on top of it.
             metadata.update(run_claim.claim_fields(pid=_claim_pid(metadata), host=host_name,
-                                                   node=node_identity.current()))
+                                                   node=node_identity.current(),
+                                                   started=_claim_started(metadata)))
         metadata_json = json.dumps(metadata, ensure_ascii=False, sort_keys=True)
         try:
             with self.connect() as conn:
@@ -3312,3 +3401,21 @@ def source_expr(columns: set[str], *candidates: str, default: str = "NULL") -> s
         if candidate in columns:
             return candidate
     return default
+
+
+def _redacted_raw_json(raw: Any, replacement: str) -> str:
+    """``raw_json`` with every ``text``/``caption`` value replaced - the rest (ids, dates) kept."""
+    try:
+        payload = json.loads(raw or "{}")
+    except (TypeError, ValueError):
+        return json.dumps({"redacted": True})
+
+    def scrub(node: Any) -> Any:
+        if isinstance(node, dict):
+            return {key: (replacement if key in ("text", "caption") and isinstance(value, str)
+                          else scrub(value)) for key, value in node.items()}
+        if isinstance(node, list):
+            return [scrub(item) for item in node]
+        return node
+
+    return json.dumps(scrub(payload), ensure_ascii=False)

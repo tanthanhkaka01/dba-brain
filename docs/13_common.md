@@ -222,7 +222,10 @@ A request without the field it needs is refused with a message naming it - never
 finished request carries a password, so it goes on stdin (`db_ops.transport` does, and the bot
 hands it to a detached command's stdin). `rules` absent means the ladder the package ships -
 `common` never reads the node's `data/emergency_operations.json`; both sides read a ladder through
-`db_ops.lib.confirmation_ladder`, so it means the same thing whoever read it. The last four doors
+`db_ops.lib.confirmation_ladder`, so it means the same thing whoever read it.
+A ladder `path` named to `confirm.load_operation` that does not exist is refused (0.26.0, owner
+decision G3.6) - it fell back to the shipped ladder without a word; the node's own absent ladder is
+still the shipped one, read app-side, which is how an install not yet initialised is priced. The last four doors
 closed in 0.24.0 too: `run-sql`, `run-cmd`, `probe-host` and the file-transfer commands resolved a
 bare `server_id` for a caller that sent nothing more, and now refuse it. A person at a shell writes
 the complete request to a file and passes `@file`.
@@ -492,7 +495,9 @@ set judged by `prune` — then applies a rule, then optionally hands the paths t
 (`docs/08_backup_restore_app.md`), and it **defaults to 8 days** here — this command is also run by
 hand against a directory nobody has configured, which is the one case where "the entry states it"
 has no answer. `retention_days` is still read, in days, for a request written before 2026-09-11.
-The planner underneath reasons in whole days, so the seconds are converted at this edge, once.
+The planner takes the seconds as they are (0.26.0): it reasoned in whole days, so anything under a
+day became 0 and 0 became the 14-day default without a word (review 0.25.0, B4.4). The answer's
+`window` names the window in the unit it was given - `"8-day"`, `"7200-second"`.
 
 Two rules, and **`age` is the default**:
 
@@ -741,10 +746,10 @@ common cli metadata ...".) The app now resolves the two logins and calls, in ord
 | Step | Command |
 | --- | --- |
 | which files | `backup-chain` - PostgreSQL's newest chain from the directory names, RMAN's own answer for Oracle (`RESTORE DATABASE PREVIEW` plus the catalog), everything for SQL Server. **A point in time copies everything**: both narrowings take the NEWEST chain, and a moment before the newest full needs an older one |
-| the copy | `copy-backup-dir` - one `tar` stream through the orchestrator. It skips a file the target already has at the same size and no older, and removes a staged file the source no longer has. It refuses a source it cannot list completely, and says which way: the folder does not exist (no backup yet), a folder vanished while listed, or the SSH user cannot read one |
+| the copy | `copy-backup-dir` - one `tar` stream through the orchestrator, file by file where tar cannot be used, and the answer says which (`copy_mode`, below). It skips a file the target already has at the same size and no older, and removes a staged file the source no longer has. It refuses a source it cannot list completely, and says which way: the folder does not exist (no backup yet), a folder vanished while listed, or the SSH user cannot read one. **Before the first file moves it checks the room** (0.26.0): `space_check` in the request - a restore entry's own, `{enabled, factor, on_unknown}`, on at x2 when absent - holds the files still to copy to `free on the target >= bytes x factor` (`df` at the staging folder), and a shortfall or an unreadable target fails the command with *No file was copied*. The answer carries what was measured (`space_check`); the restore script that follows checks nothing itself |
 | the listing | `list-backup-files` (unchanged) |
 | instance metadata | `sqlserver-replay-instance` (unchanged), before the databases and after them |
-| the restore | `restore-full` / `restore-diff` / `restore-log` (unchanged) |
+| the restore | `restore-full` / `restore-diff` / `restore-log`. Since 0.26.0 a SQL Server full with `replace` starts its batch with a guard: a database ONLINE on the target raises before anything runs unless the request says `overwrite_existing: true` (G2.10) |
 | the check | `verify-restore` (unchanged) |
 | the cleanup | `prune-staged-backups` - the staging folder past the entry's retention, **after** the verify |
 
@@ -752,6 +757,26 @@ All three new ones are **stdin only**: their requests carry SSH passwords. A log
 `username` and a resolved `password` or an absolute `key_file` - never a ref. The work is
 `db_ops/common/backup_copy.py`, which was `backup_restore/transfer.py` until 0.23.0. The fields are
 `input_`/`output_backup_chain`, `_copy_backup_dir` and `_prune_staged_backups`.
+
+### A fallback in *how* is reported, and can be pinned (0.26.0, owner decision G4)
+
+The no-fallback rule (review notes G) is about *which* thing is acted on: that is stated, or the
+command does not run. *How* it is done may still step down to a second way - the second way is what
+reaches a 2008 R2 instance or a host without `tar` - but the answer **always says which way ran**,
+and where there is a choice the way **can be pinned**: a pinned way that cannot be used is an error,
+never a reason to try the other.
+
+| What steps down | The answer says | To pin it |
+| --- | --- | --- |
+| a SQL Server connection: ODBC, then pymssql | `run-sql` -> `tool.actual`: `driver`, `encryption`, `fell_back`, every attempt | `sqlserver_driver` on the instance - a named ODBC driver that fails is an error; `pymssql` goes straight there |
+| the copy between two hosts: one `tar` stream, then one SFTP transfer per file | `copy-backup-dir` -> `copy_mode` (`tar` / `sftp` / `none`) and `copy_fell_back`; the message and the restore's `COPY_DONE` say *file by file over SFTP* | `copy_mode` in the request, and on a script-driven restore entry: `auto` (default), `tar`, `sftp`. Pinned to `tar`, a stream that cannot be used fails the copy and nothing goes file by file |
+| a staged file taking its name: `posix-rename`, then remove + rename | `relay-file` and `send-file` -> `replace_mode` (`posix-rename` / `remove+rename`) | none - a server without the extension has no first way. The second is not atomic: between its two steps the destination does not exist |
+| a command over WinRM: `pypsrp`, else a local PowerShell driving `Invoke-Command` | `run-cmd` -> `backend` (`pypsrp` / `powershell`), over WinRM only | the install: `pypsrp` is used whenever the `[winrm]` extra is there. The second cannot authenticate to a WORKGROUP host and says so (`_name_the_missing_backend`) |
+| `docker`, then `sudo docker` | **not reported yet** - the host's own shell decides, at the moment of use (`lib.shell.docker_cli`), and no answer reads it back | `"sudo": false` on the host block: plain `docker` only |
+
+The copy's words - `auto`, `tar`, `sftp` - are `db_ops/lib/restore/copy_mode.py`, shared by the
+restore entry and the command. Until this, the per-file copy was a line on stderr: across two
+internet hops it is 10 KB/s (measured), and a drill that took eight hours answered like any other.
 
 ### `metric-batch` — one target's metrics, run one after another (0.24.0)
 
@@ -850,7 +875,7 @@ with an import in it.
 | `sla_results.py` | The shapes the SLA app persists, shared with `sla_store.py`. `SlaPolicy` deliberately stayed in `sla/models.py`: a policy is config the app parses, not a row anything writes. | `SlaPolicyResult`, `SlaValidationSummary`, `state_key` |
 | `backup_restore_history.py` | The backup/restore history store (`backup_restore_history`). **Moved here from `backup_restore/history.py`** on 2026-08-11, same move and same reason. | `BackupRestoreHistory`; `HISTORY_SCHEMA_VERSION` |
 | `inventory_render.py` | Merging a health overlay into the canonical inventory and rendering the dated summary — shared by the master-side `control` app and the worker-side `reports` app, which each held a copy (265 identical lines) until 2.33.00. The copies had already drifted; the reports version was a strict superset (reads the newer `backup_evidence` block, takes disks from `merged_drives`, surfaces curated `findings`) and is the one kept, so the master-side output gained those sections rather than losing any. What stays app-side is what genuinely differs: `control` SSHes to the worker and SFTPs the overlay back, `reports` runs store-local. | `build_inventory_summary`, `merged_drives`, `merged_sql_resources`; `DEFAULT_INVENTORY`, `HEALTH_BLOCKS`, `DBTYPE_LABEL`, `DISK_WARN_PCT`, `DISK_CRIT_PCT` |
-| `secret_check.py` | **Single source of truth** for *proving a secret still logs in somewhere* — the read-only sibling of `password_rotation`, sharing its target resolution so an audit and a rotation can never disagree about where a secret lives. Resolves a ref by walking **every** config that can name it (`db_instances` database login or `cmd_access`, `docker_db_connections` — which carries the published non-default port — `restore_config`, `users.json` `remote_credentials`) before falling back to the standard key name. When `cmd_access` does not state a method the protocol is **probed** (SSH 22, then WinRM 5985/5986) rather than assumed. Distinguishes the four things that all used to read "unreachable": `UNREACHABLE` (nothing answers), `NO_MANAGEMENT_PORT` (host is up on RDP but has no scriptable way in), `AUTH_FAILED` (the credential is wrong), `NOT_A_LOGIN` (key material or a service token). **Input is a JSON object**; `{}` checks the whole store. | `check`, `check_ref`, `resolve_check_target`, `oracle_service_for_host`; `SecretCheckError`; `NOT_A_LOGIN`, `HTTP_LOGINS`, `SSH_PORT`, `WINRM_PORTS` |
+| `secret_check.py` | **Single source of truth** for *proving a secret still logs in somewhere* — the read-only sibling of `password_rotation`, sharing its target resolution so an audit and a rotation can never disagree about where a secret lives. Resolves a ref by walking **every** config that can name it (`db_instances` database login or `cmd_access`, `docker_db_connections` — which carries the published non-default port — `restore_config`, `users.json` `remote_credentials`) and never reads a host from the ref's own name (0.26.0). When `cmd_access` does not state a method the protocol is **probed** (SSH 22, then WinRM 5985/5986) rather than assumed. Distinguishes the four things that all used to read "unreachable": `UNREACHABLE` (nothing answers), `NO_MANAGEMENT_PORT` (host is up on RDP but has no scriptable way in), `AUTH_FAILED` (the credential is wrong), `NOT_A_LOGIN` (key material or a service token). **Input is a JSON object**; `{}` checks the whole store. | `check`, `check_ref`, `resolve_check_target`, `oracle_service_for_host`; `SecretCheckError`; `NOT_A_LOGIN`, `HTTP_LOGINS`, `SSH_PORT`, `WINRM_PORTS` |
 | `password_rotation.py` | **Single source of truth** for *changing a database login's password* — on the server **and** in the secret store, as one operation. A rotation done as two steps drifts: an `ALTER LOGIN` nobody records leaves db_ops authenticating with a dead password; a store edit nobody applies leaves a password the server never accepted. Fixed order per target: connect with the current password (a target whose current password already fails is **skipped**, never guessed at), issue the engine's change statement, **re-authenticate on a new connection** (the session that issued the change stays valid, so checking on it proves nothing), then store. A failed verify is rolled back inline with the value the process still holds. Every target gets its **own** generated password. **Input is a JSON object**, like `sql_run` and `remote_exec`. See [the section below](#rotating-a-login-password-password_rotation). | `rotate`, `rotate_ref`, `persist_rotated`, `strip_secrets`, `generate_password`, `build_change_statement`, `select_refs`, `resolve_ref_target`, `target_from_ref_name`; `PasswordRotationError`; `SUPPORTED_ENGINES`, `DEFAULT_PASSWORD_LENGTH = 28`, `MIN_PASSWORD_LENGTH = 12` |
 | `evidence.py` | The **gate model** every runbook-style operation reports through, and its JSON evidence file. One named check, a verdict (`OK` / `WARN` / `FAIL`), a sentence an operator can act on, and two independent flags: `blocking` (a failure stops the run) and `override` (a blocking failure an operator may accept deliberately). Gates are echoed as they run — a 30-minute restart that speaks only at the end is indistinguishable from a hung one — and written to `runtime/evidence/<operation>/<run_id>.json`, one file per run, never overwriting an older one. | `GateReport` (`add`, `note`, `say`, `blockers`, `passed`, `status`, `to_dict`, `write`), `Gate`, `new_run_id`; `OK`, `WARN`, `FAIL`, `SKIP`, `DEFAULT_EVIDENCE_ROOT` |
 | `confirm.py` | **The one place db_ops asks a human before doing something it cannot undo.** Every dangerous operation — restart, service stop, cumulative update, and whatever is added next — calls `require_confirmation`, so the control behaves identically everywhere. Two locks that answer different questions: `"confirm": true` is *intent* (this payload means to change a machine), typing `yes` at the prompt is *presence* (a human is reading **this** target now). The prompt names the target and the consequence — "are you sure?" with no content trains people to answer without reading. With no terminal the run is refused unless the request declares `"assume_yes": true`. See [the section below](#asking-before-something-irreversible-confirm). | `require_confirmation`, `banner`, `is_interactive`, `open_terminal`, `read_answer`; `CONFIRM_WORD = "yes"`, `ANSWER_DEADLINE_SECONDS = 120` |
@@ -863,7 +888,7 @@ with an import in it.
 | `schema_copy.py` | **Single source of truth** for *reproducing one SQL Server schema on another instance*. `table_load.py` covers a file into one table; this covers "make schema `X` on instance B look like schema `X` on instance A". Nine phases in dependency order — partition function/scheme, change tracking on the database, tables, change tracking per table, indexes, checks, data, modules, foreign keys — with **FKs after data**, so load order cannot violate them. Every phase is **idempotent** (`IF OBJECT_ID(...) IS NULL`, `IF NOT EXISTS`, `CREATE OR ALTER`), because a run that dies in phase 4 has to resume by being run again rather than by being repaired. `plan` prints counts and statements and writes nothing; `apply` takes an `sp_getapplock` around the whole operation, because the "already has rows" guard is read-then-write and two appliers really did run against one target. Data moves **through the client** in batched `executemany` with `IDENTITY_INSERT` per table — `INSERT ... SELECT FROM [OtherDb]...` only works when both databases share an instance. **Input is a JSON object**, like `run-sql` and `rotate-password`. See [the section below](#copying-a-schema-between-instances-schema_copy). | `copy_schema`, `build_plan`, `apply_plan`, `plan_steps`, `verify_copy`, `copy_table_data`, `select_tables`, `select_modules`, `assert_destination`, `application_lock`, `format_plan`; `SchemaCopyError`; `SchemaCopyRequest`, `Endpoint`, `Step`; `PHASES`, `DEFAULT_BATCH_SIZE = 2000`, `DEFAULT_TIMEOUT_SECONDS = 900`, `DEFAULT_LOCK_TIMEOUT_SECONDS = 300`, `DEFAULT_MODULE_PASSES = 4` |
 | `schema_catalog.py` | **Single source of truth** for *what SQL Server's catalogue views say a schema contains* — the read half of `schema_copy`, kept apart because reading a catalogue and writing DDL fail differently and are worth testing separately. Also owns the answer to the question the feature request called worth as much as the copying: **`unsupported_features` lists what a copy will silently drop**. Scripting from `sys.tables` alone loses partitioning (a UAT hop shipped 0 of 32 partitioned indexes), change tracking (a `CREATE PROCEDURE` failed with Msg 22105 mid-deploy), filegroups, compression, temporal tables, extended properties and permissions. Reporting them is not the same as carrying them, and saying which is which is the point. | `unsupported_features`, and the per-object readers `schema_copy` plans from |
 | `result_format.py` | **Single source of truth** for *how a result set is rendered*: `json` (default, the only one a program should parse), `txt` (aligned table for a terminal), `csv` (RFC 4180 via the stdlib writer, header row included), `xml` (structure without a JSON parser), `xlsx` (writes a workbook, via `xlsx_export`), `raw` (values only, tab-separated, no header — so `\| cut -f2` works). Chosen inside the JSON request as `"format"`, never a flag, so a config file can carry it. `xlsx` was already here but reachable only from `sql_tasks` config; the rest existed nowhere and were being improvised by piping JSON into whatever the operator remembered. **A SQL NULL stays distinguishable from an empty string in every text format** — rendering both as nothing silently answers a question nobody asked. `csv` does it PostgreSQL's way (`COPY ... WITH CSV`): an empty *unquoted* field is NULL, `""` is the empty string; numbers stay unquoted so a spreadsheet reads them as numbers. Column names become XML *attributes*, not tags: SQL returns columns called `1` or `count(*)` and neither is a legal element name. `write_result` is the single entry point for "put this result set in a file", whatever the format — callers get one call and no branch, which is what `sql_tasks` now uses for all of `xlsx`/`csv`/`txt`/`xml`. | `render_result`, `write_result`, `normalize_format`; `ResultFormatError`; `RESULT_FORMATS`, `NULL_TEXT` |
-| `backup_copy.py` | A restore's **staging copy** between two hosts (0.23.0, from `backup_restore.transfer`): which parts of a backup directory the restore needs (`chain_include` - PostgreSQL by name, Oracle by asking RMAN, everything for SQL Server and for a point in time), the copy as one `tar` stream that skips what is there and removes what the source dropped (`sync_backup_dir`), the engine's read access (`open_for_the_engine`), and the staging cleanup past retention (`prune_target_dir`). SSH clients arrive open, from values the caller resolved; the CLI face is `cli_backup_copy` (`backup-chain`, `copy-backup-dir`, `prune-staged-backups`). | `chain_include`, `sync_backup_dir`, `open_for_the_engine`, `prune_target_dir`; `TransferResult` |
+| `backup_copy.py` | A restore's **staging copy** between two hosts (0.23.0, from `backup_restore.transfer`): which parts of a backup directory the restore needs (`chain_include` - PostgreSQL by name, Oracle by asking RMAN, everything for SQL Server and for a point in time), the copy as one `tar` stream that skips what is there and removes what the source dropped (`sync_backup_dir`), the room the files to copy must find first (`check_room`, the entry's `space_check`), the engine's read access (`open_for_the_engine`), and the staging cleanup past retention (`prune_target_dir`). SSH clients arrive open, from values the caller resolved; the CLI face is `cli_backup_copy` (`backup-chain`, `copy-backup-dir`, `prune-staged-backups`). | `chain_include`, `sync_backup_dir`, `check_room`, `open_for_the_engine`, `prune_target_dir`; `TransferResult`, `CopySpaceError` |
 | `file_transfer.py` | **Single source of truth** for *moving one named file* between this host and a remote one, and for *packing a set into one archive* so it can be moved as one. The apps that move files do it inside a larger job — `backup_copy` (`copy-backup-dir`) syncs a whole backup directory between two remote hosts, `backup_restore.copy_backup` pulls a window of backups off an SMB share — and neither answers "put **this** file **there**", so that kept being typed by hand as `ssh`/`scp`/`docker cp`. Every transfer is size-verified and a short copy deletes what it wrote; overwriting must be asked for and lands atomically; a same-size destination is skipped; mtime is preserved (the restore log-chain filter reads it). `pack_files` builds the archive **on the host that already holds the files** and returns its `sha256` — size catches a truncated copy, not a corrupted one. **Not** for staging a backup set: per-file SFTP across two internet hops measured 10 KB/s, which is why `backup_copy` streams a directory as one `tar`. **Input is a JSON object.** | `fetch_file`, `send_file`, `pack_files`; `FileTransferError`; `STATUS_COPIED` / `STATUS_REPLACED` / `STATUS_SKIPPED_EXISTS`, `PARTIAL_SUFFIX` |
 | `sqlserver_patch.py` | The SQL-Server-specific half of a cumulative update: the "is this instance safe to patch" gate set, the unattended `setup.exe /Action=Patch` contract with its exit-code rules (**3010 = applied, restart required — never re-run**), and the build verification that reads `SERVERPROPERTY` first and registry **`PatchLevel`** (not `Version`) as corroboration. Everything platform-generic underneath is `host_ops`. See [the section below](#patching-a-sql-server-instance-sqlserver_patch). | `precheck`, `apply_cu`, `verify_build` (the JSON entry points); `patch_arguments`, `patch_exit_verdict`, `sqlserver_service_names`, `sqlserver_registry_key`, `setup_log_root`, `version_tuple`; `SqlServerPatchError`; `EXIT_SUCCESS_RESTART_REQUIRED = 3010` |
 | `ops_status.py` | **Is db_ops itself running** — the one question no other app here asks. Everything in db_ops watches databases; nothing watched db_ops, and on 2026-08-12 a NameError in the SQL task scanner made every scheduled scan exit 1 once a minute for a day while the daemon stayed up, the container stayed up and the metric reports kept arriving. Not one scheduled SQL task ran, and a person found it by noticing an absence. Reads `job_runs` and `app_commands.json` and answers two things the estate's own monitoring cannot: **overdue** (an app that stopped being *scheduled* writes no failure row at all, so "no errors" is not health) and **failed since the last alert went out** (the alert's own queue row is the watermark, so an app broken since Tuesday does not message the group every minute for three days — the standing failures ride the periodic summary instead, the same split `sla_policies.json` makes with `reminder_after_seconds`). That question is asked **over an interval, never sampled at an instant**: the first version compared the two newest `job_runs` rows at the moment it happened to run and in seven weeks never sent one alert, because APP-CONTROL runs once a minute while APP-TELEGRAM runs every four seconds — a failure that came and went between two checks was invisible (2026-08-14). Both ends of a **restart** are excused, the daemon's shutdown rows and the stale-`running` rows it closes on startup, or every deploy would raise an incident. The summary's working-hours window is **local** and constrains only the summary; the failure alert ignores the clock, because an app that breaks at 03:00 is news at 03:00. Its state is the queue row it already writes (`source_type=ops_status`), so there is no state table to drift. CLI face: `db.cli ops-status` (the module is `db/ops_status.py` now), scheduled as `APP-CONTROL`. It answers `success: true` when the check **ran**, whatever it found - `false` for a failing app would make *db_ops found a problem* and *db_ops could not look* the same answer; what it found is in `data`. `mode: report` sends nothing; there is no `dry_run`, and the default `auto` sends. | `build_ops_status`, `format_summary`, `format_failure_alert`, `summary_is_due`, `last_summary_sent_at`, `last_failure_alert_at`, `load_app_commands`; `FAILED_STATUSES`, `NON_FAULT_MARKERS`, `SOURCE_TYPE`, `SUMMARY_NOTE`, `FAILURE_NOTE` |
@@ -904,7 +929,7 @@ remote method) has a default:
   "shell": "bash",            // bash | powershell | cmd
   "auth_type": "key",         // ssh: key | password
   "key_file": "/keys/worker.key",  // an absolute path; a bare name is refused (R09)
-  "password_ref": "vm_pw",    // or password_env (env var name), or password (literal)
+  "password_ref": "vm_pw",    // or password_env (its old spelling), or password (literal)
   "timeout_seconds": 30,      // opening the session
   "command_timeout_seconds": null,  // running a command; null = unbounded
   "ssl": false                // winrm
@@ -917,6 +942,12 @@ legitimately take an hour (`docker compose up` pulling a 1.5 GB image, an RMAN d
 restore). So a command is **unbounded by default**, like a plain `ssh host cmd`. A caller
 that wants a bound passes `timeout_seconds=` to `run()`/`run_script()` — metrics does, per
 metric — or sets `command_timeout_seconds` on the access object for the whole session.
+
+**WinRM too, since 0.26.0.** Its session turned "no deadline" into the connect timeout - 30 s by
+default - so every WinRM caller that set none (a patch step, a host operation) was cut half a minute
+in, and `sqlcmd_run` carried its own very large number to get round it (review 0.25.0, B5.3). Now the
+connect timeout bounds one HTTP round trip (pypsrp's `connection_timeout`, never longer than the
+command's own deadline), and the command runs until it ends or until the deadline its caller set.
 
 A second JSON object — a `remote_credentials` entry — can carry `username` and the
 password fields; the access object wins on any key both define.
@@ -2158,9 +2189,15 @@ module to look everywhere and to ask the right question. Resolution order:
    answers nothing, and is written up as unusable;
 3. `restore_config.json` — `password_ref` / `sql_password_ref` in a restore's `source` / `target`
    (`password_env` / `sql_password_env` until 0.22.0, still read);
-4. `users.json` `remote_credentials` — an OS account no instance references;
-5. the standard key name, which carries the IP **and an optional port**
-   (`ORACLE_203_0_113_121_1522_SYS`). A name is a label, so it is last.
+4. `users.json` `remote_credentials` — an OS account no instance references.
+
+**Never the ref's own name** (0.26.0). A fifth step read the host from the standard key name
+(`ORACLE_203_0_113_121_1522_SYS`) when no config named the ref, on by default because *this command
+only reads* - but it reads by sending the secret, to whoever holds that address now.
+`rotate-password` stopped doing it (G3.4) and this did not. A ref nothing names answers `NO_TARGET`
+with what to add, and a request that still says `allow_name_host: true` is refused, not ignored.
+The one name still read is a web login's (Grafana, InfluxDB): no configuration file names such an
+account, so its key is the only statement of where it lives.
 
 When the method is not stated the protocol is **probed** — SSH 22, then WinRM 5985/5986 — because
 the estate is mixed and asking an Ubuntu host over WinRM reports it unreachable when that is only
@@ -2238,8 +2275,14 @@ which is why the rollback is not optional and not deferred.
 | `password_length` | generated length (default 28, minimum 12) |
 | `passwords` | `{password_ref: value}` when an external policy dictates the value |
 | `host_overrides` | `{password_ref: ip}` to pin which node of a clustered instance to use |
-| `allow_name_host` | for a ref no `db_instance` uses, take the host from the standard key name (`MSSQL_<ip>_<login>`). **Off by default** — a key name is a label, not configuration, so deriving a target from it is an explicit operator choice. |
+| `allow_name_host` | **removed in 0.26.0** (owner decision G3.4): a request carrying `true` is refused. A ref no `db_instance` uses is refused too, with what to add - a password is changed only where the inventory says the login lives, never on a host taken from the ref's name. |
 | `timeout_seconds` | connect timeout (default 10) |
+
+**Which store it reads** (0.26.0, owner decision G3.1): `--config X` reads `X`'s own `data/`, and an
+`X` that cannot be read is refused - nothing done. It used to fall back to the default data dir, so
+`--config D:/other/config.json` rotated the passwords of whatever root the process stood in. With no
+`--config`, the node's own data dir (`DB_OPS_HOME` / `DB_OPS_DATA_DIR`). The same holds for
+`check-secret`, `check-secret-literals` and `check-identifiers`.
 
 Statuses: `SUCCESS` · `READY` (dry run) · `SKIPPED` (not attempted, with the reason) ·
 `FAILED` (attempted, nothing kept). Passwords never appear in the output, the logs, or the results.
@@ -2267,8 +2310,6 @@ python -m db_ops.common.cli rotate-password '{"match": "DBA_USER_DBA", "dry_run"
 # then rotate
 python -m db_ops.common.cli rotate-password '{"match": "DBA_USER_DBA"}' --key-base64 "<b64>"
 
-# one ref that no db_instance references, host taken from its standard name
-python -m db_ops.common.cli rotate-password '{"refs": ["MSSQL_192_0_2_8_DBA_USER_DBA"], "allow_name_host": true}'
 ```
 
 After rotating, **deploy with `--no-merge-worker`**: the normal deploy merges the worker's secrets
@@ -2519,6 +2560,16 @@ imported there. A subprocess per verdict would cost more than the work it schedu
 `lib` / `common` split in one sentence. `check-objects` exits 1 when it finds a violation, so it can
 stand in a gate.
 
+**`fallback` notices - phase 1 of the owner's no-fallback rule** (0.26.0, review notes G). An active
+record that leaves a which-thing fact to a default is reported, with the field to add and what is
+assumed until then: an instance reaching its host with no `platform` (guessed from `os` or the
+transport, G3.2), an SSH `cmd_access` with no `auth_type` (`key`, G3.3), no `port` (the engine's,
+G3.9), a PostgreSQL / MySQL instance with no `database_name` or an Oracle one with no `service_name`
+(taken from a label, G3.8), a script SQL Server restore with no `env.MSSQL_USER` (`sa`, G2.11), a
+restore into a container with no `sqlcmd_path`, a certificate API with no
+`certificate_api_token_ref`. A notice, not a violation: nothing stops today. The next release
+refuses these records. The rules are `db_ops.lib.stated_facts`.
+
 **What the reference describes: 153 entries in four families.** The CONFIG a node reads (60 - every
 `data/` file the catalogue calls `config`, and every block between a file's root and its records),
 the REQUESTS `common.cli` takes (45, kind `input`), the ANSWERS it gives (44, kind `output`, with
@@ -2590,6 +2641,14 @@ the backup and restore-drill overrides' `database` -> `database_name`, and an SL
 `name` -> `display_name` (with the parser's own synonyms `slo_target`, `aggregation_method`,
 `operator`). `sid` was measured and kept: it is the Oracle SID and differs from `instance_name`
 on every record that carries both.
+
+**Since 0.26.0 no password is read from the environment** (owner decision G3.5): `password_env` is
+the old spelling of `password_ref` everywhere - a key in the secret store - and a ref resolves only
+from the secrets the caller hands over (an app's own store, through `lib.data_sources`). The
+environment answered for whatever a request named: `password_env: DB_OPS_SECRET_KEY`, or a
+`run-sql` `connection.password_ref` of the same name, sent the node's passphrase as a login
+password to the host the request chose. `run-sql` now refuses a `password_ref` it is not given a
+`password` for; the apps send the password.
 
 Describing them found four names that meant one thing twice and one that meant two things: a
 credential's `notes` (every other record says `note`), a console block's `ord` (`sort_order`), and a
@@ -2955,8 +3014,9 @@ runs may take an hour. Sharing one number silently kills exactly the long operat
 object exists to drive.
 
 The credential object (`username` + `password` / `password_env` / `password_ref`) may be
-passed alongside; the access object wins on any key both define. Secret resolution order is
-`password` → `password_env` (an env var name) → `password_ref` (the encrypted store).
+passed alongside; the access object wins on any key both define. Secret resolution: `password`,
+else the ref (`password_ref`, or `password_env` its old spelling) among the secrets handed over -
+never the environment (G3.5).
 Full behaviour — sessions, script shipping, error classification — is in
 [Reaching a VM (`remote_exec`)](#reaching-a-vm-remote_exec) above.
 
@@ -3340,6 +3400,12 @@ second place for the same fact to live, and the two would drift the first time a
 renamed. An ambiguous or absent match raises rather than guessing — replaying logins onto the
 wrong instance is not an error anyone notices quickly. `target` stays only for the case the chain
 cannot answer: an instance that is not in `db_instances.json` at all.
+
+**The whole inventory, not the monitored part (0.26.0).** The chain is matched against every record
+in `db_instances.json`, active or not, collected or not, and a container is matched on
+`container_name` as well as `instance_name`. Until 0.26.0 it read the metric targets - the active
+instances with metrics on - and a lab is neither: the 100.250 drill onto the `.252` lab replayed
+nothing, *No SQL Server instance matches container*, though the entry named the instance exactly.
 
 The block is parsed when the config is **loaded**, not when the restore runs: a misspelled
 artifact name would otherwise sit in the file until the 02:00 restore that needed it, and surface

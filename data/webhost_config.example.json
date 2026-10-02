@@ -5,7 +5,7 @@
     "'web' holds the session and permission rules. 'session_days' is why closing the browser does not sign anyone out: the cookie and the stored session carry the same lifetime, so shortening it shortens both.",
     "The 'min_level_*' values are checked against a person's level on the same 1-100 ladder telegram_users.json uses. view < edit < run < admin, and somebody needs at least the named level for that class of action. Raise min_level_run before letting the console reach a production instance.",
     "'cookie_secure' must be true wherever the console is served over HTTPS, and is false here only because the sample assumes a plain HTTP address on a private network. Serving a session cookie over plain HTTP on a routed network hands out the session.",
-    "'max_failed_logins' and 'lockout_minutes' are the brute-force gate. They apply per account, so locking one account does not lock the console.",
+    "'max_failed_logins' and 'lockout_minutes' are the brute-force gate. They apply per account, so locking one account does not lock the console. 'max_failed_logins_per_ip' refuses one address first - set below max_failed_logins, so a stranger cannot lock somebody else's account. Both count failures inside lockout_minutes.",
     "'apps' is one block per component - all fourteen. 'ord' is the number of its file under docs/, so the dashboard reads in the same order as the documentation, and 'app_command_ids' links a block to the entries in app_commands.json it owns, which is how a block shows its schedule and its last run. A block with none is a library or a CLI-only component and says so."
   ],
 
@@ -17,6 +17,7 @@
     "cookie_samesite": "Lax",
     "max_failed_logins": 8,
     "lockout_minutes": 15,
+    "max_failed_logins_per_ip": 5,
     "min_level_view": 1,
     "min_level_edit": 50,
     "min_level_run": 50,

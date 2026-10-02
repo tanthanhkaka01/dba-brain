@@ -25,9 +25,13 @@ def run_target_preflight(
     config: BackupRestoreConfig,
     *,
     logger: object | None = None,
+    recopy: bool = False,
 ) -> BackupRestoreConfig | None:
     """
     Validate (and where possible, prepare) the restore target before the workflow runs.
+
+    ``recopy`` says the copy that follows is forced: the files it would find staged are written
+    again, so the space check counts room for them.
 
     Windows targets — SMB/UNC:
         1. Sets up SMB credentials via cmdkey.
@@ -57,7 +61,7 @@ def run_target_preflight(
     :mod:`db_ops.backup_restore.space`.
     """
     try:
-        check_free_space(config, log=lambda message: _log(logger, message))
+        check_free_space(config, log=lambda message: _log(logger, message), recopy=recopy)
     except RestoreSpaceRefused as exc:
         # Raised as the preflight's own error so every caller that already stops on a preflight
         # failure stops on this one too, rather than each learning about a new exception type.
@@ -380,9 +384,8 @@ def _unc_accessible(unc_root: str) -> bool:
     return os.path.exists(unc_root)
 
 
-def _ps_quote(value: str) -> str:
-    """Wrap value in PowerShell single-quoted literal (escapes embedded single quotes as '')."""
-    return "'" + value.replace("'", "''") + "'"
+# One definition, the one that doubles typographic quotes too (review 0.25.0, F12.1).
+from db_ops.lib.powershell import quote_powershell as _ps_quote  # noqa: E402
 
 
 def _log(logger: object | None, message: str) -> None:

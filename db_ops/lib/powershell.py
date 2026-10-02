@@ -35,9 +35,18 @@ __all__ = [
 ]
 
 
+#: Every character PowerShell's tokenizer reads as a single quote: the ASCII one and the four
+#: typographic ones. Doubling only `'` left `’` to close the literal, so a value such as
+#: `x’; Remove-Item ...; ’` ran the middle as a command (review 0.25.0, F12.1).
+_SINGLE_QUOTES = ("'", "\u2018", "\u2019", "\u201a", "\u201b")
+
+
 def quote_powershell(value: str) -> str:
-    """Quote a value as a PowerShell single-quoted string literal."""
-    return "'" + str(value).replace("'", "''") + "'"
+    """Quote a value as a PowerShell single-quoted string literal (every kind of quote doubled)."""
+    text = str(value)
+    for quote in _SINGLE_QUOTES:
+        text = text.replace(quote, quote + quote)
+    return "'" + text + "'"
 
 
 def encode_powershell_command(script_text: str) -> str:

@@ -128,7 +128,24 @@ def indent_of(path: Path, default: int = 4) -> int:
     return default
 
 
-def atomic_write_text(path: Path, text: str) -> None:
+def _umask() -> int:
+    """This process's umask, read without changing it.
+
+    ``os.umask`` can only be read by setting it, and for the moment between the two calls every
+    file another thread creates is world-writable. Linux states it in ``/proc/self/status``; where
+    that cannot be read, the ordinary 022.
+    """
+    try:
+        with open("/proc/self/status", "r", encoding="ascii", errors="replace") as handle:
+            for line in handle:
+                if line.startswith("Umask:"):
+                    return int(line.split()[1], 8)
+    except (OSError, ValueError, IndexError):
+        pass
+    return 0o022
+
+
+def atomic_write_text(path: Path, text: str, *, private: bool = False) -> None:
     """Write ``text`` to ``path`` atomically (temp file in the same dir + replace).
 
     The replacement inherits the **original file's mode and owner**, and that is not cosmetic.
@@ -139,6 +156,14 @@ def atomic_write_text(path: Path, text: str) -> None:
     ``labuser``, could no longer open it. ``merge_worker_config`` reported it as "not on worker"
     and the deploy's copy step then overwrote the operator's toggle with the master's file.
     The write succeeded, the change was real, and the next deploy silently destroyed it.
+
+    **A file that is new gets the mode a plain write would have given it** - by the umask, 0644 on
+    an ordinary host - unless it is ``private``, which keeps ``mkstemp``'s 0600. The same 0600 was
+    what every new file got, whatever it held: when the scaffold, the lab registry and the daemon's
+    state file moved onto this writer to become atomic (review 0.25.0, B9.2), every file ``init``
+    creates turned from 0644 into 0600 with them - a node whose daemon runs as another user than
+    the one who ran ``init`` could not read its own configuration. Private is a statement about
+    what a file holds, made by the caller that knows (:func:`db_ops.lib.secret_text.write_secret_file`).
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -158,6 +183,8 @@ def atomic_write_text(path: Path, text: str) -> None:
                 os.chown(tmp_name, original.st_uid, original.st_gid)
             except (AttributeError, OSError):
                 pass
+        elif not private and os.name != "nt":
+            os.chmod(tmp_name, 0o666 & ~_umask())
         os.replace(tmp_name, path)
     except BaseException:
         try:

@@ -27,6 +27,7 @@ can fail the restore; see :func:`replay_metadata_phase`.
 from __future__ import annotations
 
 import json
+import posixpath
 import shlex
 import time
 from dataclasses import dataclass, field
@@ -58,9 +59,10 @@ from db_ops.backup_restore.config import (
     parse_cleanup_retention,
 )
 from db_ops.transport import common_cli
-from db_ops.lib import instance_bundle
+from db_ops.lib import instance_bundle, restore_space
 from db_ops.lib.shell import docker_cli
 from db_ops.lib.notify import NotifyConfig
+from db_ops.lib.restore.copy_mode import parse_copy_mode
 from db_ops.lib.time_window import TimeWindow, parse_time_window_config
 
 
@@ -101,6 +103,17 @@ class ScriptRestore:
     env_secrets: dict[str, str] = field(default_factory=dict)
     # Per-entry notify object (db_ops.lib.notify): logging_on_run + alert_on_error.
     notify: NotifyConfig = field(default_factory=NotifyConfig)
+    # SQL Server: a full restore over a database ONLINE on the target is refused unless stated
+    # (owner decision G2.10). See config.BackupRestoreConfig.overwrite_existing.
+    overwrite_existing: bool = False
+    # How the backup crosses to a target on another machine: `auto` (one tar stream, file by file
+    # when tar cannot be used - and the answer says which), or `tar` / `sftp` pinned, where the
+    # other way is never tried (owner decision G4). See db_ops.lib.restore.copy_mode.
+    copy_mode: str = "auto"
+    # The room the copy to another machine must find before it starts - the entry's `space_check`,
+    # absent meaning on at x2. The tool checks it before the script runs; the script checks nothing
+    # (the operator, 2026-10-02). Until then the field was read on a share-driven entry only.
+    space_check: restore_space.SpaceCheck = field(default_factory=restore_space.SpaceCheck)
 
     @property
     def is_remote(self) -> bool:
@@ -120,6 +133,29 @@ class ScriptRestore:
         return f"{self.restore_id} ({self.db_type})"
 
 
+class ScriptRestores(list):
+    """The script-driven entries that can run - and, apart, the inactive ones that cannot be read.
+
+    ``unusable`` is ``{restore_id: why}``. Since 0.26.0 an entry states everything about its target
+    or it is refused (owner decision G2), and the refusal was for the whole file: one retired drill
+    that still named a two-level staging folder, or no ``target_server_id``, stopped every
+    script-driven restore on the node - the scheduled pass, ``list-restores``, and registering a new
+    entry through the bot - the "one item stops the pass" shape the same review removed everywhere
+    else. An **active** entry is still refused outright: it is about to run. An **inactive** one
+    runs nothing, so it is kept out of the list with its reason, shown by ``list-restores``, and
+    asking for it by id answers with that reason instead of "no such entry".
+    """
+
+    def __init__(self, *args: Any) -> None:
+        super().__init__(*args)
+        self.unusable: dict[str, str] = {}
+
+
+def unusable_reason(jobs: Any, restore_id: str) -> str:
+    """Why ``restore_id`` was kept out of ``jobs``, or "" - ``jobs`` being any loader's answer."""
+    return str(getattr(jobs, "unusable", {}).get(restore_id, ""))
+
+
 def _read_entries(path: Path | None) -> list[Any] | None:
     if path is None or not path.exists():
         return None
@@ -132,21 +168,24 @@ def _read_entries(path: Path | None) -> list[Any] | None:
     return entries if isinstance(entries, list) else None
 
 
-def load_script_restores(config_path: str | Path | None = None) -> list[ScriptRestore]:
+def load_script_restores(config_path: str | Path | None = None) -> ScriptRestores:
     """The script-driven subset of ``backup_restore.restores[]``.
 
     Falls back to the canonical restore config for the same reason the backup loader does: the
     scheduled command runs with ``--config config.json``, which holds app settings and no restore
     entries, so without the fallback the daemon would silently restore nothing.
+
+    The answer is a :class:`ScriptRestores`: an inactive entry that cannot be read is not in it,
+    and is named in its ``unusable`` with the reason. An active one that cannot be read raises.
     """
     path = Path(config_path) if config_path else None
     entries = _read_entries(path)
     if entries is None and (path is None or path.resolve() != DEFAULT_RESTORE_CONFIG_PATH.resolve()):
         entries = _read_entries(DEFAULT_RESTORE_CONFIG_PATH)
     if entries is None:
-        return []
+        return ScriptRestores()
 
-    jobs: list[ScriptRestore] = []
+    jobs = ScriptRestores()
     seen: set[str] = set()
     for index, entry in enumerate(entries):
         if not isinstance(entry, dict) or not is_script_restore(entry):
@@ -157,67 +196,172 @@ def load_script_restores(config_path: str | Path | None = None) -> list[ScriptRe
         if restore_id in seen:
             raise ValueError(f"Duplicate restore_id: {restore_id}.")
         seen.add(restore_id)
-        for required in ("server_id", "backup_dir", "script"):
-            if not str(entry.get(required) or "").strip():
-                raise ValueError(f"{restore_id} requires {required}.")
-        target_container = str(entry.get("target_container") or "").strip()
-        target_server_id = str(entry.get("target_server_id") or "").strip()
-        if not target_container and not target_server_id:
-            raise ValueError(
-                f"{restore_id} requires target_container (restore into a container on the "
-                f"source host) or target_server_id (restore onto another machine)."
-            )
-        target_backup_dir = str(entry.get("target_backup_dir") or "").strip()
-        source_backup_host_dir = str(entry.get("source_backup_host_dir") or "").strip()
-        if target_server_id and target_server_id != str(entry["server_id"]).strip():
-            if not target_backup_dir:
-                raise ValueError(
-                    f"{restore_id} restores onto {target_server_id}, so it requires target_backup_dir: "
-                    f"the backup has to be transferred there, not shared through a mount."
-                )
-            if not source_backup_host_dir:
-                raise ValueError(
-                    f"{restore_id} restores onto another machine, so it requires "
-                    f"source_backup_host_dir: backup_dir is a path inside the database container "
-                    f"and the transfer reads the source host's filesystem."
-                )
-        env = entry.get("env") or {}
-        if not isinstance(env, dict):
-            raise ValueError(f"{restore_id}.env must be an object.")
-        env_secrets = entry.get("env_secrets") or {}
-        if not isinstance(env_secrets, dict):
-            raise ValueError(f"{restore_id}.env_secrets must be an object of {{ENV_NAME: secret_ref}}.")
-        jobs.append(ScriptRestore(
-            restore_id=restore_id,
-            db_type=str(entry.get("db_type") or "").strip().lower(),
-            server_id=str(entry["server_id"]).strip(),
-            target_container=target_container,
-            target_server_id=target_server_id,
-            target_backup_dir=target_backup_dir,
-            target_visible_dir=str(entry.get('target_visible_dir') or '').strip(),
-            source_backup_host_dir=source_backup_host_dir,
-            cleanup_retention=parse_cleanup_retention(
-                entry, context=f"backup_restore.restores[{index}]"
-            ),
-            backup_dir=str(entry["backup_dir"]).strip(),
-            script=str(entry["script"]).strip(),
-            time_window=parse_time_window_config(
-                entry, context=f"backup_restore.restores[{index}]"
-            ).time_window,
-            env_secrets={str(k): str(v) for k, v in env_secrets.items()},
-            notify=parse_backup_restore_notify(
-                entry, context=f"backup_restore.restores[{index}] ({restore_id})"
-            ),
-            active=bool(entry.get("active", True)),
-            env={str(k): str(v) for k, v in env.items()},
-            server_metadata=parse_server_metadata(
-                entry.get("server_metadata"),
-                label=f"backup_restore.restores[{index}] ({restore_id})",
-                for_restore=True,
-                db_type=str(entry.get("db_type") or ""),
-            ),
-        ))
+        try:
+            jobs.append(_script_restore(index, entry, restore_id))
+        except ValueError as exc:
+            if bool(entry.get("active", True)):
+                raise
+            # An inactive entry runs nothing, and is how an estate retires a drill. Refusing the
+            # whole file over one stopped every restore on the node - the active ones too - for an
+            # entry nobody runs (see ScriptRestores). It is kept out, with its reason.
+            jobs.unusable[restore_id] = str(exc)
+    jobs.unusable.update(_check_staging_dirs(jobs))
+    jobs[:] = [job for job in jobs if job.restore_id not in jobs.unusable]
     return jobs
+
+
+def _script_restore(index: int, entry: dict[str, Any], restore_id: str) -> ScriptRestore:
+    """One entry, read strictly: everything about its target stated, or a ``ValueError`` naming
+    what is missing."""
+    for required in ("server_id", "backup_dir", "script"):
+        if not str(entry.get(required) or "").strip():
+            raise ValueError(f"{restore_id} requires {required}.")
+    # Nothing about the target is derived from the source (owner decision 2026-10-01, rules
+    # R47): an entry that left `target_server_id` out used to mean "the source host", and on
+    # SQL Server the restore then connected to the source's own port - production restored
+    # over itself with REPLACE (review 0.25.0, B4.5).
+    db_type = str(entry.get("db_type") or "").strip().lower()
+    if not db_type:
+        raise ValueError(f"{restore_id} requires db_type.")
+    target_container = str(entry.get("target_container") or "").strip()
+    target_server_id = str(entry.get("target_server_id") or "").strip()
+    if not target_server_id:
+        raise ValueError(
+            f"{restore_id} requires target_server_id: the instance the backup is restored "
+            f"onto. Name it even when it is on the source's machine - the source is never "
+            f"assumed to be the target."
+        )
+    target_backup_dir = str(entry.get("target_backup_dir") or "").strip()
+    target_visible_dir = str(entry.get("target_visible_dir") or "").strip()
+    source_backup_host_dir = str(entry.get("source_backup_host_dir") or "").strip()
+    env = entry.get("env") or {}
+    if not isinstance(env, dict):
+        raise ValueError(f"{restore_id}.env must be an object.")
+    if target_server_id == str(entry["server_id"]).strip():
+        # Same machine as the source: the two instances differ only by container (and, for
+        # SQL Server, by port), so both are stated, and so is where the target reads the set.
+        if not target_container:
+            raise ValueError(
+                f"{restore_id} restores onto its own source machine ({target_server_id}), so it "
+                f"requires target_container: the container the restore goes INTO."
+            )
+        if not target_visible_dir:
+            raise ValueError(
+                f"{restore_id} restores onto its own source machine, so it requires "
+                f"target_visible_dir: the backup directory as the target container sees it."
+            )
+        if db_type == "sqlserver" and not str(env.get("MSSQL_PORT") or "").strip():
+            raise ValueError(
+                f"{restore_id} restores SQL Server onto its own source machine, so it requires "
+                f"env.MSSQL_PORT: the target container's port. Without it the restore would "
+                f"connect to the source instance."
+            )
+    if target_server_id and target_server_id != str(entry["server_id"]).strip():
+        if not target_backup_dir:
+            raise ValueError(
+                f"{restore_id} restores onto {target_server_id}, so it requires target_backup_dir: "
+                f"the backup has to be transferred there, not shared through a mount."
+            )
+        if not source_backup_host_dir:
+            raise ValueError(
+                f"{restore_id} restores onto another machine, so it requires "
+                f"source_backup_host_dir: backup_dir is a path inside the database container "
+                f"and the transfer reads the source host's filesystem."
+            )
+    env_secrets = entry.get("env_secrets") or {}
+    if not isinstance(env_secrets, dict):
+        raise ValueError(f"{restore_id}.env_secrets must be an object of {{ENV_NAME: secret_ref}}.")
+    try:
+        copy_mode = parse_copy_mode(entry.get("copy_mode"))
+        space_check = restore_space.parse_space_check(entry)
+    except ValueError as exc:
+        raise ValueError(f"{restore_id}: {exc}") from None
+    if space_check.measure_restore:
+        # Refused, not ignored: an entry that says its restore is measured, and is not, is a
+        # statement nothing keeps. Only the share-driven SQL Server restore can be asked today.
+        raise ValueError(f"{restore_id}: {restore_space.MEASURE_RESTORE_UNSUPPORTED}")
+    return ScriptRestore(
+        restore_id=restore_id,
+        db_type=db_type,
+        server_id=str(entry["server_id"]).strip(),
+        target_container=target_container,
+        target_server_id=target_server_id,
+        target_backup_dir=target_backup_dir,
+        target_visible_dir=target_visible_dir,
+        source_backup_host_dir=source_backup_host_dir,
+        cleanup_retention=parse_cleanup_retention(
+            entry, context=f"backup_restore.restores[{index}]"
+        ),
+        backup_dir=str(entry["backup_dir"]).strip(),
+        script=str(entry["script"]).strip(),
+        time_window=parse_time_window_config(
+            entry, context=f"backup_restore.restores[{index}]"
+        ).time_window,
+        env_secrets={str(k): str(v) for k, v in env_secrets.items()},
+        notify=parse_backup_restore_notify(
+            entry, context=f"backup_restore.restores[{index}] ({restore_id})"
+        ),
+        active=bool(entry.get("active", True)),
+        overwrite_existing=entry.get("overwrite_existing") is True,
+        copy_mode=copy_mode,
+        space_check=space_check,
+        env={str(k): str(v) for k, v in env.items()},
+        server_metadata=parse_server_metadata(
+            entry.get("server_metadata"),
+            label=f"backup_restore.restores[{index}] ({restore_id})",
+            for_restore=True,
+            db_type=str(entry.get("db_type") or ""),
+        ),
+    )
+
+
+def _check_staging_dirs(jobs: list[ScriptRestore]) -> dict[str, str]:
+    """Each cross-machine entry stages into a directory of its own (review 0.25.0, B4.7).
+
+    The copy is a mirror and the prune deletes by age, so two entries sharing - or nesting - one
+    `target_backup_dir` on a target delete each other's files, and a shallow directory (`/`,
+    `/data`) takes whatever else lives there. The docs asked operators for this; now it is checked.
+
+    An active entry that breaks the rule raises. An inactive one is returned as
+    ``{restore_id: why}`` instead, and where an active entry and an inactive one share a directory
+    it is the inactive one that yields (:class:`ScriptRestores`).
+    """
+    unusable: dict[str, str] = {}
+    kept: list[tuple[ScriptRestore, str]] = []
+    for job in jobs:
+        if not job.is_remote:
+            continue
+        directory = posixpath.normpath(job.target_backup_dir)
+        problem = ""
+        if len([part for part in directory.split("/") if part]) < 3:
+            problem = (
+                f"{job.restore_id}: target_backup_dir {job.target_backup_dir!r} is too shallow - the "
+                f"staging copy deletes what it does not recognise there. Use a directory of its own, "
+                f"at least three levels deep (e.g. /opt/db_ops/restore_staging/{job.restore_id}).")
+        while not problem:
+            clash = next(((other, held) for other, held in kept
+                          if other.target_server_id == job.target_server_id
+                          and (directory == held or directory.startswith(held + "/")
+                               or held.startswith(directory + "/"))), None)
+            if clash is None:
+                break
+            other, held = clash
+            shared = (
+                f"{job.restore_id} and {other.restore_id} stage into {directory} and {held} on "
+                f"{job.target_server_id}: one directory holds the other, so each run would delete the "
+                f"other's files. Give every restore its own target_backup_dir.")
+            if job.active and not other.active:
+                unusable[other.restore_id] = shared
+                kept.remove(clash)
+                continue
+            problem = shared
+        if problem:
+            if job.active:
+                raise ValueError(problem)
+            unusable[job.restore_id] = problem
+            continue
+        kept.append((job, directory))
+    return unusable
 
 
 def select_due_script_restores(
@@ -331,6 +475,8 @@ def transfer_backup_to_target(
         "source": source_login, "source_dir": job.source_backup_host_dir,
         "target": target_login, "target_dir": job.target_backup_dir,
         "include": chain.get("include") or [], "make_readable": True, "open_for_engine": True,
+        "copy_mode": job.copy_mode,
+        "space_check": restore_space.as_request(job.space_check),
     }, stream_stderr=True))
     out["include"] = list(chain.get("include") or [])
     pruned = (prune_staged_backups(job, target=target, data_dir=data_dir, key=key,

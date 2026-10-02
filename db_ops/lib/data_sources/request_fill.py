@@ -104,6 +104,7 @@ def connection_from(instance: Mapping[str, Any], credential: Mapping[str, Any], 
         "instance_name": str(instance.get("instance_name") or ""),
         "service_name": str(instance.get("service_name") or ""),
         "sqlserver_driver": str(instance.get("sqlserver_driver") or ""),
+        "sqlserver_tls_verify": instance.get("sqlserver_tls_verify") is True,
         "sql_access": dict(instance.get("sql_access") or {"method": "direct"}),
     }
     # SQL Server connects to master unless a request names a database: the inventory's field is

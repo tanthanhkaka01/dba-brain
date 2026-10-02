@@ -118,6 +118,7 @@ def connect_engine(
     sqlserver_driver: str = "",
     oracle_client_mode: str = "",
     profile: TargetProfile | None = None,
+    sqlserver_tls_verify: bool = False,
     connect_timeout_seconds: int = DEFAULT_CONNECT_TIMEOUT_SECONDS,
     statement_timeout_seconds: int | None = DEFAULT_STATEMENT_TIMEOUT_SECONDS,
     autocommit: bool = False,
@@ -177,6 +178,7 @@ def connect_engine(
             username=str(username), password=str(password), service_name=service_name,
             sqlserver_driver=sqlserver_driver, connect_timeout=connect_timeout,
             statement_timeout=statement_timeout_seconds, autocommit=autocommit,
+            sqlserver_tls_verify=bool(sqlserver_tls_verify),
         )
     except DbConnectError:
         raise
@@ -185,12 +187,14 @@ def connect_engine(
 
 
 def _connect_sqlserver(*, host, port, database, username, password, sqlserver_driver,
-                       connect_timeout, statement_timeout, autocommit, **_ignored) -> Any:
+                       connect_timeout, statement_timeout, autocommit, sqlserver_tls_verify=False,
+                       **_ignored) -> Any:
     return sql_execution.connect_sqlserver_with_fallback(
         host=host, port=port, database=database or "master",
         username=username, password=password,
         driver=str(sqlserver_driver or "").strip(), connect_timeout=connect_timeout,
         command_timeout=statement_timeout, autocommit=autocommit,
+        tls_verify=bool(sqlserver_tls_verify),
     )
 
 

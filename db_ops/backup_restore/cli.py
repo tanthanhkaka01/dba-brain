@@ -19,7 +19,7 @@ from db_ops.backup_restore.backup import (
 )
 from db_ops.transport import common_cli
 from db_ops.lib import sql_instance
-from db_ops.backup_restore.restore_script import load_script_restores
+from db_ops.backup_restore.restore_script import load_script_restores, unusable_reason
 from db_ops.lib.time_window import weekdays_text
 from db_ops.lib.listing import active_only, hidden_note
 from db_ops.backup_restore.workflow import run_workflow
@@ -288,10 +288,16 @@ def _format_restore_list(
     """
     configs, hidden_configs = active_only(restore_configs)
     scripts, hidden_scripts = active_only(script_jobs or [])
+    # Inactive entries the loader could not read (`ScriptRestores.unusable`): they stop nothing, and
+    # they are said here, each with what it lacks, because this is where an operator looks first.
+    unusable = dict(getattr(script_jobs, "unusable", {}) or {})
+    incomplete = ([f"Inactive and incomplete ({len(unusable)}) - not usable until fixed:"]
+                  + [f"- {reason}" for _restore_id, reason in sorted(unusable.items())]) if unusable else []
     total = len(configs) + len(scripts)
     if not total:
         note = hidden_note(hidden_configs + hidden_scripts, noun="entry")
-        return "No active restore entries in restore_config.json." + (f"\n{note}" if note else "")
+        return "\n".join(["No active restore entries in restore_config.json."]
+                         + ([note] if note else []) + ([""] + incomplete if incomplete else []))
 
     lines = [f"Restore IDs ({total}):"]
     for cfg in configs:
@@ -306,6 +312,8 @@ def _format_restore_list(
     note = hidden_note(hidden_configs + hidden_scripts, noun="entry")
     if note:
         lines.extend(["", note])
+    if incomplete:
+        lines.extend(["", *incomplete])
     return "\n".join(lines)
 
 
@@ -647,7 +655,12 @@ def main(argv: list[str]) -> int:
                 # run by `workflow`, through run_scheduled_restores. Reporting it as "no entry
                 # found" sent an operator looking for a config problem that did not exist, on an
                 # entry sitting in the file they were reading. Name the command that runs it.
-                script_ids = {job.restore_id for job in load_script_restores(resolved_config_path)}
+                script_jobs = load_script_restores(resolved_config_path)
+                why_not = unusable_reason(script_jobs, restore_id_filter)
+                if why_not:
+                    # An inactive entry the loader could not read: its own reason, not "no entry".
+                    raise ValueError(why_not)
+                script_ids = {job.restore_id for job in script_jobs}
                 if restore_id_filter in script_ids and args.command == "restore-workflow":
                     # Run it, by the scheduler's own runner. This used to refuse, naming a CLI
                     # command - and `/spbot_restore` runs exactly this, so not one PostgreSQL,
@@ -1058,6 +1071,18 @@ def _sql_error_text(text: str, *, max_lines: int = 12) -> str:
     return "\n".join(lines[-max_lines:])
 
 
+def point_in_time_window_start(point_in_time_utc: dt.datetime | None, hours: int) -> dt.datetime | None:
+    """Where a point-in-time restore's copy window begins, or ``None`` for no lower bound.
+
+    ``hours <= 0`` means "every matching file" - the copy step's own rule for ``copy_recent_hours``
+    - so a point-in-time restore then reaches back without limit. ``point - 0 h`` made the window
+    zero wide (an inverted one for a negative value) and the copy found nothing to take.
+    """
+    if point_in_time_utc is None or int(hours) <= 0:
+        return None
+    return point_in_time_utc - dt.timedelta(hours=int(hours))
+
+
 def run_restore_workflow(
     *,
     restore_configs: list[BackupRestoreConfig],
@@ -1110,7 +1135,12 @@ def run_restore_workflow(
         _preflighted: list[BackupRestoreConfig] = []
         with _workflow_phase(logger, f"{_rid}restore-workflow preflight", summary=summary, current_phase="preflight", restore_count=len(restore_configs)):
             for config in restore_configs:
-                override = run_target_preflight(config, logger=logger)
+                # The space check in here counts the chain the copy will take, and a point in time
+                # has a chain of its own (0.26.0 §1.74). It leaves out what is already staged
+                # unless the copy is forced, which writes those files again (§1.76).
+                measured = (dataclasses.replace(config, copy_window_end_utc=point_in_time_utc)
+                            if point_in_time_utc is not None else config)
+                override = run_target_preflight(measured, logger=logger, recopy=force)
                 _preflighted.append(override if override is not None else config)
         restore_configs = _preflighted
 
@@ -1122,9 +1152,7 @@ def run_restore_workflow(
             return int(copy_hours) if copy_hours is not None else int(config.copy_recent_hours)
 
         def _window_start(config: BackupRestoreConfig):
-            if point_in_time_utc is None:
-                return None
-            return point_in_time_utc - dt.timedelta(hours=_hours(config))
+            return point_in_time_window_start(point_in_time_utc, _hours(config))
 
         copy_window_end = point_in_time_utc if point_in_time_utc is not None else None
         copy_window_start = _window_start(restore_configs[0]) if restore_configs else None

@@ -71,8 +71,12 @@ def _host_block(job: Any, *, data_dir: Any, load_secrets: Any = None) -> dict[st
     """
     from db_ops.backup_restore.backup import resolve_ssh_target
 
+    target_server_id = str(getattr(job, "target_server_id", "") or "").strip()
+    if not target_server_id:
+        raise RestoreByIdError(f"{job.restore_id} names no target_server_id; the source is never "
+                               "assumed to be the target.")
     target = resolve_ssh_target(
-        job.target_server_id or job.server_id, label=job.label,
+        target_server_id, label=job.label,
         data_dir=data_dir, require_container=False,
     )
     block: dict[str, Any] = {
@@ -103,7 +107,18 @@ def _visible_dir(job: Any) -> str:
     namespace. Stated in the entry as ``target_visible_dir`` when the two differ - guessing it is
     how a restore reports "file not found" for a file that is plainly there.
     """
-    return str(getattr(job, "target_visible_dir", "") or job.target_backup_dir or job.backup_dir)
+    stated = str(getattr(job, "target_visible_dir", "") or "").strip()
+    if stated:
+        return stated
+    remote = str(getattr(job, "target_server_id", "") or "").strip() not in (
+        "", str(getattr(job, "server_id", "") or "").strip())
+    if remote and str(getattr(job, "target_backup_dir", "") or "").strip():
+        # The copy staged the set there, on the target's own filesystem: the same directory, named.
+        return str(job.target_backup_dir)
+    # Never the source's `backup_dir`: that is where the SOURCE keeps its backups, and reading it
+    # as the target's was a guess that only held when both happened to share a mount.
+    raise RestoreByIdError(
+        f"{job.restore_id}: state target_visible_dir - the backup directory as the target sees it.")
 
 
 # --------------------------------------------------------------------------- #
@@ -144,14 +159,78 @@ def _sqlserver_port(job: Any, *, data_dir: Any) -> int:
     override = str((job.env or {}).get("MSSQL_PORT") or "").strip()
     if override:
         return int(override)
-    wanted =str(getattr(job, "target_server_id", "") or job.server_id or "").strip()
+    wanted = str(getattr(job, "target_server_id", "") or "").strip()
+    port = _instance_sql_port(wanted, data_dir=data_dir) if wanted else None
+    if port is None:
+        # No 1433, and never the source's port: either is a guess about which instance to
+        # overwrite (review 0.25.0, B4.5).
+        raise RestoreByIdError(
+            f"{job.restore_id}: the target's SQL Server port is not stated - give env.MSSQL_PORT, or "
+            f"a port on the db_instances.json record of {wanted or 'the target'}.")
+    return port
+
+
+def _instance_sql_port(server_id: str, *, data_dir: Any) -> int | None:
+    """The port a SQL Server inventory record states, or ``None``."""
+    from db_ops.lib import data_sources
+
     for record in data_sources.load_db_instances(data_dir):
-        if str(record.get("server_id") or "").strip() != wanted:
+        if str(record.get("server_id") or "").strip() != server_id:
             continue
         if str(record.get("db_type") or "").strip().lower() in ("sqlserver", "mssql") and record.get("port"):
             return int(record["port"])
-        break
-    return 1433
+        return None
+    return None
+
+
+def _same_machine(left: str, right: str) -> bool:
+    """Do two host strings name one machine? Compared as text, then by resolved address."""
+    import socket
+
+    a, b = str(left or "").strip().lower(), str(right or "").strip().lower()
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    try:
+        addresses = [{info[4][0] for info in socket.getaddrinfo(name, None)} for name in (a, b)]
+    except OSError:
+        return False
+    return bool(addresses[0] & addresses[1])
+
+
+def assert_target_is_not_source(job: Any, host: dict[str, Any], *, data_dir: Any) -> None:
+    """Refuse a restore whose target is the source instance itself.
+
+    The SQL Server engine path has had this check since 0.2x (`validate_restore_target_is_not_source`);
+    this path, which the scheduler uses, never did (review 0.25.0, B4.5 / F10.3). Same machine is
+    allowed only into another container, and for SQL Server only on another port.
+    """
+    from db_ops.backup_restore.backup import resolve_ssh_target
+
+    source = resolve_ssh_target(job.server_id, label=job.label, data_dir=data_dir,
+                                require_container=False)
+    if not _same_machine(source.host, host.get("host", "")):
+        return
+    target_container = str(getattr(job, "target_container", "") or "").strip()
+    source_container = str(source.container_name or "").strip()
+    if not target_container or target_container == source_container:
+        raise RestoreByIdError(
+            f"{job.restore_id}: the target is the source instance itself ({source.host}"
+            f"{', container ' + source_container if source_container else ''}). Refused: a restore "
+            f"there would overwrite production with its own backup.")
+    if str(job.db_type).lower() == "sqlserver":
+        source_port = _instance_sql_port(job.server_id, data_dir=data_dir)
+        sql_port = _sqlserver_port(job, data_dir=data_dir)
+        if source_port is None or sql_port is None:
+            raise RestoreByIdError(
+                f"{job.restore_id}: target and source are on one machine, and the SQL Server ports "
+                f"needed to tell the two instances apart are not both stated "
+                f"(source {source_port}, target {sql_port}).")
+        if source_port == sql_port:
+            raise RestoreByIdError(
+                f"{job.restore_id}: the target port {sql_port} is the source instance's port on the "
+                f"same machine. Refused: the restore would overwrite production.")
 
 
 def _logs_through(files: list[dict[str, Any]], moment: str) -> list[dict[str, Any]]:
@@ -188,11 +267,17 @@ def _plan_sqlserver(job: Any, secrets: dict[str, str], *, point_in_time: str,
     directory = _visible_dir(job)
     target = {
         "host": host["host"], "port": _sqlserver_port(job, data_dir=data_dir),
+        # Phase 1 of the owner's no-fallback rule (G2.11): an entry that names no login still runs
+        # as `sa` in this release, and says so in the answer; the next one refuses it.
         "username": job.env.get("MSSQL_USER", "sa"),
         "password": _secret(job.env_secrets.get("MSSQL_PASSWORD", ""), secrets,
                             where=f"{job.restore_id}.env_secrets.MSSQL_PASSWORD"),
     }
     steps: list[dict[str, Any]] = []
+    if not str(job.env.get("MSSQL_USER") or "").strip():
+        steps.append({"op": "warning", "warning": (
+            f"{job.restore_id}: env.MSSQL_USER is not stated, so the restore logs in as sa. State "
+            "the login on the entry - the next release refuses an entry without it (G2.11).")})
 
     cert_password = _secret(job.env_secrets.get("BACKUP_ENCRYPTION_PASSWORD", ""), secrets,
                             where=f"{job.restore_id}.env_secrets.BACKUP_ENCRYPTION_PASSWORD") \
@@ -242,7 +327,9 @@ def _plan_sqlserver(job: Any, secrets: dict[str, str], *, point_in_time: str,
         tail = "log" if logs["files"] else ("diff" if diff["files"] else "full")
         steps.append({"op": "restore-full", "request": {
             "db_type": "sqlserver", "database_name": database, "target": target,
-            "backup_path": full["files"][0]["path"], "with_recovery": tail == "full"}})
+            "backup_path": full["files"][0]["path"], "with_recovery": tail == "full",
+            # The entry's word: a database ONLINE on the target is refused without it (G2.10).
+            "overwrite_existing": bool(job.overwrite_existing)}})
         if diff["files"]:
             steps.append({"op": "restore-diff", "request": {
                 "db_type": "sqlserver", "database_name": database, "target": target,
@@ -443,7 +530,7 @@ def restore_by_id(request: dict[str, Any], *, data_dir: Any = None,
     *what happened*, the caller decides *who hears about it*.
     """
     from db_ops.backup_restore.backup import _load_secrets
-    from db_ops.backup_restore.restore_script import load_script_restores
+    from db_ops.backup_restore.restore_script import load_script_restores, unusable_reason
 
     restore_id = str(request.get("restore_id") or "").strip()
     if not restore_id:
@@ -452,7 +539,12 @@ def restore_by_id(request: dict[str, Any], *, data_dir: Any = None,
     dry_run = bool(request.get("dry_run"))
     config_path = str(request.get("config") or "") or None
 
-    jobs = [j for j in load_script_restores(config_path) if j.restore_id == restore_id]
+    loaded = load_script_restores(config_path)
+    why_not = unusable_reason(loaded, restore_id)
+    if why_not:
+        # An inactive entry the loader could not read: its own reason, not "no such entry".
+        raise RestoreByIdError(why_not)
+    jobs = [j for j in loaded if j.restore_id == restore_id]
     if not jobs:
         # An SMB entry (no `script`) had a second route here until 0.24.0 - adapted onto these
         # primitives, beside restore-workflow's. One route per entry (rules R43): it is
@@ -474,6 +566,7 @@ def restore_by_id(request: dict[str, Any], *, data_dir: Any = None,
         if job.env_secrets else {}
     host = _host_block(job, data_dir=data_dir, load_secrets=lambda: secrets or _load_secrets(
         data_dir=data_dir, key=key, key_base64=key_base64))
+    assert_target_is_not_source(job, host, data_dir=data_dir)
 
     # Staging stays with the machinery that has been doing it nightly for months. Re-deriving it
     # here would repeat the mistake this module was written after: a primitive that turned out to
@@ -504,10 +597,16 @@ def restore_by_id(request: dict[str, Any], *, data_dir: Any = None,
                   f"{transferred['bytes_copied']} bytes, {transferred['skipped']} already present"
                   + (f", {transferred['removed_absent_at_source']} removed (gone at the source)"
                      if transferred.get("removed_absent_at_source") else "")
-                  + ("" if transferred.get("include") else " (the whole directory)") + ".",
+                  + ("" if transferred.get("include") else " (the whole directory)")
+                  # The slow way is said where a person reads it, not only on stderr (G4).
+                  + (" - file by file over SFTP, the tar stream could not be used"
+                     if transferred.get("copy_fell_back") else "") + ".",
                   {"copied": transferred["copied"], "skipped": transferred["skipped"],
                    "bytes_copied": transferred["bytes_copied"],
-                   "removed_absent_at_source": transferred.get("removed_absent_at_source", 0)})
+                   "removed_absent_at_source": transferred.get("removed_absent_at_source", 0),
+                   **({"copy_mode": transferred["copy_mode"],
+                       "copy_fell_back": bool(transferred.get("copy_fell_back"))}
+                      if transferred.get("copy_mode") else {})})
 
     steps = planner(job, secrets, point_in_time=point_in_time, host=host, data_dir=data_dir,
                     dry_run=dry_run)

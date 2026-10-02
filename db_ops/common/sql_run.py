@@ -139,7 +139,6 @@ the rollback contract, all of which are engine-independent.
 from __future__ import annotations
 
 import json
-import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -618,15 +617,14 @@ def resolve_connection_spec(
     stated as version 8 went to python-oracledb anyway.
     """
     password = spec.password
-    if spec.password_ref:
-        if not os.getenv(spec.password_ref, "").strip():
-            raise SqlRunError(
-                f"connection.password_ref {spec.password_ref!r} is not in this process's environment, "
-                'and no secret store is read here (rules R09): send "password" instead.')
-        try:
-            password = sql_execution.resolve_password(spec.credential(), {})
-        except (RuntimeError, OSError, ValueError) as exc:
-            raise SqlRunError(str(exc)) from exc
+    if spec.password_ref and not password:
+        # Not from the environment either (owner decision G3.5). A ref here was looked up in this
+        # process's environment under the name the request gave, so a request naming
+        # DB_OPS_SECRET_KEY sent the node's passphrase, as a login password, to the host it named.
+        raise SqlRunError(
+            f"connection.password_ref {spec.password_ref!r} is not resolved here: this command reads "
+            'no secret store and no environment (rules R09, G3.5). Send "password" - the app that '
+            "calls resolves the ref from its own store.")
 
     resolved = spec.to_resolved(
         password=password,
@@ -685,6 +683,7 @@ def connect_target(target: dict[str, Any], *, timeout_seconds: int = DEFAULT_TIM
             username=str(target["username"]),
             password=str(target["password"]),
             sqlserver_driver=str(target.get("sqlserver_driver") or "").strip(),
+            sqlserver_tls_verify=target.get("sqlserver_tls_verify") is True,
             # What makes the driver choice version-aware. The resolver has already merged the
             # request's stated facts over the inventory's, so by here there is one profile and
             # `db_connect` never has to ask where a field came from.

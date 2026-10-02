@@ -15,7 +15,7 @@ Every `<name>_password` in this config can be written three ways, read in this o
 | Written as | Where the value comes from |
 | --- | --- |
 | `"sa_password": "..."` | the literal in the file |
-| `"sa_password_env": "LAB_SA"` | the environment variable `LAB_SA` |
+| `"sa_password_env": "LAB_SA"` | the key `LAB_SA` in the encrypted secret store - the old spelling of `_password_ref`. Until 0.26.0 the environment variable `LAB_SA`; no password is read from the environment now (owner decision G3.5) |
 | `"sa_password_ref": "LAB_SA"` | the key `LAB_SA` in the encrypted secret store |
 
 **The ref is the form to use, and it is what `data/sre_config.example.json` now shows.** Put the

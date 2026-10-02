@@ -21,6 +21,7 @@ from db_ops.lib.inventory_render import (  # shared with reports: one merge, one
 
 import datetime
 import json
+import shlex
 from pathlib import Path
 
 from db_ops.control._support import (
@@ -63,8 +64,10 @@ def run_inventory_health(*, host: str, user: str, password: str | None, port: in
     password = resolve_password(password, host=host, user=user)
     client = ssh_connect(host, user, password, port)
     try:
-        cmd = (f"docker exec {container} python -m db_ops.reports.cli build-inventory-health "
-               f"--days {int(days)} --date {stamp} --output-dir {container_runtime}")
+        # Quoted (review 0.25.0, F6.3): both names come from the operator's flags.
+        cmd = (f"docker exec {shlex.quote(container)} python -m db_ops.reports.cli build-inventory-health "
+               f"--days {int(days)} --date {shlex.quote(str(stamp))} "
+               f"--output-dir {shlex.quote(str(container_runtime))}")
         print(f"[remote] $ {cmd}", flush=True)
         rc, _out, err = ssh_capture(client, cmd)
         if rc != 0:

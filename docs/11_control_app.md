@@ -95,7 +95,7 @@ control app) — they do **not** decide this node's role. Each daemon tick logs 
 | `pull-node-config --from <node>/data [--merge-secrets --key... --dry-run]` | **Carry back what a LOCAL node created.** The sibling of `worker-pull-data-config` for a node that is an ordinary directory on a PC rather than the worker container - which is what the estate is since it moved off the container. Same merge rules, because it is the same function underneath: union by key with the master winning a shared key, named leaves only for field-merged files, and a secret ref that differs on both sides refuses and writes nothing. `store_config.json` and `telegram_config.json` are never carried back - a node's own store declaration and its `getUpdates` cursor are per-node state, and copying either back breaks the node it came from or the one it lands on. |
 | `worker-pull-data-config [--host --user --key... --from-worker-path --to-master-path --files --all-json --include-secrets --merge-secrets --plaintext-secret-path --overwrite --dry-run]` | Copy updated `data/` config files from the worker back to the master over SFTP (the worker's `data/` is bind-mounted on the host at `<remote-dir>/data`). Defaults to just `docker_db_connections.json`; `--all-json` widens to every `*.json` (still excluding the encrypted secret store unless `--include-secrets`). Existing master files are skipped unless `--overwrite`; `--dry-run` prints the plan. |
 
-**The secret store is not an ordinary file.** `--include-secrets` copies it like any other, which is last-writer-wins: a ref the master added *after* the last deploy exists only on the master, and the worker's file would silently delete it. Use **`--merge-secrets`** whenever the worker created a secret (the Telegram `spbot_create_db_docker` command does): it decrypts and unions the worker encrypted store, the master encrypted store, and the master plaintext source (`secrets/secret_text.json`). Both master stores are synchronized to that union. If one ref holds different values in any participating store, it reports a conflict and writes nothing rather than guessing which password is current. It needs `--key`/`--key-base64`, implies `--include-secrets`, and accepts `--plaintext-secret-path` when the plaintext source is not at its repository default. The plaintext file remains local and gitignored; it is never copied to the worker.
+**The secret store is not an ordinary file.** `--include-secrets` copies it like any other, which is last-writer-wins: a ref the master added *after* the last deploy exists only on the master, and the worker's file would silently delete it. Use **`--merge-secrets`** whenever the worker created a secret (the Telegram `spbot_create_db_docker` command does): it decrypts and unions the worker encrypted store, the master encrypted store, and the master plaintext source (`secrets/secret_text.json`). Both master stores are synchronized to that union. If one ref holds different values in any participating store, it reports a conflict and writes nothing rather than guessing which password is current. It needs `--key`/`--key-base64`, implies `--include-secrets`, and accepts `--plaintext-secret-path` when the plaintext source is not at its repository default. The plaintext file remains local and gitignored; it is never copied to the worker. Both master stores are written through `secret_text.write_secret_file` (0.26.0): replaced whole, and created `0600` - the merge wrote them truncate-then-write, and a new plaintext source came out world-readable (review 0.25.0, F6.2).
 
 ```powershell
 # after the bot created a lab database on the worker
@@ -192,8 +192,11 @@ python -m db_ops.control.cli worker-create-db-docker `
 ### Notes
 
 - Secrets travel **encrypted** in the bundle (`data/encrypted_secret_text.json`); the
-  passphrase is passed to the daemon as `--key_base64` and never bundled. The same key also
-  decrypts the worker SSH password for the control commands above.
+  passphrase reaches the daemon in `DB_OPS_SECRET_KEY` - exported by a start script sent on stdin,
+  handed to the container by name only (`-e DB_OPS_SECRET_KEY`) - and is never bundled and never an
+  argument: as `--key_base64` it sat in the container's command for its whole life, readable with
+  `docker inspect` and `ps` (review 0.25.0, B2.4/F6.1). The `--key-base64` you pass to the control
+  commands here stays on this machine; it also decrypts the worker SSH password for them.
 - `inventory-health` never copies the live store — it runs the extraction query
   inside the container and transfers only the small dated overlay.
 - The host key is auto-accepted (`AutoAddPolicy`); intended for trusted hosts.
@@ -361,6 +364,10 @@ write, and rewriting it would only move the mtime.
 > `worker-status`, `worker-run`, `worker-pull-data-config` and `deploy --type` reach the live node
 > with no flags. The retired pair (`/opt/db_ops`, `db_ops_daemon`) is still reachable through
 > `--remote-dir` / `--container`, and the stopped container is the rollback.
+>
+> Every name from these flags reaches the worker's shell quoted (0.26.0, review 0.25.0 F6.3): a
+> `--remote-dir` with a space in it broke the deploy half way, after the worker had been half
+> prepared.
 >
 > **What is still true here:** the image layout, the mounts, `node_role`, the passphrase at run
 > time, and every command in B4 onwards — the published image is built from this same Dockerfile.
@@ -585,18 +592,22 @@ docker image ls | grep db_ops          # should show db_ops:latest
 docker compose run --rm db_ops \
   python -m db_ops.metrics.cli --config config.json collect --dry-run --key_base64 "<base64-passphrase>"
 
-# 3. start the daemon, passing the passphrase at runtime + the worker node role
-docker compose run -d --name db_ops_daemon -e DB_OPS_NODE_ROLE=worker db_ops daemon --key_base64 "<base64-passphrase>"
+# 3. start the daemon with the passphrase in its ENVIRONMENT + the worker node role
+#    (read it without echo; `-e DB_OPS_SECRET_KEY` names the variable, the value is not on any command line)
+read -rs DB_OPS_SECRET_KEY && export DB_OPS_SECRET_KEY
+docker compose run -d --name db_ops_daemon -e DB_OPS_NODE_ROLE=worker -e DB_OPS_SECRET_KEY db_ops daemon
 
 # 4. confirm it is running
 docker ps | grep db_ops_daemon
 ```
 
-The passphrase is supplied only on this command line — it is not written to the
-compose file, an env file, or the image. The daemon exports it in-memory
-(`DB_OPS_SECRET_KEY`) so the app commands it spawns inherit it and decrypt
-on demand. (`--key_base64` is used so a passphrase with `#$%` etc. survives shell
-quoting; plain `--key "<passphrase>"` works for simple passphrases.)
+The passphrase is given in the environment only (0.25.0 review, B2.4/F6.1). On a command line
+(`daemon --key_base64 …`) it was readable by every user on the host for the container's whole
+life (`ps`, `/proc/<pid>/cmdline`, `docker inspect`), and the daemon used to copy it onto every
+child's command line too; it now hands it to children in `DB_OPS_SECRET_KEY` only. `daemon --key`
+/ `--key_base64` still work for a one-off by hand. `control deploy` does the same as step 3 for
+you: the key travels to the worker on stdin. It is still visible to the `docker` group through
+`docker inspect` (root-equivalent anyway).
 
 `DB_OPS_NODE_ROLE=worker` makes the daemon run only `app_commands.json` entries with
 `node_role` of `worker` or `all`. The control app's `start-daemon` sets this for you
@@ -605,8 +616,8 @@ quoting; plain `--key "<passphrase>"` works for simple passphrases.)
 > **Restart behavior.** Because the key is never persisted, a stopped container
 > cannot auto-restart with the key. Re-run the step-3 command to restart. (If you
 > accept the key living in Docker's container metadata — visible via
-> `docker inspect` — you may instead use
-> `docker run -d --restart unless-stopped -e DB_OPS_NODE_ROLE=worker <mounts> db_ops:latest daemon --key_base64 "<base64-passphrase>"`
+> `docker inspect` — you may instead export it as in step 3 and use
+> `docker run -d --restart unless-stopped -e DB_OPS_NODE_ROLE=worker -e DB_OPS_SECRET_KEY <mounts> db_ops:latest daemon`
 > so it survives reboots; the strict "nothing stored" option is the `compose run`
 > command above. The control app's `start-daemon` uses `restart=unless-stopped`.)
 
@@ -672,7 +683,8 @@ docker compose run --rm db_ops \
 
 ```bash
 docker rm -f db_ops_daemon
-docker compose run -d --name db_ops_daemon -e DB_OPS_NODE_ROLE=worker db_ops daemon --key_base64 "<base64-passphrase>"
+read -rs DB_OPS_SECRET_KEY && export DB_OPS_SECRET_KEY     # the passphrase, typed, never an argument
+docker compose run -d --name db_ops_daemon -e DB_OPS_NODE_ROLE=worker -e DB_OPS_SECRET_KEY db_ops daemon
 ```
 
 **Changed a secret value**: re-run the encrypt step on Windows, re-copy
@@ -684,7 +696,8 @@ docker compose run -d --name db_ops_daemon -e DB_OPS_NODE_ROLE=worker db_ops dae
 ```bash
 docker load -i db_ops_image.tar
 docker rm -f db_ops_daemon
-docker compose run -d --name db_ops_daemon -e DB_OPS_NODE_ROLE=worker db_ops daemon --key_base64 "<base64-passphrase>"
+read -rs DB_OPS_SECRET_KEY && export DB_OPS_SECRET_KEY     # the passphrase, typed, never an argument
+docker compose run -d --name db_ops_daemon -e DB_OPS_NODE_ROLE=worker -e DB_OPS_SECRET_KEY db_ops daemon
 ```
 
 > From the master PC, all three updates are a single `python -m db_ops.control.cli deploy --user <user>`.
@@ -694,7 +707,7 @@ docker compose run -d --name db_ops_daemon -e DB_OPS_NODE_ROLE=worker db_ops dae
 | Symptom | Likely cause | Fix |
 | --- | --- | --- |
 | Jobs error `Failed to decrypt secret text: wrong key or corrupted file` | wrong `--key` | restart with the exact passphrase used to encrypt |
-| Jobs error `No decryption key provided` | daemon started without a key | restart with `daemon --key_base64 "<base64-passphrase>"` |
+| Jobs error `No decryption key provided` | daemon started without a key | restart it with `DB_OPS_SECRET_KEY` exported and `-e DB_OPS_SECRET_KEY` (step 3) |
 | `password ref not found ...` for every target | `data/encrypted_secret_text.json` missing/empty | re-run the encrypt step and re-copy the file |
 | Worker runs no commands (tick shows `active_commands=0`) | all entries tagged `node_role: master`, or node resolved as `master` | tag worker entries `worker`/`all`; confirm `DB_OPS_NODE_ROLE=worker` is set on the container |
 | `docker build` fails: apt `403 Forbidden` or `Hash Sum mismatch` | a transparent HTTP proxy on the build network corrupts apt traffic | the Dockerfile defaults to an HTTPS mirror to bypass it; for a different network override `docker build --build-arg UBUNTU_MIRROR=http://archive.ubuntu.com/ubuntu ...` |
@@ -774,7 +787,8 @@ the server:
 # copy the repository (code + Dockerfile + config + data + sql) to /opt/db_ops-src
 cd /opt/db_ops-src
 docker compose build                                   # uses docker-compose.yml (with build:)
-docker compose run -d --name db_ops_daemon -e DB_OPS_NODE_ROLE=worker db_ops daemon --key_base64 "<base64-passphrase>"
+read -rs DB_OPS_SECRET_KEY && export DB_OPS_SECRET_KEY     # the passphrase, typed, never an argument
+docker compose run -d --name db_ops_daemon -e DB_OPS_NODE_ROLE=worker -e DB_OPS_SECRET_KEY db_ops daemon
 docker logs -f db_ops_daemon
 ```
 

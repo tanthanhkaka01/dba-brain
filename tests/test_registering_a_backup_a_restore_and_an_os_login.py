@@ -749,7 +749,10 @@ def _script_restore(**over):
         "db_type": "postgresql",
         # The script runner refuses an entry without these, so registration does too.
         "server_id": "ACME-192-0-2-10",
+        # In place: the target is the source's machine, stated - never assumed (review 0.25.0, G2).
+        "target_server_id": "ACME-192-0-2-10",
         "target_container": "PG_DRILL",
+        "target_visible_dir": "/backup/pg",
         "script": "assets/restore/pg_drill.sh",
         "backup_dir": "/backup/pg",
         "cleanup_retention": 86400,
@@ -775,7 +778,8 @@ def test_a_sqlserver_entry_that_declares_a_script_is_script_driven_too(tmp_path)
     # The engine is not the deciding factor - `script` is. A container-to-container SQL Server
     # drill reuses the Oracle/PostgreSQL machinery and carries none of the SMB/.bak fields.
     registration.add_restore(
-        _script_restore(restore_id="ACME_MSSQL_TO_DRILL", db_type="sqlserver"),
+        _script_restore(restore_id="ACME_MSSQL_TO_DRILL", db_type="sqlserver",
+                        env={"MSSQL_PORT": "11433"}),
         data_dir=tmp_path, key=KEY)
 
     written = json.loads((tmp_path / "restore_config.json")

@@ -261,6 +261,11 @@ def build_parser() -> argparse.ArgumentParser:
     ssh_parser.add_argument("host", help="Target host name or IP.")
     ssh_parser.add_argument("command_args", nargs=argparse.REMAINDER)
     ssh_parser.add_argument("--dry-run", action="store_true")
+    ssh_parser.add_argument(
+        "--stdin", action="store_true",
+        help="Read the command from stdin, and send it as a script: nothing it carries reaches an "
+             "argument list here or on the bastion. Give it before the host - everything after "
+             "the host is the remote command.")
     ssh_parser.set_defaults(handler=_handle_ssh)
 
     ss_parser = subparsers.add_parser(
@@ -560,8 +565,16 @@ def _handle_run_bastion_ansible(args: argparse.Namespace, logger, *, sre_config:
 
 def _handle_ssh(args: argparse.Namespace, logger, *, sre_config: SreOperationalConfig) -> int:
     log_function_call(logger, function_name="sre.ssh")
+    command_args = _strip_sep(args.command_args)
+    script_text = None
+    if args.stdin:
+        if command_args:
+            print("sre ssh: give the command on stdin or as arguments, not both.", file=sys.stderr)
+            return 2
+        script_text = sys.stdin.read()
     result = run_ssh_command(
-        sre_config, host=args.host, command_args=_strip_sep(args.command_args), dry_run=args.dry_run
+        sre_config, host=args.host, command_args=command_args, dry_run=args.dry_run,
+        script_text=script_text,
     )
     return _emit_single(result, dry_run=args.dry_run, logger=logger, label=f"ssh:{args.host}")
 

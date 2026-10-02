@@ -190,14 +190,22 @@ def _validate(path: Path, document: dict[str, Any], loader) -> None:
         scratch.unlink(missing_ok=True)
 
 
-def _load_every_restore(path: Path) -> None:
+def _load_every_restore(path: Path, *, registering: str = "") -> None:
     """Load ``restores[]`` the way each consumer does: the SQL Server engine path, then the
-    script-driven one the scheduler and ``restore-workflow`` run."""
+    script-driven one the scheduler and ``restore-workflow`` run.
+
+    ``registering`` is the entry being written. The script loader keeps an inactive entry it cannot
+    read out of its answer rather than refusing the file (``ScriptRestores``), so an old retired
+    entry no longer blocks a new one - but the entry being registered is held to the rule whether
+    it is active or not: one that could never run is not written.
+    """
     from db_ops.backup_restore.config import load_restore_configs
-    from db_ops.backup_restore.restore_script import load_script_restores
+    from db_ops.backup_restore.restore_script import load_script_restores, unusable_reason
 
     load_restore_configs(path)
-    load_script_restores(path)
+    why_not = unusable_reason(load_script_restores(path), registering)
+    if why_not:
+        raise ValueError(why_not)
 
 
 def _write_document(path: Path, document: dict[str, Any]) -> None:
@@ -511,7 +519,7 @@ def add_restore(request: dict[str, Any] | None = None, *,
     # routed to a notify level no Telegram group defines was written, and from then on
     # `list-restores` and every `restore-workflow` on the node failed on it - for every entry, not
     # only that one (found writing the lab walkthrough, 2026-09-25).
-    _validate(path, document, _load_every_restore)
+    _validate(path, document, lambda candidate: _load_every_restore(candidate, registering=restore_id))
 
     written: list[str] = []
     for ref, value in stored:

@@ -88,7 +88,8 @@ class SreOperationalConfig:
 
 
 #: A password in this config may be written three ways, and the file on disk should carry the
-#: third: `<name>_password` (a literal), `<name>_password_env` (an environment variable), or
+#: third: `<name>_password` (a literal), `<name>_password_env` (the old spelling of the ref - a store
+#: key, never an environment variable since owner decision G3.5), or
 #: `<name>_password_ref` (a key in the encrypted secret store). The precedence is the toolkit's
 #: usual one and comes from the shared resolver rather than a copy of it.
 #:

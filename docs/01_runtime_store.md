@@ -104,7 +104,7 @@ data/store_config.json
 | `backend` | `sqlite` or `postgresql`. `postgres` is accepted as an alias. |
 | `sqlite.path` | Store file location. Relative paths resolve against the tool root, so `runtime/db_ops.sqlite` means `<tool_root>/runtime/db_ops.sqlite` on every node. |
 | `sqlite.connection_string` | `sqlite:///<path>` URL. Authoritative when set — the path is read back out of it, so the file cannot name two destinations. |
-| `postgresql.*` | Host, port, database, schema, username, `password_ref`, sslmode, connect timeout, application name. |
+| `postgresql.*` | Host, port, database, schema, username, `password_ref`, sslmode, connect timeout, application name. `sslmode` means what libpq means since 0.26.0 - `require` encrypts, `verify-ca` checks the chain, `verify-full` the chain and the name; `disable`/`allow`/`prefer` (the default) connect without TLS, as every store did before, because the setting never reached pg8000 (review 0.25.0, B5.5). |
 | `postgresql.connection_string` | Full URL with a `{password}` placeholder. Authoritative when set; otherwise built from the fields above. |
 
 No password is ever written to this file. `password_ref` names a key in `data/encrypted_secret_text.json`, decrypted at runtime with `DB_OPS_SECRET_KEY` and substituted into `{password}` by `StoreConfig.resolved_connection_string()`. The `connection_string` property is the password-free form and is what gets logged.

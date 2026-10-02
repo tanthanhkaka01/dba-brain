@@ -42,17 +42,26 @@ def remote_size(session, path: str) -> int | None:
         return None
 
 
-def atomic_replace(session, staged: str, destination: str) -> None:
+#: The two ways a staged file takes its real name, as an answer reports them (``replace_mode``).
+REPLACE_ATOMIC = "posix-rename"
+REPLACE_IN_TWO_STEPS = "remove+rename"
+
+
+def atomic_replace(session, staged: str, destination: str) -> str:
     """Move ``staged`` onto ``destination`` in one step where the server supports it.
 
     Same rule and same fallback as ``common.backup_copy``: prefer the OpenSSH
     ``posix-rename`` extension, which overwrites in a single syscall, and only fall back to
     remove-then-rename when the server lacks it.
+
+    Returns which of the two it was. The second is not atomic - between its two steps the
+    destination does not exist - and until the owner's rule that a fallback in *how* is always
+    reported (review notes G4) nothing said a file had been replaced that way.
     """
     sftp = session.sftp()
     try:
         sftp.posix_rename(staged, destination)
-        return
+        return REPLACE_ATOMIC
     except (IOError, OSError, AttributeError):
         pass
     try:
@@ -60,6 +69,7 @@ def atomic_replace(session, staged: str, destination: str) -> None:
     except (IOError, OSError):
         pass
     sftp.rename(staged, destination)
+    return REPLACE_IN_TWO_STEPS
 
 
 class _Drained:
@@ -108,7 +118,8 @@ def relay(source, destination, source_path: str, dest_path: str, *, overwrite: b
 
     Both are open SSH sessions (:class:`db_ops.common.remote_exec.SshSession`); Linux on both
     ends, because the stream is ``cat`` and ``sha256sum``. ``*_name`` is what an error calls each
-    end. Returns ``size_bytes``, ``sha256`` and ``verified``.
+    end. Returns ``size_bytes``, ``sha256``, ``verified`` and ``replace_mode`` - how the staged
+    file took its name (:func:`atomic_replace`).
     """
     size = remote_size(source, source_path)
     if size is None:
@@ -167,5 +178,6 @@ def relay(source, destination, source_path: str, dest_path: str, *, overwrite: b
         raise RelayError(
             f"relay {source_path} -> {dest_path}: sha256 mismatch (source {source_sha}, "
             f"destination {dest_sha}); the copy was discarded.")
-    atomic_replace(destination, staged, dest_path)
-    return {"size_bytes": int(moved), "sha256": source_sha, "verified": True}
+    replaced_by = atomic_replace(destination, staged, dest_path)
+    return {"size_bytes": int(moved), "sha256": source_sha, "verified": True,
+            "replace_mode": replaced_by}

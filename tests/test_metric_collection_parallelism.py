@@ -209,3 +209,43 @@ def test_the_configured_setting_is_what_the_catalog_says(tmp_path):
     path.write_text(json.dumps({"collection": {"max_parallel_servers": 16}, "metrics": []}), encoding="utf-8")
 
     assert load_max_parallel_servers(path) == 16
+
+
+@pytest.mark.parametrize("max_parallel", [1, 16])
+def test_one_targets_config_error_does_not_end_the_pass(tmp_path, monkeypatch, max_parallel):
+    """A mistyped `disabled_collector_types` raises by design. It used to fail the whole pass: every
+    other server's tally was lost and `target_health` was never rebuilt for anyone (review 0.25.0,
+    F3.1). Now it is that target's error, named in the run message, and the pass is DONE."""
+    import db_ops.metrics.collector as collector
+
+    collected: list[str] = []
+
+    def collect_one(**kwargs):
+        collected.append(kwargs["target"].server_id)
+        return []
+
+    real = collector._metric_disabled_by_collector_type
+
+    def check(metric, target):
+        if target.server_id == "server-bad":
+            raise ValueError("disabled_collector_types names an unknown collector type: 'command'")
+        return real(metric, target)
+
+    _wire(monkeypatch, targets=[_target("server-bad"), _target("server-good")],
+          definitions=[_definition()], collect_one=collect_one, max_parallel=max_parallel)
+    monkeypatch.setattr(collector, "_metric_disabled_by_collector_type", check)
+    rebuilt = []
+    real_rebuild = collector.MetricStore.rebuild_target_health
+
+    def rebuild(self, **kwargs):
+        rebuilt.append(kwargs)
+        return real_rebuild(self, **kwargs)
+
+    monkeypatch.setattr(collector.MetricStore, "rebuild_target_health", rebuild)
+
+    summary = collect_metrics(config=_config(tmp_path), dry_run=False, force=True)
+
+    assert collected == ["server-good"]
+    assert summary.error_count >= 1
+    assert "server-bad: not collected - ValueError" in summary.message
+    assert rebuilt, "the estate-wide health rebuild still runs"

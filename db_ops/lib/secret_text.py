@@ -33,6 +33,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+from db_ops.lib.file_lock import FileLock
+
 SECRET_KEY_ENV_VAR = "DB_OPS_SECRET_KEY"
 ENCRYPTED_SECRET_TEXT_FILENAME = "encrypted_secret_text.json"
 SECRET_TEXT_FILENAME = "secret_text.json"
@@ -201,8 +203,29 @@ def load_secret_text(data_dir: str | Path, *, key: str | None = None) -> dict[st
     return load_secret_text_file(Path(data_dir) / ENCRYPTED_SECRET_TEXT_FILENAME, key=key)
 
 
+def write_secret_file(path: Path, text: str) -> None:
+    """The one way a secret file is written: atomic replace, a new file created 0600, an existing
+    one keeping its mode and owner (`json_io.atomic_write_text`).
+
+    ``write_text`` truncates first - a crash mid-write leaves an empty store - and creates by the
+    umask, 0644: the plaintext source of every credential, readable by anyone on the host. The
+    deploy's secret merge still wrote both that way (review 0.25.0, F6.2).
+    """
+    from db_ops.lib.json_io import atomic_write_text
+
+    atomic_write_text(path, text, private=True)
+
+
 def set_secret_text(data_dir: str | Path, ref: str, value: str, *, key: str | None = None,
                     overwrite: bool = False) -> bool:
+    """Store ``value`` under ``ref`` - :func:`_set_secret_text_locked`, under the store's lock."""
+    path = Path(data_dir) / ENCRYPTED_SECRET_TEXT_FILENAME
+    with FileLock(path):
+        return _set_secret_text_locked(data_dir, ref, value, key=key, overwrite=overwrite)
+
+
+def _set_secret_text_locked(data_dir: str | Path, ref: str, value: str, *, key: str | None = None,
+                            overwrite: bool = False) -> bool:
     """Store ``value`` under ``ref`` in ``<data_dir>/encrypted_secret_text.json``.
 
     The whole store is decrypted, updated and re-encrypted with the same passphrase, so the
@@ -231,8 +254,7 @@ def set_secret_text(data_dir: str | Path, ref: str, value: str, *, key: str | No
 
     secrets[ref] = str(value)
     blob = encrypt_secret_text(secrets, resolved_key)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(blob, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    write_secret_file(path, json.dumps(blob, indent=2, ensure_ascii=False) + "\n")
     return True
 
 
@@ -258,15 +280,13 @@ def set_secret_everywhere(data_dir: str | Path, ref: str, value: str, *,
 
     plain_path = Path(plaintext_store) if plaintext_store else None
     if plain_path is not None and plain_path.exists():
-        plain = json.loads(plain_path.read_text(encoding="utf-8"))
-        if plain.get(ref) != value:
-            plain[ref] = value
-            plain_path.write_text(
-                json.dumps({name: plain[name] for name in sorted(plain)},
-                           indent=2, ensure_ascii=False) + "\n",
-                encoding="utf-8",
-            )
-            written = True
+        with FileLock(plain_path):
+            plain = json.loads(plain_path.read_text(encoding="utf-8"))
+            if plain.get(ref) != value:
+                plain[ref] = value
+                write_secret_file(plain_path, json.dumps({name: plain[name] for name in sorted(plain)},
+                                                          indent=2, ensure_ascii=False) + "\n")
+                written = True
     return written
 
 
@@ -317,6 +337,6 @@ def encrypt_secret_text_file(source: str | Path, dest: str | Path, key: str) -> 
     if decrypt_secret_text(blob, key) != secrets:
         raise RuntimeError("Round-trip verification failed; refusing to write output.")
 
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(json.dumps(blob, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    with FileLock(Path(dest)):
+        write_secret_file(Path(dest), json.dumps(blob, ensure_ascii=False, indent=2) + "\n")
     return len(secrets)

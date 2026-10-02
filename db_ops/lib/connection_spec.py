@@ -59,6 +59,8 @@ class ConnectionSpec:
     credential_name: str = ""
     credential_role: str = ""
     sqlserver_driver: str = ""
+    #: Verify the server's certificate and never fall back to plaintext (review 0.25.0, B5.5).
+    sqlserver_tls_verify: bool = False
     oracle_client_mode: str = ""
     sql_access: dict[str, Any] = field(default_factory=lambda: {"method": "direct"})
     profile: TargetProfile = field(default_factory=TargetProfile)
@@ -114,6 +116,7 @@ class ConnectionSpec:
             credential_name=str(payload.get("credential_name") or "").strip(),
             credential_role=str(payload.get("role") or payload.get("credential_role") or "").strip(),
             sqlserver_driver=str(payload.get("sqlserver_driver") or payload.get("driver") or "").strip(),
+            sqlserver_tls_verify=payload.get("sqlserver_tls_verify") is True,
             oracle_client_mode=str(payload.get("oracle_client_mode") or "").strip(),
             sql_access=dict(payload.get("sql_access") or {"method": "direct"}),
             # The version travels in the same block as the host it describes, so a self-contained
@@ -147,6 +150,7 @@ class ConnectionSpec:
             "service_name": self.service_name,
             "database_name": str(database or self.database or default_database or ""),
             "sqlserver_driver": self.sqlserver_driver,
+            "sqlserver_tls_verify": self.sqlserver_tls_verify,
             "oracle_client_mode": self.oracle_client_mode,
             "credential_name": self.credential_name or f"inline:{self.username}",
             "username": self.username,

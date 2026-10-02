@@ -14,10 +14,17 @@
         r.blocking_session_id,
         s.login_name,
         s.host_name,
+        c.client_net_address AS client_ip,
         s.program_name
     FROM sys.dm_exec_requests AS r
     JOIN sys.dm_exec_sessions AS s
         ON r.session_id = s.session_id
+    -- The request's own connection (one row per request, MARS included), for client_ip: host_name
+    -- is whatever the client says it is; client_net_address is where SQL Server saw it come from.
+    -- 0.25.0 added it to every collector that already joined this view and missed these, whose
+    -- join was only in a commented-out draft (0.26.0 section 1.75).
+    LEFT JOIN sys.dm_exec_connections AS c
+        ON c.connection_id = r.connection_id
     WHERE r.session_id <> @@SPID
       AND s.is_user_process = 1
       AND r.total_elapsed_time >= 300000
@@ -61,6 +68,7 @@ SELECT
         ', logical_reads=', MAX(CASE WHEN rn = 1 THEN logical_reads END),
         ', login=', COALESCE(MAX(CASE WHEN rn = 1 THEN login_name END), ''),
         ', host=', COALESCE(MAX(CASE WHEN rn = 1 THEN host_name END), ''),
+        ', client_ip=', COALESCE(CAST(MAX(CASE WHEN rn = 1 THEN client_ip END) AS varchar(48)), ''),
         ', app=', COALESCE(MAX(CASE WHEN rn = 1 THEN program_name END), '')
     ) AS message
 FROM ranked

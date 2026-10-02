@@ -95,9 +95,13 @@ def test_a_pending_command_is_dispatched_once_even_if_the_workflow_runs_again(tm
     assert dispatched == ["192.0.2.116"]  # one dispatch, not one per workflow cycle
 
 
-def test_a_claim_left_behind_by_a_killed_worker_is_retried_once_it_goes_stale(tmp_path, monkeypatch):
+def test_a_claim_left_behind_by_a_killed_worker_is_closed_and_its_sender_told(tmp_path, monkeypatch):
     """A container restart kills the workflow mid-command: the row stays pending and claimed.
-    It must not be lost — after the stale window another cycle may take it."""
+
+    It must not be lost - and it must not be run a second time either. Until review 0.25.0 (B3.1)
+    the next cycle past the stale window ran it again with nobody asking: `/spbot_kill_spid` and
+    `/spbot_restart_server` included, while the first run's reply had perhaps never been sent. It
+    is closed now, and its sender is asked to check and send it again."""
     sqlite_path, commands_path, message_id = prepare(tmp_path)
     store = DbOpsStore(sqlite_path)
     now = datetime.now(timezone.utc)
@@ -114,6 +118,24 @@ def test_a_claim_left_behind_by_a_killed_worker_is_retried_once_it_goes_stale(tm
     )
     result = process_pending_command_messages(sqlite_path=sqlite_path, commands_path=commands_path)
 
-    assert result["processed"] == 1
+    assert dispatched == []
+    assert result["skipped"] == 1 and result["queued_reply"] == 1
+    with sqlite3.connect(sqlite_path) as conn:
+        status = conn.execute("SELECT command_status FROM telegram_command_messages "
+                              "WHERE telegram_command_message_id = ?", (message_id,)).fetchone()[0]
+        replies = [row[0] for row in conn.execute("SELECT message_text FROM telegram_send_messages")]
+    assert status == command_processor.COMMAND_STATUS_SKIPPED
+    assert any("NOT run again" in text for text in replies)
+
+
+def test_a_command_never_claimed_before_still_runs(tmp_path, monkeypatch):
+    sqlite_path, commands_path, _ = prepare(tmp_path)
+    dispatched = []
+    monkeypatch.setattr(
+        command_processor, "execute_command_action",
+        lambda **kwargs: dispatched.append(kwargs["args"][0]) or {"status": "success"},
+    )
+
+    process_pending_command_messages(sqlite_path=sqlite_path, commands_path=commands_path)
+
     assert dispatched == ["192.0.2.116"]
-    assert claimed_at(sqlite_path, message_id) > abandoned

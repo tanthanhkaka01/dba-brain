@@ -284,7 +284,11 @@ def _handle_user_password_show(args, config, logger) -> int:
               "created with --no-remember, or before the copy existed. The password cannot be "
               "recovered from the hash; set a new one with user-password.", file=sys.stderr)
         return 1
-    print(password)
+    # The real stdout, not the tee: every line printed here is also copied into
+    # logs/webhost_runtime.log, which the console's log viewer serves (review 0.25.0, F2.1).
+    stream = sys.__stdout__ or sys.stdout
+    stream.write(password + "\n")
+    stream.flush()
     return 0
 
 

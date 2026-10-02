@@ -25,6 +25,11 @@ as far as its newest full. That is fine when a full is taken often relative to t
 estate takes one daily against a 14-day window, so the newest full is never more than a day old)
 and wrong when it is not.
 
+**Under both rules each database's newest FULL, and everything after it, is kept whatever its age**
+(:func:`_keep_newest_chain`). Without that floor, a database whose backups had stopped for longer
+than the window lost every backup it had on the next prune - the newest full included, at exactly
+the moment the backups were most needed (review 0.25.0, B4.3).
+
 Both rules keep a file whose ``finished_at`` the engine could not state: "unknown age" and "old"
 are not the same fact, and only one of them is a reason to delete something.
 """
@@ -58,12 +63,21 @@ class RetentionError(ValueError):
 
 
 def plan_retention(files: list[dict[str, Any]], *, retention_days: int = DEFAULT_RETENTION_DAYS,
-                   mode: str = AGE, now: datetime | None = None) -> dict[str, Any]:
+                   mode: str = AGE, now: datetime | None = None,
+                   retention_seconds: int | None = None) -> dict[str, Any]:
     """Split ``files`` into what is kept and what is obsolete, with a reason for each.
 
     ``files`` are rows as :func:`db_ops.common.backupfiles.list_backup_files` returns them.
+
+    ``retention_seconds``, when positive, is the window exactly as the config states it, and wins
+    over ``retention_days``. The planner reasoned in whole days only, so a `cleanup_retention` under a
+    day became 0 days and the caller replaced it with 14 - a two-hour lab retention kept two weeks
+    of backups, without a word (review 0.25.0, B4.4).
     """
-    days = _days(retention_days)
+    seconds = int(retention_seconds or 0)
+    days = _days(retention_days) if seconds <= 0 else seconds / 86400.0
+    window = f"{int(days)}-day" if seconds <= 0 else (
+        f"{int(days)}-day" if seconds % 86400 == 0 else f"{seconds}-second")
     rule = str(mode or AGE).strip().lower()
     if rule not in MODES:
         raise RetentionError(f"mode must be one of {', '.join(MODES)}; got {mode!r}.")
@@ -71,16 +85,21 @@ def plan_retention(files: list[dict[str, Any]], *, retention_days: int = DEFAULT
     # the database server printed, and they carry no zone. Both sides have to be on one
     # clock, or the cutoff is wrong by the offset - seven hours of extra retention at +07.
     moment = now or timezone_lib.display_now()
-    cutoff = _stamp(moment - timedelta(days=days))
+    cutoff = _stamp(moment - (timedelta(days=days) if seconds <= 0 else timedelta(seconds=seconds)))
 
-    rows = _by_age(files, cutoff=cutoff, days=days) if rule == AGE \
-        else _by_recovery_window(files, cutoff=cutoff, days=days)
+    rows = _by_age(files, cutoff=cutoff, days=window) if rule == AGE \
+        else _by_recovery_window(files, cutoff=cutoff, days=window)
+    rows = _keep_newest_chain(rows)
 
     obsolete = [row for row in rows if row["verdict"] == OBSOLETE]
     keep = [row for row in rows if row["verdict"] == KEEP]
     return {
         "mode": rule,
-        "retention_days": days,
+        # Whole days, as the field always was; 0 under a day - `retention_seconds` is exact.
+        "retention_days": days if seconds <= 0 else seconds // 86400,
+        "retention_seconds": seconds if seconds > 0 else int(days * 86400),
+        # The window as words, in the unit it was given: "14-day", "7200-second".
+        "window": window,
         "cutoff": cutoff,
         "obsolete": obsolete,
         "keep": keep,
@@ -96,18 +115,18 @@ def plan_retention(files: list[dict[str, Any]], *, retention_days: int = DEFAULT
     }
 
 
-def _by_age(files: list[dict[str, Any]], *, cutoff: str, days: int) -> list[dict[str, Any]]:
-    """Older than the cutoff, whatever it is and whatever depends on it."""
+def _by_age(files: list[dict[str, Any]], *, cutoff: str, days: str) -> list[dict[str, Any]]:
+    """Older than the cutoff. :func:`_keep_newest_chain` then spares each database's newest chain."""
     rows = []
     for row in files:
         finished = _normalise(row.get("finished_at"))
         if not finished:
             rows.append(_verdict(row, KEEP, "no finished_at: age unknown, so not judged"))
         elif finished < cutoff:
-            rows.append(_verdict(row, OBSOLETE, f"finished {finished}, older than the {days}-day "
+            rows.append(_verdict(row, OBSOLETE, f"finished {finished}, older than the {days} "
                                                 f"cutoff ({cutoff})"))
         else:
-            rows.append(_verdict(row, KEEP, f"finished {finished}, inside the {days}-day window"))
+            rows.append(_verdict(row, KEEP, f"finished {finished}, inside the {days} window"))
     return rows
 
 
@@ -131,12 +150,39 @@ def _by_recovery_window(files: list[dict[str, Any]], *, cutoff: str,
             elif finished >= anchor:
                 rows.append(_verdict(row, KEEP,
                                      f"at or after the anchor full ({anchor}); needed to restore "
-                                     f"into the {days}-day window"))
+                                     f"into the {days} window"))
             else:
                 rows.append(_verdict(row, OBSOLETE,
                                      f"older than the anchor full ({anchor}); nothing in the "
-                                     f"{days}-day window restores from it"))
+                                     f"{days} window restores from it"))
     return rows
+
+
+def _keep_newest_chain(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The floor under both rules: each database's newest FULL, and everything after it, is kept.
+
+    Under **age** a database whose backups had been failing (or whose job was paused) for longer
+    than the window lost **every** backup on the next ``prune --apply``, newest FULL included -
+    exactly the situation the estate's monitoring exists for (review 0.25.0, B4.3). A database with
+    no FULL in the listing is left to the rule that judged it.
+    """
+    newest: dict[str, str] = {}
+    for row in rows:
+        finished = _normalise(row.get("finished_at"))
+        if row.get("kind") == FULL and finished:
+            key = str(row.get("database_name") or "")
+            newest[key] = max(newest.get(key, ""), finished)
+    kept = []
+    for row in rows:
+        anchor = newest.get(str(row.get("database_name") or ""))
+        finished = _normalise(row.get("finished_at"))
+        if row["verdict"] == OBSOLETE and anchor and finished >= anchor:
+            reason = ("the newest full of this database - kept regardless of age"
+                      if row.get("kind") == FULL and finished == anchor
+                      else f"after the newest full ({anchor}) - its chain is kept regardless of age")
+            row = _verdict(row, KEEP, reason)
+        kept.append(row)
+    return kept
 
 
 def _by_database(files: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:

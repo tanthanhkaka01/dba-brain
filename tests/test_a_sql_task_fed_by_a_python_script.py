@@ -344,3 +344,17 @@ def test_a_task_with_no_python_input_plans_exactly_as_it_always_did():
     assert [s.label for s in steps] == ["[1/2] a.sql", "[2/2] b.sql"]
     assert all(s.parameter_values == {"session_id": 7} for s in steps)
     assert all(s.batch_label == "" for s in steps)
+
+
+def test_the_fetcher_never_sees_the_master_passphrase(root, monkeypatch):
+    """The daemon puts DB_OPS_SECRET_KEY in every app's environment; a fetcher is an HTTP client or
+    vendor code and must not inherit the key to every credential (review 0.25.0, F4.2)."""
+    monkeypatch.setenv("DB_OPS_SECRET_KEY", "the-master-key")
+    monkeypatch.setenv("SOMETHING_ELSE", "kept")
+    body = ("import json, os; print(json.dumps({'data': [{'key': os.environ.get('DB_OPS_SECRET_KEY', ''),"
+            " 'other': os.environ.get('SOMETHING_ELSE', '')}]}))")
+    source = ps.PythonSource(script_path=write(root, "env.py", body))
+
+    rows = ps.run(source, tool_root=root).rows
+
+    assert rows == [{"key": "", "other": "kept"}]

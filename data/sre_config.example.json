@@ -30,7 +30,7 @@
       "ansible_dir": "../db_ops/sre/automation/ansible"
     },
     "credentials": {
-      "_note": "Lab-only. These machines are created from a template, rehearsed on and destroyed, which is why a literal password here is defensible. Prefer the ref form anyway: write \"<name>_password_ref\": \"SOME_STORE_KEY\" and keep the value in the encrypted secret store (db-ops encrypt-secret). A literal, \"<name>_password_env\", and \"<name>_password_ref\" are all read, in that order. A lab that gets kept is how a throwaway password becomes a stored one.",
+      "_note": "Lab-only. These machines are created from a template, rehearsed on and destroyed, which is why a literal password here is defensible. Prefer the ref form anyway: write \"<name>_password_ref\": \"SOME_STORE_KEY\" and keep the value in the encrypted secret store (db-ops encrypt-secret). A literal is read first, else the ref - \"<name>_password_ref\", or \"<name>_password_env\", its old spelling - from the secret store; never the environment. A lab that gets kept is how a throwaway password becomes a stored one.",
       "guest_user": "labuser",
       "guest_password_ref": "LAB_GUEST_PASSWORD",
       "root_user": "root",

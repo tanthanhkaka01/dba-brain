@@ -192,19 +192,20 @@ def test_an_unknown_method_or_shell_is_rejected_by_name():
         rx.RemoteAccess.from_json({"method": "ssh"})
 
 
-def test_a_password_resolves_explicit_then_env_then_secret_store(monkeypatch):
-    monkeypatch.setenv("DB_OPS_TEST_PW_ENV", "from-env")
-    monkeypatch.setenv("DB_OPS_TEST_REF", "ref-as-env")
+def test_a_password_resolves_explicit_then_from_the_secrets_handed_over(monkeypatch):
+    """Owner decision G3.5: no environment lookup. `password_env` is the old spelling of a ref."""
+    monkeypatch.setenv("DB_OPS_TEST_REF", "in the environment, never read")
 
-    explicit = {"password": "literal", "password_env": "DB_OPS_TEST_PW_ENV", "password_ref": "DB_OPS_TEST_REF"}
+    explicit = {"password": "literal", "password_ref": "DB_OPS_TEST_REF"}
     assert rx.resolve_secret_value(explicit) == "literal"
 
-    via_env = {"password_env": "DB_OPS_TEST_PW_ENV", "password_ref": "DB_OPS_TEST_REF"}
-    assert rx.resolve_secret_value(via_env) == "from-env"
-
-    # A ref is looked up in the decrypted store the caller passed in, before the environment.
-    assert rx.resolve_secret_value({"password_ref": "DB_OPS_TEST_REF"}, secrets={"DB_OPS_TEST_REF": "from-store"}) == "from-store"
-    assert rx.resolve_secret_value({"password_ref": "DB_OPS_TEST_REF"}) == "ref-as-env"
+    store = {"DB_OPS_TEST_REF": "from-store"}
+    assert rx.resolve_secret_value({"password_ref": "DB_OPS_TEST_REF"}, secrets=store) == "from-store"
+    assert rx.resolve_secret_value({"password_env": "DB_OPS_TEST_REF"}, secrets=store) == "from-store"
+    with pytest.raises(rx.RemoteExecError, match="not among the secrets"):
+        rx.resolve_secret_value({"password_ref": "DB_OPS_TEST_REF"})
+    with pytest.raises(rx.RemoteExecError, match="two different secrets"):
+        rx.resolve_secret_value({"password_ref": "A", "password_env": "B"}, secrets={"A": "1", "B": "2"})
 
     # Nothing named at all is not an error: SSH key auth legitimately has no password.
     assert rx.resolve_secret_value({}) == ""
