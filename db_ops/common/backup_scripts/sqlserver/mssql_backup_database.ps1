@@ -37,7 +37,8 @@
 #      MSSQL_USER + MSSQL_PASSWORD (optional; omitted = Windows auth as the WinRM account),
 #      MSSQL_DATABASES (optional comma list; default = every online user database),
 #      BACKUP_ENCRYPTION_PASSWORD (optional, from env_secrets; absent = unencrypted),
-#      BACKUP_CERT_NAME (default db_ops_backup_cert), RETENTION_DAYS (default 14).
+#      BACKUP_CERT_NAME (default db_ops_backup_cert), RETENTION_DAYS (default 14),
+#      RETENTION_SECONDS (optional; a window under a day, which wins over RETENTION_DAYS).
 # Exit: 0 on success, non-zero on failure. Prints RESULT=ok only on a completed run.
 
 $ErrorActionPreference = 'Stop'
@@ -68,6 +69,9 @@ if (-not $backupDir) { Die 'BACKUP_DIR is not set.' }
 if ($level -notin @('full', 'diff', 'log')) { Die "BACKUP_LEVEL must be full, diff or log: '$($env:BACKUP_LEVEL)'." }
 if ($retentionDays -notmatch '^\d+$') { Die "RETENTION_DAYS must be a whole number of days: '$retentionDays'." }
 $retentionDays = [int]$retentionDays
+# A window under a day arrives in seconds, because days cannot say it - the Linux script's rule.
+$retentionSeconds = $env:RETENTION_SECONDS
+if ($retentionSeconds -and $retentionSeconds -notmatch '^\d+$') { Die "RETENTION_SECONDS must be a whole number of seconds: '$retentionSeconds'." }
 # A SQL login needs both halves. One without the other silently falls back to Windows auth and
 # backs up as whoever WinRM connected as - which may have rights the operator did not intend.
 if ($mssqlUser -and -not $mssqlPass) { Die 'MSSQL_USER is set without MSSQL_PASSWORD.' }
@@ -286,7 +290,7 @@ foreach ($db in $databases) {
 # Deleting by age alone can remove the FULL that every retained DIFF/LOG restores onto, leaving a
 # backup set that looks present and cannot be used. The rule is the Linux script's: keep everything
 # at or newer than the newest FULL, whatever its age, and apply the age cut only below that.
-$cutoff = (Get-Date).AddDays(-1 * $retentionDays)
+$cutoff = if ($retentionSeconds) { (Get-Date).AddSeconds(-1 * [int]$retentionSeconds) } else { (Get-Date).AddDays(-1 * $retentionDays) }
 foreach ($db in $databases) {
     $dbDir = "$backupDir\$db"
     if (-not (Test-Path -LiteralPath $dbDir)) { continue }

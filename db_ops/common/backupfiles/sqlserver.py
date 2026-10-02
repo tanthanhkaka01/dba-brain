@@ -16,7 +16,7 @@ import re
 from typing import Any
 
 from db_ops.common import sql_run
-from db_ops.common.backupfiles import DIFF, FULL, LOG, BackupListError, row
+from db_ops.common.backupfiles import DIFF, FULL, LOG, BackupListError, age_seconds, row
 
 #: RESTORE HEADERONLY's BackupType codes, and the letters some tools report instead.
 _KIND = {"1": FULL, "5": DIFF, "2": LOG, "D": FULL, "I": DIFF, "L": LOG}
@@ -57,6 +57,10 @@ def list_files(request: dict[str, Any], skipped: list[str] | None = None) -> lis
         # but 3 were given` on the first target that fell back. The value is ours, and escaped.
         found = sql_run.query_rows(
             cursor, _LIST.format(directory=directory.replace(chr(39), chr(39) * 2)))
+        # BackupFinishDate is the instance's own clock and carries no zone; so is GETDATE(). A
+        # piece's age is the difference between the two (see `backupfiles.age_seconds`).
+        stamped = sql_run.query_rows(cursor, "SELECT GETDATE() AS server_now")
+        server_now = stamped[0].get("server_now") if stamped else None
 
         rows: list[dict[str, Any]] = []
         for item in sorted(found, key=lambda i: str(i.get("path") or "")):
@@ -92,6 +96,7 @@ def list_files(request: dict[str, Any], skipped: list[str] | None = None) -> lis
                     finished_at=finished.isoformat() if hasattr(finished, "isoformat") else None,
                     first_lsn=int(float(head.get("FirstLSN") or 0)),
                     last_lsn=int(float(head.get("LastLSN") or 0)),
+                    age=age_seconds(finished, server_now),
                 ))
         return rows
     finally:

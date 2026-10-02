@@ -59,7 +59,7 @@ from db_ops.backup_restore.config import (
     parse_cleanup_retention,
 )
 from db_ops.transport import common_cli
-from db_ops.lib import instance_bundle, restore_space
+from db_ops.lib import data_sources, instance_bundle, restore_space
 from db_ops.lib.shell import docker_cli
 from db_ops.lib.notify import NotifyConfig
 from db_ops.lib.restore.copy_mode import parse_copy_mode
@@ -180,8 +180,10 @@ def load_script_restores(config_path: str | Path | None = None) -> ScriptRestore
     """
     path = Path(config_path) if config_path else None
     entries = _read_entries(path)
+    source = path
     if entries is None and (path is None or path.resolve() != DEFAULT_RESTORE_CONFIG_PATH.resolve()):
         entries = _read_entries(DEFAULT_RESTORE_CONFIG_PATH)
+        source = DEFAULT_RESTORE_CONFIG_PATH
     if entries is None:
         return ScriptRestores()
 
@@ -205,9 +207,39 @@ def load_script_restores(config_path: str | Path | None = None) -> ScriptRestore
             # whole file over one stopped every restore on the node - the active ones too - for an
             # entry nobody runs (see ScriptRestores). It is kept out, with its reason.
             jobs.unusable[restore_id] = str(exc)
-    jobs.unusable.update(_check_staging_dirs(jobs))
+    jobs.unusable.update(_check_staging_dirs(
+        jobs, machines=_target_machines(source.parent if source else None)))
     jobs[:] = [job for job in jobs if job.restore_id not in jobs.unusable]
     return jobs
+
+
+def _target_machines(data_dir: Path | None) -> dict[str, str]:
+    """``server_id`` -> the machine that instance is on, from the inventory beside the restore file.
+
+    A staging directory is a path on a *machine*, and one machine carries several instances: three
+    lab restores onto the SQL Server, the PostgreSQL and the Oracle of one VM shared one
+    `target_backup_dir`, each a different `target_server_id`, so the check below saw three targets
+    and passed. Each copy then removed the other two's files as "gone at the source", and the
+    PostgreSQL restore lost its base backup in the middle of `pg_combinebackup` 21 times in 24
+    (the 0.26.0 soak, 2026-10-01).
+
+    Empty when there is no inventory to read; an instance it does not list stands for itself, so
+    the check is then the one it was - by instance.
+    """
+    try:
+        records = data_sources.load_db_instances(data_dir)
+    except Exception:  # noqa: BLE001 - an unreadable inventory must not stop the restores loading.
+        return {}
+    machines: dict[str, str] = {}
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        access = record.get("cmd_access") if isinstance(record.get("cmd_access"), dict) else {}
+        address = str(access.get("host") or record.get("ip") or "").strip().lower()
+        server_id = str(record.get("server_id") or "").strip()
+        if server_id and address:
+            machines[server_id] = address
+    return machines
 
 
 def _script_restore(index: int, entry: dict[str, Any], restore_id: str) -> ScriptRestore:
@@ -315,17 +347,27 @@ def _script_restore(index: int, entry: dict[str, Any], restore_id: str) -> Scrip
     )
 
 
-def _check_staging_dirs(jobs: list[ScriptRestore]) -> dict[str, str]:
+def _check_staging_dirs(jobs: list[ScriptRestore], *,
+                        machines: dict[str, str] | None = None) -> dict[str, str]:
     """Each cross-machine entry stages into a directory of its own (review 0.25.0, B4.7).
 
     The copy is a mirror and the prune deletes by age, so two entries sharing - or nesting - one
-    `target_backup_dir` on a target delete each other's files, and a shallow directory (`/`,
+    `target_backup_dir` on a machine delete each other's files, and a shallow directory (`/`,
     `/data`) takes whatever else lives there. The docs asked operators for this; now it is checked.
+
+    "On a machine", not "on a target": ``machines`` (:func:`_target_machines`) says which machine
+    each target instance is on, so two entries restoring onto two instances of one host are held to
+    the rule as well.
 
     An active entry that breaks the rule raises. An inactive one is returned as
     ``{restore_id: why}`` instead, and where an active entry and an inactive one share a directory
     it is the inactive one that yields (:class:`ScriptRestores`).
     """
+    where = machines or {}
+
+    def machine(item: ScriptRestore) -> str:
+        return where.get(item.target_server_id) or item.target_server_id
+
     unusable: dict[str, str] = {}
     kept: list[tuple[ScriptRestore, str]] = []
     for job in jobs:
@@ -340,15 +382,18 @@ def _check_staging_dirs(jobs: list[ScriptRestore]) -> dict[str, str]:
                 f"at least three levels deep (e.g. /opt/db_ops/restore_staging/{job.restore_id}).")
         while not problem:
             clash = next(((other, held) for other, held in kept
-                          if other.target_server_id == job.target_server_id
+                          if machine(other) == machine(job)
                           and (directory == held or directory.startswith(held + "/")
                                or held.startswith(directory + "/"))), None)
             if clash is None:
                 break
             other, held = clash
+            place = (job.target_server_id if other.target_server_id == job.target_server_id
+                     else f"{machine(job)}, the machine both {other.target_server_id} and "
+                          f"{job.target_server_id} are on")
             shared = (
                 f"{job.restore_id} and {other.restore_id} stage into {directory} and {held} on "
-                f"{job.target_server_id}: one directory holds the other, so each run would delete the "
+                f"{place}: one directory holds the other, so each run would delete the "
                 f"other's files. Give every restore its own target_backup_dir.")
             if job.active and not other.active:
                 unusable[other.restore_id] = shared

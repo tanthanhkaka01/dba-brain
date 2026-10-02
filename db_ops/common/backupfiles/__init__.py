@@ -36,6 +36,39 @@ class BackupListError(ValueError):
     """The listing could not be produced."""
 
 
+#: Marks the line a host listing ends with: that machine's own clock, printed by the same shell
+#: that listed the files. One spelling for the engines that list through a shell.
+HOST_NOW = "__HOST_NOW__"
+
+
+def age_seconds(finished: Any, now: Any) -> int | None:
+    """How old a backup is, with both instants read off ONE clock: the machine's that stamped it.
+
+    ``finished_at`` carries no zone - it is what the engine or the host printed - so its age cannot
+    be worked out against this node's clock without knowing the offset between the two. A node at
+    +08 judging a container that keeps UTC read a backup finished a minute ago as eight hours old,
+    and a two-hour retention marked it obsolete at once (the lab, 2026-10-02). So each engine also
+    asks the same machine what time it is *now*, and the age is the difference: no zone enters it.
+
+    ``None`` when either instant is missing or unreadable - an unknown age is not an old one.
+    """
+    from datetime import datetime
+
+    def instant(value: Any) -> datetime | None:
+        if isinstance(value, datetime):
+            return value.replace(tzinfo=None)
+        text = str(value or "").strip().replace("T", " ")[:19]
+        try:
+            return datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return None
+
+    start, end = instant(finished), instant(now)
+    if start is None or end is None:
+        return None
+    return max(0, int((end - start).total_seconds()))
+
+
 def list_backup_files(request: dict[str, Any]) -> dict[str, Any]:
     """List the backups one engine holds. Returns ``{"files": [...], "counts": {...}}``.
 
@@ -169,14 +202,17 @@ def _latest_only(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def row(*, path: str, kind: str, database: str | None = None,
         size: int | None = None, finished_at: str | None = None,
-        **extra: Any) -> dict[str, Any]:
+        age: int | None = None, **extra: Any) -> dict[str, Any]:
     """One listed backup, in the shape every engine returns.
 
     Built through here so the three engines cannot drift into naming the same field differently -
     the whole point of the command is that a caller does not have to branch per engine.
+
+    ``age`` is :func:`age_seconds` - how old the backup was on the clock that stamped
+    ``finished_at`` - and ``None`` where the listing could not say.
     """
     return {"path": path, "kind": kind, "database_name": database,
-            "size_bytes": size, "finished_at": _stamp(finished_at), **extra}
+            "size_bytes": size, "finished_at": _stamp(finished_at), "age_seconds": age, **extra}
 
 
 def _stamp(value: Any) -> str | None:

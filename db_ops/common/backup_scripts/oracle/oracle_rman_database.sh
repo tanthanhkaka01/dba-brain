@@ -14,8 +14,17 @@
 # to restore to any point inside $RETENTION_DAYS. It is never a blind "delete older than",
 # which would happily drop the level 0 that the newer level 1s depend on.
 #
+# A window under a day: RMAN's recovery window is whole days, so the policy is set to one day -
+# the smallest there is - and the window itself ($RETENTION_SECONDS) is applied by RMAN's own
+# `DELETE BACKUP COMPLETED BEFORE`, which removes whole backup sets and their catalogue records
+# together. Only after a level 0 that succeeded in this run, and never anything from this run:
+# the newest level 0 is then always newer than what is removed. Deleting pieces by file age from
+# outside RMAN would cut a backup in half - one level 0 is several backup sets finishing seconds
+# apart - and leave the catalogue pointing at files that are gone.
+#
 # Env: DOCKER_CONTAINER (OPTIONAL since 0.21.0 - unset means this host), BACKUP_DIR (required, path inside the container),
-#      RETENTION_DAYS (default 14), BACKUP_LEVEL (optional 0|1 override for manual runs),
+#      RETENTION_DAYS (default 14), RETENTION_SECONDS (optional; a window under a day),
+#      BACKUP_LEVEL (optional 0|1 override for manual runs),
 #      ORACLE_SID (optional; the container login profile's own when unset - set it when the
 #      container serves more than one instance, because `rman target /` connects to whichever
 #      SID the profile happens to export),
@@ -30,6 +39,10 @@ set -u
 container="${DOCKER_CONTAINER:-}"
 backup_dir="${BACKUP_DIR:-}"
 retention_days="${RETENTION_DAYS:-14}"
+retention_seconds="${RETENTION_SECONDS:-}"
+# When this run began, on this host's clock: the sub-day sweep below counts back from here, so a
+# backup that takes longer than the window cannot have its own first sets removed.
+run_started="$(date +%s)"
 level_override="${BACKUP_LEVEL:-}"
 oracle_sid="${ORACLE_SID:-}"
 rman_configure="${RMAN_CONFIGURE:-apply}"
@@ -50,6 +63,9 @@ die() { printf 'RESULT=error reason=%s\n' "$1" >&2; exit 1; }
 
 case "$retention_days" in
     ''|*[!0-9]*) die "RETENTION_DAYS must be a whole number of days: '${retention_days}'." ;;
+esac
+case "$retention_seconds" in
+    *[!0-9]*) die "RETENTION_SECONDS must be a whole number of seconds: '${retention_seconds}'." ;;
 esac
 
 # Empty is the normal case and means "whatever the container's profile exports". Anything else has
@@ -237,6 +253,33 @@ if [ "$rman_rc" -ne 0 ] || printf '%s\n' "$rman_out" | grep -qE 'RMAN-00569|RMAN
     exit 1
 fi
 
+# --- A window under a day ---------------------------------------------------------------------
+# Reached only when the backup above succeeded. After a level 0: every backup set completed before
+# (the start of this run - the window) goes, through RMAN. After a level 1 nothing is removed -
+# the level 0 it depends on may be older than the window, and it is the next level 0 that makes
+# the older ones unnecessary.
+#
+# The cutoff is SYSDATE - RETENTION_SECONDS/86400 - the configured window, never a literal - less
+# the time this run has taken: counted from the run's start, so a level 0 that takes longer than
+# the window cannot have its own first backup sets removed.
+if [ -n "$retention_seconds" ] && [ "$level" = "0" ]; then
+    run_elapsed=$(( $(date +%s) - run_started ))
+    sweep_in="$(cat <<RMANEOF
+DELETE NOPROMPT BACKUP COMPLETED BEFORE 'SYSDATE-${retention_seconds}/86400-${run_elapsed}/86400';
+EXIT;
+RMANEOF
+)"
+    printf 'retention_sweep=SYSDATE-%s/86400-%s/86400 (the window, then this run so far)\n' \
+        "$retention_seconds" "$run_elapsed"
+    sweep_out="$(printf '%s\n' "$sweep_in" | run_rman "${sid_export}rman target / log /dev/stdout 2>&1")" \
+        || printf 'warning: the retention sweep exited non-zero\n' >&2
+    printf '%s\n' "$sweep_out"
+    # Never the backup's verdict: the backup is taken and good, and a sweep that could not run is
+    # a warning the next level 0 gets to try again.
+    printf '%s\n' "$sweep_out" | grep -qE 'RMAN-00569' \
+        && printf 'warning: the retention sweep reported an RMAN error\n' >&2
+fi
+
 # Keep the pieces readable to the host's SSH user, for the same reason the PostgreSQL backup
 # does: a cross-machine restore reads this directory over SFTP as an ordinary account that
 # neither owns the files nor shares their group, and RMAN writes them 0640. Re-applied on every
@@ -244,4 +287,5 @@ fi
 run_db "chmod -R a+rX '${backup_dir}'" </dev/null     || printf 'warning: could not relax permissions on %s
 ' "${backup_dir}" >&2
 
-printf 'RESULT=ok backup_level=%s retention_days=%s\n' "$level" "$retention_days"
+printf 'RESULT=ok backup_level=%s retention_days=%s retention_seconds=%s\n' \
+    "$level" "$retention_days" "${retention_seconds:-<unset>}"

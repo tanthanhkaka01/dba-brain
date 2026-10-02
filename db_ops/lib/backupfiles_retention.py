@@ -81,11 +81,14 @@ def plan_retention(files: list[dict[str, Any]], *, retention_days: int = DEFAULT
     rule = str(mode or AGE).strip().lower()
     if rule not in MODES:
         raise RetentionError(f"mode must be one of {', '.join(MODES)}; got {mode!r}.")
-    # The operator's wall clock, not UTC: the file stamps this is compared against are what
-    # the database server printed, and they carry no zone. Both sides have to be on one
-    # clock, or the cutoff is wrong by the offset - seven hours of extra retention at +07.
+    span = timedelta(days=days) if seconds <= 0 else timedelta(seconds=seconds)
+    # The file stamps this is compared against are what the database server printed, and they
+    # carry no zone, so both sides have to be on one clock or the cutoff is wrong by the offset.
+    # Where the listing says how old each file is on the clock that stamped it (`age_seconds`),
+    # that clock is the one used - see `_source_cutoff`. Where it does not, the operator's wall
+    # clock stands in for it, which is right when the server keeps the operator's time.
     moment = now or timezone_lib.display_now()
-    cutoff = _stamp(moment - (timedelta(days=days) if seconds <= 0 else timedelta(seconds=seconds)))
+    cutoff = _source_cutoff(files, span) or _stamp(moment - span)
 
     rows = _by_age(files, cutoff=cutoff, days=window) if rule == AGE \
         else _by_recovery_window(files, cutoff=cutoff, days=window)
@@ -113,6 +116,35 @@ def plan_retention(files: list[dict[str, Any]], *, retention_days: int = DEFAULT
         "reclaimable_bytes": sum(int(row.get("size_bytes") or 0) for row in obsolete),
         "sizes_known": all(row.get("size_bytes") is not None for row in obsolete),
     }
+
+
+def _source_cutoff(files: list[dict[str, Any]], span: timedelta) -> str:
+    """The cutoff on the clock that stamped the files, or ``""`` when the listing does not say.
+
+    A row that carries ``age_seconds`` states two instants on its own machine's clock: when the
+    backup finished, and - that plus its age - what time it was there when the listing was taken.
+    "Now, there" minus the window is the cutoff every ``finished_at`` of that listing can be
+    compared with as text, whatever zone this node shows.
+
+    Without it the cutoff was this node's wall clock. A node at +08 judging a lab container that
+    keeps UTC put the cutoff six hours after the present: a backup finished a minute earlier read
+    as older than a two-hour window, and only the newest-chain floor kept anything at all (the
+    0.26.0 soak's labs, 2026-10-02). At fourteen days the same eight hours went unnoticed.
+    """
+    there_now: datetime | None = None
+    for row in files:
+        age = row.get("age_seconds")
+        finished = _normalise(row.get("finished_at"))
+        if age is None or not finished:
+            continue
+        try:
+            moment = datetime.strptime(finished, "%Y-%m-%d %H:%M:%S") + timedelta(seconds=int(age))
+        except (TypeError, ValueError):
+            continue
+        # One listing, one clock: the rows agree to the second or two the listing took. The
+        # latest is the closest to when it ended.
+        there_now = moment if there_now is None else max(there_now, moment)
+    return _stamp(there_now - span) if there_now is not None else ""
 
 
 def _by_age(files: list[dict[str, Any]], *, cutoff: str, days: str) -> list[dict[str, Any]]:

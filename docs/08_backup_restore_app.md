@@ -540,8 +540,11 @@ Each entry is judged with **its own `cleanup_retention`** — the same number it
 with, so the two cannot drift — through `common`'s `prune-backup-files` (`docs/13_common.md`),
 `mode=age` by default. `--retention-seconds` and `--mode` override for one run (`--retention-days`
 is the deprecated spelling and is multiplied on the way in). Oracle and PostgreSQL entries are
-listed from the filesystem; SQL Server entries are **skipped by name**, because their listing goes
-through the instance and needs a login this command does not carry. Each run writes its own
+listed from the host; a SQL Server entry is listed **through the instance, with the job's own
+login** (`MSSQL_USER`, `env_secrets.MSSQL_PASSWORD`) since 0.26.0, and skipped by name only when
+the job states none. **A PostgreSQL entry is reported on and never deleted from**, `--apply` or
+not: a base backup is a directory in a chain, the backup script removes whole chains itself, and
+the delete this command uses takes files only - it planned, then failed on every path. Each run writes its own
 `job_runs` row under `backup_restore.prune_job.<backup_id>.<job>`, so "did the cleanup run" is a
 different question from "did the backup run".
 
@@ -1268,8 +1271,16 @@ A script-driven entry states its target in full, or it does not load:
 | Entry | Required |
 | --- | --- |
 | every entry | `server_id`, `db_type`, `target_server_id`, `backup_dir`, `script` |
-| target on another machine | `target_backup_dir` (its own, ≥ 3 levels deep, not shared or nested with another entry on that target), `source_backup_host_dir` |
+| target on another machine | `target_backup_dir` (its own, ≥ 3 levels deep, not shared or nested with another entry on that **machine** - whichever instance of it each entry restores onto; the machine is the inventory's `cmd_access.host`, else `ip`), `source_backup_host_dir` |
 | target on the source's machine (`target_server_id` = `server_id`) | `target_container`, `target_visible_dir`; SQL Server also `env.MSSQL_PORT` |
+
+**"On that machine", not "on that target" (0.26.0).** The staging copy is a mirror: what is in the
+folder and not at the source is removed as *gone at the source*. The check compared
+`target_server_id`, and one machine carries several instances - the soak's three lab restores,
+onto the SQL Server, the PostgreSQL and the Oracle of one VM, shared one folder and passed. Every
+hour the Oracle copy removed the 2,700 files the PostgreSQL copy had staged thirty seconds earlier
+and `pg_combinebackup` lost its base backup in mid-run: 21 failures in 24 cycles (read off the
+soak's logs, 2026-10-02). Now two entries on one machine are refused whichever instances they name.
 
 **An entry that is switched off does not stop the others (0.26.0).** The table is enforced on an
 **active** entry, and an active entry that fails it refuses the whole file - it is about to run.
@@ -1623,12 +1634,41 @@ now always something. The `--delete-hours` / `--hours` spellings still work and 
 3600 in the open (`cli._retention_override`), rather than the configured seconds being divided
 down somewhere inside the workflow.
 
-Whole days are still derived at the one edge that only speaks days: `RETENTION_DAYS` in the
-backup scripts' environment. It is not a second setting — `BackupJob.retention_days` is a read-only
-property over this one. The prune planner (`db_ops/lib/backupfiles_retention.py`) takes the seconds
-as they are since 0.26.0: converted to whole days, anything under a day became 0 and 0 became the
-14-day default, so a two-hour lab retention kept two weeks of backups without a word (review 0.25.0,
-B4.4). Its answer names the window in the unit it was given (`window`: `"8-day"`, `"7200-second"`).
+### How the window reaches the engine
+
+A backup job's window is applied **by its own script, the way its engine does it** (the owner,
+2026-10-02: *Oracle and PostgreSQL follow Oracle's and PostgreSQL's own way*). The script is handed
+two environment variables, neither a second setting — both are read-only views of
+`cleanup_retention` (`BackupJob.retention_days`, `BackupJob.retention_seconds`):
+
+| Variable | Value | When |
+| --- | --- | --- |
+| `RETENTION_DAYS` | whole days, **at least 1** | always, unless the window is 0 (no age gate) |
+| `RETENTION_SECONDS` | the window exactly | only when it is **under a day** |
+
+| Engine | Its own way | Under a day |
+| --- | --- | --- |
+| SQL Server | file age, and never past the newest FULL of that database (`find … ! -newer <newest full>`; the PowerShell twin on Windows) | the age is counted in minutes (`-mmin`) on the host's own clock |
+| PostgreSQL | **whole chains**: a `_FULL` and the `_INCR`s after it go together, once the newest member is past the cutoff, judged on the UTC stamps in their names. The WAL archive is trimmed by `pg_archivecleanup` against the oldest base backup that remains | the same sweep with a nearer cutoff; the WAL follows on the WAL job's next run |
+| Oracle | RMAN: `CONFIGURE RETENTION POLICY TO RECOVERY WINDOW OF n DAYS` and `DELETE OBSOLETE` | RMAN's window is whole days, so the policy is **1 day** and the window itself is applied by `DELETE BACKUP COMPLETED BEFORE 'SYSDATE-<RETENTION_SECONDS>/86400-<this run so far>/86400'` - the configured window, never a literal - whole backup sets and their catalogue records together. **Only after a level 0 that succeeded in the same run**, and counted back from the start of that run: the newest level 0 is always newer than what is removed, and a level 0 that takes longer than the window keeps its own first sets; a level 1 run removes nothing. Archived logs leave the disk on the same window once backed up; their *backups* wait for that level 0 sweep |
+
+Until 0.26.0 a window under a day reached no script at all: handed nothing, each kept its own
+default of fourteen days (seven for WAL and archivelogs). The lab jobs of the soak declare 7200
+seconds and kept every backup they took - 77 GB on one host in 31 hours - while the configuration
+said two hours. Read off the soak's logs on 2026-10-02 and proven on the rebuilt lab the same day:
+after a pass at 12:39Z the oldest SQL Server file was 12:32, the PostgreSQL chain of 09:52 was
+removed whole, and RMAN reported `Deleted 20 objects`.
+
+Why not delete the files from outside, with one rule for all three: an RMAN level 0 is several
+backup sets finishing seconds apart, and a PostgreSQL base backup is a directory in a chain. A
+file-by-file rule cuts the first in half at the cutoff and cannot remove the second at all.
+
+The prune planner (`db_ops/lib/backupfiles_retention.py`) takes the seconds as they are since
+0.26.0: converted to whole days, anything under a day became 0 and 0 became the 14-day default
+(review 0.25.0, B4.4). Its answer names the window in the unit it was given (`window`: `"8-day"`,
+`"7200-second"`), and it judges each file **on the clock of the machine that stamped it**: every
+listing also asks that machine the time (`age_seconds`), because `finished_at` carries no zone and
+a node at +08 read a backup one minute old on a UTC host as eight hours old.
 
 Both phases announce themselves to the store (`DELETE_START` / `DELETE_DONE`) with
 `files_considered` / `deleted` / `skipped`. Until 2026-09-11 the cleanup wrote nothing at all: across

@@ -954,7 +954,7 @@
                     },
                     "measured_against": "each backup file's own age",
                     "rule": "0 = no age gate, which is NOT 'keep everything': every file becomes a candidate and the chain rule alone decides (never the newest full, nor anything at or after it). Believing the opposite let a staging directory reach 16.7 GB",
-                    "purpose": "How long a directory of backups keeps them. A backup job prunes its own output; a restore entry prunes the copies it staged."
+                    "purpose": "How long a directory of backups keeps them. A backup job prunes its own output; a restore entry prunes the copies it staged. On a backup job the window is applied by the job's script the way its engine does it - file age below the newest full (SQL Server), whole chains and pg_archivecleanup (PostgreSQL), RMAN (Oracle) - and a window under a day reaches the script exactly, as RETENTION_SECONDS: RMAN's own recovery window is whole days, so Oracle then keeps a one-day policy and removes what is older than the window after each successful level 0."
                 },
                 {
                     "field": "target_retention_seconds",
@@ -9535,7 +9535,7 @@
             "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 6,
+            "field_count": 7,
             "required_field_count": 0,
             "fields": [
                 {
@@ -9608,7 +9608,7 @@
                         "allow_empty": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "When the backup finished, `YYYY-MM-DD HH:MM:SS` in the clock the engine or the host printed: the SQL Server and Oracle instance's, the host's for PostgreSQL (its backup_manifest's mtime). Retention compares it with the wall clock."
+                    "purpose": "When the backup finished, `YYYY-MM-DD HH:MM:SS` in the clock the engine or the host printed: the SQL Server and Oracle instance's, the host's for PostgreSQL (its backup_manifest's mtime). It carries no zone; retention judges it on that same clock, through `age_seconds`."
                 },
                 {
                     "field": "finished_at_utc",
@@ -9623,6 +9623,21 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "The same moment in UTC, where the listing knows the offset (PostgreSQL). A point-in-time bound, which is converted to UTC, is compared with this."
+                },
+                {
+                    "field": "age_seconds",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "the clock of the machine that stamped finished_at",
+                    "purpose": "How old the backup was when it was listed, in seconds, with both instants read off one clock: the listing asks the same machine what time it is there (GETDATE() for SQL Server, the shell RMAN ran in for Oracle, the host's date for PostgreSQL). Retention uses it, so the zone this node shows never enters the judgement.",
+                    "rule": "null when either instant could not be read: an unknown age is not an old one. Added in 0.26.0 - before it the cutoff was this node's wall clock, eight hours off a UTC host from a node at +08"
                 }
             ]
         },
@@ -9713,7 +9728,7 @@
                         "allow_empty": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The instant older than which a file may go."
+                    "purpose": "The instant older than which a file may go, on the clock that stamped the files: the listing's own `now` minus the window, wherever the rows carry `age_seconds`; this node's wall clock where they do not."
                 },
                 {
                     "field": "keep",

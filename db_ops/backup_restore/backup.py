@@ -99,15 +99,35 @@ class BackupJob:
 
     @property
     def retention_days(self) -> int | None:
-        """``cleanup_retention`` in whole days, for the two readers that only speak days.
+        """``cleanup_retention`` in whole days, for the readers that only speak days.
 
-        Derived, never configured: the backup scripts take ``RETENTION_DAYS`` in their environment
-        and the planner in ``db_ops.lib.backupfiles_retention`` reasons in days, and neither is a
-        second setting - they are this one, rounded down, at the edge where it leaves Python.
-        ``None`` when the window is under a day, so the reader keeps its own default rather than
-        being handed a 0 it would read as "delete everything".
+        Derived, never configured: the backup scripts take ``RETENTION_DAYS`` in their environment,
+        and it is not a second setting - it is this one, at the edge where it leaves Python.
+
+        **A window under a day is one day here**, the smallest a day-speaking reader can state:
+        never a 0 it would read as "delete everything", and no longer nothing at all, which left
+        each script on its own default of fourteen - a lab job declaring ``cleanup_retention:
+        7200`` kept every backup it took, 77 GB on one host in 31 hours of an hourly cycle (the
+        0.26.0 soak, 2026-10-02). RMAN is such a reader: its recovery window is whole days, so an
+        Oracle job with a two-hour window keeps one day. The scripts that can do better are also
+        handed :attr:`retention_seconds`. ``None`` for 0, which is "no age gate" and not a window.
         """
-        return int(cleanup_retention.as_days(self.cleanup_retention)) or None
+        if self.cleanup_retention <= 0:
+            return None
+        return max(1, int(cleanup_retention.as_days(self.cleanup_retention)))
+
+    @property
+    def retention_seconds(self) -> int | None:
+        """The window exactly, when it is under a day; ``None`` otherwise.
+
+        Handed to the script as ``RETENTION_SECONDS`` beside ``RETENTION_DAYS``, and read by the
+        ones whose engine can apply it: SQL Server (file age, below the newest full) and
+        PostgreSQL (whole chains, on the names' own UTC stamps). Only under a day, so a window
+        stated in days is judged exactly as it always was.
+        """
+        if 0 < self.cleanup_retention < 86400:
+            return int(self.cleanup_retention)
+        return None
 
     @property
     def job_code(self) -> str:

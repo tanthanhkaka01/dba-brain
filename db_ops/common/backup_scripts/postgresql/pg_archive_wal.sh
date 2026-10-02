@@ -25,6 +25,7 @@ set -u
 container="${DOCKER_CONTAINER:-}"
 backup_dir="${BACKUP_DIR:-}"
 retention_days="${RETENTION_DAYS:-7}"
+retention_seconds="${RETENTION_SECONDS:-}"
 pg_user="${PG_USER:-postgres}"
 pg_os_user="${PG_OS_USER:-postgres}"
 
@@ -34,6 +35,17 @@ die() { printf 'RESULT=error reason=%s\n' "$1" >&2; exit 1; }
 case "$retention_days" in
     ''|*[!0-9]*) die "RETENTION_DAYS must be a whole number of days: '${retention_days}'." ;;
 esac
+# A window under a day arrives in seconds (see pg_basebackup_database.sh). It only matters to the
+# fallback below: with a base backup present the cut line is that backup's START WAL, not an age.
+age_test="-mtime +${retention_days}"
+if [ -n "$retention_seconds" ]; then
+    case "$retention_seconds" in
+        *[!0-9]*) die "RETENTION_SECONDS must be a whole number of seconds: '${retention_seconds}'." ;;
+    esac
+    [ "$retention_seconds" -ge 60 ] \
+        || die "RETENTION_SECONDS must be at least 60: '${retention_seconds}'."
+    age_test="-mmin +$(( retention_seconds / 60 ))"
+fi
 
 # $DOCKER_CONTAINER is optional since 0.21.0, exactly as in pg_basebackup_database.sh: set it for a
 # cluster inside a container, leave it unset for one on the host. Chosen once, here, so nothing below
@@ -172,7 +184,7 @@ else
     # Nothing to protect yet, but do not let the archive grow without bound while the first
     # base backup has not run: fall back to the age floor.
     printf 'no base backup yet; falling back to age-based WAL cleanup (%s days)\n' "$retention_days"
-    run_db "find '${wal_dir}' -type f -mtime +${retention_days} -delete" \
+    run_db "find '${wal_dir}' -type f ${age_test} -delete" \
         || printf 'warning: age-based WAL cleanup reported an error\n' >&2
 fi
 

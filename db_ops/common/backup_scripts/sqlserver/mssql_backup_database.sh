@@ -32,7 +32,8 @@
 #      MSSQL_USER (default sa), MSSQL_PASSWORD (required, from env_secrets),
 #      MSSQL_DATABASES (optional comma list; default = every online user database),
 #      BACKUP_ENCRYPTION_PASSWORD (optional, from env_secrets; absent = unencrypted),
-#      BACKUP_CERT_NAME (default db_ops_backup_cert), RETENTION_DAYS (default 14).
+#      BACKUP_CERT_NAME (default db_ops_backup_cert), RETENTION_DAYS (default 14),
+#      RETENTION_SECONDS (optional; a window under a day, which wins over RETENTION_DAYS).
 # Exit: 0 on success, non-zero on failure. Prints RESULT=ok only on a completed run.
 set -u
 
@@ -46,6 +47,7 @@ databases_csv="${MSSQL_DATABASES:-}"
 enc_password="${BACKUP_ENCRYPTION_PASSWORD:-}"
 cert_name="${BACKUP_CERT_NAME:-db_ops_backup_cert}"
 retention_days="${RETENTION_DAYS:-14}"
+retention_seconds="${RETENTION_SECONDS:-}"
 
 die() { printf 'RESULT=error reason=%s\n' "$1" >&2; exit 1; }
 
@@ -58,6 +60,18 @@ esac
 case "$retention_days" in
     ''|*[!0-9]*) die "RETENTION_DAYS must be a whole number of days: '${retention_days}'." ;;
 esac
+# A window under a day arrives in seconds, because days cannot say it: unset, a two-hour lab
+# retention ran on the 14-day default and nothing was ever removed (2026-10-02). `find` counts
+# minutes, and the age is the file's own on this host's clock - no time zone enters it.
+age_test="-mtime +${retention_days}"
+if [ -n "$retention_seconds" ]; then
+    case "$retention_seconds" in
+        *[!0-9]*) die "RETENTION_SECONDS must be a whole number of seconds: '${retention_seconds}'." ;;
+    esac
+    [ "$retention_seconds" -ge 60 ] \
+        || die "RETENTION_SECONDS must be at least 60: '${retention_seconds}'."
+    age_test="-mmin +$(( retention_seconds / 60 ))"
+fi
 
 # $DOCKER_CONTAINER is optional since 0.21.0: set it for an instance inside a container, leave it
 # unset for one installed on this Linux host. A NARROWER gap than the PostgreSQL and Oracle scripts
@@ -267,7 +281,7 @@ for db in $databases; do
     fi
     exec_here sh -c "
         find '${db_dir}' -type f \\( -name '*.bak' -o -name '*.trn' \\) \
-             -mtime +${retention_days} ! -newer '${newest_full}' -delete 2>/dev/null || true
+             ${age_test} ! -newer '${newest_full}' -delete 2>/dev/null || true
     "
 done
 

@@ -39,6 +39,7 @@ set -u
 container="${DOCKER_CONTAINER:-}"
 backup_dir="${BACKUP_DIR:-}"
 retention_days="${RETENTION_DAYS:-7}"
+retention_seconds="${RETENTION_SECONDS:-}"
 oracle_sid="${ORACLE_SID:-}"
 rman_configure="${RMAN_CONFIGURE:-apply}"
 oracle_os_user="${ORACLE_OS_USER:-}"
@@ -59,6 +60,16 @@ die() { printf 'RESULT=error reason=%s\n' "$1" >&2; exit 1; }
 case "$retention_days" in
     ''|*[!0-9]*) die "RETENTION_DAYS must be a whole number of days: '${retention_days}'." ;;
 esac
+case "$retention_seconds" in
+    *[!0-9]*) die "RETENTION_SECONDS must be a whole number of seconds: '${retention_seconds}'." ;;
+esac
+# How far back an archived log stays on disk once it has been backed up. Days, or - for a window
+# under a day - the seconds as a fraction of one: RMAN takes a date expression here. The BACKUPS
+# of archivelogs keep the day-based line below: under a day they are removed by the database
+# job's sweep after its next level 0 (oracle_rman_database.sh), never ahead of the level 0 that
+# makes them unnecessary.
+log_age="${retention_days}"
+[ -n "$retention_seconds" ] && log_age="${retention_seconds}/86400"
 
 # Empty means "whatever the container profile exports". Anything else is exported into a shell
 # inside the container, so it has to be an identifier and nothing else.
@@ -190,7 +201,7 @@ RUN {
 }
 CROSSCHECK ARCHIVELOG ALL;
 DELETE NOPROMPT EXPIRED ARCHIVELOG ALL;
-DELETE NOPROMPT ARCHIVELOG ALL COMPLETED BEFORE 'SYSDATE-${retention_days}';
+DELETE NOPROMPT ARCHIVELOG ALL COMPLETED BEFORE 'SYSDATE-${log_age}';
 DELETE NOPROMPT BACKUP OF ARCHIVELOG ALL COMPLETED BEFORE 'SYSDATE-${retention_days}';
 EXIT;
 RMANEOF

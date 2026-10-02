@@ -22,10 +22,15 @@ import re
 import shlex
 from typing import Any
 
-from db_ops.common.backupfiles import CONTROLFILE, DIFF, FULL, LOG, BackupListError, row
+from db_ops.common.backupfiles import (
+    CONTROLFILE, DIFF, FULL, HOST_NOW, LOG, BackupListError, age_seconds, row)
 from db_ops.common.hostcmd import parse_host, run
 
 _LIST = "LIST BACKUP;\nEXIT;\n"
+
+#: The clock of the shell rman ran in, printed after its listing.
+_NOW_LINE = re.compile(r"^" + HOST_NOW + r" (?P<now>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s*$",
+                       re.MULTILINE)
 
 #: RMAN prints Completion Time in the session's NLS date format, which defaults to ``06-AUG-26`` —
 #: a date with no clock. That cannot order two backups taken on the same day, which is exactly what
@@ -64,12 +69,17 @@ def list_files(request: dict[str, Any]) -> list[dict[str, Any]]:
     if not directory:
         raise BackupListError("path is required: the RMAN backup directory to report on.")
 
+    # The last line is the clock of the shell rman ran in. RMAN prints Completion Time on that
+    # clock with no zone, so a piece's age is the difference between the two (`age_seconds`).
     result = run(host,
-                 f"export {_NLS}; printf {shlex.quote(_LIST)} | rman target / log /dev/stdout 2>&1",
+                 f"export {_NLS}; printf {shlex.quote(_LIST)} | rman target / log /dev/stdout 2>&1; "
+                 f"echo \"{HOST_NOW} $(date '+%Y-%m-%d %H:%M:%S')\"",
                  timeout=int(request.get("timeout_seconds") or 600))
     text = result["stdout"]
     if "Piece Name" not in text:
         raise BackupListError(f"rman refused or reported nothing: {text.strip()[-400:]}")
+    stamped = _NOW_LINE.search(text)
+    host_now = stamped.group("now") if stamped else ""
 
     prefix = directory.rstrip("/") + "/"
     sets: list[_Set] = []
@@ -109,5 +119,6 @@ def list_files(request: dict[str, Any]) -> list[dict[str, Any]]:
                 # being reported on, and offering it would hand a caller a path it cannot use.
                 continue
             rows.append(row(path=path, kind=item.kind, database=None,
-                            finished_at=item.completed or None))
+                            finished_at=item.completed or None,
+                            age=age_seconds(item.completed, host_now)))
     return rows

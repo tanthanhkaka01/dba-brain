@@ -13,10 +13,17 @@ a request and answers it. What comes back is recorded in ``job_runs`` and report
 backup run is, because an operator asking "did the cleanup run" is asking the same question about
 the same estate.
 
-**The backup scripts already prune their own directories** (``RETENTION_DAYS`` inside each
-``assets/backup/**`` script). This exists for the directories nothing prunes — a Windows share, a
-copy on a second host — and to make the decision inspectable before it happens: ``--dry-run`` lists
-every file with the reason it is going, which the in-script cleanup cannot be asked for.
+**The backup scripts already prune their own directories**, each the way its engine does it: RMAN's
+``DELETE OBSOLETE`` for Oracle, whole chains and ``pg_archivecleanup`` for PostgreSQL, age below the
+newest full for SQL Server (``RETENTION_DAYS``, and ``RETENTION_SECONDS`` for a window under a day -
+see ``spec_builder``). This exists for the directories nothing prunes — a Windows share, a copy on a
+second host — and to make the decision inspectable before it happens: ``--dry-run`` lists every
+file with the reason it is going, which the in-script cleanup cannot be asked for.
+
+**It does not delete a PostgreSQL backup.** A base backup is a directory and a member of a chain;
+the script drops whole chains and this would remove one directory at a time - and could not: the
+delete it uses takes files only, so until 0.26.0 a PostgreSQL ``--apply`` planned, then failed on
+every path. It reports, and says by name that it will not delete.
 """
 
 from __future__ import annotations
@@ -32,10 +39,58 @@ from db_ops.lib.backupfiles_retention import AGE, DEFAULT_RETENTION_DAYS
 from db_ops.db.job_runs import JobRun
 from db_ops.db.store import DbOpsStore, utc_now_text
 
-#: Entries whose engine this can list. SQL Server is asked through the instance rather than the
-#: filesystem, which needs a login the prune request does not carry, so it is refused by name
-#: rather than half-attempted.
+#: Entries whose engine is listed from the host alone. SQL Server is asked through the instance
+#: instead (the files carry their own headers), which needs a login: the job's own, when it states
+#: one (:func:`sql_login`). Without one the entry is refused by name rather than half-attempted.
 LISTABLE = {"oracle", "postgresql", "postgres"}
+
+#: Engines this reports on and never deletes from: their backups are directories in chains, and
+#: the backup script's own sweep is what removes them.
+REPORT_ONLY = {"postgresql", "postgres"}
+REPORT_ONLY_REASON = (
+    "a PostgreSQL base backup is a directory in a chain: the backup script removes whole chains "
+    "itself (RETENTION_DAYS, or RETENTION_SECONDS under a day) and trims the WAL archive with "
+    "pg_archivecleanup. This command reports on it and deletes nothing.")
+
+
+def sql_login(job: Any, *, secrets: dict[str, str] | None = None,
+              data_dir: str | Path | None = None) -> dict[str, Any] | None:
+    """The SQL Server login a backup job runs under, as the ``target`` block a listing takes.
+
+    The job's script logs in as ``MSSQL_USER`` (``sa`` when unset) with the secret behind
+    ``env_secrets.MSSQL_PASSWORD``; the instance's address is the inventory's. ``None`` when the
+    job states no such secret - a Windows job on integrated security - or the inventory does not
+    hold the instance: the caller then says the entry cannot be listed, by name.
+    """
+    from db_ops.lib import data_sources
+
+    ref = str((getattr(job, "env_secrets", None) or {}).get("MSSQL_PASSWORD") or "").strip()
+    password = (secrets or {}).get(ref) if ref else None
+    if not password:
+        return None
+    instance = next((item for item in data_sources.load_db_instances(data_dir)
+                     if str(item.get("server_id") or "").strip() == job.server_id), None)
+    address = str((instance or {}).get("ip") or "").strip()
+    if not address:
+        return None
+    env = getattr(job, "env", None) or {}
+    return {"host": address, "port": int((instance or {}).get("port") or 1433),
+            "username": str(env.get("MSSQL_USER") or "sa"), "password": str(password)}
+
+
+def not_listable(job: Any, *, secrets: dict[str, str] | None = None,
+                 data_dir: str | Path | None = None) -> str:
+    """Why this job's directory cannot be listed, or ``""`` when it can."""
+    engine = str(job.db_type or "").strip().lower()
+    if engine in LISTABLE:
+        return ""
+    if engine == "sqlserver":
+        if sql_login(job, secrets=secrets, data_dir=data_dir):
+            return ""
+        return ("sqlserver backups are listed through the instance, and this job states no login "
+                "for it (env_secrets.MSSQL_PASSWORD); prune it with common.cli prune-backup-files "
+                "and a target block.")
+    return f"{engine or 'unknown'} backups cannot be listed by this command."
 
 
 def prune_job_request(job: Any, *, target: Any, secrets: dict[str, str] | None = None,
@@ -53,7 +108,11 @@ def prune_job_request(job: Any, *, target: Any, secrets: dict[str, str] | None =
     # credentials and would otherwise be handed a key_file it cannot find.
     from db_ops.backup_restore.spec_builder import _resolved_key_file, _ssh_password
 
+    login = (sql_login(job, secrets=secrets, data_dir=data_dir)
+             if str(job.db_type or "").strip().lower() == "sqlserver" else None)
     return {
+        # Only for SQL Server, which is listed through the instance.
+        **({"target": login} if login else {}),
         "db_type": job.db_type,
         "path": job.backup_dir,
         # Seconds, under the one name both halves of the app read - see
@@ -116,17 +175,12 @@ def run_prune(
     secrets = _load_secrets(data_dir=data_dir, key=key, key_base64=key_base64)
 
     for item in jobs:
-        engine = str(item.db_type or "").strip().lower()
-        if engine not in LISTABLE:
+        refusal = not_listable(item, secrets=secrets, data_dir=data_dir)
+        if refusal:
             # Named rather than skipped quietly: an operator who configured a SQL Server entry and
             # sees nothing happen would reasonably conclude the prune ran and found nothing.
             summary["skipped"] += 1
-            summary["jobs"].append({
-                "job": item.label, "status": "skipped",
-                "reason": f"{engine or 'unknown'} backups are listed through the instance, which "
-                          "needs a login this command does not carry; prune it with "
-                          "common.cli prune-backup-files and a target block.",
-            })
+            summary["jobs"].append({"job": item.label, "status": "skipped", "reason": refusal})
             continue
 
         started_at = utc_now_text()
@@ -140,9 +194,11 @@ def run_prune(
         )
         try:
             target = resolve_backup_target(item, data_dir=data_dir)
+            report_only = str(item.db_type or "").strip().lower() in REPORT_ONLY
             request = prune_job_request(item, target=target, secrets=secrets,
                                         retention_seconds=retention_seconds, mode=mode,
-                                        delete=bool(apply), dry_run=False, data_dir=data_dir)
+                                        delete=bool(apply) and not report_only, dry_run=False,
+                                        data_dir=data_dir)
             result = _prune_one(request, secrets=secrets)
         except Exception as exc:  # noqa: BLE001 - one entry must not stop the rest.
             summary["failed"] += 1
@@ -160,10 +216,13 @@ def run_prune(
             "job": item.label, "status": "done", "path": item.backup_dir,
             "retention_days": result["retention_days"], "obsolete": obsolete, "deleted": deleted,
             "kept": result["counts"]["keep"],
+            # Said on the entry it applies to: `--apply` was given and nothing was deleted.
+            **({"report_only": REPORT_ONLY_REASON} if apply and report_only else {}),
         })
         message = (f"{item.label}: {obsolete} obsolete of {result['counts']['total']} at "
                    f"a {result.get('window') or str(result['retention_days']) + '-day'} window"
-                   + (f", {deleted} deleted." if apply else ", nothing deleted (report only)."))
+                   + (f", {deleted} deleted." if apply and not report_only
+                      else ", nothing deleted (report only)."))
         _record(store, item, status="DONE", started_at=started_at, message=message,
                 app_config=app_config, logger=logger,
                 metadata={"obsolete": obsolete, "deleted": deleted})
@@ -184,7 +243,6 @@ def _prune_one(request: dict[str, Any], *, secrets: dict[str, str]) -> dict[str,
     and it stays an import: it is a rule about values, and a subprocess to apply arithmetic to a
     list would be the wrong shape at any speed.
     """
-    from db_ops.lib import cleanup_retention
     from db_ops.lib.backupfiles_retention import plan_retention
 
     listed = common_cli.run("list-backup-files", request)

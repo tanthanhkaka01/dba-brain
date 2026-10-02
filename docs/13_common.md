@@ -516,6 +516,23 @@ Both keep a file whose `finished_at` the engine could not state: "unknown age" a
 the same fact. `recovery_window` judges **per database**, because a chain belongs to one — a single
 SQL Server directory holds every database on the instance.
 
+**The cutoff is on the clock that stamped the files (0.26.0).** `finished_at` is what the engine or
+the host printed and carries no zone, so every listing also asks that machine what time it is
+*there* and gives each row `age_seconds`: the instance's `GETDATE()` for SQL Server, the shell RMAN
+ran in for Oracle, the host's `date` for PostgreSQL. "Now, there" minus the window is the `cutoff`
+the answer states. Before, the cutoff was this node's wall clock: a node at +08 over a container on
+UTC read a backup one minute old as eight hours old, which fourteen days hid and two hours did not.
+A listing that states no age is judged on the node's clock, as it always was.
+
+**`delete: true` is refused for PostgreSQL**, by name, with the plan still in `data`. A base backup
+is a directory in a chain and `delete-files` takes files only: it planned, then failed on every
+path, and had never removed one. The backup script removes whole chains itself (`RETENTION_DAYS`,
+`RETENTION_SECONDS`), and `pg_archivecleanup` trims the WAL archive behind them.
+
+**The scripts take `RETENTION_SECONDS` for a window under a day** - SQL Server and PostgreSQL apply
+it as their own rule on a nearer cutoff, Oracle through RMAN's `DELETE BACKUP COMPLETED BEFORE`
+after a successful level 0 (`docs/08_backup_restore_app.md`, *How the window reaches the engine*).
+
 **Reporting is the default; `delete: true` is deliberate.** Without it the command only answers, and
 `obsolete_paths` is exactly the array `delete-files` takes as `paths`, so deciding and deleting stay
 two steps. With it, removal goes through `delete-files` — one file at a time, with all its refusals —

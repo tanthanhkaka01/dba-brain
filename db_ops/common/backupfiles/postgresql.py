@@ -14,9 +14,9 @@ from __future__ import annotations
 import shlex
 from typing import Any
 
-from db_ops.common.backupfiles import DIFF, FULL, LOG, BackupListError, row
+from db_ops.common.backupfiles import (
+    DIFF, FULL, HOST_NOW, LOG, BackupListError, age_seconds, row)
 from db_ops.common.hostcmd import parse_host, run
-
 
 def _utc(modified: str) -> str | None:
     """``stat -c %y`` in UTC, the clock a point in time is compared in.
@@ -54,19 +54,23 @@ def list_files(request: dict[str, Any]) -> list[dict[str, Any]]:
     # mtime - but a directory there is created by the copy and dated by it. A full and its
     # incremental staged in the same second then read as finished together, and the chain dropped
     # the incremental (the lab drill, 2026-09-25: `..._FULL` and `..._INCR` both "10:53:22").
+    #
+    # The last line is the host's own clock, in the format `stat -c %y` prints: a file's age is
+    # then the difference of two instants on one clock (see `age_seconds`).
     command = (
         f"for d in {root}/base/*_FULL {root}/base/*_INCR {root}/wal; do "
         f"[ -e \"$d\" ] || continue; "
         f"if [ -f \"$d/backup_manifest\" ]; then m=\"$d/backup_manifest\"; else m=\"$d\"; fi; "
         f"printf '%s|%s|%s\\n' \"$d\" \"$(stat -c %s \"$d\")\" \"$(stat -c %y \"$m\")\"; "
-        f"done 2>/dev/null"
+        f"done 2>/dev/null; printf '{HOST_NOW}|%s\\n' \"$(date '+%Y-%m-%d %H:%M:%S')\""
     )
     result = run(host, command, timeout=int(request.get("timeout_seconds") or 300))
 
+    lines = [line.strip() for line in result["stdout"].splitlines()]
+    host_now = next((line.split("|", 1)[1] for line in lines if line.startswith(HOST_NOW + "|")), "")
     rows: list[dict[str, Any]] = []
-    for line in result["stdout"].splitlines():
-        line = line.strip()
-        if not line or "|" not in line:
+    for line in lines:
+        if not line or "|" not in line or line.startswith(HOST_NOW + "|"):
             continue
         path, size, modified = (line.split("|", 2) + ["", ""])[:3]
         name = path.rsplit("/", 1)[-1]
@@ -81,5 +85,6 @@ def list_files(request: dict[str, Any]) -> list[dict[str, Any]]:
         rows.append(row(path=path, kind=kind, database=None,
                         size=int(size) if size.isdigit() else None,
                         finished_at=modified.strip() or None,
-                        finished_at_utc=_utc(modified)))
+                        finished_at_utc=_utc(modified),
+                        age=age_seconds(modified, host_now)))
     return rows

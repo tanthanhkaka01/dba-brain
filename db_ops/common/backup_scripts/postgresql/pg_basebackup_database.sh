@@ -27,7 +27,8 @@
 # Env: DOCKER_CONTAINER (OPTIONAL since 0.21.0 - set it to reach a cluster inside a container,
 #      leave it unset for one installed on the host itself), BACKUP_DIR (required; inside the
 #      container when DOCKER_CONTAINER is set, on the host otherwise),
-#      RETENTION_DAYS (default 14), BACKUP_LEVEL (optional full|incr override for manual runs),
+#      RETENTION_DAYS (default 14), RETENTION_SECONDS (optional; a window under a day, which
+#      wins over RETENTION_DAYS), BACKUP_LEVEL (optional full|incr override for manual runs),
 #      PG_USER (default postgres), PG_OS_USER (OS user inside the container, default postgres),
 #      PG_PORT (optional; the image's default when unset - set it when the container runs the
 #      cluster on a non-default port, or runs more than one).
@@ -37,6 +38,7 @@ set -u
 container="${DOCKER_CONTAINER:-}"
 backup_dir="${BACKUP_DIR:-}"
 retention_days="${RETENTION_DAYS:-14}"
+retention_seconds="${RETENTION_SECONDS:-}"
 level_override="${BACKUP_LEVEL:-}"
 pg_user="${PG_USER:-postgres}"
 pg_os_user="${PG_OS_USER:-postgres}"
@@ -59,6 +61,16 @@ die() { printf 'RESULT=error reason=%s\n' "$1" >&2; exit 1; }
 case "$retention_days" in
     ''|*[!0-9]*) die "RETENTION_DAYS must be a whole number of days: '${retention_days}'." ;;
 esac
+# A window under a day arrives in seconds, because days cannot say it: unset, a two-hour lab
+# retention ran on the 14-day default and no chain was ever dropped (2026-10-02). The sweep below
+# is the same one - whole chains, judged on the UTC stamp in their names - with a nearer cutoff.
+retention_window="${retention_days} days ago"
+if [ -n "$retention_seconds" ]; then
+    case "$retention_seconds" in
+        *[!0-9]*) die "RETENTION_SECONDS must be a whole number of seconds: '${retention_seconds}'." ;;
+    esac
+    retention_window="${retention_seconds} seconds ago"
+fi
 # Unset is the normal case and means the image's default. A non-numeric value is not: it would be
 # pasted into the psql argument list and produce a connection error naming the port, four calls in.
 case "$pg_port" in
@@ -259,7 +271,7 @@ run_db "test -f '${target}/backup_manifest'" \
 # is within the window; the directory names sort chronologically, so one pass is enough.
 cleanup=$(cat <<CLEANUP
 set -u
-cutoff=\$(date -u -d "${retention_days} days ago" +%Y%m%dT%H%M%SZ 2>/dev/null) || exit 0
+cutoff=\$(date -u -d "${retention_window}" +%Y%m%dT%H%M%SZ 2>/dev/null) || exit 0
 chain=""
 newest=""
 drop_chain() {

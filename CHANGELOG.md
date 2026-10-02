@@ -138,6 +138,15 @@ do about it. Not the internal refactor that made it possible.
 - **The Vault certificate fetch verifies TLS by default**; name an internal CA with
   `certificate_api_ca_file`.
 - **A request's `rules` can only make an operation harder to confirm.**
+- **Two restore entries on one machine need a staging folder each, whichever instances they
+  restore onto.** The check compared `target_server_id`; it now compares the machine
+  (`cmd_access.host`, else `ip`, of each target in the inventory). Two **active** script-driven
+  entries that share or nest a `target_backup_dir` on one host are refused when the file is
+  loaded - they were deleting each other's staged files on every run. Give each its own folder
+  before upgrading; `list-restores` names the pair.
+- **A backup job's `cleanup_retention` under a day now deletes.** It was handed to no script, so
+  each kept its own default of fourteen days. Read the value on every job that states less than
+  86400 before upgrading: it is about to be applied.
 
 ### Security
 - Estate data in a report (database, job, login names) can no longer close the page's `<script>`
@@ -155,6 +164,24 @@ do about it. Not the internal refactor that made it possible.
 
 ### Fixed
 
+- **A backup job's retention under a day was never applied.** The scripts take `RETENTION_DAYS`,
+  whole days; under a day they were handed nothing and kept fourteen. A lab host on an hourly cycle
+  with `cleanup_retention: 7200` held 77 GB after 31 hours. The window now reaches the script
+  exactly, as `RETENTION_SECONDS`, and each engine applies it its own way: SQL Server by file age
+  in minutes, never past the newest full; PostgreSQL by dropping whole chains on a nearer cutoff,
+  with `pg_archivecleanup` behind it; Oracle through RMAN - the policy stays a one-day recovery
+  window, the smallest RMAN states, and `DELETE BACKUP COMPLETED BEFORE
+  'SYSDATE-<RETENTION_SECONDS>/86400'` runs after each level 0 that succeeded, never reaching into
+  that run. `RETENTION_DAYS` is at least 1 for such a job, never absent.
+- **Three lab restores onto one machine deleted each other's staged backups.** See *Changed -
+  action required*: 21 PostgreSQL restores in 24 failed in `pg_combinebackup` on a soak, each for a
+  base backup another entry's copy had just removed.
+- **The retention report judged a backup's age on the wrong clock.** `finished_at` carries no
+  zone and the cutoff was the node's wall clock: a node at +08 read a backup one minute old on a
+  UTC host as eight hours old. Every listing now asks the machine that stamped the files what time
+  it is there (`age_seconds`), and the cutoff is on that clock. `prune-backups` also lists a SQL
+  Server entry, through the instance with the job's own login, and says by name that it does not
+  delete a PostgreSQL backup - a directory in a chain, which it had planned and then failed on.
 - **On a Linux node the restore copy's space check measured nothing.** It walked the source share as
   a path, which a Linux node cannot do: it found no files, counted 0 bytes and said *fits* on every
   share-driven SQL Server restore the container worker ran. The check now asks the copy's own engine

@@ -60,6 +60,11 @@ def backup_request_from_job(
         env["DOCKER_CONTAINER"] = target.container_name
     if job.retention_days is not None:
         env["RETENTION_DAYS"] = str(job.retention_days)
+    # A window under a day, exactly. Beside the days, not instead of them: each script prunes the
+    # way its engine does, and RMAN's recovery window is whole days - Oracle reads the days (one,
+    # at least), SQL Server and PostgreSQL read these seconds. See BackupJob.retention_seconds.
+    if getattr(job, "retention_seconds", None) is not None:
+        env["RETENTION_SECONDS"] = str(job.retention_seconds)
     env.update(job.env)
     for name, ref in (job.env_secrets or {}).items():
         env[name] = _secret(str(ref), secrets, where=f"{job.label}.env_secrets.{name}")

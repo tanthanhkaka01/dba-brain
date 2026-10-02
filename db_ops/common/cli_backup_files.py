@@ -198,6 +198,18 @@ def _prune(request: dict) -> int:
             message=f"Nothing obsolete under a {plan['window']} {plan['mode']} rule.",
             data={**plan, "deleted": None}, metrics=metrics))
 
+    if str(request.get("db_type") or "").strip().lower() in {"postgresql", "postgres"}:
+        # Refused by name rather than attempted: every path here is a directory, and the delete
+        # below takes files only - it planned, then failed on each one, and had never removed a
+        # PostgreSQL backup. The engine's own way is the backup script's: whole chains, and
+        # pg_archivecleanup for the WAL archive.
+        return response.emit(response.fail(
+            operation,
+            "delete is not available for postgresql: a base backup is a directory in a chain, and "
+            "the backup script removes whole chains itself (RETENTION_DAYS, or RETENTION_SECONDS "
+            "under a day). Nothing was deleted; the plan is in data.",
+            data={**plan, "deleted": None}, metrics=metrics))
+
     from db_ops.common.deletefiles import delete_files
 
     try:
