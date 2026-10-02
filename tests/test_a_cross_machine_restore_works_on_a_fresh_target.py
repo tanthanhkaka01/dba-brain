@@ -248,6 +248,15 @@ def test_a_file_sql_server_calls_not_a_backup_is_skipped(monkeypatch):
     assert _list_with(monkeypatch, "The media family on device is incorrectly formed. (3241)") == []
 
 
+def test_an_empty_file_is_not_a_backup_either(monkeypatch):
+    """The staging marker a copy leaves in the folder is one. With it there, the SQL Server
+    restore of the soak's lab failed at the listing on its first run (2026-10-02):
+    *cannot read /opt/db_ops/backup/.../.dbops-staging ... is empty. (3254)*."""
+    error = ("The volume on device '/in/.dbops-staging' is empty. (3254) (SQLExecDirectW); "
+             "RESTORE HEADERONLY is terminating abnormally. (3013)")
+    assert _list_with(monkeypatch, error) == []
+
+
 @pytest.mark.parametrize("error", [
     "Cannot open backup device. Operating system error 5(Access is denied.). (3201)",
     "Cannot find server certificate with thumbprint '0xB384'. (33111)",

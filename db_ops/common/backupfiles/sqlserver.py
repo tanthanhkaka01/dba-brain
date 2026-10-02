@@ -23,7 +23,11 @@ _KIND = {"1": FULL, "5": DIFF, "2": LOG, "D": FULL, "I": DIFF, "L": LOG}
 
 #: SQL Server's own numbers for "this file is not a backup": the media family is incorrectly formed
 #: (3241), or not Microsoft Tape Format (3242, 3243). Measured on a certificate file, 2026-09-24.
-_NOT_A_BACKUP = frozenset({"3241", "3242", "3243"})
+#: And *the volume on device is empty* (3254): a file with nothing in it. The marker a restore's
+#: copy leaves in its staging folder (`.dbops-staging`, 0.26.0) is one, and with it in the folder
+#: every script-driven SQL Server restore stopped at the listing - *cannot read
+#: .../.dbops-staging* - before restoring anything (the lab, 2026-10-02, before the soak's clock).
+_NOT_A_BACKUP = frozenset({"3241", "3242", "3243", "3254"})
 _NUMBERED = re.compile(r"\((\d{3,5})\)")
 #: What this tool's SQL Server jobs name their pieces; anything else in the folder is not ours.
 _BACKUP_SUFFIXES = (".bak", ".trn")

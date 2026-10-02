@@ -182,6 +182,11 @@ do about it. Not the internal refactor that made it possible.
   it is there (`age_seconds`), and the cutoff is on that clock. `prune-backups` also lists a SQL
   Server entry, through the instance with the job's own login, and says by name that it does not
   delete a PostgreSQL backup - a directory in a chain, which it had planned and then failed on.
+- **A script-driven SQL Server restore stopped at the staging marker.** The copy leaves an empty
+  `.dbops-staging` file in the staging folder (new in this version), the restore lists that folder
+  through the instance, and `RESTORE HEADERONLY` on an empty file answers 3254 - *the volume on
+  device is empty* - which was not one of the "not a backup" numbers: *cannot read
+  .../.dbops-staging*, before anything was restored. An empty file is not a backup.
 - **On a Linux node the restore copy's space check measured nothing.** It walked the source share as
   a path, which a Linux node cannot do: it found no files, counted 0 bytes and said *fits* on every
   share-driven SQL Server restore the container worker ran. The check now asks the copy's own engine
