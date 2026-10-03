@@ -82,7 +82,8 @@ only `lib`, and nothing below it may import it.
 
 | Module | Holds |
 | --- | --- |
-| `lib/common_cli.py` | `CommandSpec` - the executable, the arguments, the stdin bytes, the deadline, whether stderr streams; `build_command()`; `read_answer()` and `CommonCliError` - the envelope read back. Pure |
+| `transport/common_cli.pyi` | **generated** (`lib.request_types.render_transport_stub`): one overload per command, so `run("restore-full", ...)` is typed `RestoreStepAnswer` and a key read from it that the answer does not carry is a mypy error - the class of the 0.22.0 rename that left every script-driven restore RESTORING. Changes no behaviour; `tests/test_answers_are_read_by_the_keys_they_carry.py` runs mypy over the package and fails on that error alone |
+| `lib/common_cli.py` | `CommandSpec` - the executable, the arguments, the stdin bytes, the deadline, whether stderr streams; `build_command()`; `read_answer()` and `CommonCliError` - the envelope read back. Pure. `read_answer` returns `(success, data, error)` as before, unpacked as three, with the answer's `error_kind` on `.kind`; `CommonCliError.kind` carries it into the app (`internal` when the command gave no answer at all) |
 | `transport/process.py` | `execute(spec)` -> `ProcessResult(returncode, stdout, stderr, error)`. The one `subprocess.run`. A process that could not start or ran past its deadline comes back with `error` set, never as an exception the caller has to know the type of |
 | `transport/common_cli.py` | `run()`, `run_allowing_failure()`, `spawn()` - the same names and behaviour the `lib` module had, so a caller changed one import line |
 | `lib/telegram_route.py` | `telegram_route()`, `telegram_groups()`, `chat_id_for_level()`, `clear_cache()` - routing read from the configuration in-process, cached for a minute. No process: nothing in it is `transport`'s any more |

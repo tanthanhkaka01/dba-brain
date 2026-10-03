@@ -762,8 +762,8 @@ common cli metadata ...".) The app now resolves the two logins and calls, in ord
 
 | Step | Command |
 | --- | --- |
-| which files | `backup-chain` - PostgreSQL's newest chain from the directory names, RMAN's own answer for Oracle (`RESTORE DATABASE PREVIEW` plus the catalog), everything for SQL Server. **A point in time copies everything**: both narrowings take the NEWEST chain, and a moment before the newest full needs an older one |
-| the copy | `copy-backup-dir` - one `tar` stream through the orchestrator, file by file where tar cannot be used, and the answer says which (`copy_mode`, below). It skips a file the target already has at the same size and no older, and removes a staged file the source no longer has. It refuses a source it cannot list completely, and says which way: the folder does not exist (no backup yet), a folder vanished while listed, or the SSH user cannot read one. **Before the first file moves it checks the room** (0.26.0): `space_check` in the request - a restore entry's own, `{enabled, factor, on_unknown}`, on at x2 when absent - holds the files still to copy to `free on the target >= bytes x factor` (`df` at the staging folder), and a shortfall or an unreadable target fails the command with *No file was copied*. The answer carries what was measured (`space_check`); the restore script that follows checks nothing itself |
+| which files | `backup-chain` - PostgreSQL's newest chain from the directory names, RMAN's own answer for Oracle (`RESTORE DATABASE PREVIEW` plus the catalog), and - since 2026-10-03 - SQL Server's chain from `<database>/FULL|DIFF|LOG/` and the time in each name, with `_cert/` (a database with no FULL, or another layout, whole). **A point in time copies everything**: every narrowing takes the NEWEST chain, and a moment before the newest full needs an older one |
+| the copy | `copy-backup-dir` - `include` (the chain) and, for `copy_selection: window`, `window_hours`: every other file the source wrote in that many hours travels too, so a window is never less than the chain. One `tar` stream through the orchestrator, file by file where tar cannot be used, and the answer says which (`copy_mode`, below). It skips a file the target already has at the same size and no older, and removes a staged file the source no longer has - **and, since 2026-10-03, the directories the source no longer has**, deepest first and only once empty: removing only the files left the husk of a pruned PostgreSQL set, dated by the removal, and the listing took it for the newest full (*pg_combinebackup: could not open file .../global/pg_control*, most hours of the 0.26 node). `list-backup-files` also skips a PostgreSQL backup directory holding no file. **Every piece keeps its source time, by either way** - tar always did; the file-by-file fallback dated each piece by the copy until 2026-10-03, so with several chains staged (a point in time copies them all) the chain copied last read as the newest. A latest restore moves the newest chain plus `wal/`, a point in time everything not already staged - `tests/test_a_staging_folder_holding_several_chains_restores_the_right_one.py` names the files. It refuses a source it cannot list completely, and says which way: the folder does not exist (no backup yet), a folder vanished while listed, or the SSH user cannot read one. **Before the first file moves it checks the room** (0.26.0): `space_check` in the request - a restore entry's own, `{enabled, factor, on_unknown}`, on at x2 when absent - holds the files still to copy to `free on the target >= bytes x factor` (`df` at the staging folder), and a shortfall or an unreadable target fails the command with *No file was copied*. The answer carries what was measured (`space_check`); the restore script that follows checks nothing itself |
 | the listing | `list-backup-files` (unchanged) |
 | instance metadata | `sqlserver-replay-instance` (unchanged), before the databases and after them |
 | the restore | `restore-full` / `restore-diff` / `restore-log`. Since 0.26.0 a SQL Server full with `replace` starts its batch with a guard: a database ONLINE on the target raises before anything runs unless the request says `overwrite_existing: true` (G2.10) |
@@ -842,6 +842,7 @@ into this module's error type.
 
 | Module | Responsibility | Key public API |
 | --- | --- | --- |
+| `cli.py` and what it was split into (2026-10-03, Q11) | `cli.py` is the entry point: `main` (every failure answered in the envelope, with its kind), `_dispatch` (every command name, in one place - two guards read it there), and the commands that read or write configuration (the registrars, `secret-set`, `rotate-password`, `check-secret`, `check-identifiers`, `check-secret-literals`, `metric-severity`, `list-targets`, `inventory-summary`, `self-status`, and `lift-example` beside `secret-set`). What reads nothing but its request moved out: `cli_usage.py` (the help text), `cli_request.py` (the request reader), `cli_sql.py` (`run-sql`, `trace-session`, `db-status`), `cli_host.py` (`run-cmd`, the four file transfers, `probe-host`), and `cli_gate.py` (the gated operations, `authorize`, `ask`). Those five are named config-free in `tests/test_common_layers.py`; `cli.py` re-exports every name they hold. `main` names the command it answers (`cli_request.COMMAND`), and the reader holds every request to that command's reference entry before the command sees it - a wrong value or a missing required field is measured today and refused with `error_kind` `request` once `request_check.REFUSING` is on (rules R49, `lib/request_check.py`). | `main`, `_dispatch`, `_read_json_request` |
 | `shell.py` | Resolve the PowerShell executable at runtime so the same code runs on Windows and inside the Linux container. Prefers cross-platform `pwsh`, then `powershell.exe`. | `powershell_executable()`, `is_powershell_executable(name)`; env override `DB_OPS_POWERSHELL` |
 | `secret_text.py` | Encrypt/decrypt the secret file at rest. PBKDF2-HMAC-SHA256 → 32-byte key, sealed with Fernet (AES-128-CBC + HMAC), random per-file salt. The passphrase is supplied at runtime; never stored. | `encrypt_secret_text`, `decrypt_secret_text`, `resolve_key`, `resolve_cli_key`, `decode_key_base64`, `set_key_env`; env `DB_OPS_SECRET_KEY` |
 | `sql_execution.py` | SQL Server connection helpers: driver selection (ODBC 18/17/…), TLS-error fallback, the pymssql cursor adapter, output converters for types pyodbc cannot decode (`datetimeoffset`), batch splitting, JSON-safe row coercion, and credential/secret loading. It executes nothing since 0.25.0: its batch reader, `execute_cursor_batches`, was the metrics' second reader beside `sql_run.execute_capture` and is gone (rules R11). | `connect_sqlserver`, `build_sqlserver_conn_str`, `choose_sqlserver_driver`, `sqlserver_driver_candidates`, `register_output_converters`, `decode_timestampoffset`, `split_sql_batches`, `make_json_safe`, `resolve_password`, `load_credentials_file`, `load_secret_text`; `MAX_RESULT_ROWS`, `SQL_SS_TIMESTAMPOFFSET` |
@@ -1655,6 +1656,28 @@ Three refusals, and they are the reason this is a command rather than a document
 A request with no `method` is answered honestly rather than as a success: `cmd_access_written`
 is false and `next` says nothing reaches the host yet.
 
+### A second database login on a server - `instance-add` with `keep_default`
+
+A server often carries more than one database login - a monitor account beside the DBA's, an
+application user beside `sys` - and only one is its default (`default_credential_name`, the login a
+target runs as when nothing names another). Until 0.26.0 `instance-add` wrote exactly one login,
+**as the default**: a second one meant registering the server again, which moved the default, and
+a third call to move it back. Ten such logins on this estate were copied between nodes by hand.
+
+```bash
+python -m db_ops.common.cli instance-add @dba_login.json --key-base64 ...
+# {"server_id": "ACME-192-0-2-50", "db_type": "sqlserver", "ip": "192.0.2.50",
+#  "username": "dba", "password": "...", "credential_name": "MSSQL_ACME_192_0_2_50_DBA",
+#  "role": "dba", "keep_default": true}
+```
+
+It writes `users.json` and the secret, and leaves `db_instances.json` as it is. It refuses, before
+writing anything: a `server_id` that is not registered; a `db_type` or `ip` other than the
+record's (the login would be filed under another machine); no `credential_name` (the derived one
+*is* the default's name) or the default's own; any inventory field (it would be ignored); and a
+login of that name already there, unless `replace`. A run then names it:
+`run-sql` with `"target"` and `"credential_name"`.
+
 ### Which login a target runs as (credentials)
 
 `data_sources.find_database_credential()` is the **only** answer to "which login does this
@@ -1855,7 +1878,7 @@ The **last run** is in `job_runs`, which `common` may not open (R04) - so it is 
 (`last_runs`, `{code: {status, started_at}}`, R09). Until 0.24.0 `db.cli self-status` was a second
 door to this report that added the column itself; one command per job (rules R43, the operator's
 choice) made it `common`'s alone, and `/spbot_self_status` states the column: the bot finishes the
-request from its node's store (`telegram.command_processor.with_last_runs`, through
+request from its node's store (`telegram.command_cli.with_last_runs`, through
 `ops_status.latest_runs`, one query for every code) before it runs `common.cli self-status`. The
 column is the only part allowed to fail: a store the bot cannot read arrives as `store_error` and
 prints `(last run unknown: <why>)`; a request that states nothing prints *not stated* - never
@@ -2093,6 +2116,9 @@ stops covering something, and the next reader cannot tell a decision from an ann
   system databases, and **vendor defaults**. `MSSQLSERVER` is how Windows registers a default
   instance and `FREEPDB1` is Oracle Free's default PDB; they read as estate names, are identical in
   every install, and scrubbing them would break the code that depends on the vendor's spelling.
+  One name is there by the owner's ruling rather than by that rule: `db_ops_store`, the container
+  of the toolkit's own runtime store, which names the tool and is used as the worked example of a
+  database in a container. Its host and its credential are still searched for.
 
 The RFC 5737 exclusion is worth its own line: without it the scan **flags its own output**. The
 first scrub script did exactly that, and a checker that reports success as failure is one the next
@@ -2452,7 +2478,28 @@ visible to any scanner - the output was clean by every check there is. So the re
 | `<style>` | never - a stylesheet is generated by this tool and holds nothing of anyone's |
 | `<script>` | **string literals only**, and not one followed by `:` - a property name is code. A template literal's `${…}` holes are code too |
 | `.json` data | the same rule, keys included: they are read by the page as `server.file` |
-| everything else | fully |
+| text between tags | fully |
+| a tag's name, an attribute's name | never |
+| `href`, `src`, `title`, `alt`, `value`, `label`, `placeholder`, `aria-label`, `download`, `data-*` | fully - a link to a page named after a server, a tooltip carrying a reading |
+| every other attribute value (`class`, `id`, `style`, `charset`, `content` ...) | only a term carrying an address and a term named by hand: `id="inst-<server_id>"` is the estate's, `class="area"` is not |
+
+Until 0.26.0 the markup was rewritten whole. An estate with tables called `meta` and `Area` shipped
+`<TerritoryHistory charset="utf-8">` and `class="ShipmentHeader"` - pages with no charset and no
+viewport, read as cp1252 by any server that does not send one, and unstyled health cards - and the
+showcase already published carried the same tag. Certified clean, because a tag is no identifier.
+
+The class names a page builds inside its own script strings are out of the markup rule's reach, so
+**a name the pages' own stylesheet selects is not mapped at all**: a word a `<style>` selector uses
+is the product's by construction. It is listed under `left_as_ordinary_words`.
+
+**Nor is a plain word the code that writes the pages prints** (`page_code_words`: the string
+constants of `reports`, `sla`, `webhost` and `lib/page_style.py`, docstrings left out, and their
+templates). Tables called `Item`, `Machine` and `Integration` had turned "78 item(s)" into "78
+BillingArchive(s)" and "which machine the fix belongs on" into "which SalesLine ..." across the
+page; the operator's call (2026-10-03) was that the page's own prose comes first. So a customer
+table called `Machine` is shown as `Machine`, while `ShiftRoster` - a name built from several words
+- is still replaced, and a term in `extra_terms` is always replaced. Read off the package at run
+time, so it follows the pages as they change rather than one estate's collisions.
 
 Finding the literals needs a scanner rather than a regex, and it is in `_js_string_spans`. Four
 things break a naive one, and every one was met on a real page: escapes; comments (an apostrophe in
@@ -2567,7 +2614,7 @@ Three questions that had no answer a program could ask for:
 | `due-check` | would this `time_window` run now, and if not why not | nothing — it evaluates the request |
 | `check-objects` | does this node's own `data/*.json` obey the reference | that file, and every file it names |
 | `check-references` | which pointer between two config files lands nowhere | `data/config_references.json`, and every file it names |
-| `upgrade-config` | after `pip install --upgrade`: every config migration this version carries, in order - the shipped reference files (replaced when they say something else, compared as documents, so a copy `init` wrote with another layout is current), the field renames, a restore's machine ids, a Telegram record's switch, the inventory into the reports - then `check-objects` and `check-references`; a plan unless `dry_run: false`, each written file copied to `runtime/config_upgrade/<stamp>/` first | the reference this version ships, and every file it names |
+| `upgrade-config` | after `pip install --upgrade`: every config migration this version carries, in order - the shipped reference files (replaced when they say something else, compared as documents, so a copy `init` wrote with another layout is current), the field renames, a restore's machine ids, a Telegram record's switch, the inventory into the reports, a command line that moved to another CLI, and the console apps this version lists and the node's `webhost_config.json` does not (added, never changed - 2026-10-03, after a node filled by bundle was found without the `transport` app) - then `check-objects` and `check-references`; a plan unless `dry_run: false`, each written file copied to `runtime/config_upgrade/<stamp>/` first | the reference this version ships, and every file it names |
 | `standardize-field-names` | moves `data/*.json` to the standard field names (stage C of one name per concept); a plan unless `dry_run: false` | the reference's `used_in`, and every file it names with its `.example.json` |
 
 `due-check` calls `db_ops.lib.time_window.explain_due` — **the same function the schedulers call** —

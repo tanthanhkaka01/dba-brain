@@ -13,6 +13,7 @@ Run from the db_ops project root:
 """
 from __future__ import annotations
 
+from db_ops.lib import errors
 import argparse
 import json
 import shlex
@@ -95,7 +96,7 @@ def bastion_ip() -> str:
             return str(n["ip"])
     # No hard-coded environment fallback: the bastion IP must come from sre_config.json
     # so the same code runs against any lab inventory. Fail loudly if it is missing.
-    raise RuntimeError(
+    raise errors.NotConfigured(
         "No bastion host found in sre_config.json sre.inventory.groups.shared "
         "(expected an entry with role='bastion' or name='bastion-01')."
     )

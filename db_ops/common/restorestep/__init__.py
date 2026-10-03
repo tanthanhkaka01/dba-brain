@@ -24,6 +24,7 @@ Each response says which of those happened, so a caller can never mistake one fo
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 from typing import Any
 # Re-exported: the vocabulary itself lives in db_ops/lib/backup_kinds.py, once.
 from db_ops.lib.backup_kinds import DIFF, FULL, LOG  # noqa: F401
@@ -31,7 +32,7 @@ from db_ops.lib.backup_kinds import DIFF, FULL, LOG  # noqa: F401
 LEVELS = (FULL, DIFF, LOG)
 
 
-class RestoreStepError(ValueError):
+class RestoreStepError(errors.RequestError):
     """The step cannot be run as asked."""
 
 

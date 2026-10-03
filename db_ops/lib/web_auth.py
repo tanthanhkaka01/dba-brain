@@ -26,6 +26,7 @@ which is the difference between a session table and a table of passwords.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import base64
 import hashlib
 import hmac
@@ -58,7 +59,7 @@ MIN_LEVEL = 1
 MAX_LEVEL = 100
 
 
-class WebAuthError(ValueError):
+class WebAuthError(errors.RequestError):
     """A credential or level cannot be honoured as given."""
 
 
@@ -77,6 +78,31 @@ def coerce_level(value: object, *, field: str = "level") -> int:
         raise WebAuthError(
             f"{field} must be from {MIN_LEVEL} to {MAX_LEVEL}; got {level}.")
     return level
+
+
+def roles(*, view: int, edit: int, run: int, admin: int) -> list[tuple[str, int]]:
+    """The console's roles, named the way Grafana names them, on the one level scale.
+
+    A role is a name for the lowest level that unlocks something - not a second permission system:
+    the console still gates by level (`min_level_*` in `webhost_config.json`), and the Telegram bot
+    reads the same 1-100 scale. Naming them is what lets a person choose "Editor" instead of
+    remembering that editing starts at 50 (the operator, 2026-10-02: *add users, set permissions*).
+    """
+    return [("Viewer", int(view)), ("Editor", max(int(edit), int(run))), ("Admin", int(admin)),
+            ("Owner", MAX_LEVEL)]
+
+
+def role_name(level: object, table: list[tuple[str, int]]) -> str:
+    """The highest role ``level`` reaches in ``table``, or "No access" below the first."""
+    name = "No access"
+    try:
+        value = int(level)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return name
+    for role, at in table:
+        if value >= int(at):
+            name = role
+    return name
 
 
 def normalize_username(value: object) -> str:

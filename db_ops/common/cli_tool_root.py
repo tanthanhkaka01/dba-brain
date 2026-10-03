@@ -19,6 +19,7 @@ types first, so a first run prints what it always printed. An option is a JSON k
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import json
 import os
 import sys
@@ -111,7 +112,7 @@ _OLD_FLAGS = {"--force": "force", "--app-name": "app_name", "--write": "write", 
               "--source": "source", "--dest": "dest"}
 
 
-class ToolRootError(RuntimeError):
+class ToolRootError(errors.OperationFailed):
     """A tool-root command refused: the reason is the operator's to act on."""
 
 

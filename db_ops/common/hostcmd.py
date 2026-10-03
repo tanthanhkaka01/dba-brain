@@ -22,6 +22,7 @@ which is what lets the worker use the same command against its own filesystem.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import base64
 import shlex
 from dataclasses import dataclass
@@ -48,7 +49,7 @@ WINRM = "winrm"
 ACCESSES = (SSH, WINRM)
 
 
-class HostCommandError(RuntimeError):
+class HostCommandError(errors.OperationFailed):
     """The command could not be run at all — not the same as running and failing."""
 
 

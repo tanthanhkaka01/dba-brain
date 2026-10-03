@@ -17,6 +17,7 @@ upper-cased), so building the same name again refreshes its entry in place.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import json
 import os
 from pathlib import Path
@@ -30,8 +31,10 @@ REGISTRY_ROOT_KEY = "docker_db_connections"
 CREATED_BY = "db_ops.sre.create-db-docker"
 
 
-class DockerDbRequestError(RuntimeError):
+class DockerDbRequestError(errors.DbOpsError, RuntimeError):
     """The request for ``common.cli`` could not be assembled from what the operator gave."""
+
+    kind = errors.KIND_REQUEST
 
 
 # --------------------------------------------------------------------------- #

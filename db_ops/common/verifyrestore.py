@@ -12,13 +12,14 @@ finishes an upgrade step — so a real statement is run against it.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import shlex
 from typing import Any
 
 from db_ops.common.hostcmd import parse_host, run
 
 
-class VerifyError(ValueError):
+class VerifyError(errors.RequestError):
     """The verification could not be performed. A database that *failed* is a result, not this."""
 
 

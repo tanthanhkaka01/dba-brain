@@ -17,6 +17,7 @@ The requests it builds carry passwords, so they go to ``common.cli`` on stdin, w
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import json
 from pathlib import Path
 from typing import Any, Mapping
@@ -51,7 +52,7 @@ _PROFILE_KEYS = ("major_version", "os", "os_text", "platform", "os_major", "os_m
 _RUNTIME_KEYS = ("container", "container_name", "pod", "namespace", "pod_container", "container_shell")
 
 
-class RequestFillError(RuntimeError):
+class RequestFillError(errors.NotConfigured):
     """This node's configuration cannot complete the request: an unknown server_id, no login."""
 
 

@@ -220,12 +220,16 @@ def test_the_registrar_and_the_runner_read_the_same_tuple():
     """The wiring, not the behaviour. Two literals spelling the same pair is how they drifted the
     first time: the runner has always refused postgresql and the registrar has always accepted it.
     """
+    import importlib
     import inspect
 
+    from conftest import SQL_RUNNER_MODULES
     from db_ops.lib.sql_access import SQL_TASK_DB_TYPES
-    from db_ops.sql_tasks import runner
 
     assert SQL_TASK_DB_TYPES == ("sqlserver", "oracle", "postgresql")
-    source = inspect.getsource(runner)
+    # The runner is five modules since 2026-10-03 (Q11); the check reads all of them, so a literal
+    # pair cannot come back in whichever one a later edit touches.
+    source = "".join(inspect.getsource(importlib.import_module(f"db_ops.sql_tasks.{name}"))
+                     for name in SQL_RUNNER_MODULES)
     assert "sql_access.SQL_TASK_DB_TYPES" in source
     assert '{"sqlserver", "oracle"}' not in source

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from db_ops.lib import errors
 import argparse
 import dataclasses
 import datetime as dt
@@ -49,7 +50,7 @@ from db_ops.logging_ops import LOG_SCOPE_ENV_VAR, log_event, log_function_call, 
 from db_ops.logging_ops.runtime_stdout import patch_stdout
 
 
-class RestoreWorkflowError(RuntimeError):
+class RestoreWorkflowError(errors.OperationFailed):
     def __init__(self, message: str, *, metadata: dict[str, object]) -> None:
         super().__init__(message)
         self.metadata = metadata
@@ -263,6 +264,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "restore-by-id", parents=[config_parent],
         help="Restore one configured entry through the db_ops.common primitives (JSON request).")
     by_id.add_argument("request", help="JSON object: {\"restore_id\": ..., \"point_in_time\": ..., \"dry_run\": ...}")
+
+    bundle = subparsers.add_parser(
+        "export-instance-bundle", parents=[config_parent],
+        help="Export one backup entry's instance metadata bundle (logins, jobs ...) on THIS node - "
+             "read-only on the source - so a restore here can replay it. Runs whether or not the "
+             "entry is active on this node; its server_metadata must be on.")
+    bundle.add_argument("--backup-id", required=True)
 
     # `verify-restore` was here until 0.24.0 - its own CHECKDB through run-sqlcmd, the job
     # `common.cli verify-restore` does on every engine (rules R43, the operator's choice). The
@@ -486,6 +494,46 @@ def _default_log_scope(command: str) -> str:
     return "backup_restore"
 
 
+def _export_instance_bundle(config_path: str, backup_id: str) -> int:
+    """The bundle a restore on this node replays, exported here (1.88).
+
+    It is written by the node that runs the source's backup, beside that backup - so a node that
+    restores a source whose backup another node runs (the soak node; the worker runs the 100.250
+    backups) never has one, and the restore replays no login. Two scripts did this by hand (1.78,
+    1.88); this is that call, for any backup entry, active here or not. Read-only on the source.
+    """
+    import json as _json
+
+    from db_ops.backup_restore.server_metadata import export_for_backup, instance_bundle_dir
+    from db_ops.lib import response as _response
+
+    jobs = [job for job in load_backup_jobs(config_path) if job.backup_id == backup_id]
+    if not jobs:
+        result = _response.fail("export-instance-bundle", f"no backup entry {backup_id!r}.",
+                                kind="request")
+    elif not jobs[0].server_metadata.enabled:
+        result = _response.fail(
+            "export-instance-bundle",
+            f"{backup_id} has server_metadata off - there is no bundle to export for it.",
+            kind="not_configured")
+    else:
+        job = jobs[0]
+        bundle_dir = instance_bundle_dir(job.server_id)
+        exported = export_for_backup(job.server_metadata, server_id=job.server_id,
+                                     bundle_dir=bundle_dir)
+        ok = bool((exported or {}).get("ok", False))
+        result = (_response.ok("export-instance-bundle",
+                               message=f"{job.server_id}: bundle exported to {bundle_dir}.",
+                               data={"bundle_dir": str(bundle_dir), "export": exported})
+                  if ok else
+                  _response.fail("export-instance-bundle",
+                                 f"{job.server_id}: export failed - "
+                                 f"{(exported or {}).get('error') or 'see data.export'}",
+                                 data={"bundle_dir": str(bundle_dir), "export": exported}))
+    sys.stdout.write(_json.dumps(result, ensure_ascii=False, default=str) + chr(10))
+    return _response.exit_code(result)
+
+
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     set_key_env(getattr(args, "key", None), getattr(args, "key_base64", None))
@@ -553,7 +601,11 @@ def main(argv: list[str]) -> int:
                 result = _response.ok("restore-by-id",
                                       message=f"{data['restore_id']} restored ({data['db_type']}).",
                                       data=data)
-                _rbid_event("END", f"Restore {_rbid_id} finished: done.")
+                _rbid_warnings = [str(w) for w in (data.get("warnings") or [])]
+                _rbid_event("END", f"Restore {_rbid_id} finished: done."
+                            + (f" With a warning - {'; '.join(_rbid_warnings)}" if _rbid_warnings else ""),
+                            {"warnings": _rbid_warnings} if _rbid_warnings else None,
+                            level="warning" if _rbid_warnings else "logging")
             except Exception as exc:  # noqa: BLE001 - reported as JSON, like the common commands.
                 result = _response.fail("restore-by-id", str(exc))
                 _rbid_event("ERROR", f"Restore {_rbid_id} FAILED.", level="error",
@@ -563,6 +615,8 @@ def main(argv: list[str]) -> int:
 
         if args.command in {"backup-add", "restore-add"}:
             return _registration_command(args)
+        if args.command == "export-instance-bundle":
+            return _export_instance_bundle(resolved_config_path, str(args.backup_id))
         if args.command == "list-backups":
             sys.stdout.write(_format_backup_list(load_backup_jobs(resolved_config_path)) + "\n")
             return 0
@@ -1193,9 +1247,9 @@ def run_restore_workflow(
                     }
                 )
                 if result.returncode != 0:
-                    raise RuntimeError(f"copy-backup failed for source_id={step_config.source_id} returncode={result.returncode}")
+                    raise errors.OperationFailed(f"copy-backup failed for source_id={step_config.source_id} returncode={result.returncode}")
                 if result.files_considered == 0:
-                    raise RuntimeError(
+                    raise errors.OperationFailed(
                         "copy-backup selected no files "
                         f"for source_id={step_config.source_id} restore_id={step_config.restore_id or 'unknown'} "
                         f"window_start_utc={copy_window_start.isoformat() if copy_window_start is not None else 'now-minus-hours'} "
@@ -1237,7 +1291,7 @@ def run_restore_workflow(
             # **And this deliberately stops before the retention cleanup.** A restore drill is what
             # proves the backups are restorable; pruning them in the same run that failed to restore
             # one is exactly backwards. Do not "fix" the early return.
-            raise RuntimeError(f"{_restore_failure_text(restore_outputs, failed_databases)} "
+            raise errors.OperationFailed(f"{_restore_failure_text(restore_outputs, failed_databases)} "
                                "Retention cleanup was not run.")
 
         # **The last question, and the only one that matters to whoever asked for the restore:
@@ -1305,7 +1359,7 @@ def run_restore_workflow(
             if unusable:
                 # Same reason the failed-restore count raises: the retention cleanup must not prune
                 # the backups when the drill that proves them restorable has just failed.
-                raise RuntimeError(
+                raise errors.OperationFailed(
                     f"restore finished but {len(unusable)} database(s) cannot be opened: "
                     f"{', '.join(sorted(unusable))}. Retention cleanup was not run.")
 
@@ -1338,7 +1392,7 @@ def run_restore_workflow(
                     }
                 )
                 if result.returncode != 0:
-                    raise RuntimeError(f"delete-backup failed for source_id={step_config.source_id} returncode={result.returncode}")
+                    raise errors.OperationFailed(f"delete-backup failed for source_id={step_config.source_id} returncode={result.returncode}")
         _deleted = sum(int(item.get("deleted") or 0) for item in delete_outputs)
         _considered = sum(int(item.get("files_considered") or 0) for item in delete_outputs)
         _skipped = sum(int(item.get("skipped") or 0) for item in delete_outputs)

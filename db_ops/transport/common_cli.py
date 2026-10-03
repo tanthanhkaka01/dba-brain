@@ -43,7 +43,7 @@ def run_allowing_failure(command: str, request: dict[str, Any], *,
     result, error = spawn(command, request, timeout_seconds=timeout_seconds,
                           stream_stderr=stream_stderr)
     if result is None:
-        raise CommonCliError(error)
+        raise CommonCliError(error, kind="internal")
     return read_answer(command, returncode=result.returncode, stdout=result.stdout,
                        stderr=result.stderr)
 

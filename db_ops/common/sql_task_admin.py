@@ -25,6 +25,7 @@ somebody is watching.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import json
 import re
 from pathlib import Path
@@ -65,7 +66,7 @@ __all__ = [
 ]
 
 
-class SqlTaskAdminError(ValueError):
+class SqlTaskAdminError(errors.RequestError):
     """Anything refused here. Carries the reason a person can act on, never a traceback."""
 
 

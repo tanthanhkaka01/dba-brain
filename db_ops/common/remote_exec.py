@@ -47,6 +47,7 @@ with ``lib.data_sources.ssh_login`` / ``request_fill``.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import base64
 import os
 import shlex
@@ -124,7 +125,7 @@ DEFAULT_SESSION_TIMEOUT_SECONDS = 30
 # --------------------------------------------------------------------------- #
 # Errors
 # --------------------------------------------------------------------------- #
-class RemoteExecError(RuntimeError):
+class RemoteExecError(errors.OperationFailed):
     """A remote session or command failed.
 
     Carries the transport context (``method``/``host``) plus whatever output was read
@@ -156,13 +157,19 @@ class RemoteExecError(RuntimeError):
 class RemoteAuthError(RemoteExecError):
     """Credentials were rejected by the remote host."""
 
+    kind = errors.KIND_UNREACHABLE
+
 
 class RemoteConnectError(RemoteExecError):
     """The host could not be reached (port closed, no route, service down)."""
 
+    kind = errors.KIND_UNREACHABLE
+
 
 class RemoteTimeoutError(RemoteExecError):
     """Connect or command exceeded the configured timeout."""
+
+    kind = errors.KIND_UNREACHABLE
 
 
 class RemoteCommandTimeoutError(RemoteTimeoutError):
@@ -173,6 +180,8 @@ class RemoteCommandTimeoutError(RemoteTimeoutError):
     It carries what the command had printed (``stdout`` / ``stderr``). A :class:`RemoteTimeoutError`,
     so every handler written for that one still catches it.
     """
+
+    kind = errors.KIND_FAILED
 
 
 # --------------------------------------------------------------------------- #

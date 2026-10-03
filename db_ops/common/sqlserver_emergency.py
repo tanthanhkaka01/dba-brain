@@ -22,6 +22,7 @@ shape that a config file, a Telegram action and a shell caller all pass through 
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import re
 from contextlib import contextmanager
 from pathlib import Path
@@ -38,7 +39,7 @@ __all__ = ["EmergencyError", "kill_spid", "shrink_log", "start_job"]
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_ .$#-]{0,127}$")
 
 
-class EmergencyError(RuntimeError):
+class EmergencyError(errors.OperationFailed):
     """A user-facing failure: unknown target, missing object, refused confirmation."""
 
 

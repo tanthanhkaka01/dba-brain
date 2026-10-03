@@ -14,6 +14,8 @@ from pathlib import Path
 from db_ops.telegram import command_processor
 from db_ops.telegram.command_processor import load_support_commands, warn_low_level
 
+from conftest import patch_telegram
+
 
 def test_the_warning_names_the_fix():
     assert "set command_type to 100" in warn_low_level("spbot_add_sql", "add_sql_task", 10)
@@ -23,7 +25,7 @@ def test_the_warning_names_the_fix():
 
 
 def test_a_node_file_left_at_10_is_used_as_written_and_warned_about_once(tmp_path, capsys, monkeypatch):
-    monkeypatch.setattr(command_processor, "_WARNED_LEVELS", set())
+    patch_telegram(monkeypatch, "_WARNED_LEVELS", set())
     path = tmp_path / "telegram_support_commands.json"
     path.write_text(json.dumps({"telegram_support_commands": [
         {"command_id": 12, "command_text": "spbot_add_sql", "command_type": 10, "action_type": "add_sql_task"},

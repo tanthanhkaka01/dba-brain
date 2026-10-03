@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+from db_ops.lib import errors
 from db_ops.lib.text_format import format_log_value  # noqa: F401 - one definition, see that module
 
 import argparse
@@ -1441,7 +1443,7 @@ def resolve_working_dir(value: str, *, data_dir: Path) -> Path:
 
 def build_forwarded_key_args(args: argparse.Namespace) -> ForwardedKeyArgs:
     if getattr(args, "key", None) and getattr(args, "key_base64", None):
-        raise RuntimeError("Use only one of --key or --key-base64.")
+        raise errors.InvalidRequest("Use only one of --key or --key-base64.")
     if getattr(args, "key_base64", None):
         return ForwardedKeyArgs("--key-base64", str(args.key_base64))
     if getattr(args, "key", None):
@@ -1645,7 +1647,7 @@ def validate_app_command_log_scope(item: dict[str, Any]) -> str:
         return validate_log_scope(str(item.get("log_scope") or ""))
     except RuntimeError as exc:
         app_command_id = str(item.get("app_command_id", "<missing>"))
-        raise RuntimeError(f"app_commands.json app_command_id={app_command_id} missing required log_scope.") from exc
+        raise errors.InvalidConfig(f"app_commands.json app_command_id={app_command_id} missing required log_scope.") from exc
 
 
 def app_command_metadata(app_command: AppCommand, **extra: Any) -> dict[str, Any]:

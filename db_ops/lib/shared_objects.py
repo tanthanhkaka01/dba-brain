@@ -21,6 +21,7 @@ reference that cannot drift is worth having; one that can is a lie with a schema
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +32,7 @@ from db_ops.lib.stated_facts import FALLBACK_KIND, fallbacks
 #: The file, by the name it has in every one of its three homes.
 FILENAME = "shared_config_objects.json"
 
-class SharedObjectError(ValueError):
+class SharedObjectError(errors.ConfigError):
     """The reference is missing, unreadable, or does not name the object asked for."""
 
 

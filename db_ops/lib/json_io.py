@@ -21,6 +21,7 @@ not carry it. One reader and one writer, in the module named for the file format
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import json
 import os
 import stat
@@ -67,7 +68,7 @@ def read_json_request(source: str) -> dict[str, Any]:
 
 
 
-def read_json_request_answered(source: str) -> tuple[dict[str, Any] | None, int]:
+def read_json_request_answered(source: str, *, operation: str = "") -> tuple[dict[str, Any] | None, int]:
     """:func:`read_json_request`, with the answer a command gives to a request it cannot read.
 
     A missing ``@file`` is the caller's typo: stderr, exit 2. A payload that is not a JSON object
@@ -81,7 +82,12 @@ def read_json_request_answered(source: str) -> tuple[dict[str, Any] | None, int]
         print(str(exc), file=sys.stderr)
         return None, 2
     except ValueError as exc:
-        print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
+        # The envelope every other answer is (rules R15), with the kind that says whose mistake
+        # it is. It printed `{"ok": false, "error": ...}` - a shape of its own, no `success` key,
+        # read by a caller as "no answer" rather than as "your request is not an object".
+        from db_ops.lib import errors, response
+
+        response.emit(response.fail(operation, str(exc), kind=errors.KIND_REQUEST))
         return None, 1
 
 def looks_like_json_request(argument: str) -> bool:
@@ -103,7 +109,7 @@ def load_json_file(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8-sig") as file:
         data = json.load(file)
     if not isinstance(data, dict):
-        raise RuntimeError(f"JSON root must be an object: {path}")
+        raise errors.InvalidConfig(f"JSON root must be an object: {path}")
     return data
 
 

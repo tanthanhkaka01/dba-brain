@@ -22,6 +22,7 @@ a stable source file, and stop the daemon for the final cutover run. See ``docs/
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import io
 import sqlite3
 import time
@@ -75,7 +76,7 @@ _SQLITE_UTC_NOW = "strftime('%Y-%m-%dT%H:%M:%SZ', 'now')"
 _POSTGRES_UTC_NOW = """to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')"""
 
 
-class MigrationError(RuntimeError):
+class MigrationError(errors.OperationFailed):
     """The migration cannot proceed or produced a result that does not verify."""
 
 

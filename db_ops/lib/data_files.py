@@ -40,6 +40,7 @@ merges at all, so the two can be checked against each other rather than drifting
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -75,7 +76,7 @@ _PUSHED = frozenset(KNOWN_TRANSFERS - {TRANSFER_LOCAL})
 _PULLED = frozenset({TRANSFER_MERGE, TRANSFER_FIELD_MERGE, TRANSFER_SECRET_MERGE, TRANSFER_PULL})
 
 
-class DataFileError(ValueError):
+class DataFileError(errors.ConfigError):
     """The manifest cannot be read, or does not describe a transfer that can be honoured."""
 
 

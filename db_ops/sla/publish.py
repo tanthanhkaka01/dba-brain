@@ -11,7 +11,7 @@ import html
 from datetime import datetime, timezone
 from pathlib import Path
 
-from db_ops.lib import page_banner
+from db_ops.lib import engine_sections, page_banner, page_style
 from db_ops.sla.models import SlaPolicyResult, SlaValidationSummary, state_key
 from db_ops.lib.timezone import file_stamp, format_display
 
@@ -188,14 +188,21 @@ def render_html(summary: SlaValidationSummary, *, recent_runs: list[dict],
                 previous_state: dict[str, str] | None = None, history_limit: int = 0,
                 report_dir: Path | None = None) -> str:
     generated_at = format_display()
-    # Sections per server, not one fleet-wide list: see _server_sections.
-    rows = _server_sections(summary)
+    # Three levels, the way an SLO dashboard is read: the estate, each engine, each instance. The
+    # page used to have one level only - a list of SLI codes per question ("AVAILABILITY_SUCCESS_
+    # RATIO: STALE" sixteen times, no instance named) - and then every check of every server.
+    instances = _instances(summary)
     history = "\n".join(_html_history_row(run) for run in recent_runs) or (
         '<tr><td colspan="6" class="muted">No stored runs.</td></tr>'
     )
     banner_emoji, banner_class = STATUS_DISPLAY.get(summary.status, ("", "nodata"))
+    checks = len(summary.results)
+    serving_bad = sum(1 for result in summary.results if result.current_status == "BAD")
+    quality_bad = sum(1 for result in summary.results
+                      if result.data_quality_status in UNMEASURABLE_QUALITY)
     return _PAGE_TEMPLATE.format(
         banner_css=page_banner.CSS,
+        page_css=page_style.CSS,
         page_banner=page_banner.render(
             title="SLA / SLO compliance", snapshot_at=generated_at, here="sla.html",
             links=None if report_dir is None else page_banner.siblings_present(
@@ -204,23 +211,28 @@ def render_html(summary: SlaValidationSummary, *, recent_runs: list[dict],
                     path.name for path in report_dir.glob("index-usage_*.htm*")))),
         generated_at=html.escape(generated_at),
         status=html.escape(summary.status),
-        banner_class=banner_class,
+        banner_class=_PAGE_CLASS.get(banner_class, "idle"),
         banner_emoji=banner_emoji,
         window_end=html.escape(summary.window_end),
+        scope_line=html.escape(_scope_line(instances, checks, summary.passed_count)),
         passed=summary.passed_count,
         at_risk=summary.at_risk_count,
         failed=summary.failed_count,
-        no_data=summary.no_data_count,
-        serving_bad=sum(1 for result in summary.results if result.current_status == "BAD"),
+        serving_bad=serving_bad,
+        serving_bad_class=page_style.kpi_class(serving_bad, "alert"),
+        failed_class=page_style.kpi_class(summary.failed_count, "alert"),
+        at_risk_class=page_style.kpi_class(summary.at_risk_count, "warnum"),
+        quality_class=page_style.kpi_class(quality_bad, "warnum"),
         debt_objects=sum(result.affected_objects for result in summary.results
                          if result.policy_model == "finding_inventory"),
-        quality_bad=sum(1 for result in summary.results
-                        if result.data_quality_status in UNMEASURABLE_QUALITY),
+        quality_bad=quality_bad,
         headline_note=html.escape(_headline_note()),
         delta_note=html.escape(_delta_note(summary, previous_state)),
         history_note=html.escape(_history_note(recent_runs, history_limit)),
-        domain_sections=_domain_sections(summary),
-        rows=rows,
+        engine_cards=_engine_cards(instances),
+        matrix=_instance_matrix(instances, _area_columns(summary)),
+        attention=_attention_table(instances),
+        rows=_server_sections(summary, instances=instances),
         history=history,
     )
 
@@ -367,9 +379,29 @@ def _index_card(*, href: str, emoji: str, title: str, note: str, disabled: bool)
     return f'<a class="{cls}" href="{html.escape(href)}">{inner}</a>'
 
 
+#: Worst first. A check nobody could measure sorts above one merely at risk: "we cannot see it" is
+#: the reading an operator can least afford to scroll past.
+_STATUS_ORDER = {"FAILED": 0, "NO_DATA": 1, "STALE": 1, "INSUFFICIENT_DATA": 1, "NOT_CONFIGURED": 1,
+                 "AT_RISK": 2, "PASSED": 3}
+
+#: STATUS_DISPLAY's class, in this page's palette (the inventory page's): ok / warn / crit / idle.
+_PAGE_CLASS = {"ok": "ok", "warn": "warn", "bad": "crit", "nodata": "idle"}
+
+
+def _status_rank(status: str) -> int:
+    return _STATUS_ORDER.get(str(status or ""), 9)
+
+
+def _status_class(status: str) -> str:
+    return _PAGE_CLASS.get(STATUS_DISPLAY.get(status, ("", "nodata"))[1], "idle")
+
+
 def _worst_first(results) -> list[SlaPolicyResult]:
-    order = {"FAILED": 0, "NO_DATA": 1, "STALE": 1, "INSUFFICIENT_DATA": 1, "AT_RISK": 2, "PASSED": 3}
-    return sorted(results, key=lambda result: (order.get(result.status, 9), result.policy_id))
+    return sorted(results, key=lambda result: (_status_rank(result.status), result.policy_id))
+
+
+def _worst_status(results) -> str:
+    return min((result.status for result in results), key=_status_rank, default="NO_DATA")
 
 
 def _server_of(result) -> str:
@@ -386,36 +418,276 @@ def _server_of(result) -> str:
     return target.split("/", 1)[0]
 
 
-def _server_sections(summary) -> str:
-    """One section per server, worst server first, plus a fleet-wide section for untargeted rows."""
+def _engine_of(result) -> str:
+    """The engine section a result belongs to - the middle segment of ``target_id``.
+
+    ``""`` for a fleet-wide result (``*``): it names no machine, so it belongs to no engine either.
+    """
+    target = str(getattr(result, "target_id", "") or "").strip()
+    if not target or target == "*":
+        return ""
+    parts = target.split("/")
+    return engine_sections.section_of(parts[1] if len(parts) > 1 else "")
+
+
+#: The engine key and label of the results that name no machine. Last on every list.
+_FLEET_KEY, _FLEET_LABEL = "", "Fleet-wide (no single target)"
+
+
+def _instances(summary) -> list[dict]:
+    """One entry per instance (``server_id``): its engine, its results, its verdict and counts.
+
+    Ordered the way every section of the page reads them: by engine, then worst instance first,
+    then by name - so the SQL Server instance that is failing is the first SQL Server row in the
+    matrix, the first SQL Server card line and the first SQL Server detail block.
+    """
     by_server: dict[str, list] = {}
     for result in summary.results:
         by_server.setdefault(_server_of(result), []).append(result)
+    instances = []
+    for server, results in by_server.items():
+        engine = next((key for key in (_engine_of(result) for result in results) if key), "")
+        if server and not engine:
+            engine = "other"
+        instances.append({
+            "server": server,
+            "engine": engine,
+            "results": results,
+            "status": _worst_status(results),
+            "failed": sum(1 for r in results if r.status == "FAILED"),
+            "at_risk": sum(1 for r in results if r.status == "AT_RISK"),
+            "passed": sum(1 for r in results if r.status == "PASSED"),
+            "no_data": sum(1 for r in results if _status_rank(r.status) == 1),
+            "bad_now": sum(1 for r in results if getattr(r, "current_status", "") == "BAD"),
+        })
 
-    def rank(item) -> tuple:
-        server, results = item
-        failed = sum(1 for r in results if r.status == "FAILED")
-        at_risk = sum(1 for r in results if r.status == "AT_RISK")
+    def rank(entry) -> tuple:
         # Fleet-wide rows last: they belong to no machine, so they answer no per-server question.
-        return (0 if server else 1, -failed, -at_risk, server)
+        engine_rank = engine_sections.section_rank(entry["engine"]) if entry["server"] else 99
+        return (engine_rank, -entry["failed"], -entry["no_data"], -entry["at_risk"], entry["server"])
 
-    output: list[str] = []
-    for server, results in sorted(by_server.items(), key=rank):
-        failed = sum(1 for r in results if r.status == "FAILED")
-        at_risk = sum(1 for r in results if r.status == "AT_RISK")
-        passed = sum(1 for r in results if r.status == "PASSED")
-        title = html.escape(server) if server else "Fleet-wide (no single target)"
-        css = "fail" if failed else ("warn" if at_risk else "ok")
-        counts = (f'<span class="badge {css}">{failed} failed</span> '
-                  f"{at_risk} at risk &middot; {passed} passed &middot; {len(results)} checks")
-        rows = "\n".join(_html_policy_row(result) for result in _worst_first(results))
-        output.append(
-            f"<h3>{title}</h3><p class=\"muted\">{counts}</p>"
-            '<div class="scroll"><table><thead><tr>'
-            "<th>Status</th><th>Policy</th><th>Instance</th><th>Category</th><th>Now</th><th>SLI (actual)</th>"
-            "<th>SLO (objective)</th><th>Budget left</th><th>Good/Total</th><th>Coverage / quality</th>"
-            f"</tr></thead><tbody>{rows}</tbody></table></div>"
+    return sorted(instances, key=rank)
+
+
+def _engines(instances: list[dict]) -> list[tuple[str, str, list[dict]]]:
+    """``(key, label, instances)`` per engine present, in page order, fleet-wide last."""
+    groups: list[tuple[str, str, list[dict]]] = []
+    for key, label in engine_sections.present_sections(
+            entry["engine"] for entry in instances if entry["server"]):
+        groups.append((key, label, [entry for entry in instances
+                                    if entry["server"] and entry["engine"] == key]))
+    fleet = [entry for entry in instances if not entry["server"]]
+    if fleet:
+        groups.append((_FLEET_KEY, _FLEET_LABEL, fleet))
+    return groups
+
+
+def _anchor(server: str) -> str:
+    """The id of an instance's detail block, so a matrix row and a card line can link to it."""
+    slug = "".join(ch if ch.isalnum() else "-" for ch in (server or "fleet").lower()).strip("-")
+    return f"inst-{slug or 'fleet'}"
+
+
+def _instance_link(entry: dict) -> str:
+    name = html.escape(entry["server"]) if entry["server"] else _FLEET_LABEL
+    return f'<a href="#{_anchor(entry["server"])}">{name}</a>'
+
+
+def _badge(status: str, text: str | None = None) -> str:
+    emoji = STATUS_DISPLAY.get(status, ("", "nodata"))[0]
+    label = html.escape(text if text is not None else status)
+    return f'<span class="badge b-{_status_class(status)}">{emoji} {label}</span>'
+
+
+def _scope_line(instances: list[dict], checks: int, passed: int) -> str:
+    machines = sum(1 for entry in instances if entry["server"])
+    engines = len({entry["engine"] for entry in instances if entry["server"]})
+    return (f"{machines} instance{'s' if machines != 1 else ''} on {engines} "
+            f"engine{'s' if engines != 1 else ''} · {passed} of {checks} checks passed")
+
+
+def _engine_cards(instances: list[dict]) -> str:
+    """One card per engine: its verdict, how much of it passes, and the instances to look at."""
+    cards = []
+    for _key, label, members in _engines(instances):
+        results = [result for entry in members for result in entry["results"]]
+        status = _worst_status(results)
+        passed = sum(entry["passed"] for entry in members)
+        share = round(100.0 * passed / len(results)) if results else 0
+        counts = (f'<span class="c crit">{sum(e["failed"] for e in members)} failed</span>'
+                  f'<span class="c idle">{sum(e["no_data"] for e in members)} cannot measure</span>'
+                  f'<span class="c warn">{sum(e["at_risk"] for e in members)} at risk</span>'
+                  f'<span class="c ok">{passed} passed</span>')
+        attention = [entry for entry in members if entry["status"] != "PASSED"]
+        if attention:
+            names = ", ".join(_instance_link(entry) for entry in attention[:8])
+            more = f" and {len(attention) - 8} more" if len(attention) > 8 else ""
+            look = f'<div class="look"><b>Look at:</b> {names}{more}</div>'
+        else:
+            look = '<div class="look ok-text">Every instance passes every check.</div>'
+        bad_now = sum(entry["bad_now"] for entry in members)
+        now = (f'<span class="now crit">{bad_now} bad right now</span>' if bad_now
+               else '<span class="now ok">nothing bad right now</span>')
+        machines = len(members) if members and members[0]["server"] else 0
+        cards.append(
+            f'<div class="ecard {_status_class(status)}">'
+            f'<div class="ehead"><span class="ename">{html.escape(label)}</span>{_badge(status)}</div>'
+            f'<div class="ebig"><span class="pct">{share}%</span>'
+            f'<span class="of">of {len(results)} checks passed'
+            + (f" · {machines} instance{'s' if machines != 1 else ''}" if machines else "")
+            + f"</span></div>"
+            f'<div class="counts">{counts}</div>{now}{look}</div>'
         )
+    return "".join(cards) or '<p class="muted">No policy results.</p>'
+
+
+#: The SLI areas the matrix has a column for, in reading order. A result's ``domain`` (or its
+#: ``category`` when it has none) picks the column; the same groups the page's old per-question
+#: headings used, so a check does not move area because the layout changed.
+_AREAS: tuple[tuple[str, str, frozenset[str]], ...] = (
+    ("availability", "Availability", frozenset({"availability"})),
+    ("recovery", "Backup &amp; recovery", frozenset({"backup", "recoverability", "data_protection"})),
+    ("replication", "Replication / HA", frozenset({"replication", "ha"})),
+    ("performance", "Performance", frozenset({"performance"})),
+    ("capacity", "Capacity", frozenset({"capacity"})),
+    ("integrity", "Integrity &amp; operations", frozenset({"integrity", "operational_health", "jobs"})),
+    ("monitoring", "Monitoring", frozenset({"monitoring"})),
+)
+
+
+def _area_of(result) -> str:
+    domain = str(getattr(result, "domain", "") or getattr(result, "category", "") or "").lower()
+    return next((key for key, _label, domains in _AREAS if domain in domains), "other")
+
+
+def _area_columns(summary) -> list[tuple[str, str]]:
+    """The areas at least one result falls in. A column of dashes says nothing."""
+    present = {_area_of(result) for result in summary.results}
+    columns = [(key, label) for key, label, _domains in _AREAS if key in present]
+    if "other" in present:
+        columns.append(("other", "Other"))
+    return columns
+
+
+def _reading(result) -> str:
+    """The shortest honest reading of one result, for a matrix cell."""
+    if result.policy_model == "finding_inventory":
+        return f"{result.affected_objects} obj"
+    if result.policy_model == "current_state":
+        return "ok" if result.actual_value else "not ok"
+    if _status_rank(result.status) == 1:
+        return "no data"
+    value = result.actual_value if result.actual_value is not None else result.actual_percent
+    return _number_with_unit(value, result.unit)
+
+
+def _cell_title(result) -> str:
+    objective = (result.objective_value if result.objective_value is not None
+                 else result.objective_percent)
+    return html.escape(
+        f"{result.policy_id}: {result.status} · measured {_reading(result)} · objective "
+        f"{result.comparison_operator} {objective} · now {getattr(result, 'current_status', '') or '-'}"
+        f" · data {result.data_quality_status}", quote=True)
+
+
+def _instance_matrix(instances: list[dict], columns: list[tuple[str, str]]) -> str:
+    """Every instance against every SLI area, grouped by engine; the worst result fills a cell."""
+    if not instances:
+        return '<p class="muted">No policy results.</p>'
+    head = ("<thead><tr><th>Instance</th><th>Verdict</th>"
+            + "".join(f'<th class="center">{label}</th>' for _key, label in columns)
+            + '<th class="center">Bad now</th></tr></thead>')
+    body = []
+    span = len(columns) + 3
+    for _key, label, members in _engines(instances):
+        body.append(f'<tr class="grp"><th colspan="{span}">{html.escape(label)}'
+                    f'<span class="gcount">{len(members)}</span></th></tr>')
+        for entry in members:
+            cells = []
+            for area, _label in columns:
+                results = _worst_first(r for r in entry["results"] if _area_of(r) == area)
+                if not results:
+                    cells.append('<td class="center na">—</td>')
+                    continue
+                worst = results[0]
+                extra = f'<span class="more">+{len(results) - 1}</span>' if len(results) > 1 else ""
+                cells.append(f'<td class="center"><span class="cell b-{_status_class(worst.status)}" '
+                             f'title="{_cell_title(worst)}">{_reading(worst)}</span>{extra}</td>')
+            now = (f'<span class="now crit">{entry["bad_now"]}</span>' if entry["bad_now"]
+                   else '<span class="muted">0</span>')
+            body.append(f'<tr><td class="srv">{_instance_link(entry)}</td>'
+                        f"<td>{_badge(entry['status'])}</td>{''.join(cells)}"
+                        f'<td class="center">{now}</td></tr>')
+    return f'<div class="tbl-scroll"><table class="matrix">{head}<tbody>{"".join(body)}</tbody></table></div>'
+
+
+def _attention_table(instances: list[dict]) -> str:
+    """Every check that did not pass, worst first, each naming its engine and its instance."""
+    rows = []
+    for entry in instances:
+        for result in entry["results"]:
+            if result.status == "PASSED":
+                continue
+            rows.append((entry, result))
+    if not rows:
+        return '<p class="good-line">✅ Nothing - every check passed.</p>'
+    rows.sort(key=lambda pair: (_status_rank(pair[1].status),
+                                0 if getattr(pair[1], "current_status", "") == "BAD" else 1,
+                                engine_sections.section_rank(pair[0]["engine"]),
+                                pair[0]["server"], pair[1].policy_id))
+    body = []
+    for entry, result in rows:
+        engine = (engine_sections.section_label(entry["engine"]) if entry["server"]
+                  else "Fleet-wide")
+        objective = (result.objective_value if result.objective_value is not None
+                     else result.objective_percent)
+        reason = str(getattr(result, "reason", "") or "")
+        body.append(
+            "<tr>"
+            f"<td>{_badge(result.status)}</td>"
+            f"<td>{html.escape(engine)}</td>"
+            f'<td class="srv">{_instance_link(entry)}</td>'
+            f"<td>{html.escape(result.policy_id)}</td>"
+            f"<td>{_now_cell(result)}</td>"
+            f'<td class="num-cell">{_actual_cell(result)}</td>'
+            f'<td class="num-cell">{html.escape(result.comparison_operator)} {objective}</td>'
+            f"<td>{html.escape(result.data_quality_status)}</td>"
+            f'<td class="prose">{html.escape(reason)}</td>'
+            "</tr>"
+        )
+    return ('<div class="tbl-scroll"><table><thead><tr><th>Status</th><th>Engine</th><th>Instance</th>'
+            "<th>Check</th><th>Now</th><th>Measured</th><th>Objective</th><th>Data</th><th>Why</th>"
+            f'</tr></thead><tbody>{"".join(body)}</tbody></table></div>')
+
+
+def _server_sections(summary, *, instances: list[dict] | None = None) -> str:
+    """Every instance's checks, one block per server, grouped under its engine.
+
+    A block is open when something in it did not pass: the page opens on what needs reading and
+    keeps the 40 healthy instances one click away instead of 400 rows down.
+    """
+    instances = _instances(summary) if instances is None else instances
+    output: list[str] = []
+    for key, label, members in _engines(instances):
+        if key != _FLEET_KEY:
+            output.append(f'<h3 class="eng-head">{html.escape(label)}'
+                          f'<span class="gcount">{len(members)}</span></h3>')
+        for entry in members:
+            title = html.escape(entry["server"]) if entry["server"] else _FLEET_LABEL
+            counts = (f'{entry["failed"]} failed &middot; {entry["at_risk"]} at risk &middot; '
+                      f'{entry["passed"]} passed &middot; {len(entry["results"])} checks')
+            rows = "\n".join(_html_policy_row(result) for result in _worst_first(entry["results"]))
+            opened = " open" if entry["status"] != "PASSED" else ""
+            output.append(
+                f'<details class="inst" id="{_anchor(entry["server"])}"{opened}>'
+                f'<summary><span class="dot {_status_class(entry["status"])}"></span>'
+                f'<span class="iname">{title}</span>{_badge(entry["status"])}'
+                f'<span class="icount">{counts}</span></summary>'
+                '<div class="tbl-scroll"><table><thead><tr>'
+                "<th>Status</th><th>Check</th><th>Target</th><th>Area</th><th>Now</th><th>Measured</th>"
+                "<th>Objective</th><th>Budget left</th><th>Good / total</th><th>Coverage / data</th>"
+                f"</tr></thead><tbody>{rows}</tbody></table></div></details>"
+            )
     return "".join(output) or '<p class="muted">No policy results.</p>'
 
 
@@ -428,9 +700,9 @@ def _now_cell(result: SlaPolicyResult) -> str:
     paged by that number goes looking for a problem that no longer exists.
     """
     if result.current_status == "OK":
-        return '<span class="badge ok">OK now</span>'
+        return '<span class="badge b-ok">OK now</span>'
     if result.current_status == "BAD":
-        return '<span class="badge bad">bad now</span>'
+        return '<span class="badge b-crit">bad now</span>'
     return '<span class="muted">—</span>'
 
 
@@ -449,47 +721,45 @@ def _actual_cell(result: SlaPolicyResult) -> str:
             return f"{html.escape(verdict)} ({result.affected_objects} affected)"
         return html.escape(verdict)
     value = result.actual_value if result.actual_value is not None else result.actual_percent
-    return f"{value} {html.escape(result.unit)}"
+    return _number_with_unit(value, result.unit)
+
+
+def _number_with_unit(value, unit) -> str:
+    """``94.87 %`` rather than ``94.87327188940093 percentage``: two decimals say all there is."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return f"{html.escape(str(value))} {html.escape(str(unit or ''))}".strip()
+    text = f"{number:.2f}".rstrip("0").rstrip(".")
+    if str(unit or "").lower() in ("percentage", "percent", "%"):
+        return f"{text}%"
+    return f"{text} {html.escape(str(unit or ''))}".strip()
+
+
+def _target_cell(result) -> str:
+    """The target inside its instance's block: ``db_type/service``, the server being the heading."""
+    target = str(result.target_id or "")
+    if not target or target == "*":
+        return "(no data)"
+    return html.escape(target.split("/", 1)[1] if "/" in target else target)
 
 
 def _html_policy_row(result: SlaPolicyResult) -> str:
-    emoji, css = STATUS_DISPLAY.get(result.status, ("", "nodata"))
-    instance = result.target_id if result.target_id and result.target_id != "*" else "(no data)"
+    objective = result.objective_value if result.objective_value is not None else result.objective_percent
     return (
         "<tr>"
-        f'<td><span class="badge {css}">{emoji} {html.escape(result.status)}</span></td>'
+        f"<td>{_badge(result.status)}</td>"
         f"<td>{html.escape(result.policy_id)}</td>"
-        f"<td>{html.escape(instance)}</td>"
+        f'<td class="srv">{_target_cell(result)}</td>'
         f"<td>{html.escape(result.category or '')}</td>"
         f"<td>{_now_cell(result)}</td>"
-        f"<td>{_actual_cell(result)}</td>"
-        f"<td>{html.escape(result.comparison_operator)} {result.objective_value if result.objective_value is not None else result.objective_percent}</td>"
-        f"<td>{result.error_budget_remaining}</td>"
-        f"<td>{result.good_count}/{result.total_count}</td>"
+        f'<td class="num-cell">{_actual_cell(result)}</td>'
+        f'<td class="num-cell">{html.escape(result.comparison_operator)} {objective}</td>'
+        f'<td class="num-cell">{_number_with_unit(result.error_budget_remaining, "")}</td>'
+        f'<td class="num-cell">{result.good_count}/{result.total_count}</td>'
         f"<td>{result.coverage_percent}% / {html.escape(result.data_quality_status)}</td>"
         "</tr>"
     )
-
-
-def _domain_sections(summary: SlaValidationSummary) -> str:
-    sections = [
-        ("Can serve business now?", {"availability"}),
-        ("Can recover if failed?", {"backup", "recoverability", "data_protection"}),
-        ("Replication and HA readiness", {"replication", "ha"}),
-        ("Performance compliance", {"performance"}),
-        ("Capacity risk", {"capacity"}),
-        ("Integrity and operational health", {"integrity", "operational_health", "jobs"}),
-        ("Monitoring/data quality", {"monitoring"}),
-    ]
-    output = ["<h2>Executive summary</h2><p class=\"muted\">Required SLIs determine the overall result; optional findings remain visible.</p>"]
-    for title, domains in sections:
-        results = [item for item in summary.results if (item.domain or item.category).lower() in domains]
-        detail = ", ".join(f"{html.escape(item.sli_code or item.policy_id)}: {html.escape(item.status)}" for item in results)
-        output.append(f"<h2>{html.escape(title)}</h2><p class=\"muted\">{detail or 'No configured SLI in this section.'}</p>")
-    output.append("<h2>Error budget and burn rate</h2><p class=\"muted\">Detailed values are retained in JSON and Markdown output.</p>")
-    output.append("<h2>Violations and recommended actions</h2><p class=\"muted\">Investigate FAILED, STALE, INSUFFICIENT_DATA, and NO_DATA before asserting compliance.</p>")
-    output.append(f"<h2>Evidence and metric timestamps</h2><p class=\"muted\">Evaluation end: {html.escape(summary.window_end)}.</p>")
-    return "".join(output)
 
 
 def _html_history_row(run: dict) -> str:
@@ -497,14 +767,17 @@ def _html_history_row(run: dict) -> str:
         "<tr>"
         f"<td>#{run.get('sla_run_id', '')}</td>"
         f"<td>{html.escape(str(run.get('finished_at') or run.get('started_at') or ''))}</td>"
-        f"<td>{html.escape(str(run.get('status') or ''))}</td>"
-        f"<td>{run.get('passed_count', 0)}</td>"
-        f"<td>{run.get('at_risk_count', 0)}</td>"
-        f"<td>{run.get('failed_count', 0)}/{run.get('no_data_count', 0)}</td>"
+        f"<td>{_badge(str(run.get('status') or ''))}</td>"
+        f'<td class="num-cell">{run.get("passed_count", 0)}</td>'
+        f'<td class="num-cell">{run.get("at_risk_count", 0)}</td>'
+        f'<td class="num-cell">{run.get("failed_count", 0)}/{run.get("no_data_count", 0)}</td>'
         "</tr>"
     )
 
 
+#: The page. Light, and in the inventory page's palette and parts - masthead, KPI strip, section
+#: heads, bordered tables, badges - so the reports read as one product. It was the one dark page
+#: among them, with a layout of its own that the operator called the ugliest of the set.
 _PAGE_TEMPLATE = """<!doctype html>
 <html lang="en">
 <head>
@@ -512,71 +785,103 @@ _PAGE_TEMPLATE = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DB Ops · SLA / SLO compliance</title>
 <style>
-  :root {{ color-scheme: light dark; }}
-  body {{ font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; background: #0f1419; color: #e6e6e6; }}
-  .wrap {{ max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; }}
-  h1 {{ font-size: 1.4rem; margin: 0 0 4px; }}
-  .sub {{ color: #9aa4af; font-size: .85rem; margin-bottom: 20px; }}
-  .banner {{ display: inline-block; padding: 8px 16px; border-radius: 10px; font-weight: 600; margin-bottom: 20px; }}
-  .banner.ok {{ background: #123d2b; color: #7ee2a8; }}
-  .banner.warn {{ background: #3d3312; color: #f0d97a; }}
-  .banner.bad {{ background: #3d1620; color: #f28ba0; }}
-  .banner.nodata {{ background: #24303d; color: #9db4c7; }}
-  .cards {{ display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 24px; }}
-  .card {{ background: #182029; border: 1px solid #263340; border-radius: 10px; padding: 12px 18px; min-width: 90px; }}
-  .card .n {{ font-size: 1.6rem; font-weight: 700; }}
-  .card .l {{ color: #9aa4af; font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; }}
-  .scroll {{ overflow-x: auto; }}
-  table {{ border-collapse: collapse; width: 100%; font-size: .88rem; margin-bottom: 32px; }}
-  th, td {{ text-align: left; padding: 8px 10px; border-bottom: 1px solid #263340; white-space: nowrap; }}
-  th {{ color: #9aa4af; font-weight: 600; font-size: .78rem; text-transform: uppercase; letter-spacing: .03em; }}
-  .badge {{ padding: 2px 8px; border-radius: 6px; font-size: .8rem; font-weight: 600; }}
-  .badge.ok {{ background: #123d2b; color: #7ee2a8; }}
-  .badge.warn {{ background: #3d3312; color: #f0d97a; }}
-  .badge.bad {{ background: #3d1620; color: #f28ba0; }}
-  .badge.nodata {{ background: #24303d; color: #9db4c7; }}
-  .muted {{ color: #7c8894; font-size: .82rem; }}
-  h2 {{ font-size: 1rem; color: #cdd6df; margin: 8px 0 12px; }}
-  @media (prefers-color-scheme: light) {{
-    body {{ background: #f5f7fa; color: #1a2029; }}
-    .card {{ background: #fff; border-color: #dbe2ea; }}
-    th, td {{ border-color: #e3e9f0; }}
-    .sub, .card .l, .muted {{ color: #5a6672; }}
-  }}
+{page_css}
+  .engines {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:12px; }}
+  .ecard {{ background:var(--surface); border:1px solid var(--line); border-top:4px solid var(--faint); border-radius:10px; padding:13px 15px; }}
+  .ecard.ok {{ border-top-color:var(--ok); }} .ecard.warn {{ border-top-color:var(--warn); }}
+  .ecard.crit {{ border-top-color:var(--crit); }} .ecard.idle {{ border-top-color:var(--faint); }}
+  .ehead {{ display:flex; justify-content:space-between; align-items:center; gap:8px; }}
+  .ename {{ font-size:15px; font-weight:700; }}
+  .ebig {{ margin:8px 0 6px; }}
+  .ebig .pct {{ font-size:28px; font-weight:700; letter-spacing:-.02em; margin-right:6px; }}
+  .ebig .of {{ font-size:12px; color:var(--muted); }}
+  .counts {{ display:flex; flex-wrap:wrap; gap:4px 10px; font-size:12px; }}
+  .counts .c.crit {{ color:var(--crit); }} .counts .c.warn {{ color:var(--warn); }}
+  .counts .c.ok {{ color:var(--ok); }} .counts .c.idle {{ color:var(--muted); }}
+  .now {{ display:inline-block; margin-top:6px; font-size:12px; font-weight:600; }}
+  .now.crit {{ color:var(--crit); }} .now.ok {{ color:var(--ok); }}
+  .look {{ margin-top:6px; font-size:12px; color:#3a4757; }}
+  .look a {{ color:var(--link); text-decoration:none; font-family:var(--mono); font-size:11.5px; }}
+  .ok-text {{ color:var(--ok); }}
+  tbody td {{ white-space:nowrap; }}
+  tr.grp th {{ background:#eef2f7; text-align:left; font-size:12px; letter-spacing:.04em; text-transform:uppercase; color:var(--brand); padding:7px 11px; border-bottom:1px solid var(--line); }}
+  .gcount {{ display:inline-block; margin-left:8px; font-size:11px; font-weight:600; color:var(--muted); background:var(--surface); border:1px solid var(--line); border-radius:999px; padding:0 7px; text-transform:none; letter-spacing:0; }}
+  td.srv a {{ color:var(--ink); text-decoration:none; font-weight:600; }}
+  td.srv a:hover {{ color:var(--link); }}
+  td.na {{ color:var(--faint); }}
+  .cell {{ font-family:var(--mono); min-width:58px; text-align:center; cursor:default; }}
+  .more {{ font-size:10.5px; color:var(--muted); margin-left:4px; }}
+  .good-line {{ color:var(--ok); font-weight:600; }}
+  h3.eng-head {{ font-size:14px; letter-spacing:.04em; text-transform:uppercase; color:var(--brand); margin:20px 0 8px; }}
+  details.inst {{ background:var(--surface); border:1px solid var(--line); border-radius:10px; margin-bottom:8px; }}
+  details.inst > summary {{ cursor:pointer; list-style:none; display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:10px 14px; }}
+  details.inst > summary::-webkit-details-marker {{ display:none; }}
+  details.inst > summary::before {{ content:"\\25b8"; color:var(--faint); }}
+  details.inst[open] > summary::before {{ content:"\\25be"; }}
+  details.inst .iname {{ font-family:var(--mono); font-weight:650; }}
+  details.inst .icount {{ font-size:12px; color:var(--muted); margin-left:auto; }}
+  details.inst .tbl-scroll {{ border:none; border-top:1px solid var(--line); border-radius:0 0 10px 10px; margin:0; }}
+  @media print {{ details.inst {{ break-inside:avoid; }} }}
 {banner_css}
 </style>
 </head>
 <body>
-<div class="wrap">
+<header class="masthead">
+  <div class="wrap">
   {page_banner}
-  <div class="sub">Computed from collected metric_results · no database connections</div>
-  <div class="banner {banner_class}">{banner_emoji} Overall: {status} · window end {window_end}</div>
-  <div class="cards">
-    <div class="card"><div class="n">{serving_bad}</div><div class="l">Bad right now</div></div>
-    <div class="card"><div class="n">{failed}</div><div class="l">Window breach</div></div>
-    <div class="card"><div class="n">{debt_objects}</div><div class="l">Objects in backlog</div></div>
-    <div class="card"><div class="n">{quality_bad}</div><div class="l">Cannot measure</div></div>
-    <div class="card"><div class="n">{passed}</div><div class="l">Passed</div></div>
-    <div class="card"><div class="n">{at_risk}</div><div class="l">At risk</div></div>
+  <h1 class="title">SLA / SLO compliance</h1>
+  <p class="subtitle">Window end {window_end} · computed from collected metric results, no database connections</p>
+  <div class="verdict {banner_class}">{banner_emoji} Overall: {status} <span class="scope">{scope_line}</span></div>
+  <div class="kpi-strip">
+    <div class="kpi {serving_bad_class}"><div class="num">{serving_bad}</div><div class="lbl">Bad right now</div></div>
+    <div class="kpi {failed_class}"><div class="num">{failed}</div><div class="lbl">Window breach</div></div>
+    <div class="kpi {at_risk_class}"><div class="num">{at_risk}</div><div class="lbl">At risk</div></div>
+    <div class="kpi {quality_class}"><div class="num">{quality_bad}</div><div class="lbl">Cannot measure</div></div>
+    <div class="kpi"><div class="num">{debt_objects}</div><div class="lbl">Objects in backlog</div></div>
+    <div class="kpi good"><div class="num">{passed}</div><div class="lbl">Passed</div></div>
   </div>
-  <p class="muted">{headline_note}</p>
-  <p class="muted">{delta_note}</p>
-  {domain_sections}
-  <h2>Policies by server</h2>
-  <p class="muted">One section per server, worst first. A server contributes several targets
-  (<code>server_id/db_type/service</code>), so its checks are collected here rather than spread
-  through one fleet-wide list.</p>
+  </div>
+</header>
+<div class="wrap">
+  <div class="notes"><p>{headline_note}</p><p>{delta_note}</p></div>
+
+  <section>
+    <div class="sec-head"><h2>By database engine</h2>
+      <span class="hint">One card per engine: its verdict, how many of its checks pass, and which instances to look at.</span></div>
+    <div class="engines">{engine_cards}</div>
+  </section>
+
+  <section>
+    <div class="sec-head"><h2>Instance matrix</h2>
+      <span class="hint">Every instance against every SLI area, grouped by engine. A cell is the worst check in that area; hover it for the policy, the objective and the data quality. Click an instance for all its checks.</span></div>
+    {matrix}
+    <div class="legend"><span><span class="badge b-ok">passed</span></span><span><span class="badge b-warn">at risk</span></span>
+      <span><span class="badge b-crit">failed</span></span><span><span class="badge b-idle">no data</span> cannot measure</span><span>— the area has no check for this instance</span></div>
+  </section>
+
+  <section>
+    <div class="sec-head"><h2>Needs attention</h2>
+      <span class="hint">Every check that did not pass, worst first. <b>Now</b> is the newest collection; the status is the rolling window.</span></div>
+    {attention}
+  </section>
+
+  <section>
+    <div class="sec-head"><h2>Instance detail</h2>
+      <span class="hint">Grouped by engine. An instance with anything not passing is open; the rest are one click away. A server contributes several targets (<code>server_id/db_type/service</code>), so they are listed together.</span></div>
 {rows}
-  <h2>Recent runs</h2>
-  <p class="muted">{history_note}</p>
-  <div class="scroll">
-  <table>
-    <thead><tr><th>Run</th><th>Time</th><th>Status</th><th>Passed</th><th>At risk</th><th>Failed/No-data</th></tr></thead>
-    <tbody>
+  </section>
+
+  <section>
+    <div class="sec-head"><h2>Recent runs</h2><span class="hint">{history_note}</span></div>
+    <div class="tbl-scroll">
+    <table>
+      <thead><tr><th>Run</th><th>Time</th><th>Status</th><th class="num-cell">Passed</th><th class="num-cell">At risk</th><th class="num-cell">Failed / no data</th></tr></thead>
+      <tbody>
 {history}
-    </tbody>
-  </table>
-  </div>
+      </tbody>
+    </table>
+    </div>
+  </section>
 </div>
 </body>
 </html>

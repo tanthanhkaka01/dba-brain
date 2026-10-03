@@ -20,6 +20,7 @@ and the refusal would name the argument rather than the list it was checked agai
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 from dataclasses import dataclass
 from typing import Any
 
@@ -49,7 +50,7 @@ DEFAULT_BATCH_ROWS = 2000
 DEFAULT_FETCH_TIMEOUT_SECONDS = 900
 
 
-class PythonSourceError(RuntimeError):
+class PythonSourceError(errors.DbOpsError, RuntimeError):
     """The task's Python step produced no rows, so the task's SQL never ran.
 
     It says nothing about what the *program* did. A fetch has written nothing; a program that
@@ -57,6 +58,8 @@ class PythonSourceError(RuntimeError):
     failed, and db_ops cannot see that from here. The messages below are careful about the
     difference: a person reading that nothing reached the database stops looking.
     """
+
+    kind = errors.KIND_CONFIG
 
 
 @dataclass(frozen=True)

@@ -16,6 +16,7 @@ made and hashed again where it landed, and the two are compared.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import hashlib
 import os
 import shlex
@@ -29,7 +30,7 @@ ZIP = "zip"
 FORMATS = (TAR, ZIP)
 
 
-class FileTransferError(RuntimeError):
+class FileTransferError(errors.OperationFailed):
     """The pack or the move could not be completed."""
 
 

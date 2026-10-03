@@ -1,0 +1,201 @@
+<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'><title>Index Usage — ACME-192-0-2-242</title><style>
+:root{
+  --bg:#f5f6f8; --surface:#ffffff; --surface-2:#fafbfc;
+  --ink:#1b2430; --muted:#64748b; --faint:#94a3b8; --line:#e5e9ef;
+  --brand:#0f2540; --brand-2:#1d3b5e; --link:#1d4ed8;
+  --crit:#dc2626; --crit-bg:#fef2f2; --crit-line:#fecaca;
+  --warn:#c2700a; --warn-bg:#fff8ed; --warn-line:#fde3bf;
+  --ok:#15803d; --ok-bg:#f0fdf4; --ok-line:#bbf7d0;
+  --idle-bg:#f1f5f9;
+  --mono:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+}
+
+*{box-sizing:border-box}
+html{-webkit-print-color-adjust:exact; print-color-adjust:exact}
+body{margin:0; background:var(--bg); color:var(--ink); font-family:var(--sans); font-size:14px; line-height:1.5}
+a{color:var(--link)}
+.wrap{max-width:none; margin:0; padding:0 22px 64px}
+header.masthead{background:linear-gradient(135deg,var(--brand),var(--brand-2)); color:#fff; padding:26px 0 24px; margin-bottom:22px}
+header.masthead .wrap{padding-bottom:0}
+h1.title{font-size:26px; font-weight:700; margin:0 0 4px; letter-spacing:-.01em}
+.subtitle{color:#c7d6e8; font-size:13px; margin:0}
+.subtitle a{color:#c7d6e8}
+.verdict{display:inline-flex; gap:10px; align-items:baseline; flex-wrap:wrap; margin-top:16px; padding:8px 14px; border-radius:9px; font-weight:650; font-size:15px}
+.verdict .scope{font-weight:500; font-size:13px; opacity:.9}
+.verdict.ok{background:#14532d; color:#bbf7d0} .verdict.warn{background:#713f12; color:#fde68a}
+.verdict.crit{background:#7f1d1d; color:#fecaca} .verdict.idle{background:#334155; color:#e2e8f0}
+.kpi-strip{display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:12px; margin-top:18px}
+.kpi{background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.14); border-radius:10px; padding:11px 14px}
+.kpi .num{font-size:24px; font-weight:700; line-height:1}
+.kpi .lbl{font-size:11px; color:#a9c0db; margin-top:5px}
+.kpi.alert .num{color:#ffb4ad} .kpi.warnum .num{color:#ffd79b} .kpi.good .num{color:#9be8b5}
+.notes p{margin:4px 0; font-size:12.5px; color:var(--muted)}
+section{margin-top:30px}
+.sec-head{display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin-bottom:12px; padding-bottom:8px; border-bottom:2px solid var(--line)}
+.sec-head h2{font-size:18px; font-weight:700; margin:0}
+.sec-head .hint{font-size:12.5px; color:var(--muted)}
+h3.part{font-size:15px; font-weight:700; margin:26px 0 10px; padding-bottom:6px; border-bottom:2px solid var(--line)}
+.callout{margin:16px 0; padding:12px 16px; border-left:5px solid var(--warn); background:var(--warn-bg); border-radius:6px; color:#7c2d12; font-weight:600}
+.tbl-scroll{overflow-x:auto; max-width:100%; border:1px solid var(--line); border-radius:10px; background:var(--surface); margin:8px 0 14px}
+table{border-collapse:collapse; width:100%; font-size:12.5px}
+thead th{background:var(--surface-2); text-align:left; font-weight:650; color:#475569; padding:8px 11px; border-bottom:1px solid var(--line); white-space:nowrap; font-size:11.5px}
+tbody td{padding:8px 11px; border-bottom:1px solid var(--line); vertical-align:middle}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover td{background:var(--surface-2)}
+td.srv{font-family:var(--mono); font-size:11.5px}
+td.prose{white-space:normal; min-width:220px; color:#3a4757}
+.num-cell{font-family:var(--mono); text-align:right}
+.center{text-align:center}
+.badge,.cell{display:inline-block; font-size:11px; font-weight:600; padding:2px 8px; border-radius:6px; white-space:nowrap; border:1px solid transparent}
+.b-ok{background:var(--ok-bg); color:var(--ok); border-color:var(--ok-line)}
+.b-warn{background:var(--warn-bg); color:var(--warn); border-color:var(--warn-line)}
+.b-crit{background:var(--crit-bg); color:var(--crit); border-color:var(--crit-line)}
+.b-idle{background:var(--idle-bg); color:var(--muted); border-color:var(--line)}
+.dot{display:inline-block; width:9px; height:9px; border-radius:50%; background:var(--faint)}
+.dot.ok{background:var(--ok)} .dot.warn{background:var(--warn)} .dot.crit{background:var(--crit)}
+.legend{display:flex; flex-wrap:wrap; gap:14px; margin-top:8px; font-size:12px; color:var(--muted)}
+.muted{color:var(--muted); font-size:12px}
+.meta{display:flex; flex-wrap:wrap; gap:6px 18px; font-size:12.5px; color:var(--muted); margin:4px 0 8px}
+.meta b{color:var(--ink); font-weight:600}
+.picker{display:grid; grid-template-columns:max-content 1fr; gap:8px 12px; align-items:start;
+  margin:0 0 18px; padding:12px 14px; background:var(--surface); border:1px solid var(--line); border-radius:10px}
+.picker-title{grid-column:1/-1; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); font-weight:700}
+.picker-label{font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--brand); font-weight:700; padding-top:4px; white-space:nowrap}
+.picker-label b{font-weight:600; color:var(--muted); border:1px solid var(--line); border-radius:999px; padding:0 6px; letter-spacing:0}
+.picker-row{display:flex; flex-wrap:wrap; gap:6px}
+.chip{border:1px solid var(--line); border-radius:999px; padding:4px 12px; font-size:12px; color:var(--muted); text-decoration:none; background:var(--surface)}
+a.chip:hover{border-color:var(--link); color:var(--link)}
+.chip.on{background:var(--brand); border-color:var(--brand); color:#fff; font-weight:600}
+.chip .dot{width:6px; height:6px; margin-right:6px; vertical-align:middle}
+@media (max-width:760px){.kpi-strip{grid-template-columns:repeat(3,1fr)}}
+.banner{font-size:17px;font-weight:700;line-height:1.35;margin:18px 0 6px;padding:13px 16px;border-left:6px solid var(--warn);background:var(--warn-bg);color:#7c2d12;border-radius:6px}.content > p{margin:6px 0;font-size:13px;color:#3a4757}.content thead th,.content tbody td{padding:7px 8px}.content thead th:first-child,.content tbody td:first-child{width:34%}.content tbody td:first-child{overflow-wrap:anywhere;min-width:200px}
+.dbo-banner{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 14px;
+  margin:0 0 18px;padding:14px 16px;border-radius:6px;
+  background:#0f2540;color:#e8eef7;font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+.dbo-banner .dbo-product{font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+  color:#7fa6d9;font-weight:700}
+.dbo-banner .dbo-title{font-size:17px;font-weight:700;color:#fff}
+.dbo-banner .dbo-scope{font-size:13px;color:#b9cbe4;font-family:ui-monospace,SFMono-Regular,
+  "Cascadia Mono",Consolas,monospace}
+.dbo-banner .dbo-stamp{font-size:12px;color:#8fb0d8;margin-left:auto;white-space:nowrap}
+.dbo-banner .dbo-links{flex-basis:100%;display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+.dbo-banner .dbo-links a{font-size:12px;color:#cfe0f5;text-decoration:none;
+  border:1px solid #2c4a70;border-radius:999px;padding:3px 11px;cursor:pointer}
+.dbo-banner .dbo-links a:hover{border-color:#7fa6d9;color:#fff}
+.dbo-banner .dbo-links a.dbo-here{background:#e8eef7;color:#0f2540;font-weight:600;
+  border-color:#e8eef7}
+@media print{.dbo-banner{background:#fff;color:#000;border:1px solid #000}
+  .dbo-banner .dbo-title,.dbo-banner .dbo-product,.dbo-banner .dbo-scope,
+  .dbo-banner .dbo-stamp{color:#000}.dbo-banner .dbo-links{display:none}}
+</style></head><body><header class="masthead"><div class="wrap"><div class="dbo-banner"><span class="dbo-product">DBA Brain</span><span class="dbo-title">Index Usage</span><span class="dbo-scope">ACME-192-0-2-242</span><span class="dbo-stamp">snapshot 2026-10-03 01:02:03 +08</span><span class="dbo-links"><a href="20261003T1234Z_database-inventory.html">Fleet inventory</a><a href="20261003T1234Z_server-metrics.html">Server metrics</a><a href="20261003T1212Z_sla.html">SLA</a><a class="dbo-here" aria-current="page">Index usage</a></span></div><h1 class="title">ACME-192-0-2-242</h1><p class="subtitle">SQL Server · index usage</p><div class="kpi-strip"><div class="kpi "><div class="num">59</div><div class="lbl">indexes total</div></div><div class="kpi "><div class="num">10</div><div class="lbl">used</div></div><div class="kpi "><div class="num">26</div><div class="lbl">unused</div></div><div class="kpi "><div class="num">23</div><div class="lbl">cold</div></div><div class="kpi "><div class="num">0</div><div class="lbl">disabled</div></div><div class="kpi warnum"><div class="num">26</div><div class="lbl">droppable</div></div><div class="kpi "><div class="num">0</div><div class="lbl">disabled clustered</div></div><div class="kpi "><div class="num">0</div><div class="lbl">missing suggestions</div></div></div></div></header><div class="wrap content"><div class="picker"><span class="picker-title">Index reports</span><span class="picker-label">SQL Server <b>13</b></span><span class="picker-row"><a class="chip" href="20261002T1704Z_index-usage_ACME-203-0-113-170.html"><span class="dot" style="background:#c2700a"></span>ACME-203-0-113-170</a><a class="chip" href="20261002T1704Z_index-usage_ACME-198-51-100-45.html"><span class="dot" style="background:#c2700a"></span>ACME-198-51-100-45</a><a class="chip" href="20261002T1702Z_index-usage_ACME-192-0-2-15-MSSQL25-1433.html"><span class="dot" style="background:#c2700a"></span>ACME-192-0-2-15-MSSQL25-1433</a><a class="chip" href="20261002T1703Z_index-usage_ACME-198-51-100-66.html"><span class="dot" style="background:#c2700a"></span>ACME-198-51-100-66</a><a class="chip" href="20261002T1702Z_index-usage_ACME-198-51-100-210.html"><span class="dot" style="background:#c2700a"></span>ACME-198-51-100-210</a><a class="chip" href="20261002T1702Z_index-usage_ACME-198-51-100-60.html"><span class="dot" style="background:#c2700a"></span>ACME-198-51-100-60</a><a class="chip" href="20261002T1703Z_index-usage_ACME-192-0-2-243.html"><span class="dot" style="background:#c2700a"></span>ACME-192-0-2-243</a><a class="chip" href="20261002T1702Z_index-usage_ACME-203-0-113-99.html"><span class="dot" style="background:#c2700a"></span>ACME-203-0-113-99</a><a class="chip" href="20261002T1702Z_index-usage_ACME-198-51-100-92.html"><span class="dot" style="background:#c2700a"></span>ACME-198-51-100-92</a><a class="chip" href="20261002T1702Z_index-usage_ACME-203-0-113-69.html"><span class="dot" style="background:#c2700a"></span>ACME-203-0-113-69</a><a class="chip" href="20261002T1720Z_index-usage_ACME-192-0-2-97.html"><span class="dot" style="background:#c2700a"></span>ACME-192-0-2-97</a><span class="chip on"><span class="dot" style="background:#c2700a"></span>ACME-192-0-2-242</span><a class="chip" href="20261002T1702Z_index-usage_ACME-203-0-113-155.html"><span class="dot" style="background:#c2700a"></span>ACME-203-0-113-155</a></span><span class="picker-label">Oracle <b>1</b></span><span class="picker-row"><a class="chip" href="20261002T1701Z_index-usage_ACME-198-51-100-125.html"><span class="dot" style="background:#15803d"></span>ACME-198-51-100-125</a></span><span class="picker-label">PostgreSQL <b>1</b></span><span class="picker-row"><a class="chip" href="20261002T1701Z_index-usage_ACME-192-0-2-15-PG-5433.html"><span class="dot" style="background:#c2700a"></span>ACME-192-0-2-15-PG-5433</a></span></div><script>(function(){var d=new URLSearchParams(location.search).get('date');if(!d)return;document.querySelectorAll('.picker a.chip,a[data-keep-date]').forEach(function(a){var h=a.getAttribute('href');a.setAttribute('href',h+(h.indexOf('?')<0?'?':'&')+'date='+encodeURIComponent(d));});})();</script><p>Host: 192.0.2.242</p>
+<p>Collected: 2026-10-02T17:02:03Z</p>
+<p>Server dashboard: <a href="20261003T1234Z_server-metrics.html">http://203.0.113.28:8080/report_dba/server-metrics.html?server=ACME-192-0-2-242</a></p>
+<p>Fleet inventory: <a href="20261003T1234Z_database-inventory.html">http://203.0.113.28:8080/report_dba/database-inventory.html</a></p>
+<div class="banner">Usage counters cover 252.4 day(s), since the instance restarted at 2026-01-23 15:12:58</div>
+<p>They are zeroed by a restart, so user_seeks = 0 means "not used since that instant", not "never used". last_stats_update is a different clock again: it is set by UPDATE STATISTICS / auto-update, not by usage, so a heavily used index can still carry statistics from months ago.</p>
+<div class="tbl-scroll"><table><thead><tr><th>Metric</th><th>Count</th><th>Meaning</th></tr></thead><tbody>
+<tr><td>indexes_total</td><td>59</td><td>every index on a user table</td></tr>
+<tr><td>used</td><td>10</td><td>had a seek, scan or lookup</td></tr>
+<tr><td>unused</td><td>26</td><td>written but never read</td></tr>
+<tr><td>cold</td><td>23</td><td>never read AND never written since restart</td></tr>
+<tr><td>disabled</td><td>0</td><td>ALTER INDEX ... DISABLE was run</td></tr>
+<tr><td>droppable</td><td>26</td><td>nonclustered, not unique, no constraint, never read</td></tr>
+</tbody></table></div>
+<h3 class="part">By database</h3>
+<div class="tbl-scroll"><table><thead><tr><th>Database</th><th>Total</th><th>Cold</th><th>Disabled</th><th>Droppable</th><th>Recommend action</th></tr></thead><tbody>
+<tr><td>host-705</td><td>59</td><td>23</td><td>0</td><td>26</td><td>review the drop candidates above</td></tr>
+</tbody></table></div>
+<h3 class="part">Drop candidates (26)</h3>
+<p>Nonclustered, not unique, not enforcing a constraint, never read. Highest write cost first — that is what the index is charging for.</p>
+<div class="tbl-scroll"><table><thead><tr><th>Index</th><th>user_updates</th><th>last_read</th><th>State</th><th>Recommend action</th></tr></thead><tbody>
+<tr><td>host-705.dbo.AssetArchive.AssetArchive$IX_BillingLog</td><td>44386</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.PolicyDetail.PolicyDetail$USERID</td><td>128</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.CampaignSnapshot.CampaignSnapshot$M_ID</td><td>128</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.ShipmentLine.ShipmentLine$UI_ID</td><td>128</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.ShipmentArchive.ShipmentArchive$CODEDETAIL</td><td>1</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.ShipmentArchive.ShipmentArchive$CODENAME</td><td>1</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.COMPANY.IX_ForecastArchive</td><td>1</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.COMPANY.IX_ReconcileStaging</td><td>1</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.COMPANY.IX_CampaignResult</td><td>1</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.COMPANY.IX_PolicyEntry</td><td>1</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.MeterMonthly.MeterMonthly$COMID</td><td>1</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.MeterMonthly.MeterMonthly$DEPTNAME</td><td>1</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.BillingLine.BillingLine$UMS_ID</td><td>1</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.CampaignLog.CampaignLog$S_GroupID</td><td>1</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.CampaignLog.CampaignLog$S_TranferID</td><td>1</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.Machine.IX_AssetMonthly</td><td>1</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.Machine.IX_RouteHistory</td><td>1</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.PolicyHistory.PolicyHistory$USERID</td><td>1</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.TicketSnapshot.TicketSnapshot$UMS_ID</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.ShipmentQueue.ShipmentQueue$Leaveid</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.PayrollHeader.PayrollHeader$HOLIDAYID</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.PayrollHeader.PayrollHeader$Leaveid</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.PayrollDaily.PayrollDaily$DeptID</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.MODE.IX_PayrollMonthly</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.ReconcileQueue.ReconcileQueue$ID</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.MeterQueue.MeterQueue$ID</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+</tbody></table></div>
+<h3 class="part">All indexes (59)</h3>
+<p>Every index on the instance, including the healthy ones — the answer to "is THIS index used?" has to be here, not only the problems.</p>
+<div class="tbl-scroll"><table><thead><tr><th>Index</th><th>id</th><th>Type</th><th>Uniq</th><th>PK</th><th>Constr</th><th>Filt</th><th>Disabled</th><th>seeks</th><th>scans</th><th>lookups</th><th>updates</th><th>last_read</th><th>last_stats_update</th><th>State</th><th>Recommend action</th></tr></thead><tbody>
+<tr><td>host-705.dbo.InvoiceDetail.InvoiceDetail$PrimaryKey</td><td>1</td><td>CLUSTERED</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>10</td><td>0</td><td>3</td><td>2026-01-23 16:00:13</td><td>2026-09-26 22:00:03</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>host-705.dbo.StaffingHeader.StaffingHeader$PrimaryKey</td><td>1</td><td>CLUSTERED</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>11</td><td>0</td><td>14</td><td>2026-01-23 16:00:13</td><td>2026-09-26 22:00:03</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>host-705.dbo.AssetArchive.AssetArchive$IX_BillingLog</td><td>2</td><td>NONCLUSTERED</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>44386</td><td>never</td><td>2026-10-02 22:00:03</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.AssetArchive.AssetArchive$IX_SupplierDaily</td><td>1</td><td>CLUSTERED</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>1519</td><td>0</td><td>44386</td><td>2026-10-02 20:00:00</td><td>2026-10-02 22:00:03</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>host-705.dbo.AssetArchive.AssetArchive$id</td><td>3</td><td>NONCLUSTERED</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>2072</td><td>0</td><td>44386</td><td>2026-10-02 22:30:02</td><td>2026-10-02 22:00:03</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>host-705.dbo.ShipmentArchive.ShipmentArchive$CODEDETAIL</td><td>2</td><td>NONCLUSTERED</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>1</td><td>never</td><td>2026-09-26 22:00:03</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.ShipmentArchive.ShipmentArchive$CODENAME</td><td>3</td><td>NONCLUSTERED</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>1</td><td>never</td><td>2026-09-26 22:00:03</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.ShipmentArchive.ShipmentArchive$PrimaryKey</td><td>1</td><td>CLUSTERED</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>1</td><td>never</td><td>2026-09-26 22:00:03</td><td>UNUSED</td><td>KEEP — primary key</td></tr>
+<tr><td>host-705.dbo.COMPANY.IX_ForecastArchive</td><td>2</td><td>NONCLUSTERED</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>1</td><td>never</td><td>2026-09-26 22:00:03</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.COMPANY.IX_ReconcileStaging</td><td>3</td><td>NONCLUSTERED</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>1</td><td>never</td><td>2026-09-26 22:00:03</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.COMPANY.IX_CampaignResult</td><td>4</td><td>NONCLUSTERED</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>1</td><td>never</td><td>2026-09-26 22:00:03</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.COMPANY.IX_PolicyEntry</td><td>5</td><td>NONCLUSTERED</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>1</td><td>never</td><td>2026-09-26 22:00:03</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.COMPANY.IX_OrdersEntry</td><td>1</td><td>CLUSTERED</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>1</td><td>never</td><td>2026-09-26 22:00:03</td><td>UNUSED</td><td>KEEP — primary key</td></tr>
+<tr><td>host-705.dbo.MeterMonthly.MeterMonthly$COMID</td><td>2</td><td>NONCLUSTERED</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>1</td><td>never</td><td>2026-09-26 22:00:03</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.MeterMonthly.MeterMonthly$DEPTID</td><td>1</td><td>CLUSTERED</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>1</td><td>never</td><td>2026-09-26 22:00:03</td><td>UNUSED</td><td>KEEP — primary key</td></tr>
+<tr><td>host-705.dbo.MeterMonthly.MeterMonthly$DEPTNAME</td><td>3</td><td>NONCLUSTERED</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>1</td><td>never</td><td>2026-09-26 22:00:03</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.TicketSnapshot.TicketSnapshot$PrimaryKey</td><td>1</td><td>CLUSTERED</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>host-705.dbo.TicketSnapshot.TicketSnapshot$UMS_ID</td><td>2</td><td>NONCLUSTERED</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.BillingLine.BillingLine$PrimaryKey</td><td>1</td><td>CLUSTERED</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>1</td><td>never</td><td>2026-09-26 22:00:03</td><td>UNUSED</td><td>KEEP — primary key</td></tr>
+<tr><td>host-705.dbo.BillingLine.BillingLine$UMS_ID</td><td>2</td><td>NONCLUSTERED</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>1</td><td>never</td><td>2026-09-26 22:00:03</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.CampaignLog.CampaignLog$PrimaryKey</td><td>1</td><td>CLUSTERED</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>1</td><td>never</td><td>2026-09-26 22:00:03</td><td>UNUSED</td><td>KEEP — primary key</td></tr>
+<tr><td>host-705.dbo.CampaignLog.CampaignLog$S_GroupID</td><td>2</td><td>NONCLUSTERED</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>1</td><td>never</td><td>2026-09-26 22:00:03</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.CampaignLog.CampaignLog$S_TranferID</td><td>3</td><td>NONCLUSTERED</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>1</td><td>never</td><td>2026-09-26 22:00:03</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.ShipmentQueue.ShipmentQueue$Leaveid</td><td>2</td><td>NONCLUSTERED</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.ShipmentQueue.ShipmentQueue$PrimaryKey</td><td>1</td><td>CLUSTERED</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>host-705.dbo.PayrollHeader.PayrollHeader$HOLIDAYID</td><td>2</td><td>NONCLUSTERED</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.PayrollHeader.PayrollHeader$Leaveid</td><td>3</td><td>NONCLUSTERED</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.PayrollHeader.PayrollHeader$PrimaryKey</td><td>1</td><td>CLUSTERED</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>host-705.dbo.PayrollDaily.PayrollDaily$DeptID</td><td>2</td><td>NONCLUSTERED</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.PayrollDaily.PayrollDaily$IX_InvoiceStaging</td><td>1</td><td>CLUSTERED</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>host-705.dbo.PayrollDaily.PayrollDaily$IX_CatalogDetail</td><td>3</td><td>NONCLUSTERED</td><td>Y</td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review carefully — unique</td></tr>
+<tr><td>host-705.dbo.QuotaHeader.QuotaHeader$PrimaryKey</td><td>1</td><td>CLUSTERED</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>host-705.dbo.CustomerHistory.CustomerHistory$Index_A53BD582_2B04_434C</td><td>1</td><td>CLUSTERED</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>2</td><td>never</td><td>2026-09-26 22:00:03</td><td>UNUSED</td><td>KEEP — primary key</td></tr>
+<tr><td>host-705.dbo.MODE.IX_PayrollMonthly</td><td>2</td><td>NONCLUSTERED</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.MODE.IX_CustomerLine</td><td>1</td><td>CLUSTERED</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>host-705.dbo.Machine.IX_AssetMonthly</td><td>2</td><td>NONCLUSTERED</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>1</td><td>never</td><td>2026-09-26 22:00:03</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.Machine.IX_ClaimEntry</td><td>1</td><td>CLUSTERED</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>45647</td><td>1641</td><td>0</td><td>1</td><td>2026-10-02 20:00:02</td><td>2026-09-26 22:00:03</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>host-705.dbo.Machine.IX_RouteHistory</td><td>3</td><td>NONCLUSTERED</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>1</td><td>never</td><td>2026-09-26 22:00:03</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.CatalogAudit.CatalogAudit$PrimaryKey</td><td>1</td><td>CLUSTERED</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>host-705.dbo.BillingDetail.BillingDetail$IX_ClaimHistory</td><td>1</td><td>CLUSTERED</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>host-705.dbo.InvoiceDaily.InvoiceDaily$IX_RouteHistory</td><td>1</td><td>CLUSTERED</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>host-705.dbo.ShiftDaily.ShiftDaily$Index_599AC926_12D6_44BA</td><td>1</td><td>CLUSTERED</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>4</td><td>never</td><td>2026-09-26 22:00:03</td><td>UNUSED</td><td>KEEP — primary key</td></tr>
+<tr><td>host-705.dbo.CustomerStatus.CustomerStatus$IX_BatchArchive</td><td>1</td><td>CLUSTERED</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>host-705.dbo.SHIFT.SHIFT$IX_PricingStatus</td><td>1</td><td>CLUSTERED</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>host-705.dbo.PolicyHistory.PolicyHistory$Index_37D84771_AECE_4899</td><td>1</td><td>CLUSTERED</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>1</td><td>never</td><td>2026-09-26 22:00:03</td><td>UNUSED</td><td>KEEP — primary key</td></tr>
+<tr><td>host-705.dbo.PolicyHistory.PolicyHistory$USERID</td><td>2</td><td>NONCLUSTERED</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>1</td><td>never</td><td>2026-09-26 22:00:03</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.ForecastQueue.ForecastQueue$PrimaryKey</td><td>1</td><td>CLUSTERED</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>host-705.dbo.PolicyDetail.PolicyDetail$PrimaryKey</td><td>1</td><td>CLUSTERED</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>45648</td><td>10</td><td>0</td><td>128</td><td>2026-10-02 20:00:02</td><td>2026-10-01 22:00:03</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>host-705.dbo.PolicyDetail.PolicyDetail$USERID</td><td>2</td><td>NONCLUSTERED</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>128</td><td>never</td><td>2026-10-01 22:00:03</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.ReconcileQueue.ReconcileQueue$ID</td><td>2</td><td>NONCLUSTERED</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.ReconcileQueue.ReconcileQueue$IX_ShiftDaily</td><td>1</td><td>CLUSTERED</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>host-705.dbo.MeterQueue.MeterQueue$ID</td><td>2</td><td>NONCLUSTERED</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.MeterQueue.MeterQueue$PrimaryKey</td><td>1</td><td>CLUSTERED</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>host-705.dbo.CampaignSnapshot.CampaignSnapshot$M_ID</td><td>2</td><td>NONCLUSTERED</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>128</td><td>never</td><td>2026-10-01 22:00:03</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.CampaignSnapshot.CampaignSnapshot$PrimaryKey</td><td>1</td><td>CLUSTERED</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>19593</td><td>26158</td><td>128</td><td>2026-10-02 20:00:02</td><td>2026-10-01 22:00:03</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>host-705.dbo.CampaignSnapshot.CampaignSnapshot$UMI_ID</td><td>3</td><td>NONCLUSTERED</td><td></td><td></td><td></td><td></td><td></td><td>26159</td><td>23</td><td>0</td><td>128</td><td>2026-10-02 20:00:02</td><td>2026-10-01 22:00:03</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>host-705.dbo.ShipmentLine.ShipmentLine$PrimaryKey</td><td>1</td><td>CLUSTERED</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>23</td><td>0</td><td>128</td><td>2026-10-01 14:00:02</td><td>2026-10-01 22:00:03</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>host-705.dbo.ShipmentLine.ShipmentLine$UI_ID</td><td>2</td><td>NONCLUSTERED</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>128</td><td>never</td><td>2026-10-01 22:00:03</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>host-705.dbo.ShipmentLine.ShipmentLine$UserMachineID</td><td>3</td><td>NONCLUSTERED</td><td></td><td></td><td></td><td></td><td></td><td>45647</td><td>105</td><td>0</td><td>128</td><td>2026-10-02 20:00:02</td><td>2026-10-01 22:00:03</td><td>USED</td><td>keep — in use</td></tr>
+</tbody></table></div></div></body></html>

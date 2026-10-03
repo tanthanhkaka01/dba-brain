@@ -145,7 +145,7 @@ def test_an_argparse_subcommand_is_not_swallowed() -> None:
 # the same answer — for the two commands whose whole job is that difference. Their exit codes
 # still say 1, because a runbook reads `$?`.
 
-ENVELOPE_KEYS = frozenset({"success", "operation", "message", "error", "data", "metrics"})
+ENVELOPE_KEYS = frozenset({"success", "operation", "message", "error", "error_kind", "data", "metrics"})
 
 #: An empty object: valid JSON that satisfies no command's own validation, so each answers from
 #: its own path without a store or a key. `ops-status` and `restore-drill-status` fail on the

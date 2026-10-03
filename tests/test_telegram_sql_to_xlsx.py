@@ -6,6 +6,8 @@ from html import unescape
 
 import pytest
 
+from conftest import patch_telegram
+
 from db_ops.common.sql_run import execute_capture_first
 from db_ops.db import DbOpsStore
 from db_ops.transport import common_cli
@@ -413,7 +415,7 @@ def fetch_send_messages(sqlite_path):
 
 
 def test_sql_to_xlsx_command_queues_document_and_summary(tmp_path, monkeypatch):
-    monkeypatch.setattr(command_processor, "TOOL_ROOT", tmp_path)
+    patch_telegram(monkeypatch, "TOOL_ROOT", tmp_path)
     sqlite_path = tmp_path / "runtime.sqlite"
     commands_path = tmp_path / "telegram_support_commands.json"
     write_sql_to_xlsx_command(commands_path)
@@ -462,7 +464,7 @@ def test_sql_to_xlsx_command_queues_document_and_summary(tmp_path, monkeypatch):
 
 
 def test_sql_to_xlsx_error_is_reported_to_user(tmp_path, monkeypatch):
-    monkeypatch.setattr(command_processor, "TOOL_ROOT", tmp_path)
+    patch_telegram(monkeypatch, "TOOL_ROOT", tmp_path)
     sqlite_path = tmp_path / "runtime.sqlite"
     commands_path = tmp_path / "telegram_support_commands.json"
     write_sql_to_xlsx_command(commands_path)

@@ -18,6 +18,7 @@ otherwise would let a caller filter on something that was never true.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 from typing import Any
 # Re-exported: the vocabulary itself lives in db_ops/lib/backup_kinds.py, once.
 from db_ops.lib.backup_kinds import DIFF, FULL, LOG  # noqa: F401
@@ -32,7 +33,7 @@ KINDS = (FULL, DIFF, LOG, CONTROLFILE)
 DEFAULT_KINDS = (FULL, DIFF, LOG)
 
 
-class BackupListError(ValueError):
+class BackupListError(errors.RequestError):
     """The listing could not be produced."""
 
 

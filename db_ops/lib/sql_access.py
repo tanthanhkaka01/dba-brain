@@ -10,6 +10,7 @@ not be three copies either.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import os
 import re
 from typing import Any
@@ -166,7 +167,7 @@ def normalize_db_type(db_type: str) -> str:
     return aliases.get(value, value)
 
 
-class LegacyOracleError(RuntimeError):
+class LegacyOracleError(errors.OperationFailed):
     """A legacy-Oracle run that failed for a reason the operator can act on.
 
     Kept distinct from a bare ``RuntimeError`` because these are the failures with a fix

@@ -28,6 +28,7 @@ that anything on the worker is stale.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 from dataclasses import dataclass
 from fnmatch import fnmatch
 from pathlib import Path
@@ -62,7 +63,7 @@ MIRRORED: dict[str, tuple[str, ...]] = {
 }
 
 
-class PushSelectionError(ValueError):
+class PushSelectionError(errors.RequestError):
     """The ``--type`` / ``--file-name`` pair does not name anything that may be pushed."""
 
 

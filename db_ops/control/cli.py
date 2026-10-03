@@ -248,6 +248,36 @@ def _push_command(args) -> int:
     return 0
 
 
+def _request_types_command(args) -> int:
+    """The static types of every common.cli request and answer, rendered from the reference.
+
+    Master-side tooling, like ``bump-version``: the two files are part of the source tree, so the
+    command that writes them runs where the source is. Without ``--write`` it only says whether they
+    are current - the guard in ``tests/test_cli_types_match_the_reference.py`` asks the same question.
+    It reads the packaged copy of the reference (R18 holds the three copies equal), so the answer
+    does not depend on the directory it is run from.
+    """
+    from db_ops.lib import request_types, shared_objects
+
+    package = Path(__file__).resolve().parents[1]
+    reference = shared_objects.load(package / "common" / "catalogue")
+    targets = {
+        package / "lib" / "cli_types.py": request_types.render(reference),
+        package / "transport" / "common_cli.pyi": request_types.render_transport_stub(reference),
+    }
+    stale = [path for path, text in targets.items()
+             if not path.exists() or path.read_text(encoding="utf-8") != text]
+    for path in stale:
+        if args.write:
+            path.write_text(targets[path], encoding="utf-8")
+            print(f"wrote {path.relative_to(package.parent)}")
+        else:
+            print(f"stale: {path.relative_to(package.parent)} - run request-types --write")
+    if not stale:
+        print("request types are current")
+    return 1 if stale and not args.write else 0
+
+
 def parse_args(argv):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -256,6 +286,13 @@ def parse_args(argv):
     bump.add_argument("--part", choices=["major", "minor", "patch"], default="patch")
     bump.add_argument("--set", dest="set_to", default=None, help="Set the version explicitly.")
     bump.add_argument("--dry-run", action="store_true")
+
+    types = sub.add_parser(
+        "request-types",
+        help="Check that lib/cli_types.py and transport/common_cli.pyi match the reference; "
+             "--write rewrites them.")
+    types.add_argument("--write", action="store_true",
+                       help="Rewrite the two generated files from the reference.")
 
     build = sub.add_parser("build-image", help="Build the image + deploy bundle locally.")
     build.add_argument("--platform", default="linux/amd64")
@@ -641,6 +678,8 @@ def _run(args) -> int:
     if args.command == "bump-version":
         version_ops.bump_version(part=args.part, set_to=args.set_to, dry_run=args.dry_run)
         return 0
+    if args.command == "request-types":
+        return _request_types_command(args)
     if args.command == "build-image":
         # Before the bundle is staged, not after: the bundle is a copy of data/, so a check that
         # ran later would be checking something already committed to.

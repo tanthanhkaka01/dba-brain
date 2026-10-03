@@ -15,19 +15,25 @@ apart without pattern-matching a message — which is what this replaced.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
+
 __all__ = ["SshAuthError", "SshConnectError", "SshError", "SshTimeoutError"]
 
 
-class SshError(RuntimeError):
+class SshError(errors.OperationFailed):
     """SSH-level failure: bad auth inputs, missing key, or connect failure."""
 
 
 class SshAuthError(SshError):
     """The host answered and rejected the credentials."""
 
+    kind = errors.KIND_UNREACHABLE
+
 
 class SshConnectError(SshError):
     """The host could not be reached at all (port closed, no route, service down)."""
+
+    kind = errors.KIND_UNREACHABLE
 
 
 class SshTimeoutError(SshConnectError):

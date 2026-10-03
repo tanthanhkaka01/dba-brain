@@ -43,7 +43,7 @@ from tests.test_common_cli_json_contract import ALL_COMMANDS
 
 
 #: The six keys `db_ops/lib/response.py` builds, always present even when empty.
-ENVELOPE_KEYS = frozenset({"success", "operation", "message", "error", "data", "metrics"})
+ENVELOPE_KEYS = frozenset({"success", "operation", "message", "error", "error_kind", "data", "metrics"})
 
 #: What each command is sent. ``{}`` is valid JSON and satisfies no command's own validation, so
 #: almost all of them answer from their refusal path without touching anything. The exceptions are

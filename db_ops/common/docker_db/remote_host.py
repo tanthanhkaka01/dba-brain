@@ -18,6 +18,7 @@ the tool's own. Output meant for a person goes to **stderr**, because stdout is 
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import shlex
 import stat
 import subprocess
@@ -26,7 +27,7 @@ import sys
 from db_ops.common.remote_exec import RemoteExecError, SshSession, open_session
 
 
-class RemoteHostError(RuntimeError):
+class RemoteHostError(errors.OperationFailed):
     """SSH/SFTP-level failure talking to the remote Ubuntu host."""
 
 

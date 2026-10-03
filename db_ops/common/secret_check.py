@@ -42,6 +42,7 @@ check", and the two must not be blurred.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import json
 import re
 from pathlib import Path
@@ -81,7 +82,7 @@ HTTP_LOGINS = {
 }
 
 
-class SecretCheckError(RuntimeError):
+class SecretCheckError(errors.OperationFailed):
     """The check could not be set up: bad request, unreadable config."""
 
 

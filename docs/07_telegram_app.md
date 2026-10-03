@@ -6,7 +6,7 @@ The Telegram App sends pending queue rows through the Telegram Bot API, saves up
 
 ## Package / Files
 
-- `db_ops/telegram/`
+- `db_ops/telegram/` - the support commands are `command_processor.py` (the claim, the dispatch and the conversation loop) over modules split out of it on 2026-10-03, in import order: `command_base.py` (the command record, its error, the dispatch log, masking), `command_replies.py`, `command_permissions.py` (levels, who may run what, the refusal), `command_cli.py` (a `cli_execute` action: argv, the request finished from this app's data, the result parsed and masked), `command_conversation.py` (prompts, answers, workflow state), `command_background.py` (a background run started, watched and judged complete), `command_listing.py` and `command_sql.py` (the built-in actions). `command_processor` re-exports every name; a test replaces a collaborator with `conftest.patch_telegram`, which reaches every module that binds it
 - `data/telegram_groups.json`
 - `data/telegram_users.json`
 - `data/bot_telegram.json`
@@ -35,6 +35,12 @@ The Telegram App sends pending queue rows through the Telegram Bot API, saves up
 ## Data Flow
 
 Outgoing flow: app/report/command processor inserts `telegram_send_messages` with `send_status = 0` -> `send-queue` sends via Telegram Bot API -> row becomes sent or failed. `send-queue` reads a limited pending set for ordering, then calls `send-one` behavior per `send_tlgmsg_id`: mark one row processing, send one Telegram message, then mark only that row sent or failed. Do not send a whole list of messages and then update statuses in one batch.
+
+A reply goes out even when the message it quotes is gone (2026-10-03): `send_message` and
+`send_document` set `allow_sending_without_reply` beside `reply_to_message_id`. The bot deletes a
+typed password from the chat and a member may delete their own command; Telegram then refused
+the whole reply (*400: message to be replied not found*) and the next question or the result
+never arrived - 64 replies on the 0.26 soak store.
 
 Severity emoji: `db_ops.telegram.api.send_message` prefixes every outgoing body with one symbol so an alert is not missed in a wall of text - `▶️` started, `✅` success, `❌` failed, `⚠️` warning, `⏳` running, `🚨` critical/aborted. Producers never write the emoji into the text; they declare **what the message is** and the symbol is applied once at send time (`db_ops/telegram/severity.py`). A message that already leads with a status emoji (the SLA report writes its own) keeps it - tagging never stacks.
 
@@ -248,6 +254,8 @@ python -m db_ops.telegram.cli --config config.json run-workflow
 python -m db_ops.telegram.cli --config config.json bot-info
 python -m db_ops.telegram.cli --config config.json group-level --group "<title or id>" --level warning --allow-command 1
 python -m db_ops.telegram.cli --config config.json user-level --user @someone --level 100
+python -m db_ops.telegram.cli --config config.json command-level --bot-command spbot_add_sql --level 100
+python -m db_ops.telegram.cli --config config.json command-level --shipped --dry-run
 ```
 
 **Discovering is not deciding.** Intake records every group and every sender it sees, and records
@@ -262,6 +270,15 @@ N or above (`commands.can_run_command`); 0 is the public tier.
 - `user-level` (2026-09-11) accepts the numeric id or the exact username, with or without `@`, and
   **no substring**: a level is a permission. Written after a new node answered its operator's own
   `/spbot_self_status` with "Permission denied (user_type=0)" four times, with no command to fix it.
+- `command-level` (2026-10-03) sets a bot command's own level, `command_type` in
+  `telegram_support_commands.json` - the third number of the gate above. `--bot-command` is the
+  exact name, with or without `/`; `--level` 0 is public and `-1` switches the command off.
+  `--shipped` takes this version's level instead of a typed one and **only ever raises**: for the
+  named command, or for every command the file holds below the shipped level; `--dry-run` lists
+  them. It needs no bot token. A node's file is used as written - the file is the truth - so a
+  node filled from another node's bundle keeps that node's levels, and `upgrade-config` leaves
+  them alone because a level is the operator's value: the 0.26 soak node ran `/spbot_add_sql` at
+  10 where this version ships 100, with a warning in the log and a hand-edit as the only fix.
 
 `enabled` in `telegram_config.json` gates **alerts** to groups, not the bot: once a token is stored
 the bot answers commands whatever it says. **`init` writes it `true`** (since 2026-09-11): shipping it
@@ -604,10 +621,10 @@ declares:
 
 | Field in `telegram_support_commands.json` | Effect | Read by |
 | --- | --- | --- |
-| `consume_rest: true` | This parameter takes **everything from its position onward**, spaces and newlines included. Only allowed on the last parameter | `consume_rest_position` / `command_args_from_text` (`command_processor.py:398`), and the argv builder (`:3329`) |
-| `accept_file: true` | The answer may be a **document** instead of text; the file's contents become the value | the conversation loop (`command_processor.py:212`) |
-| `file_encoding: "base64"` | That document is **binary** (a spreadsheet), carried as base64 rather than decoded as text | `command_processor.py:219` |
-| `max_file_bytes` | The largest attachment this parameter takes, in bytes; a larger one is refused with a reply. Absent, Telegram's own bot limit (20 MB) is the only bound - the file is read whole into memory, and as base64 it grows by a third inside the JSON request (0.26.0, review 0.25.0 F8.3) | `command_processor._max_file_bytes` |
+| `consume_rest: true` | This parameter takes **everything from its position onward**, spaces and newlines included. Only allowed on the last parameter | `consume_rest_position` / `command_args_from_text` (`command_processor.py`), and the argv builder (`command_cli.cli_action_values`) |
+| `accept_file: true` | The answer may be a **document** instead of text; the file's contents become the value | the conversation loop (`command_processor.process_pending_conversation_messages`) |
+| `file_encoding: "base64"` | That document is **binary** (a spreadsheet), carried as base64 rather than decoded as text | the same loop |
+| `max_file_bytes` | The largest attachment this parameter takes, in bytes; a larger one is refused with a reply. Absent, Telegram's own bot limit (20 MB) is the only bound - the file is read whole into memory, and as base64 it grows by a third inside the JSON request (0.26.0, review 0.25.0 F8.3) | `command_sql._max_file_bytes` |
 | `options` + `allow_text_input: false` | A closed list, so the answer is one of the values — which are themselves single tokens, guarded by a test | `db_ops/lib/workflow_steps.py` |
 
 All four are data. Nothing about any particular command is hard-coded.
@@ -643,7 +660,12 @@ ideas of "back" as it has commands.
 | --- | --- | --- | --- |
 | `cancel` | 🚫 Cancel | The run ends. `telegram_conversation_states.status = 'cancelled'`, the trail row is `cancelled`, the reply says `No changes were made.` and the keyboard is removed. **Nothing executes.** | always |
 | `back` | ⬅️ Back | The previous **asked** step is asked again, and its answer is cleared | when the run has asked more than one step |
-| `skip` | ⏭️ Skip | The step's `skip_value` (default `-`) is stored and the run moves on | only where the step allows it |
+| `skip` | ⏭️ Skip | The step's `skip_value` (default `-`) is stored and the run moves on - to the next question, or, on the last step, to running the command | only where the step allows it |
+
+**Skip on the last step runs the command (2026-10-03, 1.87).** It used to queue the same
+question again "for the next cycle to execute", and waited for an answer to it: `/spbot_backup <id>`
+asked for its level a second time after Skip, for ever. `apply_conversation_control` answers
+`SKIPPED_LAST_STEP` and the loop runs the command exactly as after the last answer.
 
 **Back walks the ask history, not `position - 1`.** With `ask_when` branching some positions are
 never asked, so counting backwards would re-ask a question the run excluded and then treat its

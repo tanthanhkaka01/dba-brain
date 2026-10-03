@@ -19,6 +19,8 @@ import subprocess
 
 import pytest
 
+from conftest import patch_restore
+
 from db_ops.backup_restore import cli as backup_cli
 from db_ops.backup_restore import restore_database as restore_module
 from db_ops.backup_restore.config import parse_restore_config
@@ -57,8 +59,8 @@ def _restore(tmp_path, monkeypatch, *, checkdb=True, checkdb_fails=False):
                 "database snapshot cannot be created because it failed to start.\nMsg 7928, Level 16")
         return subprocess.CompletedProcess(cmd, 0, "complete", "")
 
-    monkeypatch.setattr(restore_module, "run_sqlcmd_query_command", fake_run_sqlcmd)
-    monkeypatch.setattr(restore_module, "log_event", lambda _logger, **kwargs: messages.append(kwargs["message"]))
+    patch_restore(monkeypatch, "run_sqlcmd_query_command", fake_run_sqlcmd)
+    patch_restore(monkeypatch, "log_event", lambda _logger, **kwargs: messages.append(kwargs["message"]))
     run = lambda: restore_module.run_restore_database(  # noqa: E731
         config=config, db_ops_config=app_config, backup_file=backup,
         ensure_certificate=False, ensure_credential=False, logger=object())

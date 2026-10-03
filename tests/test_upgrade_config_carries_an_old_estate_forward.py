@@ -199,3 +199,31 @@ def test_a_command_line_naming_a_moved_command_is_pointed_at_its_cli(tmp_path):
     assert '    "telegram_support_commands": [' in path.read_text(encoding="utf-8"), "layout kept"
     _, again = config_upgrade.upgrade({"data_dir": str(data), "steps": ["moved-commands"]})
     assert again["records_changed"] == 0
+
+
+def test_a_console_app_this_version_added_reaches_a_node_carried_forward(tmp_path):
+    """`init` writes the console's app list once. The 0.26 soak node, filled from an older node's
+    bundle, had no `transport` app - 0.24.0 added it - and nothing ever offered it (the 0.26 sheet,
+    section 6, C2). Only added: an entry the node already holds, renamed here, is left as it is."""
+    from db_ops.common import scaffold
+
+    shipped = scaffold.packaged_default("data/webhost_config.json")
+    codes = [app["app_code"] for app in shipped["apps"]]
+    data = tmp_path / "data"
+    data.mkdir()
+    kept = dict(shipped["apps"][0], display_name="Renamed by the operator")
+    (data / "webhost_config.json").write_text(json.dumps(
+        {**shipped, "apps": [kept] + [app for app in shipped["apps"][1:] if app["app_code"] != "transport"]},
+        indent=2) + "\n", encoding="utf-8")
+
+    _, plan = config_upgrade.upgrade({"data_dir": str(data), "steps": ["console-apps"]})
+    assert plan["records_changed"] == 1
+    assert "transport" not in [app["app_code"] for app in _read(data, "webhost_config.json")["apps"]]
+
+    config_upgrade.upgrade({"data_dir": str(data), "steps": ["console-apps"], "dry_run": False})
+    apps = _read(data, "webhost_config.json")["apps"]
+    assert sorted(app["app_code"] for app in apps) == sorted(codes)
+    assert apps[0]["display_name"] == "Renamed by the operator"
+
+    _, again = config_upgrade.upgrade({"data_dir": str(data), "steps": ["console-apps"]})
+    assert again["records_changed"] == 0

@@ -25,6 +25,7 @@ still listed, under ``inactive``, because an entry someone re-enables is the nex
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 from pathlib import Path
 from typing import Any
 
@@ -36,7 +37,7 @@ from db_ops.lib.shared_objects import walk_records
 #: The file, in each of its three homes (package seed, this node's, the public example).
 FILENAME = "config_references.json"
 
-class ConfigReferenceError(ValueError):
+class ConfigReferenceError(errors.ConfigError):
     """The rule file is missing, unreadable, or does not describe a rule that can be checked."""
 
 

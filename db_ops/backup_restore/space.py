@@ -25,6 +25,7 @@ hold the database, and the copy at x2 is the rule every engine shares.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import dataclasses
 import shutil
 import tempfile
@@ -37,7 +38,7 @@ from db_ops.backup_restore.copy_backup import open_ssh_connection
 from db_ops.lib import restore_space
 
 
-class RestoreSpaceRefused(RuntimeError):
+class RestoreSpaceRefused(errors.Refused):
     """The restore was stopped because the files will not fit, or could not be measured."""
 
 
@@ -305,7 +306,14 @@ def restore_room_sql(*, database: str, backups: list[str], data_path: str, log_p
       toward needing more.
     * **free** - on the volume the data path is on, as the instance sees it
       (``sys.dm_os_volume_stats``). Asked of the instance and not of the host because the path is
-      the instance's: in a container it is not a path on the host at all.
+      the instance's: in a container it is not a path on the host at all. A Windows instance
+      names each volume's mount point and the data path is matched to the longest one. **An
+      instance on Linux states the free bytes and no mount point at all** (read on the lab's
+      SQL Server 2025, 2026-10-03: ``volume_mount_point`` NULL beside 154 GB free) - matched by
+      mount point alone, the free space was never read there and every measured restore onto a
+      Linux target was "could not be measured". There the volume is the one of a file the
+      instance already keeps in the folder the restore writes to; a folder that holds no file of
+      the instance stays unread, because which volume it is on cannot be told.
 
     Each part is tried on its own: one that cannot be read leaves its number empty, and the caller
     says which it was.
@@ -326,6 +334,7 @@ def restore_room_sql(*, database: str, backups: list[str], data_path: str, log_p
 SET NOCOUNT ON;
 DECLARE @filelist TABLE ({_FILELIST_COLUMNS});
 DECLARE @created bigint, @size bigint, @overwritten bigint, @free bigint, @volume nvarchar(512);
+DECLARE @folder nvarchar(512);
 BEGIN TRY
 {reads}
 END TRY
@@ -342,11 +351,16 @@ BEGIN CATCH
     SET @overwritten = 0;
 END CATCH;
 BEGIN TRY
-    SELECT TOP (1) @free = vs.available_bytes, @volume = vs.volume_mount_point
+    SET @folder = LOWER(LEFT(N'{data}', LEN(N'{data}') - PATINDEX(N'%[/\\]%', REVERSE(N'{data}')) + 1));
+    SELECT TOP (1) @free = vs.available_bytes,
+                   @volume = COALESCE(NULLIF(vs.volume_mount_point, N''), @folder)
     FROM sys.master_files AS mf
     CROSS APPLY sys.dm_os_volume_stats(mf.database_id, mf.file_id) AS vs
-    WHERE LEFT(LOWER(N'{data}'), LEN(vs.volume_mount_point)) = LOWER(vs.volume_mount_point)
-    ORDER BY LEN(vs.volume_mount_point) DESC;
+    WHERE (NULLIF(vs.volume_mount_point, N'') IS NOT NULL
+           AND LEFT(LOWER(N'{data}'), LEN(vs.volume_mount_point)) = LOWER(vs.volume_mount_point))
+       OR (NULLIF(vs.volume_mount_point, N'') IS NULL
+           AND LEFT(LOWER(mf.physical_name), LEN(@folder)) = @folder)
+    ORDER BY LEN(ISNULL(vs.volume_mount_point, N'')) DESC;
 END TRY
 BEGIN CATCH
     SET @free = NULL;

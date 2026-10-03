@@ -56,6 +56,7 @@ from db_ops.backup_restore.server_metadata import (
 )
 from db_ops.backup_restore.config import (
     DEFAULT_CLEANUP_RETENTION,
+    _parse_copy_selection,
     parse_cleanup_retention,
 )
 from db_ops.transport import common_cli
@@ -114,6 +115,12 @@ class ScriptRestore:
     # absent meaning on at x2. The tool checks it before the script runs; the script checks nothing
     # (the operator, 2026-10-02). Until then the field was read on a share-driven entry only.
     space_check: restore_space.SpaceCheck = field(default_factory=restore_space.SpaceCheck)
+    # What the copy to another machine takes (config.COPY_SELECTIONS): `chain` - the backups the
+    # restore applies - or `window` - the chain and every file of `copy_recent_hours`. Read on a
+    # script-driven entry since 2026-10-03; until then it was accepted and ignored here, so an
+    # entry asking for every restore point of its window got the chain alone.
+    copy_selection: str = "chain"
+    copy_recent_hours: int = 24
 
     @property
     def is_remote(self) -> bool:
@@ -306,7 +313,11 @@ def _script_restore(index: int, entry: dict[str, Any], restore_id: str) -> Scrip
     try:
         copy_mode = parse_copy_mode(entry.get("copy_mode"))
         space_check = restore_space.parse_space_check(entry)
-    except ValueError as exc:
+        copy_selection = _parse_copy_selection(entry.get("copy_selection"))
+        # 0 is a value - a window with no limit - not "absent": `or 24` read it as a day.
+        hours = entry.get("copy_recent_hours")
+        copy_recent_hours = 24 if hours is None or str(hours).strip() == "" else int(hours)
+    except (TypeError, ValueError) as exc:
         raise ValueError(f"{restore_id}: {exc}") from None
     if space_check.measure_restore:
         # Refused, not ignored: an entry that says its restore is measured, and is not, is a
@@ -337,6 +348,8 @@ def _script_restore(index: int, entry: dict[str, Any], restore_id: str) -> Scrip
         overwrite_existing=entry.get("overwrite_existing") is True,
         copy_mode=copy_mode,
         space_check=space_check,
+        copy_selection=copy_selection,
+        copy_recent_hours=copy_recent_hours,
         env={str(k): str(v) for k, v in env.items()},
         server_metadata=parse_server_metadata(
             entry.get("server_metadata"),
@@ -511,19 +524,27 @@ def transfer_backup_to_target(
     del log
     source_login = _ssh_login(source, data_dir=data_dir, key=key, key_base64=key_base64)
     target_login = _ssh_login(target, data_dir=data_dir, key=key, key_base64=key_base64)
-    chain = common_cli.run("backup-chain", {
-        "db_type": job.db_type, "source": source_login,
-        "source_dir": job.source_backup_host_dir, "backup_dir": job.backup_dir,
-        "container": source.container_name, "point_in_time": point_in_time,
-    }, stream_stderr=True)
+    window = job.copy_selection == "window"
+    if window and job.copy_recent_hours <= 0:
+        # A window with no limit is the whole directory; there is no chain to narrow it to.
+        include: list[str] = []
+    else:
+        include = list(common_cli.run("backup-chain", {
+            "db_type": job.db_type, "source": source_login,
+            "source_dir": job.source_backup_host_dir, "backup_dir": job.backup_dir,
+            "container": source.container_name, "point_in_time": point_in_time,
+        }, stream_stderr=True).get("include") or [])
     out = dict(common_cli.run("copy-backup-dir", {
         "source": source_login, "source_dir": job.source_backup_host_dir,
         "target": target_login, "target_dir": job.target_backup_dir,
-        "include": chain.get("include") or [], "make_readable": True, "open_for_engine": True,
+        "include": include, "make_readable": True, "open_for_engine": True,
         "copy_mode": job.copy_mode,
         "space_check": restore_space.as_request(job.space_check),
+        # The chain AND every file of the window: never fewer backups than `chain` copies.
+        **({"window_hours": job.copy_recent_hours} if window and job.copy_recent_hours > 0 else {}),
     }, stream_stderr=True))
-    out["include"] = list(chain.get("include") or [])
+    out["include"] = include
+    out["copy_selection"] = job.copy_selection
     pruned = (prune_staged_backups(job, target=target, data_dir=data_dir, key=key,
                                    key_base64=key_base64)
               if prune else {"pruned": 0, "retention_seconds": int(job.cleanup_retention or 0),

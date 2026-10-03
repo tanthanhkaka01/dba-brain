@@ -19,6 +19,24 @@ do about it. Not the internal refactor that made it possible.
 
 ### Added
 
+- **`telegram.cli command-level`** sets the level of a bot command - who may run it - instead of
+  a hand-edit of `telegram_support_commands.json`: `--bot-command spbot_add_sql --level 100`, or
+  `--shipped` to raise every command the file holds below this version's level (`--dry-run`
+  lists them). A node's file is used as written, so a node filled from another node's bundle
+  keeps that node's levels until this is run; the log's warning now names the command.
+- **`upgrade-config` adds the console apps a node's `webhost_config.json` lacks** (step
+  `console-apps`). `init` writes that list once, so a node upgraded in place or filled from an
+  older node's bundle never showed an app a later version added - `transport`, since 0.24.0.
+  Only added: an entry the file already holds is left as it is.
+- **`instance-add` with `"keep_default": true` adds a second database login to a registered
+  server** - a DBA account beside the monitor's - and leaves its default login and its inventory
+  record as they are. Until now the only way was to register the server again with the new login,
+  which made it the default. It needs a `credential_name` other than the default's, and refuses an
+  unregistered server, a `db_type` or `ip` other than the record's, and an inventory field.
+- **`webhost.cli bootstrap-admin`** adds the first-run `admin` / `admin` (level 100, password
+  changed at the first sign-in) to a store that already holds other accounts - the console
+  creates it by itself only on an empty store, so a store reused from an earlier install could
+  leave nobody able to sign in. It never resets an existing `admin`.
 - **`check-objects` names every active record that leaves a which-thing fact to a default** - a
   `fallback` notice per field, with what is assumed until then: an instance's `platform`, an SSH
   `auth_type`, a `port`, a PostgreSQL database or an Oracle service, a script restore's
@@ -44,8 +62,86 @@ do about it. Not the internal refactor that made it possible.
 - **`python -m db_ops.sql_tasks.cli close-run --sql-run-id N --reason "..." --confirm yes`** closes
   one SQL task run left `running` by a process that no longer exists, and releases its target. It
   closes a row only while it is still `running`, and is never prompted for.
+- **The server page lists the Query Store findings of the last 24 hours, one row per query plan** -
+  still happening or cleared, first and last report, how many runs reported it, its worst severity
+  and its peaks (CPU per run, the ratio to the cheapest other plan, duration, reads). The charts
+  showed three regressed queries as one series with one query's message, did not draw a finding
+  seen for the first time, and kept nothing once it cleared. Alerting is unchanged.
+- **Accounts are managed in the console**: Administration -> Users (admins only) lists every
+  account with its role, state, last sign-in and sessions, and creates an account, changes its role,
+  resets its password, signs it out everywhere or disables it. Roles name the console's levels -
+  Viewer, Editor, Admin, Owner - on the same 1-100 scale. Every change asks for your own password
+  again; nobody grants a level above their own, changes an account above their own, or lowers or
+  disables their own account there. `webhost.cli`'s user commands are unchanged.
 
 ### Changed
+
+- **The report pages use the whole window.** Inventory, server metrics, index and SLA capped
+  their content at 1180px and centred it; they now take the browser's full width. On the index
+  page a long index name wraps instead of pushing its table off the screen, and so does a long
+  mount point in the inventory's fleet matrix - no table of those pages scrolls sideways at
+  1280 pixels or wider. The tables of one index page line up - the name column takes the same
+  share of each - and *Fragmented* names an index `database.schema.table.index`, as the other
+  tables do, so a name copied from it is found in *All indexes*.
+- **Every `common.cli` answer says what kind of failure it was**: the envelope has a seventh key,
+  `error_kind` - `null` on success, else `request`, `not_configured`, `refused`, `unreachable`,
+  `failed`, `config` or `internal` - and a request that is not a JSON object is now answered in that
+  envelope (it printed `{"ok": false, "error": ...}`, a shape of its own). A program reading the
+  answer can branch on `error_kind` instead of matching the error text. Nothing else in the envelope
+  changed. Every error the tool raises now carries its kind - a login that failed is
+  `unreachable`, a refused space check `refused`, a bad `sql_commands.json` `config` - so the kind
+  is right whichever module raised it; a message that began `RuntimeError:` now begins with the
+  kind's class (`InvalidConfig:`, `Unreachable:` ...). Code catching `RuntimeError` or `ValueError`
+  catches exactly what it caught before.
+- **A `common.cli` request is checked against the reference before the command runs** - and, for
+  now, only measured: set `DB_OPS_REQUEST_CHECK_LOG` to a file and every mismatch is recorded there
+  (a value of the wrong kind or out of its range, a required field left out, an unknown key, a
+  deprecated spelling). Refusing them, with the field named and `error_kind` `request`, is built and
+  tested and switched off until real requests measure clean: switched on, the first node refused
+  every SQL task, because the reference was wrong about `run-sql`'s `capture`.
+- **Metrics and reports are launched every 30 s instead of every 120 s** (`APP-METRICS`,
+  `APP-REPORTS-CREATE` in the shipped `app_commands.json`), so a metric is at most 30 s late past
+  its own interval. An existing node keeps its schedule until it is changed with
+  `common.cli app-command-set`.
+- **A database running in a container shows its container's CPU and memory** on its server page,
+  where both tiles read "not collected": it has no host login, so no OS collector runs for it,
+  and the container's own readings (`DOCKER_CONTAINER_STATS`, collected under the same target)
+  were never looked at. A target with OS or SQL Server readings keeps showing those.
+- **Metric 23 judges a regressed query on all its bad plans together.** `QUERY_PLAN_REGRESSED_FREQUENT`
+  held its 300 s / 1,200 s CPU threshold against each plan alone, so a statement flipping between
+  two bad plans (210 s + 97 s) was never reported. The CPU of a query's bad plans is now summed,
+  the query is reported once on its heaviest bad plan, and the message and the server page show
+  the total (`query_bad_plan_count`, `query_bad_cpu_sec`).
+- **Every `common.cli` request and answer has a static type, rendered from the reference**
+  (`db_ops.lib.cli_types`, and typed overloads of `db_ops.transport.common_cli.run`). Code that
+  calls a command through the transport and reads its answer under a key the answer does not carry
+  is now a type error, checked in CI by mypy (added to the `dev` extra). `python -m
+  db_ops.control.cli request-types --write` renders the types again after the reference changes.
+- **The largest modules are split by what they do, every import path kept.** `db/store.py` into
+  one mixin per table family; `reports/server_report.py` into series, health, sections and Oracle;
+  `backup_restore/restore_database.py` into finding the backups, the SQL around a restore and
+  running sqlcmd; `telegram/command_processor.py` into replies, permissions, CLI actions, the
+  conversation, background runs and the built-in actions; `common/cli.py` into its help text, its
+  request reader, and the commands that read nothing but their request (SQL, host, gated) - the
+  ones that read or write configuration stay in `cli.py`; `sql_tasks/runner.py` into the plan, the
+  parameters, the output and the execution on a target. Each old module re-exports every name
+  it had, so code importing from it is unchanged; a test that replaces a function must now replace
+  it where its caller lives.
+- **The sign-in and password pages** follow the common centred-card layout, light, with a show /
+  hide toggle on each password field.
+
+- **The SLA page reads by engine and by instance.** The estate's verdict first, then one card per
+  database engine (SQL Server, Oracle, PostgreSQL, Host only) with the share of its checks that
+  pass and the instances to look at, a matrix of every instance against every SLI area, every
+  check that did not pass with its instance, and each instance's checks folded under its engine.
+  It listed SLI codes per question with no instance named, and is now in the other pages' style.
+- **The instance pickers on the server-metrics and index pages show one row per engine** - SQL
+  Server, Oracle, PostgreSQL, Host only - with a count each; targets with nothing collected sort
+  last in their row.
+- **The index pages look like the other report pages**: a masthead naming the server and its
+  engine, the totals as stat cards (disabled and unusable indexes red, drop candidates, fragmented
+  indexes and stale statistics amber), and every table in a bordered card. They were plain HTML
+  tables. The report pages now share one stylesheet.
 
 - **A restore's space check asks for twice the bytes it copies, on every engine, and a staged file
   is not counted twice** (§1.76). `space_check.factor` defaults to **2.0** (it was 1.5) for SQL
@@ -164,6 +260,51 @@ do about it. Not the internal refactor that made it possible.
 
 ### Fixed
 
+- **`space_check.measure_restore` reads the free space of a SQL Server on Linux.** Such an
+  instance reports the free bytes with no mount point, so the lookup by mount point found
+  nothing and every measured restore onto a Linux target was *could not be measured* - refused,
+  or run unmeasured under `on_unknown: proceed`. The volume is now taken from a file the
+  instance keeps in the folder the restore writes to.
+- **A legacy Oracle target reached by `sql_access.method: "subprocess"` runs.** Started as a
+  script (no `launcher`), the tool was never told to read its request on stdin and answered
+  *Either --request or --connect is required* - no such target ever ran. Targets reached through
+  the bridge (`"api"`) or a `launcher` were not affected.
+- **`backup-add` / `restore-add` with `replace` keep the entry where it was** in
+  `restore_config.json`. It was removed and appended, so one replace moved the entry to the end
+  of its list and the file's diff showed nothing of what had changed in it.
+- **`copy_selection` works for every engine and both ways to a target.** A restore to another
+  machine ignored it: PostgreSQL and Oracle always copied their chain, SQL Server always the whole
+  directory. Now `chain` copies the backups the restore applies (SQL Server: each database's newest
+  FULL, DIFF and the LOGs after, with `_cert/`), and `window` copies the chain and every other file
+  of `copy_recent_hours` - on the share copy too, which took the window alone and could miss the
+  FULL. A point in time copies everything either way.
+- **A restore whose entry asks for instance metadata and replays none says so.** The run ended
+  `done` with the skip only as an event; it now ends *done with a warning*, and the skip names
+  the real cause - the bundle is written by the node that runs the source's backup.
+  `backup_restore.cli export-instance-bundle --backup-id <id>` exports it on the restoring node.
+- **A bot reply still arrives when the message it answers is gone.** The bot deletes a typed
+  password from the chat, and a member may delete their own command; Telegram then refused the
+  whole reply, so the next question or the result was lost. Replies now go out without the quote.
+- **Skip on a bot command's last question runs the command.** `/spbot_backup <id>` with no level
+  asked for the level again after Skip, and kept waiting; the skip value (`-`, "let the schedule
+  decide") is now taken and the backup runs.
+- **A SQL task run left `running` by a task since removed from `sql_commands.json` is closed** by the
+  sweep, with the default timeout - only when this node started it, since a shared store's other
+  node may still run that task. It stayed `running` for ever.
+- **A backup copied file by file keeps its source time.** When the tar stream cannot be used
+  and the copy falls back to SFTP, every piece was dated by the copy; with several PostgreSQL
+  chains staged (a point-in-time restore copies them all), the chain copied last read as the
+  newest backup and a point in time could find no full before it.
+- **A PostgreSQL restore whose source prunes its backups no longer fails in most hours.** The staging
+  copy removed the files of a backup set the source had pruned but kept its folders; the listing read
+  the empty folder as the newest full backup and combined it with every incremental after it
+  (`pg_combinebackup: could not open file ".../global/pg_control"`). The copy now removes the folders
+  the source no longer has, and the listing skips a backup folder that holds no file.
+- **An Oracle or PostgreSQL server page no longer lists SQL Server metrics as "not collected".** A
+  metric variant the catalog marks `"supported": false` counted as expected, so the Oracle page read
+  26 of 66 metrics and the PostgreSQL one 22 of 66.
+- **A PostgreSQL server's Backup area reads its backups.** The area was fed `BACKUP_LAST_RESULT`
+  only and said "not collected" over a collected `POSTGRES_BACKUP_LAST_RESULT`.
 - **A backup job's retention under a day was never applied.** The scripts take `RETENTION_DAYS`,
   whole days; under a day they were handed nothing and kept fourteen. A lab host on an hourly cycle
   with `cleanup_retention: 7200` held 77 GB after 31 hours. The window now reaches the script
@@ -353,8 +494,24 @@ do about it. Not the internal refactor that made it possible.
   in `QUERY_LONG_RUNNING` and `QUERY_LONG_WAITING_OR_ROLLBACK_REQUESTS` on SQL Server (both variants).
   0.25.0 added it to the metrics that already joined `sys.dm_exec_connections`, and these two had the
   join only in a commented-out draft.
+- **`build-showcase` leaves a page's markup alone.** It rewrote every word outside script and
+  style, tags included: an estate with tables called `meta` and `Area` produced
+  `<TerritoryHistory charset="utf-8">` and unstyled health cards - certified clean, and already in
+  the published showcase. Tag and attribute names are never rewritten now, `class` / `id` / `style`
+  only for an address or a hand-named term inside them, and a name the pages' own stylesheet selects
+  is not mapped at all. **Nor is a table or login whose name is a plain word the pages themselves
+  print** (`Item`, `Machine`, `Integration`): "78 item(s)" had read "78 BillingArchive(s)". Such a
+  name is now shown as it is; a name built from several words, or one in `extra_terms`, is still
+  replaced.
+- **`instance-add` refused with a password and no passphrase, or a store that would not open, and
+  said nothing was written - yet `users.json` already held the new login**, one with no secret
+  behind it. The secret is now stored first and the passphrase checked before any write.
 - **The SQL Server 2008 R2 sleeping-open-transaction metric names the client's address**
   (`client_ip=`), as the current variant has since 0.25.0.
+- **`LOCK_BLOCKING_SESSIONS` on SQL Server 2008 R2 names the head blocker** - one row per session
+  at the head of a chain, with its login, host, `client_ip=`, status, open transactions and last
+  SQL, as the current variant has. It used to count blocked sessions per database: an alert that
+  said where it hurt and not which session to deal with.
 
 ## [0.25.0] - 2026-09-30
 

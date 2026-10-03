@@ -23,6 +23,7 @@ the derived answer.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import json
 from pathlib import Path
 from typing import Any
@@ -37,8 +38,10 @@ REPORTS_CONFIG_FILENAME = "reports_config.json"
 BASE_URL_KEY = "report_base_url"
 
 
-class UseBaseUrlError(RuntimeError):
+class UseBaseUrlError(errors.DbOpsError, RuntimeError):
     """The node could not be pointed at that address. Nothing was written."""
+
+    kind = errors.KIND_REQUEST
 
 
 USAGE = """usage: python -m db_ops.reports.cli use-base-url [<url> | --this-node | --clear] [--dry-run]

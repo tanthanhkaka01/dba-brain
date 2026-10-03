@@ -62,8 +62,8 @@ def test_every_server_gets_its_own_section():
         _Result("A/sqlserver/one"), _Result("A/sqlserver/two"), _Result("B/sqlserver/one"),
     ])
     rendered = publish._server_sections(summary)
-    assert rendered.count("<h3>") == 2
-    assert "<h3>A</h3>" in rendered and "<h3>B</h3>" in rendered
+    assert rendered.count('<details class="inst"') == 2
+    assert 'id="inst-a"' in rendered and 'id="inst-b"' in rendered
 
 
 def test_the_server_with_the_most_failures_comes_first():
@@ -74,13 +74,13 @@ def test_the_server_with_the_most_failures_comes_first():
         _Result("loud/sqlserver/y", status="FAILED"),
     ])
     rendered = publish._server_sections(summary)
-    assert rendered.index("<h3>loud</h3>") < rendered.index("<h3>quiet</h3>")
+    assert rendered.index('id="inst-loud"') < rendered.index('id="inst-quiet"')
 
 
 def test_fleet_wide_rows_sort_last_because_they_name_no_machine():
     summary = _Summary([_Result("*", status="FAILED"), _Result("srv/sqlserver/x", status="PASSED")])
     rendered = publish._server_sections(summary)
-    assert rendered.index("<h3>srv</h3>") < rendered.index("Fleet-wide")
+    assert rendered.index('id="inst-srv"') < rendered.index("Fleet-wide")
 
 
 def test_each_section_states_its_own_counts():
@@ -207,6 +207,6 @@ def test_the_rendered_page_actually_uses_the_sections():
         ]),
         recent_runs=[],
     )
-    assert "<h3>srv-a</h3>" in page
-    assert "<h3>srv-b</h3>" in page
-    assert page.index("<h3>srv-a</h3>") < page.index("<h3>srv-b</h3>")
+    assert 'id="inst-srv-a"' in page
+    assert 'id="inst-srv-b"' in page
+    assert page.index('id="inst-srv-a"') < page.index('id="inst-srv-b"')

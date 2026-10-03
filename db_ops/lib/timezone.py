@@ -28,6 +28,7 @@ and never learn where the value came from — the same shape as ``node_role``.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import os
 import re
 from datetime import date, datetime, timedelta, timezone
@@ -58,7 +59,7 @@ _OFFSET_PATTERN = re.compile(
 _MAX_OFFSET_MINUTES = 14 * 60
 
 
-class TimezoneError(ValueError):
+class TimezoneError(errors.ConfigError):
     """The declared timezone cannot be honoured as written."""
 
 

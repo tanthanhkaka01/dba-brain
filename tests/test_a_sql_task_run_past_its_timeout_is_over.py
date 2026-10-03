@@ -31,6 +31,8 @@ from db_ops.lib import process_liveness, run_claim
 from db_ops.sql_tasks import runner
 from tests.test_sql_task_claims import FakeLogger, RecordingSqlRunStore, sql_command, sql_target
 
+from conftest import patch_sql_runner
+
 HOST = "this-node"
 
 
@@ -190,15 +192,15 @@ def test_a_run_by_hand_first_closes_that_task_s_overdue_runs(tmp_path, monkeypat
         def fetch_running_sql_runs(self):
             return [{"sql_id": 9, "sql_run_id": 1}, {"sql_id": 12, "sql_run_id": 2}]
 
-    monkeypatch.setattr(runner, "load_sql_commands", lambda path, **_kw: {9: sql_command()})
-    monkeypatch.setattr(runner, "load_sql_targets", lambda path, **_kw: [sql_target()])
-    monkeypatch.setattr(runner, "bind_parameter_values", lambda command, values: values)
+    patch_sql_runner(monkeypatch, "load_sql_commands", lambda path, **_kw: {9: sql_command()})
+    patch_sql_runner(monkeypatch, "load_sql_targets", lambda path, **_kw: [sql_target()])
+    patch_sql_runner(monkeypatch, "bind_parameter_values", lambda command, values: values)
     monkeypatch.setattr(runner.data_sources, "load_secret_text", lambda data_dir: {})
     monkeypatch.setattr(runner.data_sources, "load_inventory", lambda data_dir: [])
     monkeypatch.setattr(runner.data_sources, "load_all_credentials", lambda data_dir: {})
-    monkeypatch.setattr(runner, "mark_stale_running_sql_runs",
+    patch_sql_runner(monkeypatch, "mark_stale_running_sql_runs",
                         lambda **kwargs: swept.append([row["sql_run_id"] for row in kwargs["running_runs"]]))
-    monkeypatch.setattr(runner, "run_one_sql_task", lambda **kwargs: (swept.append("ran"), True)[1])
+    patch_sql_runner(monkeypatch, "run_one_sql_task", lambda **kwargs: (swept.append("ran"), True)[1])
 
     runner.run_sql_id_tasks(store=Store(), data_dir=tmp_path, sql_id=9, force=True, dry_run=False,
                             telegram_groups={}, logger=FakeLogger())

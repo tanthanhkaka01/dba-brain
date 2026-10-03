@@ -40,6 +40,7 @@ run, not history; carrying it would describe the estate as the stand-in last saw
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -82,7 +83,7 @@ TABLES: tuple[TableSpec, ...] = (
 )
 
 
-class BackfillError(RuntimeError):
+class BackfillError(errors.OperationFailed):
     """The source or the destination is not in a state where carrying rows is safe."""
 
 

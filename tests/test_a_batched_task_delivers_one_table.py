@@ -24,6 +24,8 @@ from db_ops.sql_tasks import runner
 
 from test_sql_task_claims import sql_command, sql_target
 
+from conftest import patch_sql_runner
+
 COLUMNS = ["batch_rows", "inserted", "window_from"]
 
 
@@ -125,12 +127,12 @@ def _run_batched_task(tmp_path, monkeypatch, *, progress_per_file=None, batches=
     command = dataclasses.replace(
         sql_command(script_files=("sql/load.sql",)),
         python_source=PythonSource(script_path="fetch.py"), progress_per_file=progress_per_file)
-    monkeypatch.setattr(runner, "_run_python_source",
+    patch_sql_runner(monkeypatch, "_run_python_source",
                         lambda **_: [json.dumps([{"n": n}]) for n in range(batches)])
-    monkeypatch.setattr(runner, "execute_sql", lambda **_: {"row_count": 1, "result_sets": []})
-    monkeypatch.setattr(runner, "log_event", lambda *args, **kwargs: None)
+    patch_sql_runner(monkeypatch, "execute_sql", lambda **_: {"row_count": 1, "result_sets": []})
+    patch_sql_runner(monkeypatch, "log_event", lambda *args, **kwargs: None)
     sent = []
-    monkeypatch.setattr(runner, "enqueue_sql_task_message",
+    patch_sql_runner(monkeypatch, "enqueue_sql_task_message",
                         lambda **kwargs: sent.append(kwargs["status"]))
     inventory, credentials = inventory_and_credentials()
 

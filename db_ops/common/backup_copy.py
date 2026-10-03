@@ -31,6 +31,7 @@ skipped), so nothing about the semantics changes - only the number of round trip
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import errno
 import posixpath
 import shlex
@@ -48,11 +49,11 @@ from db_ops.lib import restore_space
 from db_ops.lib.restore.copy_mode import COPY_AUTO, COPY_MODES, COPY_NONE, COPY_SFTP, COPY_TAR
 
 
-class CopyModeError(RuntimeError):
+class CopyModeError(errors.Refused):
     """The copy was pinned to a mode that could not do it."""
 
 
-class CopySpaceError(RuntimeError):
+class CopySpaceError(errors.Refused):
     """The files to copy do not fit on the target, or its free space could not be read."""
 
 
@@ -299,7 +300,7 @@ def _stream_files(
 STAGING_MARKER = ".dbops-staging"
 
 
-class StagingDirError(RuntimeError):
+class StagingDirError(errors.Refused):
     """``target_dir`` holds files and is not marked as a db_ops staging directory."""
 
 
@@ -449,11 +450,14 @@ def sync_backup_dir(
     log: Any = None,
     copy_mode: str = COPY_AUTO,
     space_check: restore_space.SpaceCheck | None = None,
+    window_since: float | None = None,
 ) -> TransferResult:
     """Copy ``source_dir`` to ``target_dir`` on another host, skipping identical files.
 
     ``include`` limits the copy to relative paths starting with one of the given prefixes, so a
-    restore can pull only the parts of a backup directory it needs. ``copy_mode`` is one of
+    restore can pull only the parts of a backup directory it needs. ``window_since`` (epoch seconds)
+    widens a narrowed copy by every file the source wrote at or after it - ``copy_selection:
+    window``: the chain, and every other restore point of the window. ``copy_mode`` is one of
     :data:`COPY_MODES`; the result says which way the files went. ``space_check`` is the rule the
     files to copy are held to before the first one moves (:func:`check_room`); ``None`` asks nothing.
     """
@@ -466,16 +470,27 @@ def sync_backup_dir(
     source_mtimes: dict[str, int] = {}
     files, dirs = _walk_remote(source_sftp, source_dir, source_mtimes)
     at_source = {rel.replace("\\", "/") for rel, _size in files}
+    dirs_at_source = {rel.replace("\\", "/").rstrip("/") for rel in dirs}
     if include:
-        files = [(rel, size) for rel, size in files if rel.replace("\\", "/").startswith(include)]
-        dirs = [rel for rel in dirs if rel.replace("\\", "/").startswith(include)]
+        # The chain, and - for a window copy - every file written inside the window. A window
+        # never narrows the chain: the restore always finds the backups it is going to apply.
+        def kept(rel: str) -> bool:
+            if rel.replace("\\", "/").startswith(include):
+                return True
+            return window_since is not None and source_mtimes.get(rel, 0) >= window_since
+
+        files = [(rel, size) for rel, size in files if kept(rel)]
+        parents = {posixpath.dirname(rel.replace("\\", "/")) for rel, _size in files}
+        ancestors = {"/".join(p.split("/")[:n]) for p in parents for n in range(1, p.count("/") + 2) if p}
+        dirs = [rel for rel in dirs
+                if rel.replace("\\", "/").startswith(include) or rel.replace("\\", "/") in ancestors]
     # Created before it is walked. The walk refuses a directory it cannot list - rightly, on
     # the source - and a target folder a first run has not made yet is exactly that, so every
     # new cross-machine restore failed its first run with "[Errno 2] No such file".
     _mkdirs(target_sftp, target_dir)
     _assert_writable(target_sftp, target_dir)
     target_mtimes: dict[str, int] = {}
-    existing_files, _ = _walk_remote(target_sftp, target_dir, target_mtimes)
+    existing_files, existing_dirs = _walk_remote(target_sftp, target_dir, target_mtimes)
     existing = {rel: size for rel, size in existing_files if rel.replace("\\", "/") != STAGING_MARKER}
     if len(existing) == len(existing_files):
         # No marker. An empty directory becomes ours. One that already holds files is adopted when
@@ -508,6 +523,25 @@ def sync_backup_dir(
         result.removed += 1
     if result.removed and log:
         log(f"removed {result.removed} staged file(s) the source no longer has")
+    # And the directories the source no longer has - the husk a removed backup set leaves. Only its
+    # files went, so `base/<stamp>_FULL` stayed, empty and dated by the removal itself; a PostgreSQL
+    # listing reads a backup off its directory name, so the husk became the newest full and the
+    # restore combined it with every incremental after it: "pg_combinebackup: could not open file
+    # .../<stamp>_INCR/global/pg_control" in most hours of the 0.26 node (2026-10-03). Judged against
+    # the whole source listing, like the files. Deepest first, so a parent is empty by the time it
+    # is tried; rmdir refuses a directory that is not, so nothing holding a file is touched.
+    removed_dirs = 0
+    for rel in sorted((d.replace("\\", "/").rstrip("/") for d in existing_dirs),
+                      key=lambda d: d.count("/"), reverse=True):
+        if not rel or rel in dirs_at_source:
+            continue
+        try:
+            target_sftp.rmdir(posixpath.join(target_dir, rel))
+        except OSError:
+            continue
+        removed_dirs += 1
+    if removed_dirs and log:
+        log(f"removed {removed_dirs} staged directory(ies) the source no longer has")
     # Every directory is recreated, including the empty ones a file-only copy would drop.
     for rel in sorted(dirs):
         _mkdirs(target_sftp, posixpath.join(target_dir, rel.replace("\\", "/")))
@@ -561,6 +595,12 @@ def sync_backup_dir(
                 with source_sftp.open(posixpath.join(source_dir, rel_posix), "rb") as reader:
                     reader.prefetch(size)
                     target_sftp.putfo(reader, remote_path, file_size=size)
+                # The piece keeps the source's time, as the tar stream does. Dated by the copy, a
+                # PostgreSQL manifest copied after a newer one read as the newest backup - the
+                # restore plan dates a backup by it - and a point in time found no full before it.
+                mtime = source_mtimes.get(rel)
+                if mtime is not None:
+                    target_sftp.utime(remote_path, (mtime, mtime))
                 result.copied += 1
                 result.bytes_copied += size
                 if log:
@@ -593,8 +633,13 @@ def chain_include(db_type: str, source_session, *, source_dir: str, backup_dir: 
                   container: str = "", point_in_time: str = "", log: Any = None) -> tuple[str, ...]:
     """Which parts of the source backup directory a restore needs, as path prefixes.
 
-    An empty tuple means "everything", which is what SQL Server gets and what every engine falls
-    back to when the chain cannot be established.
+    An empty tuple means "everything" - a point in time, or a SQL Server layout the names cannot be
+    read from.
+
+    SQL Server's layout states the chain too (``<database>/FULL|DIFF|LOG/<name>_<stamp>Z.bak``):
+    each database's newest FULL, its newest DIFF and the LOGs after them, by the rule the share
+    copy already follows (:mod:`db_ops.lib.sqlserver_backup_chain`). Until 2026-10-03 a SQL Server
+    copy to another machine took the whole directory, whatever its entry's ``copy_selection`` said.
 
     PostgreSQL's directory layout states the chain, so it is read from the names (see
     :func:`postgresql_chain_include`). An RMAN directory does not - level 0, level 1, archivelogs,
@@ -614,6 +659,8 @@ def chain_include(db_type: str, source_session, *, source_dir: str, backup_dir: 
         return ()
     if engine in {"postgresql", "postgres"}:
         return postgresql_chain_include(source_session, source_dir=source_dir, log=log)
+    if engine in {"sqlserver", "mssql"}:
+        return sqlserver_chain_include(source_session, source_dir=source_dir, log=log)
     if engine == "oracle":
         if not container:
             # RMAN is asked inside the source container; without it the chain is unknown, and
@@ -624,12 +671,56 @@ def chain_include(db_type: str, source_session, *, source_dir: str, backup_dir: 
     return ()
 
 
-class ChainUnknownError(RuntimeError):
+class ChainUnknownError(errors.OperationFailed):
     """The source cannot say which pieces form the restore chain, so nothing is copied.
 
     It used to copy the whole directory instead. Owner decision 2026-10-01 (review 0.25.0, G2.9):
     no fallback - a set nobody chose is not copied, and the restore fails with the reason.
     """
+
+
+def sqlserver_chain_include(source_session, *, source_dir: str, log: Any = None) -> tuple[str, ...]:
+    """Each database's restore chain, the certificate folder, as relative paths.
+
+    Read from the layout the backup jobs write - ``<database>/FULL|DIFF|LOG/<file>``, the time in
+    the name (or the file's mtime when the name carries none) - with the share copy's own rule, so
+    both ways to a target copy the same backups. ``_cert/`` always travels: an encrypted backup
+    cannot be read on the target without it.
+
+    A database with no FULL is copied whole, and a layout with no ``FULL`` / ``DIFF`` / ``LOG``
+    folders at all is copied whole - what every SQL Server copy did before: a narrowed copy that
+    guessed wrong fails the restore, a wide one only costs time.
+    """
+    from db_ops.lib import sqlserver_backup_chain as chain_rule
+
+    command = (f"cd {shlex.quote(source_dir.rstrip('/'))} && "
+               "find . -type f -printf '%P|%T@\\n' 2>/dev/null")
+    _stdin, stdout, _stderr = source_session.open_stream(command)
+    candidates = []
+    for line in stdout.read().decode("utf-8", "replace").splitlines():
+        rel, _sep, stamp = line.strip().rpartition("|")
+        parts = rel.split("/")
+        if len(parts) < 3 or not chain_rule.kind_from_folder(parts[-2]):
+            continue
+        try:
+            mtime = float(stamp)
+        except ValueError:
+            mtime = 0.0
+        candidates.append(chain_rule.Candidate(
+            item=rel, database=parts[-3], kind=chain_rule.kind_from_folder(parts[-2]),
+            timestamp=chain_rule.backup_time_from_name(parts[-1]) or mtime))
+    if not candidates:
+        if log:
+            log(f"no FULL / DIFF / LOG folders under {source_dir}: copying the whole directory")
+        return ()
+    choice = chain_rule.restore_chain(candidates)
+    folders = {str(c.item).rsplit("/", 2)[0]: c.database for c in candidates}
+    whole = sorted(f"{folder}/" for folder, database in folders.items()
+                   if database in choice.unresolved)
+    if log:
+        for line in choice.lines:
+            log(line.replace("copied by its window instead", "copied whole"))
+    return tuple(sorted(str(item) for item in choice.selected)) + tuple(whole) + ("_cert/",)
 
 
 def postgresql_chain_include(source_session, *, source_dir: str, log: Any = None) -> tuple[str, ...]:

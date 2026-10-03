@@ -17,6 +17,8 @@ import json
 
 import pytest
 
+from conftest import patch_telegram
+
 from db_ops.telegram import command_processor
 from db_ops.telegram.command_processor import (
     SupportCommand,
@@ -70,7 +72,7 @@ def _entry(text, **overrides):
 
 def _run(tmp_path, monkeypatch, entries, *, user_id="7", chat_type="private", users=None):
     _write_config(tmp_path, entries, users=users)
-    monkeypatch.setattr(command_processor, "TOOL_ROOT", tmp_path)
+    patch_telegram(monkeypatch, "TOOL_ROOT", tmp_path)
     row = _Row(chat_id="7", message_id=1, chat_type=chat_type, user_id=user_id)
     return execute_list_all_command_command(
         store=_Store(), row=row, command=_command(), source_id="1")

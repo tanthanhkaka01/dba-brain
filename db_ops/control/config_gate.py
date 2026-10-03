@@ -33,6 +33,7 @@ must not do.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import sys
 from pathlib import Path
 from typing import Any
@@ -43,7 +44,7 @@ DRIFT_CHOICES = ("ask", "adopt", "keep", "abort")
 _RULE = "-" * 78
 
 
-class ConfigDriftAbort(RuntimeError):
+class ConfigDriftAbort(errors.Refused):
     """The deploy was stopped because the store and ``data/`` disagree."""
 
 

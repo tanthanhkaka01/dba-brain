@@ -75,7 +75,11 @@ else in the console - and no report page - opens until it is changed (at least 8
 different from the old one). Every other session of the account ends with the change. The same
 accounts sign in to the console and to the report pages. Passwords are kept only as a PBKDF2 hash
 in the running store (`web_users`); a change made from the console clears any recoverable copy
-the CLI had written to the secret store. A store that already has accounts gets no `admin`.
+the CLI had written to the secret store. A store that already has accounts gets no `admin` by
+itself - `python -m db_ops.webhost.cli bootstrap-admin` adds the same `admin` / `admin`, changed
+at its first sign-in, to such a store (a store that outlived its first node, whose only
+account belongs to someone who is not there; the 0.26 soak node, 2026-10-03). It never resets
+an active `admin`: that password is somebody's - `user-password` does that, deliberately.
 
 Accounts live in the runtime store (`web_users`), not in a file. A password is stored only as a
 PBKDF2-HMAC-SHA256 encoding at the same 200 000 iterations the encrypted secret store uses
@@ -90,8 +94,23 @@ level unlocks is set in `data/webhost_config.json`:
 | `min_level_view` | 1 | Every console page (enforced since the 0.25.0 review; it was read and ignored). |
 | `min_level_edit` | 50 | Changing config records. |
 | `min_level_run` | 50 | Running an app from the console. |
-| `min_level_admin` | 90 | **Reading logs**; and, together with the user's password typed again, any change to what runs or who may run it (below). Console accounts and sessions are managed with `db.cli`, not from the console - it has no account pages. |
+| `min_level_admin` | 90 | **Reading logs**; and, together with the user's password typed again, any change to what runs or who may run it (below); and **managing accounts** - the Users page (below). |
 | `reports_require_login` | true | The report pages on the same listener need a console session; `false` only behind a proxy that authenticates. |
+
+**Users - accounts managed in the console** (the operator, 2026-10-02). Until then an account could
+only be added, re-levelled, reset or disabled with `webhost.cli`; the console now has Grafana's
+*Users* page: Administration -> Users, shown to an admin only. Levels are named as roles - **Viewer**
+(from `min_level_view`), **Editor** (from the higher of `min_level_edit` / `min_level_run`), **Admin**
+(from `min_level_admin`), **Owner** (100), `lib.web_auth.roles` - on the same scale, so a raw level
+can still be typed. The rules are the handler's, not the form's: every change needs the CSRF token,
+admin level and the actor's own password again; nobody grants a level above their own or changes an
+account above their own; nobody lowers or disables their own account there (another admin does); the
+last active admin is never lowered or disabled; a reset or a disable ends the account's sessions, and
+a level change applies at the next request because a session reads its level from the account. The
+CLI commands stay - the console is a second door to the same `WebAuthStore` operations, not a second
+implementation. The sign-in and password pages follow Tabler's sign-in layout (the product mark
+over a centred card, a show/hide toggle on every password field) in the report pages' palette, and
+still say one thing for every failed sign-in.
 
 **What runs, and who may run it** (0.25.0 review, F9.1). A change to `app_commands.command_text`
 (and `working_dir`, `env`, `node_role`), `db_instances.cmd_access`, a SQL task's script or input,
@@ -390,6 +409,12 @@ way on a shared host should be treated as disclosed.
 | `/db_ops/config/<file>/<collection>[/<key>]` | POST | yes, level 50 | Create or update a record. |
 | `/db_ops/config/<file>/<collection>/<key>/delete` | POST | yes, level 50 | Retire a record. |
 | `/db_ops/apps/<app_command_id>/run` | POST | yes, level 50 | Queue a run. |
+| `/db_ops/users` | GET | yes, admin | Accounts: role, state, last sign-in, failed sign-ins, sessions; recent sign-in attempts. |
+| `/db_ops/users` | POST | yes, admin + password | Create an account (role or exact level, initial password, *must change* by default). |
+| `/db_ops/users/<name>/level` | POST | yes, admin + password | Change its role or level. |
+| `/db_ops/users/<name>/password` | POST | yes, admin + password | Reset its password (ends its sessions; *must change* by default). |
+| `/db_ops/users/<name>/signout` | POST | yes, admin + password | End every session it holds. |
+| `/db_ops/users/<name>/disable` | POST | yes, admin + password | Disable it (ends its sessions; the name can be issued again). |
 
 Anything else under the prefix is a 404. An unauthenticated page request redirects to the login
 form; an unauthenticated **`/api/`** request answers `401` with JSON, so a `fetch()` gets an error

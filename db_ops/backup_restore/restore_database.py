@@ -1,6 +1,6 @@
 from __future__ import annotations
+from db_ops.lib import errors
 from db_ops.backup_restore.shell_quoting import _BACKUP_TIMESTAMP_RE, backup_time_from_name, _build_sqlcmd_auth_args, _escape_identifier, _escape_sql_string, _ps_array, _ps_quote  # noqa: F401 - one definition
-
 import datetime
 import shlex
 import subprocess
@@ -9,7 +9,6 @@ import time
 import re
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
-
 from db_ops.backup_restore.config import (
     BackupRestoreConfig,
     DatabaseRestoreMapping,
@@ -25,49 +24,73 @@ from db_ops.backup_restore.sanitize import compact_log_value, sanitize_text, san
 from db_ops.lib.config import DbOpsConfig, load_config
 from db_ops.db.store import utc_now_text
 from db_ops.logging_ops import log_event
-
-
-@dataclass(frozen=True)
-class RestoreCandidate:
-    source_key: str
-    source_database_name: str
-    restore_database_name: str
-    backup_file_unc: Path
-    backup_file_on_vm: Path
-    restore_data_file_on_vm: Path
-    restore_log_file_on_vm: Path
-
-
-RESTORE_FAILURE_MARKERS = (
-    "msg 3013",
-    "terminating abnormally",
-    "incorrectly formed",
-    "can not be read",
-    "cannot be read",
-    "the media family",
+from db_ops.backup_restore.restore_base import (  # noqa: F401 - re-exported: every name kept its address
+    RestoreCandidate,
+    _emit_restore_log,
+    _format_metadata,
+    _normalize_restore_path,
 )
-
-PRESTART_SQL_CONNECTION_MARKERS = (
-    "login timeout expired",
-    "tcp provider: error code 0x102",
-    "network-related or instance-specific error",
+from db_ops.backup_restore.restore_find import (  # noqa: F401 - re-exported: every name kept its address
+    _backup_path_exists,
+    _backup_sort_timestamp,
+    _coerce_database_mapping,
+    _database_full_backup_dir,
+    _find_database_mapping,
+    _find_latest_full_backups_linux,
+    _find_linux_files_with_mtime,
+    _find_log_backups_linux_with_mtime,
+    _find_skipped_log_reasons,
+    _linux_file_mtime,
+    _missing_backup_paths,
+    _path_backup_timestamp,
+    _safe_file_stem,
+    _skipped_full_backups,
+    _target_path_str,
+    find_full_backups_for_pitr,
+    find_latest_full_backups,
+    find_restore_diff_backup,
+    find_restore_diff_backup_for_pitr,
+    find_restore_log_backups,
+    find_restore_log_backups_for_pitr,
+    get_full_backup_for_pitr,
+    get_latest_full_backup,
+    get_latest_full_backup_for_database,
+    target_path,
+    vm_unc_to_local_path,
 )
-
-AMBIGUOUS_SQL_CONNECTION_MARKERS = (
-    "connection reset",
-    "broken pipe",
+from db_ops.backup_restore.restore_sql import (  # noqa: F401 - re-exported: every name kept its address
+    build_checkdb_sql,
+    build_recovery_if_restoring_sql,
+    build_recovery_sql,
+    build_set_recovery_model_full_sql,
+    composed_restore_sql,
 )
-
-
-class RestoreCommandTimeoutError(RuntimeError):
-    def __init__(self, message: str, *, command_started: bool) -> None:
-        super().__init__(message)
-        self.command_started = command_started
-
-
-def _emit_restore_log(logger: object | None, message: str, *, level: str = "logging") -> None:
-    if logger:
-        log_event(logger, level=level, message=sanitize_text(message))
+from db_ops.backup_restore.restore_sqlcmd import (  # noqa: F401 - re-exported: every name kept its address
+    AMBIGUOUS_SQL_CONNECTION_MARKERS,
+    PRESTART_SQL_CONNECTION_MARKERS,
+    RESTORE_FAILURE_MARKERS,
+    RestoreCommandTimeoutError,
+    _SqlcmdCommand,
+    _assert_sql_command_target,
+    _execute_sqlcmd_once,
+    _is_ambiguous_sql_connection_failure,
+    _is_sqlserver_msg_4305,
+    _is_transient_sql_connection_failure,
+    _local_request_from_argv,
+    _log_restore_progress,
+    _parse_restore_progress_percent,
+    _remote_exec_type,
+    _restore_step_command,
+    _run_sqlcmd_query_command_streaming,
+    _run_sqlcmd_via_ssh,
+    _sql_of,
+    _sqlcmd_argv,
+    _sqlcmd_in_common,
+    _sqlcmd_request,
+    build_sqlcmd_query_command,
+    restore_output_has_failure,
+    run_sqlcmd_query_command,
+)
 
 
 def parse_point_in_time(value: str) -> datetime.datetime:
@@ -95,200 +118,12 @@ def parse_point_in_time(value: str) -> datetime.datetime:
     return dt.astimezone(datetime.timezone.utc)
 
 
-def _format_metadata(**metadata: object) -> str:
-    return " ".join(f"{key}={compact_log_value(value)}" for key, value in metadata.items() if value is not None)
-
-
 def _restore_database_label(candidate: RestoreCandidate | None, database: DatabaseRestoreMapping | None = None) -> str:
     if candidate is not None:
         return candidate.source_database_name
     if database is not None:
         return database.source_database
     return "unknown"
-
-
-def get_latest_full_backup(config: BackupRestoreConfig | None = None) -> Path:
-    restore_config = config or load_restore_config()
-    files = sorted(
-        find_latest_full_backups(restore_config),
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
-    )
-    if not files:
-        raise FileNotFoundError(f"No .bak file found in {restore_config.vm_import_unc}.")
-    return files[0]
-
-
-def _target_path_str(path: Path, config: BackupRestoreConfig) -> str:
-    """Return path string in the correct format for the target OS SQL context."""
-    s = str(path)
-    return s.replace("\\", "/") if config.is_linux else s
-
-
-def target_path(*parts, config: BackupRestoreConfig) -> Path:
-    """Join *parts* the way the **target host** writes a path, not the way this machine does.
-
-    Three separators are in play and only one is right: the orchestrator's (an Ubuntu worker), the
-    target's, and whichever one `pathlib.Path` picks from the platform it was imported on. Joining
-    with `Path` silently chose the third, so a restore path for a Windows SQL Server came off the
-    Linux worker with a forward slash in the middle of it.
-
-    Forcing Windows is not the fix either — SQL Server runs on Linux, and `config.is_linux` is what
-    says which this target is. The result is converted through `str` because
-    `Path(PureWindowsPath(...))` copies the *parts* and re-joins them locally, which is the same
-    bug wearing a different hat.
-    """
-    flavour = PurePosixPath if config.is_linux else PureWindowsPath
-    joined = flavour(parts[0])
-    for part in parts[1:]:
-        joined = joined / flavour(part)
-    return Path(str(joined))
-
-
-def vm_unc_to_local_path(path: str | Path, config: BackupRestoreConfig) -> Path:
-    """Where a file copied to the target's import share is, as the *target* sees it."""
-    backup_path = Path(path)
-    relative_path = backup_path.relative_to(config.vm_import_unc)
-    return target_path(config.vm_import_local, relative_path, config=config)
-
-
-
-
-def _backup_sort_timestamp(path: Path, *, fallback_mtime: float) -> float:
-    stamped = backup_time_from_name(path.name)
-    return fallback_mtime if stamped is None else stamped
-
-
-def find_latest_full_backups(config: BackupRestoreConfig | None = None, *, now: float | None = None) -> list[Path]:
-    restore_config = config or load_restore_config()
-    if restore_config.is_linux:
-        return _find_latest_full_backups_linux(restore_config, now=now)
-    grouped: dict[str, Path] = {}
-    database_filter = {item.source_database.lower() for item in restore_config.databases}
-    cutoff = (time.time() if now is None else now) - (restore_config.copy_recent_hours * 60 * 60)
-    for path in restore_config.vm_import_unc.rglob("*.bak"):
-        if not path.is_file() or path.parent.name.lower() != restore_config.full_backup_subdir.lower():
-            continue
-        if database_filter and path.parent.parent.name.lower() not in database_filter:
-            continue
-        if restore_config.copy_recent_hours > 0 and path.stat().st_mtime < cutoff:
-            continue
-        source_key = str(path.parent.parent.relative_to(restore_config.vm_import_unc)).lower()
-        current = grouped.get(source_key)
-        if current is None or path.stat().st_mtime > current.stat().st_mtime:
-            grouped[source_key] = path
-    return sorted(grouped.values(), key=lambda path: str(path.parent.parent.relative_to(restore_config.vm_import_unc)).lower())
-
-
-def _find_latest_full_backups_linux(config: BackupRestoreConfig, *, now: float | None = None) -> list[Path]:
-    linux_import = str(config.vm_import_unc).replace("\\", "/")
-    full_subdir = config.full_backup_subdir
-    database_filter = {item.source_database.lower() for item in config.databases}
-    cutoff = (time.time() if now is None else now) - (config.copy_recent_hours * 60 * 60) if config.copy_recent_hours > 0 else None
-
-    with open_ssh_connection(config) as ssh:
-        answer = ssh.run(
-            f'find {shlex.quote(linux_import)} -type f -name "*.bak" -printf "%T@ %p\\n" 2>/dev/null || true'
-        )
-        lines = answer.stdout.splitlines()
-
-    grouped: dict[str, tuple[float, Path]] = {}
-    for line in lines:
-        parts = line.split(" ", 1)
-        if len(parts) < 2:
-            continue
-        try:
-            mtime = float(parts[0])
-        except ValueError:
-            continue
-        fpath = parts[1].strip()
-        p = PurePosixPath(fpath)
-        # Expected layout: {import_root}/{DB_NAME}/{FULL}/{file.bak}
-        if p.parent.name.lower() != full_subdir.lower():
-            continue
-        db_name = p.parent.parent.name
-        if database_filter and db_name.lower() not in database_filter:
-            continue
-        if cutoff is not None and mtime < cutoff:
-            continue
-        source_key = db_name.lower()
-        existing_mtime, _ = grouped.get(source_key, (0.0, None))
-        if mtime > existing_mtime:
-            grouped[source_key] = (mtime, Path(fpath))
-
-    return sorted((v for _, v in grouped.values()), key=lambda p: str(p).lower())
-
-
-def _find_log_backups_linux_with_mtime(config: BackupRestoreConfig, linux_db_dir: str) -> list[tuple[float, str]]:
-    return _find_linux_files_with_mtime(config, f"{linux_db_dir}/LOG", "*.trn")
-
-
-def _find_linux_files_with_mtime(
-    config: BackupRestoreConfig,
-    directory: str | Path,
-    pattern: str,
-) -> list[tuple[float, str]]:
-    linux_dir = str(directory).replace("\\", "/")
-    with open_ssh_connection(config) as ssh:
-        answer = ssh.run(
-            f'find {shlex.quote(linux_dir)} -maxdepth 1 -type f -name {shlex.quote(pattern)} '
-            f'-printf "%T@ %p\\n" 2>/dev/null || true'
-        )
-        lines = answer.stdout.splitlines()
-    result: list[tuple[float, str]] = []
-    for line in lines:
-        parts = line.split(" ", 1)
-        if len(parts) < 2:
-            continue
-        try:
-            mtime = float(parts[0])
-        except ValueError:
-            continue
-        result.append((mtime, parts[1].strip()))
-    return result
-
-
-def _linux_file_mtime(config: BackupRestoreConfig, path: str | Path) -> float | None:
-    linux_path = str(path).replace("\\", "/")
-    with open_ssh_connection(config) as ssh:
-        answer = ssh.run(
-            f'stat -c "%Y" {shlex.quote(linux_path)} 2>/dev/null || true'
-        )
-        value = answer.stdout.strip()
-    try:
-        return float(value) if value else None
-    except ValueError:
-        return None
-
-
-def _missing_backup_paths(config: BackupRestoreConfig, paths: list[Path] | list[str]) -> set[str]:
-    """The chain's files that are NOT on the target, asked in ONE session.
-
-    Asked one file at a time until 0.24.1: a FULL and its logs are a session each, every session a
-    fresh SSH connection, and on 2026-09-27 a lab VM dropped one of them (``WinError 10054``) while
-    a 97-log chain was being checked - which failed the database, and cost 2 min 46 s before it
-    did. The answer is compared by :func:`_normalize_restore_path`.
-    """
-    if not paths:
-        return set()
-    if not config.is_linux:
-        return {_normalize_restore_path(path) for path in paths if not Path(path).is_file()}
-    posix = [str(path).replace("\\", "/") for path in paths]
-    script = "\n".join(f"[ -f {shlex.quote(path)} ] || printf '%s\\n' {shlex.quote(path)}" for path in posix)
-    with open_ssh_connection(config) as ssh:
-        answer = ssh.run_script(script)
-    return {_normalize_restore_path(line.strip()) for line in answer.stdout.splitlines() if line.strip()}
-
-
-def _backup_path_exists(config: BackupRestoreConfig, path: str | Path) -> bool:
-    if not config.is_linux:
-        return Path(path).is_file()
-    linux_path = str(path).replace("\\", "/")
-    with open_ssh_connection(config) as ssh:
-        answer = ssh.run(
-            f'test -f {shlex.quote(linux_path)} && printf yes || true'
-        )
-        return answer.stdout.strip() == "yes"
 
 
 def build_restore_candidate(
@@ -349,145 +184,6 @@ def _restore_step(level: str, candidate: RestoreCandidate, config: BackupRestore
     if stopat_utc is not None:
         fields["stopat"] = stopat_utc.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
     return fields
-
-
-def composed_restore_sql(level: str, fields: dict[str, object]) -> str:
-    """The statement ``common`` will run for a step, without running it - for a dry run's plan."""
-    from db_ops.transport import common_cli
-
-    answer = common_cli.run(f"restore-{level}", {**fields, "dry_run": True})
-    return "\n".join(str(text) for text in answer.get("statements") or [])
-
-
-def build_recovery_sql(candidate: RestoreCandidate) -> str:
-    return f"""
-USE master;
-RESTORE DATABASE [{_escape_identifier(candidate.restore_database_name)}] WITH RECOVERY;
-ALTER DATABASE [{_escape_identifier(candidate.restore_database_name)}] SET MULTI_USER;
-""".strip()
-
-
-def build_recovery_if_restoring_sql(candidate: RestoreCandidate) -> str:
-    # PITR finalize: only recover if the DB is still RESTORING. During a point-in-time restore the
-    # final LOG restore normally recovers the DB (WITH RECOVERY + STOPAT); but if that log was
-    # skipped (e.g. Msg 4305 from a non-contiguous/stray log) or the chain ended exactly at the
-    # target, the DB is left RESTORING. Recovering here brings it online at the last applied point
-    # -- which is never past the target, since every NORECOVERY log ends at or before it. If the DB
-    # is already ONLINE the RESTORE is skipped and this is a no-op that just normalizes user access.
-    db = _escape_identifier(candidate.restore_database_name)
-    db_literal = _escape_sql_string(candidate.restore_database_name)
-    return f"""
-USE master;
-IF DATABASEPROPERTYEX(N'{db_literal}', N'Status') = N'RESTORING'
-    RESTORE DATABASE [{db}] WITH RECOVERY;
-ALTER DATABASE [{db}] SET MULTI_USER;
-""".strip()
-
-
-def build_set_recovery_model_full_sql(candidate: RestoreCandidate) -> str:
-    return f"ALTER DATABASE [{_escape_identifier(candidate.restore_database_name)}] SET RECOVERY FULL;"
-
-
-def build_checkdb_sql(candidate: RestoreCandidate) -> str:
-    return f"DBCC CHECKDB ([{_escape_identifier(candidate.restore_database_name)}]) WITH NO_INFOMSGS;"
-
-
-def build_sqlcmd_query_command(*, sql: str, config: BackupRestoreConfig) -> list[str]:
-    command = _SqlcmdCommand(_sqlcmd_argv(sql=sql, config=config))
-    command.sql = sql
-    return command
-
-
-def _sqlcmd_argv(*, sql: str, config: BackupRestoreConfig) -> list[str]:
-    sql_auth_args = _build_sqlcmd_auth_args(config)
-    timeout_args = [
-        "-l",
-        str(config.sql_login_timeout_seconds),
-        "-t",
-        str(config.sql_query_timeout_seconds),
-    ]
-    if config.vm_credential_target and config.is_linux:
-        # Linux: returned as a sentinel — actual execution is SSH-based via run_sqlcmd_query_command.
-        return ["__ssh_sqlcmd__", config.vm_credential_target, config.restore_sql_instance_on_vm, sql, *timeout_args]
-    if config.vm_credential_target:
-        open_timeout_ms = max(config.remote_command_timeout_seconds, 1) * 1000
-        operation_timeout_ms = (
-            config.restore_command_timeout_seconds * 1000
-            if config.restore_command_timeout_seconds > 0
-            else 2_147_483_647
-        )
-        password = ""
-        if config.vm_username and config.vm_password_env:
-            password = resolve_password_ref(config.vm_password_env)
-            if not password:
-                raise RuntimeError(f"Password ref not found in environment or secret_text.json: {config.vm_password_env}")
-        # The Invoke-Command wrapper (credential, session option, script block) is shared —
-        # see db_ops.lib.powershell. Only the remote body below is restore-specific.
-        return powershell.build_invoke_command_argv(
-            host=config.vm_credential_target,
-            username=config.vm_username if password else "",
-            password=password,
-            open_timeout_ms=open_timeout_ms,
-            operation_timeout_ms=operation_timeout_ms,
-            arguments=[config.sqlcmd_path, config.restore_sql_instance_on_vm, sql],
-            script_body=[
-                "    param($SqlcmdPath, $SqlInstance, $Sql)",
-                f"    $sqlAuthArgs = @({_ps_array(sql_auth_args)})",
-                f"    $timeoutArgs = @({_ps_array(timeout_args)})",
-                "    & $SqlcmdPath -S $SqlInstance -C @sqlAuthArgs @timeoutArgs -b -Q $Sql",
-                "    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }",
-            ],
-        )
-    return [
-        config.sqlcmd_path,
-        "-S",
-        config.restore_sql_instance_on_vm,
-        "-C",
-        *sql_auth_args,
-        *timeout_args,
-        "-b",
-        "-Q",
-        sql,
-    ]
-
-
-def _remote_exec_type(config: BackupRestoreConfig) -> str:
-    if config.vm_credential_target:
-        return "ssh" if config.is_linux else "powershell"
-    return "local"
-
-
-def _assert_sql_command_target(cmd: list[str], config: BackupRestoreConfig) -> str:
-    exec_type = _remote_exec_type(config)
-    first = str(cmd[0]).lower() if cmd else ""
-    is_ssh = first == "__ssh_sqlcmd__"
-    is_powershell = is_powershell_executable(cmd[0]) if cmd else False
-
-    if config.is_linux and not is_ssh:
-        raise RuntimeError(
-            f"Target context mismatch: restore_id={config.restore_id} target_host={config.vm_credential_target} "
-            f"target_os_type=linux cannot execute remote_exec_type={'powershell' if is_powershell else 'local'}."
-        )
-    if not config.is_linux and config.vm_credential_target and not is_powershell:
-        raise RuntimeError(
-            f"Target context mismatch: restore_id={config.restore_id} target_host={config.vm_credential_target} "
-            f"target_os_type=windows cannot execute remote_exec_type={'ssh' if is_ssh else 'local'}."
-        )
-    if is_ssh:
-        if len(cmd) < 4 or cmd[1] != config.vm_credential_target or cmd[2] != config.restore_sql_instance_on_vm:
-            raise RuntimeError(
-                f"Target context mismatch: restore_id={config.restore_id} SSH command target does not match "
-                f"target_host={config.vm_credential_target} sql_instance={config.restore_sql_instance_on_vm}."
-            )
-    if is_powershell:
-        expected = f"Invoke-Command -ComputerName {_ps_quote(config.vm_credential_target)}"
-        script = cmd[-1] if cmd else ""
-        if expected not in script:
-            raise RuntimeError(
-                f"Target context mismatch: restore_id={config.restore_id} PowerShell command does not match "
-                f"target_host={config.vm_credential_target}."
-            )
-    return exec_type
 
 
 def run_restore_database(
@@ -941,7 +637,7 @@ def run_restore_log(
                         "stderr": "",
                     }
                 else:
-                    raise RuntimeError(
+                    raise errors.Refused(
                         f"reason=restore_timeout_resume_unsafe database={candidate.restore_database_name} "
                         f"backup={backup_on_vm} last_confirmed_log={resume_result['last_confirmed_log']}: {exc}"
                     ) from exc
@@ -986,7 +682,7 @@ def run_restore_log(
             results.append(result)
         if not results:
             skipped_text = ", ".join(skipped_4305) if skipped_4305 else "none"
-            raise RuntimeError(
+            raise errors.OperationFailed(
                 "missing required earlier LOG backup / LSN gap: no selected LOG backup could be applied "
                 f"database={candidate.restore_database_name} skipped_msg_4305={skipped_text}"
             )
@@ -1048,7 +744,7 @@ CHECKDB_OFF_REASON = "switched off on this restore entry (checkdb: false)"
 CHECK_FAILED = "CHECK_FAILED"
 
 
-class IntegrityCheckFailed(RuntimeError):
+class IntegrityCheckFailed(errors.OperationFailed):
     """`DBCC CHECKDB` failed on a database that was restored and recovered."""
 
 
@@ -1501,291 +1197,6 @@ def ensure_vm_share_credential(config: BackupRestoreConfig) -> None:
         store_share_logins([request])
 
 
-def _sql_of(cmd: list[str]) -> str:
-    """The batch inside a command :func:`build_sqlcmd_query_command` made, in any of its shapes."""
-    if cmd and cmd[0] == "__ssh_sqlcmd__":
-        return str(cmd[3])
-    if "-Q" in cmd:
-        return str(cmd[cmd.index("-Q") + 1])
-    # The Invoke-Command argv carries the batch inside its script; build_sqlcmd_query_command
-    # records it on the list it returns.
-    sql = getattr(cmd, "sql", None)
-    if sql is None:
-        raise RuntimeError("no SQL batch found in the sqlcmd command.")
-    return str(sql)
-
-
-class _SqlcmdCommand(list):
-    """The argv :func:`build_sqlcmd_query_command` returns, which also remembers its batch.
-
-    A list, so everything that compared or asserted its shape still does; the batch rides along
-    because the PowerShell shape buries it inside a script, and ``common.cli run-sqlcmd`` is handed
-    the batch and its context as values, not a command line to reverse-engineer. A restore step
-    rides along instead as ``restore_step`` - ``(level, request)`` - and goes to
-    ``common.cli restore-<level>``, which writes the RESTORE itself."""
-
-    sql: str = ""
-    restore_step: tuple[str, dict[str, object]] | None = None
-
-
-def _restore_step_command(restore: tuple[str, dict[str, object]], *,
-                          config: BackupRestoreConfig) -> list[str]:
-    """The command shape for a restore step: where it runs (ssh / PowerShell / local), with the step
-    in place of a batch - the shape is still what :func:`_assert_sql_command_target` checks and what
-    the log names, and nothing reads a statement out of it."""
-    level, fields = restore
-    command = build_sqlcmd_query_command(
-        sql=f"-- restore-{level} {fields.get('backup_path')} (written by common.cli)", config=config)
-    command.restore_step = (level, dict(fields))
-    return command
-
-
-def _sqlcmd_request(cmd: list[str], config: BackupRestoreConfig, *, via: str) -> dict[str, object]:
-    """The ``run-sqlcmd`` request for one batch, every value resolved here - ``common`` reads none."""
-    auth = _build_sqlcmd_auth_args(config)
-    username, password = (auth[1], auth[3]) if auth[:1] == ["-U"] else ("", "")
-    request: dict[str, object] = {
-        "sql": _sql_of(cmd),
-        "instance": config.restore_sql_instance_on_vm,
-        "sqlcmd_path": config.sqlcmd_path,
-        "username": username,
-        "password": password,
-        "login_timeout_seconds": config.sql_login_timeout_seconds,
-        "query_timeout_seconds": config.sql_query_timeout_seconds,
-        "timeout_seconds": config.restore_command_timeout_seconds,
-        "via": via,
-    }
-    if config.sql_container and via != "winrm":
-        # The container's own sqlcmd: the target host may have none (a lab VM with only Docker).
-        request["container"] = config.sql_container
-    if via != "local":
-        host_password = ""
-        if config.vm_password_env and (via == "ssh" or config.vm_username):
-            host_password = resolve_password_ref(config.vm_password_env)
-            if not host_password:
-                raise RuntimeError(
-                    f"Password ref not found in environment or secret_text.json: {config.vm_password_env}")
-        request["host"] = {
-            "host": config.vm_credential_target,
-            "username": config.vm_username,
-            "password": host_password,
-            "open_timeout_seconds": config.remote_command_timeout_seconds,
-        }
-    return request
-
-
-def _local_request_from_argv(cmd: list[str], *, timeout_seconds: int) -> dict[str, object]:
-    """A local ``sqlcmd`` argv, read back into a request - for a caller with no restore config."""
-    def after(flag: str, default: str = "") -> str:
-        return str(cmd[cmd.index(flag) + 1]) if flag in cmd else default
-
-    return {"sql": _sql_of(cmd), "instance": after("-S"), "sqlcmd_path": str(cmd[0]),
-            "username": after("-U"), "password": after("-P"),
-            "login_timeout_seconds": int(after("-l", "30")), "query_timeout_seconds": int(after("-t", "0")),
-            "timeout_seconds": timeout_seconds, "via": "local"}
-
-
-def _sqlcmd_in_common(request: dict[str, object], *, cmd: list[str]) -> subprocess.CompletedProcess[str]:
-    """Run one batch through ``common.cli run-sqlcmd`` (1.38) and hand it back as the process it was.
-
-    The restore's statements used to run here - an SSH channel of the app's own, a local
-    PowerShell, a local ``sqlcmd``. They run in ``common`` now, which reads no configuration: this
-    app resolved every value above. What an answer MEANS - a failure hidden in exit code 0, a
-    connection lost mid-RESTORE LOG - is still decided by the caller of this function, unchanged.
-    stderr streams: ``sqlcmd``'s *percent processed* reaches this process's log as it happens.
-    """
-    from db_ops.transport import common_cli
-
-    step = getattr(cmd, "restore_step", None)
-    if step is not None:
-        level, fields = step
-        # The same sqlcmd, in the same place, with the same timeouts - the batch is written there.
-        sqlcmd = {key: value for key, value in request.items() if key != "sql"}
-        ok, data, error = common_cli.run_allowing_failure(
-            f"restore-{level}", {**fields, "sqlcmd": sqlcmd}, stream_stderr=True)
-    else:
-        ok, data, error = common_cli.run_allowing_failure("run-sqlcmd", request, stream_stderr=True)
-    if not ok:
-        raise RuntimeError(f"sqlcmd could not be run ({request.get('via')}): {error}")
-    if data.get("timed_out"):
-        raise RestoreCommandTimeoutError(
-            f"Restore command timed out after {request.get('timeout_seconds')} seconds.",
-            command_started=True,
-        )
-    exit_code = data.get("exit_code")
-    completed = subprocess.CompletedProcess(
-        cmd, 1 if exit_code is None else int(exit_code),
-        str(data.get("stdout") or ""), str(data.get("stderr") or ""))
-    # What actually ran, for the step's record - a restore step's text is written in common.
-    completed.statements = list(data.get("statements") or [])
-    return completed
-
-
-def _run_sqlcmd_via_ssh(cmd: list[str], config: BackupRestoreConfig) -> subprocess.CompletedProcess[str]:
-    """``sqlcmd`` on a Linux target over SSH. ``cmd`` is the sentinel list from build_sqlcmd_query_command."""
-    _assert_sql_command_target(cmd, config)
-    return _sqlcmd_in_common(_sqlcmd_request(cmd, config, via="ssh"), cmd=cmd)
-
-
-def run_sqlcmd_query_command(
-    cmd: list[str],
-    *,
-    config: BackupRestoreConfig | None = None,
-    logger: object | None = None,
-    progress_step: str | None = None,
-    progress_database: str | None = None,
-    restore_id: str = "",
-    allow_transient_retry: bool = True,
-    command_file: str = "",
-) -> subprocess.CompletedProcess[str]:
-    if config is not None:
-        remote_exec_type = _assert_sql_command_target(cmd, config)
-        _emit_restore_log(
-            logger,
-            "restore-db remote-command dispatch "
-            + _format_metadata(
-                restore_id=config.restore_id or None,
-                target_id=config.target_id,
-                target_host=config.vm_credential_target or "local",
-                target_os_type=config.vm_platform,
-                remote_exec_type=remote_exec_type,
-                sql_instance=config.restore_sql_instance_on_vm,
-                command_phase=progress_step or "sql",
-                sql_login_timeout_seconds=config.sql_login_timeout_seconds,
-                sql_query_timeout_seconds=config.sql_query_timeout_seconds,
-                remote_command_timeout_seconds=config.remote_command_timeout_seconds,
-                restore_command_timeout_seconds=config.restore_command_timeout_seconds,
-            ),
-        )
-    attempts = 3 if allow_transient_retry else 1
-    for attempt in range(1, attempts + 1):
-        result = _execute_sqlcmd_once(
-            cmd,
-            config=config,
-            logger=logger,
-            progress_step=progress_step,
-            progress_database=progress_database,
-            restore_id=restore_id,
-        )
-        if result.returncode == 0 and not restore_output_has_failure(result.stdout, result.stderr):
-            return result
-        combined_output = f"{result.stdout}\n{result.stderr}"
-        if attempt < attempts and _is_transient_sql_connection_failure(combined_output):
-            _emit_restore_log(
-                logger,
-                "restore-db remote-command retry "
-                + _format_metadata(
-                    restore_id=restore_id or (config.restore_id if config else None),
-                    target_id=config.target_id if config else None,
-                    target_host=config.vm_credential_target if config else None,
-                    command_phase=progress_step or "sql",
-                    reason="transient_connection_before_restore",
-                    resume_decision="retry_safe_not_started",
-                    last_confirmed_log="unknown",
-                    next_log=command_file or "unknown",
-                    attempt=attempt + 1,
-                ),
-            )
-            time.sleep(min(attempt, 2))
-            continue
-        if progress_step == "restore-log" and _is_ambiguous_sql_connection_failure(combined_output):
-            raise RestoreCommandTimeoutError(
-                "Connection was lost after RESTORE LOG command dispatch; execution status is ambiguous.",
-                command_started=True,
-            )
-        break
-    details = [f"sqlcmd command failed with exit code {result.returncode}."]
-    stdout = sanitize_text(result.stdout.strip())
-    stderr = sanitize_text(result.stderr.strip())
-    if stdout:
-        details.append(f"stdout:\n{stdout}")
-    if stderr:
-        details.append(f"stderr:\n{stderr}")
-    if not stdout and not stderr:
-        details.append("No stdout/stderr was returned by PowerShell/sqlcmd.")
-    raise RuntimeError("\n".join(details))
-
-
-def _execute_sqlcmd_once(
-    cmd: list[str],
-    *,
-    config: BackupRestoreConfig | None,
-    logger: object | None,
-    progress_step: str | None,
-    progress_database: str | None,
-    restore_id: str,
-) -> subprocess.CompletedProcess[str]:
-    timeout_seconds = config.restore_command_timeout_seconds if config else 0
-    if cmd and cmd[0] == "__ssh_sqlcmd__":
-        if config is None:
-            raise RuntimeError("config is required for SSH sqlcmd execution.")
-        result = _run_sqlcmd_via_ssh(cmd, config)
-        # The Linux path logged no progress at all until 0.23.0; it has the same answer to read.
-        _log_restore_progress(result, logger=logger, progress_step=progress_step or "sql",
-                              progress_database=progress_database or "unknown", restore_id=restore_id)
-        return result
-    return _run_sqlcmd_query_command_streaming(
-        cmd,
-        logger=logger,
-        progress_step=progress_step or "sql",
-        progress_database=progress_database or "unknown",
-        restore_id=restore_id,
-        timeout_seconds=timeout_seconds,
-        config=config,
-    )
-
-
-def _run_sqlcmd_query_command_streaming(
-    cmd: list[str],
-    *,
-    logger: object | None,
-    progress_step: str,
-    progress_database: str,
-    restore_id: str = "",
-    timeout_seconds: int = 0,
-    config: BackupRestoreConfig | None = None,
-) -> subprocess.CompletedProcess[str]:
-    """A Windows target through ``Invoke-Command``, or a local ``sqlcmd`` - through ``common.cli``.
-
-    The progress events are read off the answer; the live *percent processed* lines reach this
-    process's stderr while the restore runs (see :func:`_sqlcmd_in_common`).
-    """
-    if config is not None:
-        via = "winrm" if config.vm_credential_target and not config.is_linux else "local"
-        request = _sqlcmd_request(cmd, config, via=via)
-    else:
-        request = _local_request_from_argv(cmd, timeout_seconds=timeout_seconds)
-    result = _sqlcmd_in_common(request, cmd=cmd)
-    _log_restore_progress(result, logger=logger, progress_step=progress_step,
-                          progress_database=progress_database, restore_id=restore_id)
-    return result
-
-
-def _log_restore_progress(result: subprocess.CompletedProcess[str], *, logger: object | None,
-                          progress_step: str, progress_database: str, restore_id: str = "") -> None:
-    """One ``progress`` event per *NN percent processed* line sqlcmd printed."""
-    if not logger:
-        return
-    for line in (result.stdout or "").splitlines():
-        progress = _parse_restore_progress_percent(line)
-        if progress is not None:
-            _emit_restore_log(
-                logger,
-                f"restore-db {progress_step} progress "
-                + _format_metadata(restore_id=restore_id or None, database=progress_database, percent=progress),
-            )
-
-
-def _is_transient_sql_connection_failure(text: str) -> bool:
-    lowered = text.lower()
-    return any(marker in lowered for marker in PRESTART_SQL_CONNECTION_MARKERS)
-
-
-def _is_ambiguous_sql_connection_failure(text: str) -> bool:
-    lowered = text.lower()
-    return any(marker in lowered for marker in AMBIGUOUS_SQL_CONNECTION_MARKERS)
-
-
 def _inspect_log_restore_resume_state(
     *,
     config: BackupRestoreConfig,
@@ -1945,425 +1356,3 @@ SELECT
         "resume_decision": resume_decision,
         "last_confirmed_log": last_file or "null",
     }
-
-
-def _normalize_restore_path(path: str | Path) -> str:
-    return str(path).replace("\\", "/").rstrip("/").lower()
-
-
-def _parse_restore_progress_percent(line: str) -> int | None:
-    lowered = line.lower()
-    if "percent" not in lowered:
-        return None
-    parts = lowered.replace(".", " ").split()
-    for index, part in enumerate(parts[:-1]):
-        if part.isdigit() and parts[index + 1].startswith("percent"):
-            return int(part)
-    return None
-
-
-def restore_output_has_failure(stdout: str | None, stderr: str | None) -> bool:
-    text = f"{stdout or ''}\n{stderr or ''}".lower()
-    return any(marker in text for marker in RESTORE_FAILURE_MARKERS)
-
-
-def _is_sqlserver_msg_4305(text: str) -> bool:
-    lowered = text.lower()
-    return "msg 4305" in lowered and "too recent to apply" in lowered
-
-
-def get_latest_full_backup_for_database(config: BackupRestoreConfig, database: DatabaseRestoreMapping | None) -> Path:
-    if database is None:
-        return get_latest_full_backup(config)
-    backup_dir = _database_full_backup_dir(config, database.source_database)
-    if config.is_linux:
-        cutoff = time.time() - (config.copy_recent_hours * 60 * 60) if config.copy_recent_hours > 0 else None
-        files = [
-            (mtime, Path(path))
-            for mtime, path in _find_linux_files_with_mtime(config, backup_dir, "*.bak")
-            if cutoff is None or mtime >= cutoff
-        ]
-        if not files:
-            raise FileNotFoundError(f"No recent .bak file found for database {database.source_database} in {backup_dir}.")
-        return sorted(files, key=lambda item: (item[0], str(item[1]).lower()), reverse=True)[0][1]
-    files = sorted(
-        [
-            path
-            for path in backup_dir.glob("*.bak")
-            if path.is_file()
-            and (config.copy_recent_hours <= 0 or path.stat().st_mtime >= time.time() - (config.copy_recent_hours * 60 * 60))
-        ],
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
-    )
-    if not files:
-        raise FileNotFoundError(f"No recent .bak file found for database {database.source_database} in {backup_dir}.")
-    return files[0]
-
-
-def get_full_backup_for_pitr(
-    config: BackupRestoreConfig,
-    database: DatabaseRestoreMapping | None,
-    point_in_time_utc: datetime.datetime,
-) -> Path:
-    pit_ts = point_in_time_utc.timestamp()
-    database_label = database.source_database if database is not None else config.source_database_name or "all"
-    if database is None:
-        candidates = [
-            (backup_timestamp, path)
-            for path in find_full_backups_for_pitr(config, point_in_time_utc)
-            for backup_timestamp in [_path_backup_timestamp(config, path)]
-            if backup_timestamp is not None and backup_timestamp <= pit_ts
-        ]
-    else:
-        backup_dir = _database_full_backup_dir(config, database.source_database)
-        if config.is_linux:
-            candidates = [
-                (_backup_sort_timestamp(Path(path), fallback_mtime=mtime), Path(path))
-                for mtime, path in _find_linux_files_with_mtime(config, backup_dir, "*.bak")
-                if _backup_sort_timestamp(Path(path), fallback_mtime=mtime) <= pit_ts
-            ]
-        else:
-            candidates = [
-                (_backup_sort_timestamp(path, fallback_mtime=path.stat().st_mtime), path)
-                for path in backup_dir.glob("*.bak")
-                if path.is_file() and _backup_sort_timestamp(path, fallback_mtime=path.stat().st_mtime) <= pit_ts
-            ]
-    if not candidates:
-        raise FileNotFoundError(
-            f"No FULL backup found for PITR database={database_label} at_or_before={point_in_time_utc.isoformat()}."
-        )
-    return sorted(candidates, key=lambda item: (item[0], str(item[1]).lower()), reverse=True)[0][1]
-
-
-def find_full_backups_for_pitr(config: BackupRestoreConfig, point_in_time_utc: datetime.datetime) -> list[Path]:
-    pit_ts = point_in_time_utc.timestamp()
-    database_filter = {item.source_database.lower() for item in config.databases}
-    grouped: dict[str, tuple[float, Path]] = {}
-    if config.is_linux:
-        linux_import = str(config.vm_import_unc).replace("\\", "/")
-        with open_ssh_connection(config) as ssh:
-            answer = ssh.run(
-                f'find {shlex.quote(linux_import)} -type f -name "*.bak" -printf "%T@ %p\\n" 2>/dev/null || true'
-            )
-            lines = answer.stdout.splitlines()
-        for line in lines:
-            parts = line.split(" ", 1)
-            if len(parts) < 2:
-                continue
-            try:
-                mtime = float(parts[0])
-            except ValueError:
-                continue
-            path = Path(parts[1].strip())
-            posix = PurePosixPath(str(path))
-            if posix.parent.name.lower() != config.full_backup_subdir.lower():
-                continue
-            db_name = posix.parent.parent.name
-            if database_filter and db_name.lower() not in database_filter:
-                continue
-            backup_ts = _backup_sort_timestamp(path, fallback_mtime=mtime)
-            if backup_ts > pit_ts:
-                continue
-            current = grouped.get(db_name.lower())
-            if current is None or backup_ts > current[0]:
-                grouped[db_name.lower()] = (backup_ts, path)
-    else:
-        for path in config.vm_import_unc.rglob("*.bak"):
-            if not path.is_file() or path.parent.name.lower() != config.full_backup_subdir.lower():
-                continue
-            db_name = path.parent.parent.name
-            if database_filter and db_name.lower() not in database_filter:
-                continue
-            backup_ts = _backup_sort_timestamp(path, fallback_mtime=path.stat().st_mtime)
-            if backup_ts > pit_ts:
-                continue
-            source_key = str(path.parent.parent.relative_to(config.vm_import_unc)).lower()
-            current = grouped.get(source_key)
-            if current is None or backup_ts > current[0]:
-                grouped[source_key] = (backup_ts, path)
-    return sorted((path for _, path in grouped.values()), key=lambda path: str(path).lower())
-
-
-def _path_backup_timestamp(config: BackupRestoreConfig, path: Path) -> float | None:
-    if config.is_linux:
-        mtime = _linux_file_mtime(config, path)
-        return _backup_sort_timestamp(path, fallback_mtime=mtime) if mtime is not None else None
-    if not path.exists():
-        return None
-    return _backup_sort_timestamp(path, fallback_mtime=path.stat().st_mtime)
-
-
-def _skipped_full_backups(
-    config: BackupRestoreConfig,
-    selected_backup: Path,
-    database: DatabaseRestoreMapping | None,
-) -> list[dict[str, str]]:
-    if database is None:
-        candidates = find_latest_full_backups(config)
-    elif config.is_linux:
-        candidates = [
-            Path(path)
-            for _, path in _find_linux_files_with_mtime(
-                config,
-                _database_full_backup_dir(config, database.source_database),
-                "*.bak",
-            )
-        ]
-    else:
-        candidates = [path for path in _database_full_backup_dir(config, database.source_database).glob("*.bak") if path.is_file()]
-    return [
-        {"backup_file": str(path), "reason": "not_latest_full"}
-        for path in sorted(candidates, key=lambda item: str(item).lower())
-        if path != selected_backup
-    ]
-
-
-
-
-
-
-
-
-
-
-
-
-def _safe_file_stem(value: str) -> str:
-    return "".join(char if char.isalnum() or char in ("_", "-") else "_" for char in value)
-
-
-def _find_database_mapping(config: BackupRestoreConfig, source_database: str) -> DatabaseRestoreMapping | None:
-    for database in config.databases:
-        if database.source_database.lower() == source_database.lower():
-            return database
-    return None
-
-
-def _coerce_database_mapping(database: DatabaseRestoreMapping | str | None) -> DatabaseRestoreMapping | None:
-    if database is None:
-        return None
-    if isinstance(database, DatabaseRestoreMapping):
-        return database
-    return DatabaseRestoreMapping(source_database=str(database))
-
-
-def _database_full_backup_dir(config: BackupRestoreConfig, source_database: str) -> Path:
-    if config.is_linux:
-        return config.vm_import_unc / source_database / config.full_backup_subdir
-    candidates = [
-        path
-        for path in config.vm_import_unc.rglob(config.full_backup_subdir)
-        if path.is_dir() and path.parent.name.lower() == source_database.lower()
-    ]
-    if candidates:
-        return sorted(candidates, key=lambda path: str(path).lower())[0]
-    return config.vm_import_unc / source_database / config.full_backup_subdir
-
-
-def find_restore_diff_backup(config: BackupRestoreConfig, candidate: RestoreCandidate) -> Path | None:
-    diff_dir = candidate.backup_file_unc.parent.parent / "DIFF"
-    if config.is_linux:
-        full_mtime = _linux_file_mtime(config, candidate.backup_file_unc)
-        if full_mtime is None:
-            return None
-        files = [
-            (mtime, Path(path))
-            for mtime, path in _find_linux_files_with_mtime(config, diff_dir, "*.bak")
-            if mtime >= full_mtime
-        ]
-        return sorted(files, key=lambda item: (item[0], str(item[1]).lower()))[-1][1] if files else None
-    if not diff_dir.exists():
-        return None
-    full_mtime = candidate.backup_file_unc.stat().st_mtime if candidate.backup_file_unc.exists() else 0
-    files = [
-        path
-        for path in diff_dir.glob("*.bak")
-        if path.is_file() and (not candidate.backup_file_unc.exists() or path.stat().st_mtime >= full_mtime)
-    ]
-    if not files:
-        return None
-    return sorted(files, key=lambda path: (path.stat().st_mtime, str(path).lower()))[-1]
-
-
-def find_restore_log_backups(config: BackupRestoreConfig, candidate: RestoreCandidate, diff_backup: Path | None = None) -> list[Path]:
-    log_dir = candidate.backup_file_unc.parent.parent / "LOG"
-    if config.is_linux:
-        baseline = diff_backup or candidate.backup_file_unc
-        baseline_mtime = _linux_file_mtime(config, baseline)
-        if baseline_mtime is None:
-            return []
-        return [
-            Path(path)
-            for mtime, path in sorted(
-                _find_linux_files_with_mtime(config, log_dir, "*.trn"),
-                key=lambda item: (item[0], item[1].lower()),
-            )
-            if mtime >= baseline_mtime
-        ]
-    if not log_dir.exists():
-        return []
-    baseline = diff_backup or candidate.backup_file_unc
-    baseline_mtime = baseline.stat().st_mtime if baseline.exists() else 0
-    return sorted(
-        [
-            path
-            for path in log_dir.glob("*.trn")
-            if path.is_file() and (not baseline.exists() or path.stat().st_mtime >= baseline_mtime)
-        ],
-        key=lambda path: (path.stat().st_mtime, str(path).lower()),
-    )
-
-
-def _find_skipped_log_reasons(
-    config: BackupRestoreConfig,
-    candidate: RestoreCandidate,
-    diff_backup: Path | None,
-    selected_logs: list[Path],
-) -> list[tuple[str, str]]:
-    log_dir = candidate.backup_file_unc.parent.parent / "LOG"
-    if config.is_linux:
-        entries = _find_linux_files_with_mtime(config, log_dir, "*.trn")
-        baseline_mtime = _linux_file_mtime(config, diff_backup or candidate.backup_file_unc)
-    else:
-        entries = (
-            [(path.stat().st_mtime, str(path)) for path in log_dir.glob("*.trn") if path.is_file()]
-            if log_dir.exists()
-            else []
-        )
-        baseline = diff_backup or candidate.backup_file_unc
-        baseline_mtime = baseline.stat().st_mtime if baseline.exists() else None
-
-    if not entries:
-        return [("null", "no_log_files_found")] if not selected_logs else []
-    if baseline_mtime is None:
-        return [(str(diff_backup or candidate.backup_file_unc), "path_missing")]
-
-    selected = {str(path).replace("\\", "/").lower() for path in selected_logs}
-    before_reason = "log_before_diff" if diff_backup else "log_before_full"
-    return [
-        (path, before_reason)
-        for mtime, path in sorted(entries, key=lambda item: (item[0], item[1].lower()))
-        if mtime < baseline_mtime and path.replace("\\", "/").lower() not in selected
-    ]
-
-
-def find_restore_diff_backup_for_pitr(
-    config: BackupRestoreConfig,
-    candidate: RestoreCandidate,
-    point_in_time_utc: datetime.datetime,
-) -> Path | None:
-    pit_ts = point_in_time_utc.timestamp()
-    if config.is_linux:
-        full_linux = str(candidate.backup_file_unc).replace("\\", "/")
-        # Navigate up two levels: .../DB_NAME/FULL/file.bak -> .../DB_NAME
-        db_linux_dir = "/".join(full_linux.split("/")[:-2])
-        diff_dir = f"{db_linux_dir}/DIFF"
-        with open_ssh_connection(config) as ssh:
-            stat_answer = ssh.run(f'stat -c "%Y" {shlex.quote(full_linux)} 2>/dev/null || echo 0')
-            full_stat_mtime = float(stat_answer.stdout.strip() or "0")
-            full_mtime = _backup_sort_timestamp(Path(full_linux), fallback_mtime=full_stat_mtime)
-            diff_answer = ssh.run(
-                f'find {shlex.quote(diff_dir)} -maxdepth 1 -type f -name "*.bak" -printf "%T@ %p\\n" 2>/dev/null || true'
-            )
-            lines = diff_answer.stdout.splitlines()
-        entries = []
-        for line in lines:
-            parts = line.split(" ", 1)
-            if len(parts) < 2:
-                continue
-            try:
-                mtime = float(parts[0])
-            except ValueError:
-                continue
-            fpath = parts[1].strip()
-            entries.append((_backup_sort_timestamp(Path(fpath), fallback_mtime=mtime), fpath))
-        valid = [(mtime, fpath) for mtime, fpath in entries if mtime >= full_mtime and mtime <= pit_ts]
-        if not valid:
-            return None
-        return Path(sorted(valid)[-1][1])
-    else:
-        diff_dir = candidate.backup_file_unc.parent.parent / "DIFF"
-        if not diff_dir.exists():
-            return None
-        full_mtime = (
-            _backup_sort_timestamp(candidate.backup_file_unc, fallback_mtime=candidate.backup_file_unc.stat().st_mtime)
-            if candidate.backup_file_unc.exists()
-            else 0
-        )
-        files = [
-            p for p in diff_dir.glob("*.bak")
-            if p.is_file()
-            and _backup_sort_timestamp(p, fallback_mtime=p.stat().st_mtime) >= full_mtime
-            and _backup_sort_timestamp(p, fallback_mtime=p.stat().st_mtime) <= pit_ts
-        ]
-        if not files:
-            return None
-        return sorted(files, key=lambda p: (_backup_sort_timestamp(p, fallback_mtime=p.stat().st_mtime), str(p).lower()))[-1]
-
-
-def find_restore_log_backups_for_pitr(
-    config: BackupRestoreConfig,
-    candidate: RestoreCandidate,
-    diff_backup: Path | None,
-    point_in_time_utc: datetime.datetime,
-) -> list[Path]:
-    pit_ts = point_in_time_utc.timestamp()
-    if config.is_linux:
-        full_linux = str(candidate.backup_file_unc).replace("\\", "/")
-        db_linux_dir = "/".join(full_linux.split("/")[:-2])
-        baseline_linux = str(diff_backup).replace("\\", "/") if diff_backup else full_linux
-        with open_ssh_connection(config) as ssh:
-            stat_answer = ssh.run(f'stat -c "%Y" {shlex.quote(baseline_linux)} 2>/dev/null || echo 0')
-            baseline_stat_mtime = float(stat_answer.stdout.strip() or "0")
-            baseline_mtime = _backup_sort_timestamp(Path(baseline_linux), fallback_mtime=baseline_stat_mtime)
-        entries = _find_log_backups_linux_with_mtime(config, db_linux_dir)
-        entries_after = [
-            (_backup_sort_timestamp(Path(fpath), fallback_mtime=mtime), fpath)
-            for mtime, fpath in entries
-            if _backup_sort_timestamp(Path(fpath), fallback_mtime=mtime) >= baseline_mtime
-        ]
-        entries_sorted = sorted(entries_after, key=lambda x: (x[0], x[1]))
-    else:
-        log_dir = candidate.backup_file_unc.parent.parent / "LOG"
-        if not log_dir.exists():
-            entries_sorted = []
-        else:
-            baseline = diff_backup or candidate.backup_file_unc
-            baseline_mtime = _backup_sort_timestamp(baseline, fallback_mtime=baseline.stat().st_mtime) if baseline.exists() else 0
-            all_logs = sorted(
-                [
-                    p for p in log_dir.glob("*.trn")
-                    if p.is_file() and _backup_sort_timestamp(p, fallback_mtime=p.stat().st_mtime) >= baseline_mtime
-                ],
-                key=lambda p: (_backup_sort_timestamp(p, fallback_mtime=p.stat().st_mtime), str(p).lower()),
-            )
-            entries_sorted = [(_backup_sort_timestamp(p, fallback_mtime=p.stat().st_mtime), str(p)) for p in all_logs]
-
-    if not entries_sorted:
-        raise ValueError(
-            f"No transaction log backups found for PITR to {point_in_time_utc.strftime('%Y-%m-%dT%H:%M:%SZ')}."
-        )
-
-    # Collect logs up to and including the first one that reaches the target time. A log whose
-    # backup timestamp is >= the target spans (or ends exactly at) the target, so it is the last
-    # one we need. Using >= (not >) stops the chain when the target lands exactly on a log
-    # boundary -- otherwise we would wrongly pull in the next log, which may be a far-future,
-    # non-contiguous backup (LSN gap) that SQL Server rejects with Msg 4305 ("too recent to apply").
-    result_paths: list[Path] = []
-    for mtime, fpath in entries_sorted:
-        result_paths.append(Path(fpath))
-        if mtime >= pit_ts:
-            break
-
-    last_mtime = entries_sorted[len(result_paths) - 1][0]
-    if last_mtime < pit_ts:
-        latest_log_utc = datetime.datetime.fromtimestamp(last_mtime, tz=datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-        raise ValueError(
-            f"Target point-in-time {point_in_time_utc.strftime('%Y-%m-%dT%H:%M:%SZ')} is beyond the available log chain. "
-            f"Latest log backup ends approximately {latest_log_utc}."
-        )
-
-    return result_paths
-
-

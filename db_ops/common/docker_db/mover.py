@@ -57,6 +57,7 @@ afterwards. Progress goes to stderr, because stdout is the JSON answer.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import ipaddress
 import json
 import posixpath
@@ -95,7 +96,7 @@ STOP_TIMEOUT_SECONDS = 180
 WRITABLE_LAYER_DATA_BYTES = 256 * 1024 * 1024
 
 
-class MoveError(RuntimeError):
+class MoveError(errors.OperationFailed):
     """A user-facing failure: instance not found, port taken, subnet clash, transfer refused."""
 
 

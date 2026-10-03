@@ -797,18 +797,20 @@ def shipped_metric_catalog(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
     every later test in the session, which is the kind of order-dependent pass that is only found
     weeks later by running one file on its own.
     """
-    from db_ops.reports import server_report
+    # The catalog and its caches live in server_series since the page was split (2026-10-03);
+    # a patch on server_report's re-exported names would reach none of the functions that read them.
+    from db_ops.reports import server_series
 
     catalog_path = shipped_config("metric_definitions.json")
     assert catalog_path.exists(), f"no shipped metric catalog at {catalog_path}"
 
-    monkeypatch.setattr(server_report, "METRIC_DEFINITIONS", catalog_path)
-    monkeypatch.setattr(server_report, "_METRIC_CATALOG", None)
-    monkeypatch.setattr(server_report, "_METRIC_INTERVALS", None)
-    catalog = server_report.metric_catalog(catalog_path)
+    monkeypatch.setattr(server_series, "METRIC_DEFINITIONS", catalog_path)
+    monkeypatch.setattr(server_series, "_METRIC_CATALOG", None)
+    monkeypatch.setattr(server_series, "_METRIC_INTERVALS", None)
+    catalog = server_series.metric_catalog(catalog_path)
     yield catalog
-    server_report._METRIC_CATALOG = None
-    server_report._METRIC_INTERVALS = None
+    server_series._METRIC_CATALOG = None
+    server_series._METRIC_INTERVALS = None
 
 
 #: Notify levels the suite's own fixtures write, beyond the standard set.
@@ -990,3 +992,59 @@ def answer_metric_items(monkeypatch, answer):
 
     monkeypatch.setattr(batch, "run", run)
     return sent
+
+
+#: The modules ``backup_restore/restore_database.py`` was split into on 2026-10-03 (Q11). A test
+#: that replaces a collaborator must replace it where the calling code looks it up, and a call now
+#: lives in whichever of these holds the caller - ``restore_database`` re-exports every name, but a
+#: re-export is a second binding, and a patch on it reaches only the callers in that module.
+RESTORE_MODULES = ("restore_database", "restore_base", "restore_find", "restore_sql", "restore_sqlcmd")
+
+
+def patch_restore(monkeypatch, name: str, value) -> None:
+    """Replace ``name`` in every split restore module that binds it."""
+    hit = False
+    for module_name in RESTORE_MODULES:
+        module = importlib.import_module(f"db_ops.backup_restore.{module_name}")
+        if hasattr(module, name):
+            monkeypatch.setattr(module, name, value)
+            hit = True
+    assert hit, f"no restore module binds {name!r}"
+
+
+#: The modules ``telegram/command_processor.py`` was split into on 2026-10-03 (Q11) - see
+#: :data:`RESTORE_MODULES` for why a patch has to reach every module that binds the name.
+TELEGRAM_COMMAND_MODULES = ("command_processor", "command_base", "command_replies", "command_permissions",
+                            "command_cli", "command_conversation", "command_background", "command_listing",
+                            "command_sql")
+
+
+def patch_telegram(monkeypatch, name: str, value, raising: bool = True) -> None:
+    """Replace ``name`` in every split Telegram command module that binds it.
+
+    ``raising=False`` is for a name no module binds yet (a builtin such as ``open``): it is then
+    set on every one of them, as ``monkeypatch.setattr(..., raising=False)`` would on the one.
+    """
+    modules = [importlib.import_module(f"db_ops.telegram.{m}") for m in TELEGRAM_COMMAND_MODULES]
+    bound = [module for module in modules if hasattr(module, name)]
+    if not bound and not raising:
+        bound = modules
+    assert bound, f"no Telegram command module binds {name!r}"
+    for module in bound:
+        monkeypatch.setattr(module, name, value, raising=raising)
+
+
+#: The modules ``sql_tasks/runner.py`` was split into on 2026-10-03 (Q11) - see
+#: :data:`RESTORE_MODULES` for why a patch has to reach every module that binds the name.
+SQL_RUNNER_MODULES = ("runner", "runner_plan", "runner_parameters", "runner_output", "runner_execute")
+
+
+def patch_sql_runner(monkeypatch, name: str, value) -> None:
+    """Replace ``name`` in every split SQL-task runner module that binds it."""
+    hit = False
+    for module_name in SQL_RUNNER_MODULES:
+        module = importlib.import_module(f"db_ops.sql_tasks.{module_name}")
+        if hasattr(module, name):
+            monkeypatch.setattr(module, name, value)
+            hit = True
+    assert hit, f"no SQL-task runner module binds {name!r}"

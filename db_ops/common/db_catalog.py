@@ -31,13 +31,14 @@ Oracle that means the service, and the schemas are the users that own objects.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 from typing import Any
 
 from db_ops.common import sql_run
 from db_ops.lib.coerce import as_bool
 
 
-class DbCatalogError(RuntimeError):
+class DbCatalogError(errors.OperationFailed):
     """A user-facing failure: unknown target, unsupported engine, the query was refused."""
 
 

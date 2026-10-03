@@ -14,6 +14,7 @@ drives its hosts, and nothing else in the tree asks these questions.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import datetime as dt
 import logging
 import re
@@ -30,27 +31,12 @@ if TYPE_CHECKING:  # pragma: no cover - the config type is only needed for annot
     from db_ops.backup_restore.config import BackupRestoreConfig
 
 
-_BACKUP_TIMESTAMP_RE = re.compile(r"_(\d{8})_(\d{6})(Z?)")
-
-
-def backup_time_from_name(name: str) -> float | None:
-    """The time a backup file's name records (``..._YYYYMMDD_HHMMSS[Z].bak``), as epoch seconds.
-
-    A trailing ``Z`` says the stamp is UTC - what db_ops' own backup scripts write since 0.20.0.
-    A name without it is read in this process's local time, as it always was: backups written by
-    other tools on the source server (a maintenance-plan or Ola Hallengren job) stamp local time and
-    carry no marker, and reading those as UTC would move every one of them by the server's offset.
-    """
-    match = _BACKUP_TIMESTAMP_RE.search(name)
-    if not match:
-        return None
-    try:
-        moment = dt.datetime.strptime(match.group(1) + match.group(2), "%Y%m%d%H%M%S")
-    except ValueError:
-        return None
-    if match.group(3):
-        moment = moment.replace(tzinfo=dt.timezone.utc)
-    return moment.timestamp()
+# One definition, in lib since 2026-10-03 (the copy in `common` reads names too); every importer of
+# these two names from here keeps working.
+from db_ops.lib.sqlserver_backup_chain import (  # noqa: E402, F401 - re-exported
+    BACKUP_TIMESTAMP_RE as _BACKUP_TIMESTAMP_RE,
+    backup_time_from_name,
+)
 
 
 def _build_sqlcmd_auth_args(config: BackupRestoreConfig) -> list[str]:
@@ -64,7 +50,7 @@ def _build_sqlcmd_auth_args(config: BackupRestoreConfig) -> list[str]:
         raise ValueError("target.sql_username and target.sql_password_env are both required when SQL auth is enabled.")
     password = resolve_password_ref(config.restore_sql_password_env)
     if not password:
-        raise RuntimeError(f"Password ref not found in environment or secret_text.json: {config.restore_sql_password_env}")
+        raise errors.NotConfigured(f"Password ref not found in environment or secret_text.json: {config.restore_sql_password_env}")
     return ["-U", config.restore_sql_username, "-P", password]
 
 

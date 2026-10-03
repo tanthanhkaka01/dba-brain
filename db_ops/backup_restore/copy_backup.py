@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+from db_ops.lib import errors
 from db_ops.backup_restore.shell_quoting import _BACKUP_TIMESTAMP_RE, backup_time_from_name, _log_progress, _write_temp_powershell_script  # noqa: F401 - one definition
 
 import dataclasses
@@ -55,7 +57,7 @@ def share_login_request(*, credential_target: str, username: str, password_env: 
         raise ValueError("credential_target, username, and password_env are all required when credential setup is enabled.")
     password = resolve_password_ref(password_env)
     if not password:
-        raise RuntimeError(f"Password ref not found in environment or secret_text.json: {password_env}")
+        raise errors.NotConfigured(f"Password ref not found in environment or secret_text.json: {password_env}")
     return {"target": credential_target, "username": username, "password": password}
 
 
@@ -246,12 +248,18 @@ def _chain_or_window(config: BackupRestoreConfig, candidates: list, *, in_window
     a staged FULL may be for the restore step to take it.
     """
     if str(getattr(config, "copy_selection", "chain") or "chain") == "window":
-        # The entry asked for the whole range (copy_selection: window): every file of the window,
-        # as before 0.26.0 - and the space check counts it, so it is refused if it does not fit.
+        # The entry asked for the whole range (copy_selection: window): every file of the window -
+        # and the chain, since 2026-10-03, so a window shorter than the FULL interval still stages
+        # the FULL the restore applies; a window copy is never less restorable than a chain copy.
+        # The same rule as the copy to another machine (common.cli copy-backup-dir window_hours).
+        # The space check counts this list, so it is refused if it does not fit.
         picked = [c.item for c in candidates if in_window(c.item)]
+        chosen = set(picked)
+        picked += [item for item in chain_rule.restore_chain(candidates, until=chain_until(config)).selected
+                   if item not in chosen]
         if callable(report):
-            report(f"copy_selection=window: {len(picked)} of {len(candidates)} file(s), every file "
-                   "of the copy window")
+            report(f"copy_selection=window: {len(picked)} of {len(candidates)} file(s), the chain "
+                   "and every file of the copy window")
         return picked
     choice = chain_rule.restore_chain(candidates, until=chain_until(config))
     unresolved = {name.lower() for name in choice.unresolved}
@@ -481,13 +489,13 @@ def open_ssh_connection(config: BackupRestoreConfig) -> RemoteHost:
     from db_ops.transport import common_cli
 
     if not config.is_linux:
-        raise RuntimeError(
+        raise errors.Refused(
             f"Target context mismatch: restore_id={config.restore_id} target_host={config.vm_credential_target} "
             "target_os_type=windows cannot execute remote_exec_type=ssh."
         )
     password = resolve_password_ref(config.vm_password_env) if config.vm_password_env else ""
     if config.vm_password_env and not password:
-        raise RuntimeError(f"password not found for vm_password_env={config.vm_password_env}")
+        raise errors.NotConfigured(f"password not found for vm_password_env={config.vm_password_env}")
     return RemoteHost(
         host=config.vm_credential_target, username=config.vm_username, password=password,
         auth_type="password" if config.vm_password_env else "key",
@@ -521,7 +529,7 @@ def _prepare_linux_base_import_dir(remote: RemoteHost, config: BackupRestoreConf
     )
     result = remote.run(cmd, sudo=True)
     if not result.ok:
-        raise RuntimeError(
+        raise errors.OperationFailed(
             f"Could not prepare Linux import directory {linux_import}: "
             f"{result.stderr.strip() or result.stdout.strip()}"
         )
@@ -665,7 +673,7 @@ def _parse_unc_share(unc: Path) -> tuple[str, str, str]:
     """Split \\\\host\\share\\sub\\dir into (host, share, subpath_posix)."""
     parts = [segment for segment in str(unc).replace("\\", "/").split("/") if segment]
     if len(parts) < 2:
-        raise RuntimeError(f"Invalid SMB share path: {unc}")
+        raise errors.InvalidConfig(f"Invalid SMB share path: {unc}")
     return parts[0], parts[1], "/".join(parts[2:])
 
 
@@ -705,7 +713,7 @@ def _list_remote_backups(config: BackupRestoreConfig, host: str, share_name: str
         files = share.list_files(unc, username=username, password=password, recurse=True,
                                  suffixes=(".bak", ".trn"), timeout_seconds=_SMB_LIST_TIMEOUT_SECONDS)
     except share.ShareError as exc:
-        raise RuntimeError(f"smbclient list failed for //{host}/{share_name}/{remote_dir}: {exc}") from exc
+        raise errors.OperationFailed(f"smbclient list failed for //{host}/{share_name}/{remote_dir}: {exc}") from exc
     return [_RemoteBackup(relative_path=str(item["path"]), size_bytes=int(item["size_bytes"]),
                           backup_timestamp=_backup_time_from_name(str(item["name"])),
                           modified_epoch=(float(item["modified_epoch"])
@@ -1010,11 +1018,11 @@ def _smbclient_download_selected_to_staging(
                 try:
                     _get_remote_backup(config, host, share, remote_path, local_target)
                 except Exception as exc:
-                    raise RuntimeError(f"smbclient download failed file={backup.relative_path}: {exc}") from exc
+                    raise errors.OperationFailed(f"smbclient download failed file={backup.relative_path}: {exc}") from exc
                 actual_size = local_target.stat().st_size if local_target.exists() else -1
                 if actual_size != backup.size_bytes:
                     local_target.unlink(missing_ok=True)
-                    raise RuntimeError(
+                    raise errors.OperationFailed(
                         f"smbclient download size mismatch file={backup.relative_path} "
                         f"expected_bytes={backup.size_bytes} actual_bytes={actual_size}"
                     )
@@ -1034,7 +1042,7 @@ def _smbclient_download_selected_to_staging(
         shutil.rmtree(staging, ignore_errors=True)
         raise
     if total_selected == 0:
-        raise RuntimeError(
+        raise errors.OperationFailed(
             f"smbclient source scan selected no files from //{host}/{share} "
             f"{_format_copy_window(config)} patterns={','.join(config.copy_file_patterns)}"
             + newest_backup_hint(config)

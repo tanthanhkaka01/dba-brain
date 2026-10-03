@@ -97,6 +97,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     show.add_argument("--username", required=True)
     show.set_defaults(handler=_handle_user_password_show)
 
+    boot = subparsers.add_parser(
+        "bootstrap-admin",
+        help="Add the first-run admin / admin (level 100, changed at first sign-in) to a store "
+             "that already holds accounts. Nothing if an active admin exists.")
+    _add_key_args(boot)
+    boot.set_defaults(handler=_handle_bootstrap_admin)
+
     ses = subparsers.add_parser("sessions", help="List or revoke console sessions.")
     _add_key_args(ses)
     ses.add_argument("--username", default="", help="Only this account.")
@@ -350,6 +357,19 @@ def _handle_sessions(args, config, logger) -> int:
         state = "active" if int(row["is_active"]) else str(row["revoked_reason"] or "ended")
         print(f"{int(row['web_session_id']):>5}  {str(row['username']):22} {state:8} "
               f"{str(row['issued_at']):21} {str(row['expires_at']):21} {str(row['client_ip'] or '-')}")
+    return 0
+
+
+def _handle_bootstrap_admin(args, config, logger) -> int:
+    from db_ops.db.web_auth_store import BOOTSTRAP_USERNAME, WebAuthStore
+
+    added = WebAuthStore.from_config(config).add_bootstrap_admin(actor="webhost.cli bootstrap-admin")
+    if added:
+        print(f"added {BOOTSTRAP_USERNAME} / {BOOTSTRAP_USERNAME} (level 100) - the password must be "
+              "changed at its first sign-in")
+    else:
+        print(f"an active {BOOTSTRAP_USERNAME} account already exists - nothing changed "
+              "(user-password resets it)")
     return 0
 
 

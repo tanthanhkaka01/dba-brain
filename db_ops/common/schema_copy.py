@@ -55,6 +55,7 @@ order cannot violate one; modules after data so a view over a loaded table is ve
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -64,7 +65,7 @@ from db_ops.common import db_connect, schema_catalog, sql_run, table_load
 from db_ops.lib import mssql_ddl, name_filter
 
 
-class SchemaCopyError(RuntimeError):
+class SchemaCopyError(errors.OperationFailed):
     """A user-facing failure: unknown target, wrong destination, a phase that could not run."""
 
 

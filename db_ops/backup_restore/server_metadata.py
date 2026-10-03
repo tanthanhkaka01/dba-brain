@@ -48,6 +48,7 @@ choice (restore the logins now, the jobs later); listing neither means both.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -83,7 +84,7 @@ def instance_bundle_dir(server_id: str) -> Path:
     return BUNDLE_ROOT / name
 
 
-class ServerMetadataConfigError(ValueError):
+class ServerMetadataConfigError(errors.ConfigError):
     """The ``server_metadata`` block is present but cannot be honoured as written."""
 
 
@@ -378,12 +379,18 @@ def replay_phase(
 
     bundle_dir = instance_bundle_dir(source_server_id)
     if not (bundle_dir / instance_bundle.SERVER_DIR).is_dir():
-        line = (f"PHASE=metadata-{phase} SKIPPED no bundle at {bundle_dir} - the backup entry for "
-                f"{source_server_id} needs server_metadata.enabled too\n")
+        # The bundle is written by the node that RUNS the source's backup entry, with its
+        # server_metadata on. Asking for `server_metadata.enabled` was right for one cause and
+        # wrong for the other: on the 0.26 soak node that entry had it on and was inactive (the
+        # worker runs it), and the advice sent the reader to a setting that was already set (1.88).
+        why = (f"no bundle at {bundle_dir}: it is written by the node that runs the backup entry "
+               f"of {source_server_id} with server_metadata on - here that entry is inactive, or "
+               f"has it off. `python -m db_ops.backup_restore.cli export-instance-bundle "
+               f"--backup-id <id>` exports it on this node (read-only on the source)")
+        line = f"PHASE=metadata-{phase} SKIPPED {why}\n"
         events.announce(announce, "METADATA_SKIP",
-                  f"Restore {label}: {phase} instance metadata skipped - no bundle exported "
-                  f"for {source_server_id}.")
-        return line, {"ok": False, "status": "SKIPPED", "error": f"no bundle at {bundle_dir}"}
+                  f"Restore {label}: {phase} instance metadata skipped - {why}.")
+        return line, {"ok": False, "status": "SKIPPED", "error": why}
 
     try:
         target = resolve_replay_target(

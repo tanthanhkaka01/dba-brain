@@ -9,6 +9,7 @@ silent: the script runs, and takes the wrong kind of backup.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 
 #: What each engine calls the level, keyed by the word a caller uses. One vocabulary across four
 #: engines so a Telegram command or a runbook can say "full" without knowing which engine answers.
@@ -16,7 +17,7 @@ from __future__ import annotations
 #: Oracle and PostgreSQL have no ``log`` here on purpose: their archive/WAL backups are a *separate
 #: script* with its own schedule, so asking for one at this level is a mistake worth naming rather
 #: than passing an unknown value into a shell script that will interpret it as something else.
-class BackupSpecError(ValueError):
+class BackupSpecError(errors.ConfigError):
     """The spec cannot be honoured as written."""
 
 

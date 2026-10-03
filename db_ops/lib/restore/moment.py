@@ -16,6 +16,7 @@ the listing's time window - each passed the operator's text through as it came, 
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 from datetime import datetime, timezone
 
 #: Accepted forms, most explicit first. An offset is what makes the answer unambiguous.
@@ -28,7 +29,7 @@ _FORMATS = (
 )
 
 
-class MomentError(ValueError):
+class MomentError(errors.RequestError):
     """The moment cannot be read."""
 
 

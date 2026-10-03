@@ -40,6 +40,7 @@ field. What each app passes as ``last_run`` is listed in ``docs/configuration.md
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -270,7 +271,7 @@ def parse_time_window_config(
     if raw_time_window in ("", None):
         raw_time_window = {}
     if not isinstance(raw_time_window, dict):
-        raise RuntimeError(f"{context}.time_window must be an object.")
+        raise errors.InvalidConfig(f"{context}.time_window must be an object.")
 
     defaults = defaults or {}
     values: dict[str, Any] = {
@@ -402,7 +403,7 @@ def parse_weekdays(value: Any, name: str) -> tuple[int, ...] | None:
     if value is None or value == "":
         return None
     if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple)):
-        raise RuntimeError(
+        raise errors.InvalidConfig(
             f"{name} must be an array of ISO weekdays 1-7 (1=Monday .. 7=Sunday); "
             f"got {value!r}. An empty array means the record never runs on a schedule."
         )
@@ -414,17 +415,17 @@ def parse_weekdays(value: Any, name: str) -> tuple[int, ...] | None:
             try:
                 item = int(str(item).strip())
             except (TypeError, ValueError) as exc:
-                raise RuntimeError(
+                raise errors.InvalidConfig(
                     f"{name} must contain whole numbers 1-7; got {item!r}."
                 ) from exc
         if item not in WEEKDAY_NAMES:
             extra = (" 0 is the cron spelling of Sunday; this field is ISO, so Sunday is 7."
                      if item == 0 else "")
-            raise RuntimeError(
+            raise errors.InvalidConfig(
                 f"{name} must contain ISO weekdays 1-7 (1=Monday .. 7=Sunday); got {item}.{extra}"
             )
         if item in parsed:
-            raise RuntimeError(
+            raise errors.InvalidConfig(
                 f"{name} lists {item} ({WEEKDAY_NAMES[item]}) twice. It is a set, so a repeat is a "
                 f"mistake rather than a weighting."
             )
@@ -438,7 +439,7 @@ def _optional_int(value: Any, name: str) -> int | None:
     try:
         return int(value)
     except (TypeError, ValueError) as exc:
-        raise RuntimeError(f"{name} must be an integer.") from exc
+        raise errors.InvalidConfig(f"{name} must be an integer.") from exc
 
 
 def _validate_non_negative(values: dict[str, int | None], name: str, context: str) -> None:
@@ -446,13 +447,13 @@ def _validate_non_negative(values: dict[str, int | None], name: str, context: st
         key = f"{prefix}_{name}"
         value = values.get(key)
         if value is not None and value < 0:
-            raise RuntimeError(f"{context}.time_window.{key} must be >= 0: {value}")
+            raise errors.InvalidConfig(f"{context}.time_window.{key} must be >= 0: {value}")
 
 
 def _validate_non_negative_scalar(values: dict[str, int | None], name: str, context: str) -> None:
     value = values.get(name)
     if value is not None and value < 0:
-        raise RuntimeError(f"{context}.time_window.{name} must be >= 0: {value}")
+        raise errors.InvalidConfig(f"{context}.time_window.{name} must be >= 0: {value}")
 
 
 def _validate_repeat_interval(values: dict[str, int | None], context: str) -> None:
@@ -460,7 +461,7 @@ def _validate_repeat_interval(values: dict[str, int | None], context: str) -> No
     still a typo, and saying so names the two special values instead of just "must be >= 0"."""
     value = values.get("repeat_interval")
     if value is not None and value < 0 and value != MANUAL_ONLY:
-        raise RuntimeError(
+        raise errors.InvalidConfig(
             f"{context}.time_window.repeat_interval must be >= 0, or {MANUAL_ONLY} for manual "
             f"(never scheduled; forced runs only): {value}"
         )

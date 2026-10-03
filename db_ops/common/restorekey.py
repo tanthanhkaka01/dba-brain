@@ -25,6 +25,7 @@ this machine reaches them), or through ``sqlcmd`` where the SQL Server is (``sql
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 from typing import Any
 
 from db_ops.lib import sqlserver_certificate
@@ -32,7 +33,7 @@ from db_ops.lib import sqlserver_certificate
 DEFAULT_CERT_NAME = "db_ops_backup_cert"
 
 
-class RestoreKeyError(ValueError):
+class RestoreKeyError(errors.RequestError):
     """The certificate cannot be imported."""
 
 

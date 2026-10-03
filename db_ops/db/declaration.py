@@ -22,13 +22,14 @@ Two consequences worth stating, because both were problems before:
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 from pathlib import Path
 from typing import Any
 
 from db_ops.db.backend import StoreTarget
 
 
-class StoreDeclarationError(ValueError):
+class StoreDeclarationError(errors.ConfigError):
     """The store block cannot be honoured as written."""
 
 

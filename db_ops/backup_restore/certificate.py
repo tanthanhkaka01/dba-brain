@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+from db_ops.lib import errors
 from db_ops.backup_restore.shell_quoting import _build_sqlcmd_auth_args, _escape_identifier, _escape_sql_string, _ps_array, _ps_quote  # noqa: F401 - one definition
 
 import base64
@@ -102,16 +104,16 @@ def read_backup_certificate_pair(config: BackupRestoreConfig, *, logger: object 
     """
     source = config.backup_certificate
     if source is None:
-        raise RuntimeError(f"restore_id={config.restore_id}: no backup_certificate on this entry.")
+        raise errors.NotConfigured(f"restore_id={config.restore_id}: no backup_certificate on this entry.")
     password = resolve_password_ref(source.password_ref)
     if not password:
-        raise RuntimeError(f"Password ref not found in environment or secret_text.json: {source.password_ref}")
+        raise errors.NotConfigured(f"Password ref not found in environment or secret_text.json: {source.password_ref}")
     try:
         cer, pvk = _pair_from_share(config)
         where = _share_cert_path(config, "cer")
     except Exception as share_error:  # noqa: BLE001 - refused, missing, unreachable: all the same next step.
         if not source.source_dir:
-            raise RuntimeError(
+            raise errors.OperationFailed(
                 f"cannot read the backup certificate from {_share_cert_path(config, 'cer')}: {share_error}. "
                 "A pair exported before 0.24.1 is readable by the SQL Server service account only - run "
                 "the backup once on this version, or name source.backup_certificate.source_dir to read "
@@ -150,7 +152,7 @@ def _pair_from_share(config: BackupRestoreConfig) -> tuple[bytes, bytes]:
                 config.prod_backup_share, share.share_relative(config.prod_backup_share, _share_cert_path(config, suffix)),
                 local, username=config.prod_smb_username, password=password, timeout_seconds=120)
             if int(answer.get("exit_code") or 0) != 0 or not local.is_file() or local.stat().st_size == 0:
-                raise RuntimeError(str(answer.get("detail") or f"smb-get exit {answer.get('exit_code')}"))
+                raise errors.OperationFailed(str(answer.get("detail") or f"smb-get exit {answer.get('exit_code')}"))
             pair.append(local.read_bytes())
     return pair[0], pair[1]
 
@@ -175,7 +177,7 @@ def _pair_from_source_host(config: BackupRestoreConfig) -> tuple[bytes, bytes]:
             "timeout_seconds": 120, "confirm": True, "assume_yes": True})
         if not ok or int(data.get("exit_code") or 0) != 0:
             detail = (str(data.get("stderr") or "") or error).strip()[:300]
-            raise RuntimeError(f"cannot read {path} on {config.source_id}: {detail}")
+            raise errors.OperationFailed(f"cannot read {path} on {config.source_id}: {detail}")
         pair.append(base64.b64decode("".join(str(data.get("stdout") or "").split())))
     return pair[0], pair[1]
 
@@ -183,7 +185,7 @@ def _pair_from_source_host(config: BackupRestoreConfig) -> tuple[bytes, bytes]:
 def fetch_backup_certificate(config: BackupRestoreConfig) -> BackupCertificate:
     token = resolve_password_ref(config.certificate_api_token_ref)
     if not token:
-        raise RuntimeError(f"Password ref not found in environment or secret_text.json: {config.certificate_api_token_ref}")
+        raise errors.NotConfigured(f"Password ref not found in environment or secret_text.json: {config.certificate_api_token_ref}")
 
     http_request = request.Request(
         config.certificate_api_url,
@@ -225,7 +227,7 @@ def parse_backup_certificate(data: dict[str, object]) -> BackupCertificate:
         if not value
     ]
     if missing:
-        raise RuntimeError(f"Certificate API result is missing required fields: {', '.join(missing)}")
+        raise errors.OperationFailed(f"Certificate API result is missing required fields: {', '.join(missing)}")
     base64.b64decode(certificate.certificate_base64, validate=True)
     base64.b64decode(certificate.private_key_base64, validate=True)
     return certificate
@@ -360,7 +362,7 @@ def _run_add_certificate_linux_via_ssh(certificate: BackupCertificate, config: B
             details.append(f"stderr:\n{stderr_text}")
         if not stdout_text and not stderr_text:
             details.append("No stdout/stderr was returned by SSH sqlcmd.")
-        raise RuntimeError("\n".join(details))
+        raise errors.OperationFailed("\n".join(details))
     return subprocess.CompletedProcess(
         args=["__ssh_cert_import__"], returncode=0, stdout=result.stdout, stderr=result.stderr)
 
@@ -373,7 +375,7 @@ def _run_add_certificate_command(
 ) -> subprocess.CompletedProcess[str]:
     """Import on this machine: the local ``sqlcmd`` argv, run through ``common.cli run-sqlcmd`` (R10)."""
     if config is not None and config.is_linux:
-        raise RuntimeError(
+        raise errors.Refused(
             f"Target context mismatch: restore_id={config.restore_id} target_host={config.vm_credential_target} "
             "target_os_type=linux cannot execute a local certificate import."
         )
@@ -400,7 +402,7 @@ def _run_add_certificate_over_winrm(
     if config.vm_username and config.vm_password_env:
         password = resolve_password_ref(config.vm_password_env)
         if not password:
-            raise RuntimeError(f"Password ref not found in environment or secret_text.json: {config.vm_password_env}")
+            raise errors.NotConfigured(f"Password ref not found in environment or secret_text.json: {config.vm_password_env}")
     from db_ops.transport import common_cli
 
     request = {
@@ -427,9 +429,9 @@ def _certificate_outcome(cmd: list[str], *, ok: bool, data: dict, error: str,
         details = [f"Certificate import command timed out after {timeout_seconds} seconds."]
         details += [f"stdout:\n{stdout}"] if stdout else []
         details += [f"stderr:\n{stderr}"] if stderr else []
-        raise RuntimeError("\n".join(details))
+        raise errors.OperationFailed("\n".join(details))
     if "exit_code" not in data:
-        raise RuntimeError(f"Certificate import command could not be run: {error or 'no answer'}")
+        raise errors.OperationFailed(f"Certificate import command could not be run: {error or 'no answer'}")
     exit_code = int(data.get("exit_code") or 0)
     if ok and exit_code == 0:
         return subprocess.CompletedProcess(cmd, 0, str(data.get("stdout") or ""), str(data.get("stderr") or ""))
@@ -440,7 +442,7 @@ def _certificate_outcome(cmd: list[str], *, ok: bool, data: dict, error: str,
         details.append(f"stderr:\n{stderr}")
     if not stdout and not stderr:
         details.append("No stdout/stderr was returned by PowerShell/sqlcmd.")
-    raise RuntimeError("\n".join(details))
+    raise errors.OperationFailed("\n".join(details))
 
 
 def _log_remote_command(

@@ -30,12 +30,13 @@ Read-only by construction: it runs through :func:`db_ops.common.sql_run.run_sql`
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 from typing import Any
 
 from db_ops.common import sql_run
 
 
-class SessionTraceError(RuntimeError):
+class SessionTraceError(errors.OperationFailed):
     """The trace could not run — an operator message."""
 
 

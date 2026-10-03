@@ -17,6 +17,7 @@ an OS login is never guessed at.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 from pathlib import PurePath
 from typing import Any
 
@@ -87,7 +88,7 @@ def resolve_platform(item: dict[str, Any]) -> str:
     if not platform:
         platform = infer_platform_from_os(str(item.get("os") or ""))
     if platform and platform not in SUPPORTED_PLATFORMS:
-        raise RuntimeError(
+        raise errors.InvalidConfig(
             f"Unsupported platform '{platform}' for db instance {item.get('ip') or item.get('target_id')}."
         )
     return platform
@@ -113,13 +114,13 @@ def resolve_cmd_access(item: dict[str, Any], *, platform: str, host: str) -> dic
     if raw in (None, ""):
         return {}
     if not isinstance(raw, dict):
-        raise RuntimeError(
+        raise errors.InvalidConfig(
             f"cmd_access must be an object for db instance {item.get('ip') or item.get('target_id')}."
         )
     enabled = bool(raw.get("enabled", True))
     method = str(raw.get("method") or "").strip().lower()
     if enabled and method not in SUPPORTED_CMD_ACCESS_METHODS:
-        raise RuntimeError(
+        raise errors.InvalidConfig(
             f"cmd_access.method must be one of {sorted(SUPPORTED_CMD_ACCESS_METHODS)}, "
             f"got '{method or '<missing>'}'."
         )
@@ -175,7 +176,7 @@ def resolve_cmd_credential(
     if not credential_name:
         if method == "ssh" and str(cmd_access.get("auth_type") or "key").strip().lower() != "password":
             return None
-        raise RuntimeError(f"cmd_access.credential_name is required for method '{method}'.")
+        raise errors.InvalidConfig(f"cmd_access.credential_name is required for method '{method}'.")
     for group in groups:
         host = str(group.get("host") or "").strip()
         if host and str(cmd_access.get("host") or "").strip() not in {"", host}:
@@ -183,4 +184,4 @@ def resolve_cmd_credential(
         for credential in group.get("credentials", []) or []:
             if str(credential.get("credential_name") or "") == credential_name:
                 return dict(credential)
-    raise RuntimeError(f"Remote credential not found: {credential_name}")
+    raise errors.NotConfigured(f"Remote credential not found: {credential_name}")

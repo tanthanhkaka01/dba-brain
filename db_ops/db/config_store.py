@@ -47,6 +47,7 @@ made the file-only model painful whenever a schedule was wrong overnight.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import hashlib
 import json
 from dataclasses import dataclass, field
@@ -83,7 +84,7 @@ _ITEM_COLUMNS = """
 """
 
 
-class ConfigStoreError(RuntimeError):
+class ConfigStoreError(errors.OperationFailed):
     """A config row could not be written as asked."""
 
 

@@ -43,6 +43,7 @@ Python caller all read the same result.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 from db_ops.lib.cmd_access import (  # noqa: F401 - one definition, see that module
     PLATFORM_LINUX,
     PLATFORM_WINDOWS,
@@ -129,7 +130,7 @@ DEFAULT_POLICY: dict[str, Any] = {
 }
 
 
-class HostOpsError(RuntimeError):
+class HostOpsError(errors.OperationFailed):
     """A user-facing failure: unknown target, unusable cmd_access, refused confirmation."""
 
 

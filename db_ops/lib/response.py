@@ -23,6 +23,10 @@ fact, and making them look different is how callers grow branches nobody tests.
   still self-describing after it has been separated from the command line that produced it.
 * ``message`` - one line for a human. This is what a Telegram message or a log line quotes.
 * ``error`` - ``null`` on success; the reason on failure, in the words the operator needs.
+* ``error_kind`` - ``null`` on success; on failure what *kind* of failure it was - one of
+  ``lib.errors.KINDS`` (``request``, ``not_configured``, ``refused``, ``unreachable``, ``failed``,
+  ``config``, ``internal``) - so a caller decides by the kind and never by matching the sentence,
+  which is written for a person and changes (2026-10-02).
 * ``data`` - the result proper. Shape is per command and documented there.
 * ``metrics`` - numbers about the run: durations, counts, bytes. Separate from ``data`` because
   the caller charts these and rarely charts the result.
@@ -34,6 +38,8 @@ from __future__ import annotations
 
 import json
 from typing import Any
+
+from db_ops.lib import errors
 
 
 def ok(
@@ -49,6 +55,7 @@ def ok(
         "operation": str(operation),
         "message": str(message),
         "error": None,
+        "error_kind": None,
         "data": {} if data is None else data,
         "metrics": dict(metrics or {}),
     }
@@ -61,8 +68,15 @@ def fail(
     message: str = "",
     data: Any = None,
     metrics: dict[str, Any] | None = None,
+    kind: str = errors.KIND_FAILED,
 ) -> dict[str, Any]:
-    """A failed response. Still a response - the caller reads it the same way it reads success."""
+    """A failed response. Still a response - the caller reads it the same way it reads success.
+
+    ``kind`` defaults to ``failed`` - the work was attempted and did not succeed, which is what most
+    explicit failures are; the request reader passes ``request`` and ``common.cli``'s catch-all the
+    exception's own kind (``lib.errors.kind_of``). An unknown kind is recorded as ``internal``
+    rather than passed on: a caller that branches on the kind must only ever see the listed ones.
+    """
     text = str(error)
     return {
         "success": False,
@@ -70,6 +84,7 @@ def fail(
         # Defaulting the human line to the error saves every caller a `or` when it renders one.
         "message": str(message) if message else text,
         "error": text,
+        "error_kind": kind if kind in errors.KINDS else errors.KIND_INTERNAL,
         "data": {} if data is None else data,
         "metrics": dict(metrics or {}),
     }

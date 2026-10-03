@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from db_ops.lib import errors as error_kinds
 import json
 import warnings
 from pathlib import Path
@@ -192,7 +193,7 @@ def load_metric_definitions(
         )
 
     if errors:
-        raise RuntimeError("Invalid metric definitions:\n- " + "\n- ".join(errors))
+        raise error_kinds.InvalidConfig("Invalid metric definitions:\n- " + "\n- ".join(errors))
     if active_only:
         return [item for item in definitions if item.active]
     return definitions

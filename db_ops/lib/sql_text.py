@@ -13,6 +13,7 @@ app-side where a shortcut would be invisible.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import os
 import re
 from typing import Any
@@ -298,13 +299,13 @@ def resolve_password(credential: dict[str, Any], secrets: dict[str, str]) -> str
     if not password_ref:
         return str(credential.get("password", ""))
     if password_ref.upper() in _NODE_KEYS or password_ref.upper().endswith("BOT_TOKEN"):
-        raise RuntimeError(f"{password_ref!r} is one of this node's own keys - it is never a password.")
+        raise errors.Refused(f"{password_ref!r} is one of this node's own keys - it is never a password.")
     env_value = os.getenv(password_ref, "").strip()
     if env_value:
         return env_value
     if password_ref in secrets:
         return secrets[password_ref]
-    raise RuntimeError(f"Password ref not found in environment or secret_text.json: {password_ref}")
+    raise errors.NotConfigured(f"Password ref not found in environment or secret_text.json: {password_ref}")
 
 
 # Upper bound on rows returned by one run. A SELECT bigger than this is truncated (and the
@@ -389,11 +390,11 @@ _SQL_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
 _SQL_TYPE_RE = re.compile(r"[A-Za-z0-9_]+(\(\s*(\d+|max)\s*(,\s*\d+\s*)?\))?", re.IGNORECASE)
 
 
-class SqlParameterError(ValueError):
+class SqlParameterError(errors.RequestError):
     """A task parameter is undeclared, mistyped, or missing — an operator message."""
 
 
-class SqlRunError(RuntimeError):
+class SqlRunError(errors.OperationFailed):
     """A user-facing failure: unknown target, no credential, connect refused, bad SQL."""
 
 

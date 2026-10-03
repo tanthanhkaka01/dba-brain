@@ -94,8 +94,28 @@ def test_a_small_query_on_a_worse_plan_run_often_is_a_finding(sql):
     assert "'query_store_plan_regressed_frequent'" in sql
     leg = sql.split("THEN 'QUERY_PLAN_REGRESSED_FREQUENT'", 1)[0].rsplit("WHEN", 1)[1]
     assert "p.recent_executions >= @p_FreqMinExecutions" in leg
-    assert "p.recent_total_cpu_sec >= @p_FreqWarnTotalCpuSec" in leg
-    assert "NULLIF(b.best_avg_cpu_sec, 0) >= @p_FreqWarnCpuRatio" in leg
+    assert "qb.query_bad_cpu_sec >= @p_FreqWarnTotalCpuSec" in leg
+    assert "p.cpu_ratio >= @p_FreqWarnCpuRatio" in leg
+    assert "cpu_ratio = p.recent_avg_cpu_sec / NULLIF(b.best_avg_cpu_sec, 0)" in sql
+
+
+def test_the_cpu_leg_is_the_querys_bad_plans_together_reported_once(sql):
+    """Replayed on the 2026-10-02 production data at 13:05: query 374468 burned 307 s on two bad
+    plans (210 + 97). Judged plan by plan, neither reached 300 s and the query was never reported,
+    though its callers waited as long as on any single bad plan. The bad plans of a query - run often
+    enough to judge, at the warning ratio - are summed, and the finding is reported once, on the
+    heaviest of them, with the sum and the count in the message."""
+    bad = sql.split("query_bad AS", 1)[1].split("query_best AS", 1)[0]
+    assert "SUM(recent_total_cpu_sec) OVER (PARTITION BY database_name, query_id)" in bad
+    assert "WHERE recent_executions >= @p_FreqMinExecutions" in bad
+    assert "AND cpu_ratio >= @p_FreqWarnCpuRatio" in bad
+    assert sql.count("AND qb.bad_rank = 1") == 3          # the kind, and both severities
+    assert "query_bad_plan_count=" in sql and "query_bad_cpu_sec=" in sql
+    # The candidates for the baseline read are chosen by the same sum, or a query whose bad plans
+    # are each under the threshold would never get a baseline to be compared with.
+    cand = sql.split("INSERT INTO #qs_cand", 1)[1].split("DECLARE base_cur", 1)[0]
+    assert "GROUP BY r.database_name, r.query_id" in cand
+    assert "HAVING SUM(r.recent_total_cpu_sec) >= @p_FreqWarnTotalCpuSec" in cand
 
 
 def test_the_frequency_baseline_is_another_plan_over_a_longer_window(sql):

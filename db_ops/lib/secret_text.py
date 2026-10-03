@@ -25,6 +25,7 @@ The loader auto-detects encrypted vs. plaintext files, so a plaintext
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import argparse
 import base64
 import binascii
@@ -52,7 +53,7 @@ def _crypto():
         from cryptography.hazmat.primitives import hashes
         from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
     except ImportError as exc:  # pragma: no cover - environment dependent
-        raise RuntimeError(
+        raise errors.NotConfigured(
             "The 'cryptography' package is required for encrypted secret text. "
             "Install it with: pip install cryptography"
         ) from exc
@@ -88,7 +89,7 @@ def encrypt_secret_text(secrets: dict[str, Any], key: str, *, iterations: int = 
 def decrypt_secret_text(blob: dict[str, Any], key: str) -> dict[str, str]:
     """Decrypt an on-disk envelope back into a {name: secret} mapping."""
     if not key:
-        raise RuntimeError(
+        raise errors.NotConfigured(
             f"No decryption key provided. Pass --key or set the {SECRET_KEY_ENV_VAR} environment variable."
         )
     Fernet, InvalidToken, _, _ = _crypto()
@@ -97,14 +98,14 @@ def decrypt_secret_text(blob: dict[str, Any], key: str) -> dict[str, str]:
         iterations = int(blob.get("iterations", _PBKDF2_ITERATIONS))
         token = str(blob["ciphertext"]).encode("ascii")
     except (KeyError, ValueError, TypeError) as exc:
-        raise RuntimeError(f"Malformed encrypted secret text envelope: {exc}") from exc
+        raise errors.InvalidConfig(f"Malformed encrypted secret text envelope: {exc}") from exc
     try:
         plaintext = Fernet(_derive_fernet_key(key, salt, iterations)).decrypt(token)
     except InvalidToken as exc:
-        raise RuntimeError("Failed to decrypt secret text: wrong key or corrupted file.") from exc
+        raise errors.InvalidConfig("Failed to decrypt secret text: wrong key or corrupted file.") from exc
     data = json.loads(plaintext.decode("utf-8"))
     if not isinstance(data, dict):
-        raise RuntimeError("Decrypted secret text is not a JSON object.")
+        raise errors.InvalidConfig("Decrypted secret text is not a JSON object.")
     return {str(name): str(value) for name, value in data.items()}
 
 
@@ -190,7 +191,7 @@ def load_secret_text_file(path: str | Path, *, key: str | None = None) -> dict[s
         return decrypt_secret_text(raw, resolve_key(key))
     if isinstance(raw, dict):
         return {str(name): str(value) for name, value in raw.items()}
-    raise RuntimeError(f"Secret text file must be a JSON object: {path}")
+    raise errors.InvalidConfig(f"Secret text file must be a JSON object: {path}")
 
 
 def load_secret_text(data_dir: str | Path, *, key: str | None = None) -> dict[str, str]:
@@ -236,9 +237,9 @@ def _set_secret_text_locked(data_dir: str | Path, ref: str, value: str, *, key: 
     """
     ref = str(ref or "").strip()
     if not ref:
-        raise RuntimeError("Secret ref must not be empty.")
+        raise errors.InvalidRequest("Secret ref must not be empty.")
     if not str(value or ""):
-        raise RuntimeError(f"Refusing to store an empty secret for {ref}.")
+        raise errors.Refused(f"Refusing to store an empty secret for {ref}.")
 
     resolved_key = resolve_key(key)
     path = Path(data_dir) / ENCRYPTED_SECRET_TEXT_FILENAME
@@ -247,7 +248,7 @@ def _set_secret_text_locked(data_dir: str | Path, ref: str, value: str, *, key: 
     if existing == value:
         return False
     if existing is not None and not overwrite:
-        raise RuntimeError(
+        raise errors.Refused(
             f"Secret ref '{ref}' already exists with a different value. "
             "Choose another ref, or pass overwrite=True to replace it."
         )
@@ -308,7 +309,7 @@ def encrypt_secret_text_file(source: str | Path, dest: str | Path, key: str) -> 
     with source.open("r", encoding="utf-8-sig") as file:
         secrets = json.load(file)
     if not isinstance(secrets, dict):
-        raise RuntimeError(f"Secret file must be a JSON object: {source}")
+        raise errors.InvalidConfig(f"Secret file must be a JSON object: {source}")
     # Keys beginning with `_` are commentary, not secrets. `secret_text.example.json` has used
     # `_notes` since it was written, but nothing enforced it — so the notes were encrypted into the
     # store as a secret named `_notes`, and the count reported one more secret than existed. Free
@@ -326,7 +327,7 @@ def encrypt_secret_text_file(source: str | Path, dest: str | Path, key: str) -> 
     # Checked after the `_` keys are dropped, because commentary is legitimately a list.
     for name, value in secrets.items():
         if isinstance(value, (dict, list)):
-            raise RuntimeError(
+            raise errors.InvalidConfig(
                 f"{source}: '{name}' holds an object, so this file is nested. It must be flat — "
                 f'{{"REF_NAME": "the secret"}} — with one entry per reference that '
                 f"users.json points at with password_ref."
@@ -335,7 +336,7 @@ def encrypt_secret_text_file(source: str | Path, dest: str | Path, key: str) -> 
 
     blob = encrypt_secret_text(secrets, key)
     if decrypt_secret_text(blob, key) != secrets:
-        raise RuntimeError("Round-trip verification failed; refusing to write output.")
+        raise errors.OperationFailed("Round-trip verification failed; refusing to write output.")
 
     with FileLock(Path(dest)):
         write_secret_file(Path(dest), json.dumps(blob, ensure_ascii=False, indent=2) + "\n")

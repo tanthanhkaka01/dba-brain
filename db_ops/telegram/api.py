@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+from db_ops.lib import errors
 from db_ops.lib.telegram_text import TELEGRAM_MESSAGE_LIMIT  # noqa: F401 - one definition, see that module
 
 import json
@@ -37,7 +39,7 @@ RATE_LIMIT_ATTEMPTS = 3
 PART_PAUSE_SECONDS = 0.35
 
 
-class TelegramRateLimited(RuntimeError):
+class TelegramRateLimited(errors.Refused):
     """Telegram refused this call for **its own** rate limit, and said for how long.
 
     A distinct type because the response is different from every other failure: nothing is wrong
@@ -91,9 +93,9 @@ def call_telegram_api(
     timeout_seconds: int = 20,
 ) -> dict[str, Any]:
     if not bot_token:
-        raise RuntimeError("Telegram bot token is empty.")
+        raise errors.NotConfigured("Telegram bot token is empty.")
     if not method_name:
-        raise RuntimeError("Telegram method name is empty.")
+        raise errors.InvalidRequest("Telegram method name is empty.")
 
     url = f"{api_url.rstrip('/')}/bot{bot_token}/{method_name}"
     encoded_payload = parse.urlencode(payload or {}).encode("utf-8")
@@ -114,13 +116,13 @@ def call_telegram_api(
         if exc.code == 429:
             raise TelegramRateLimited(
                 f"Telegram HTTP 429: {body}", _retry_after_seconds(body)) from exc
-        raise RuntimeError(f"Telegram HTTP {exc.code}: {body}") from exc
+        raise errors.OperationFailed(f"Telegram HTTP {exc.code}: {body}") from exc
     except error.URLError as exc:
-        raise RuntimeError(f"Telegram request failed: {exc.reason}") from exc
+        raise errors.Unreachable(f"Telegram request failed: {exc.reason}") from exc
 
     result = json.loads(body)
     if not result.get("ok"):
-        raise RuntimeError(f"Telegram returned not ok: {body}")
+        raise errors.OperationFailed(f"Telegram returned not ok: {body}")
     return result
 
 
@@ -150,9 +152,9 @@ def send_message(
     later part still waits: part of the body has landed, and finishing it beats sending it twice.
     """
     if not chat_id:
-        raise RuntimeError("Telegram chat id is empty.")
+        raise errors.InvalidRequest("Telegram chat id is empty.")
     if not text:
-        raise RuntimeError("Telegram message text is empty.")
+        raise errors.InvalidRequest("Telegram message text is empty.")
 
     # Telegram rejects a body longer than 4096 chars with HTTP 400 ("message is too long"), so an
     # over-long body goes out as several `[part i/n]` messages rather than being clipped. Every
@@ -187,8 +189,13 @@ def send_message(
         }
         # The quote belongs on the first part only — repeating it would quote the original once
         # per part. Buttons go on the last, which is where the reader ends up.
+        # `allow_sending_without_reply`: the message quoted may be gone - the bot deletes a typed
+        # password from the chat, a member deletes their own command - and Telegram then refused
+        # the whole reply (*400: message to be replied not found*), so the next question or the
+        # result never arrived. 64 replies were lost that way on the soak store (2026-10-03).
         if reply_to_message_id is not None and index == 0:
             payload["reply_to_message_id"] = reply_to_message_id
+            payload["allow_sending_without_reply"] = "true"
         if reply_markup is not None and index == len(parts) - 1:
             payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
 
@@ -263,7 +270,7 @@ def _send_part_honouring_rate_limit(
                 f"telegram.send_message rate limited: {where}, waiting {pause:.1f}s "
                 f"(attempt {attempt} of {RATE_LIMIT_ATTEMPTS})"))
             time.sleep(pause)
-    raise RuntimeError(f"Telegram send gave up on {where}.")  # unreachable; the loop returns or raises
+    raise errors.OperationFailed(f"Telegram send gave up on {where}.")  # unreachable; the loop returns or raises
 
 
 def send_document(
@@ -277,7 +284,7 @@ def send_document(
     reply_to_message_id: int | None = None,
 ) -> dict[str, Any]:
     if not chat_id:
-        raise RuntimeError("Telegram chat id is empty.")
+        raise errors.InvalidRequest("Telegram chat id is empty.")
     path = Path(document_path)
     if not path.is_file():
         raise FileNotFoundError(f"Telegram document not found: {path}")
@@ -287,6 +294,7 @@ def send_document(
         payload["caption"] = caption
     if reply_to_message_id is not None:
         payload["reply_to_message_id"] = reply_to_message_id
+        payload["allow_sending_without_reply"] = "true"
 
     return call_telegram_multipart_api(
         bot_token=bot_token,
@@ -310,7 +318,7 @@ def call_telegram_multipart_api(
     timeout_seconds: int = 60,
 ) -> dict[str, Any]:
     if not bot_token:
-        raise RuntimeError("Telegram bot token is empty.")
+        raise errors.NotConfigured("Telegram bot token is empty.")
     boundary = f"dbops-{uuid.uuid4().hex}"
     body = build_multipart_body(
         boundary=boundary,
@@ -336,13 +344,13 @@ def call_telegram_multipart_api(
         if exc.code == 429:
             raise TelegramRateLimited(
                 f"Telegram HTTP 429: {response_body}", _retry_after_seconds(response_body)) from exc
-        raise RuntimeError(f"Telegram HTTP {exc.code}: {response_body}") from exc
+        raise errors.OperationFailed(f"Telegram HTTP {exc.code}: {response_body}") from exc
     except error.URLError as exc:
-        raise RuntimeError(f"Telegram request failed: {exc.reason}") from exc
+        raise errors.Unreachable(f"Telegram request failed: {exc.reason}") from exc
 
     result = json.loads(response_body)
     if not result.get("ok"):
-        raise RuntimeError(f"Telegram returned not ok: {response_body}")
+        raise errors.OperationFailed(f"Telegram returned not ok: {response_body}")
     return result
 
 
@@ -410,7 +418,7 @@ def get_file_bytes(
     link the worker has, not just a JSON reply.
     """
     if not file_id:
-        raise RuntimeError("Telegram file_id is empty.")
+        raise errors.InvalidRequest("Telegram file_id is empty.")
     try:
         meta = call_telegram_api(
             bot_token=bot_token, method_name="getFile",
@@ -420,7 +428,7 @@ def get_file_bytes(
         # Telegram's own refusal reads "Bad Request: file is too big", which tells the operator
         # nothing about what to do next. Say whose limit it is and what the way around it is.
         if "too big" in str(exc).lower():
-            raise RuntimeError(
+            raise errors.Refused(
                 f"Telegram refuses to serve this file to a bot: the Bot API caps a bot's own "
                 f"download at {TELEGRAM_BOT_DOWNLOAD_LIMIT // (1024 * 1024)} MB, however large "
                 f"the file you attached is. Send a smaller extract, or put the file where the "
@@ -430,10 +438,10 @@ def get_file_bytes(
     result = meta.get("result") or {}
     file_path = str(result.get("file_path") or "")
     if not file_path:
-        raise RuntimeError("Telegram getFile returned no file_path.")
+        raise errors.OperationFailed("Telegram getFile returned no file_path.")
     reported_size = int(result.get("file_size") or 0)
     if max_bytes is not None and reported_size and reported_size > max_bytes:
-        raise RuntimeError(f"Telegram file too large: {reported_size} > {max_bytes} bytes.")
+        raise errors.Refused(f"Telegram file too large: {reported_size} > {max_bytes} bytes.")
     url = f"{api_url.rstrip('/')}/file/bot{bot_token}/{file_path}"
     req = request.Request(url, method="GET")
     try:
@@ -441,11 +449,11 @@ def get_file_bytes(
             data = response.read() if max_bytes is None else response.read(max_bytes + 1)
     except error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Telegram file HTTP {exc.code}: {body}") from exc
+        raise errors.OperationFailed(f"Telegram file HTTP {exc.code}: {body}") from exc
     except error.URLError as exc:
-        raise RuntimeError(f"Telegram file download failed: {exc.reason}") from exc
+        raise errors.Unreachable(f"Telegram file download failed: {exc.reason}") from exc
     if max_bytes is not None and len(data) > max_bytes:
-        raise RuntimeError(f"Telegram file exceeds {max_bytes} bytes.")
+        raise errors.Refused(f"Telegram file exceeds {max_bytes} bytes.")
     return data
 
 

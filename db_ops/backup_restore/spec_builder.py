@@ -10,6 +10,7 @@ third route for a SQL Server restore and went (rules R43), and the spec with it.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +18,7 @@ from db_ops.lib.paths import resolve_tool_path
 from db_ops.lib.timezone import display_now
 
 
-class SpecBuildError(ValueError):
+class SpecBuildError(errors.ConfigError):
     """The entry cannot be turned into a complete request: a secret or a script it names is missing."""
 
 

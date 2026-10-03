@@ -270,6 +270,10 @@ CONFIG_FREE_BY_NAME: tuple[str, ...] = (
     # 0.23.0 (1.48): a restore's copy and staging cleanup, moved out of the app.
     "cli_backup_copy.py", "backup_copy.py",
     "hostcmd.py", "ssh_relay.py", "db_connect.py",
+    # 2026-10-03 (Q11): what `cli.py` was split into - the help, the request reader, and the
+    # handlers that read nothing but their request. The ones that read or write config stayed in
+    # `cli.py`, so these are config-free by construction; naming them keeps them so.
+    "cli_usage.py", "cli_request.py", "cli_sql.py", "cli_host.py", "cli_gate.py",
 )
 
 # The two transports a module reaches a host through, `ssh` and `remote_exec`, were resolver tier

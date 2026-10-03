@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from db_ops.lib import errors
 import ipaddress
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,7 +14,7 @@ from db_ops.lib.config import DbOpsConfig
 from db_ops.db import DbOpsStore
 
 
-class ReportWorkflowError(RuntimeError):
+class ReportWorkflowError(errors.OperationFailed):
     def __init__(self, message: str, *, exit_code: int = 1) -> None:
         super().__init__(message)
         self.exit_code = exit_code

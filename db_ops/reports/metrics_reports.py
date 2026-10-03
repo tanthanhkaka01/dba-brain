@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+from db_ops.lib import errors
 from db_ops.lib.metric_score import target_score as _target_score  # noqa: F401 - one definition
 from db_ops.lib.text_format import format_utc as _format_utc  # noqa: F401 - one definition, see that module
 from db_ops.lib.timezone import display_now, format_display, format_display_text, format_offset, offset_minutes, to_display  # noqa: F401 - one definition, see that module
@@ -402,20 +404,20 @@ def load_report_configs(path: str | Path = DEFAULT_REPORTS_CONFIG_PATH, *, logge
         raw = json.load(file)
     reports = raw.get("reports")
     if not isinstance(reports, list):
-        raise RuntimeError(f"reports_config must contain a reports list: {config_path}")
+        raise errors.InvalidConfig(f"reports_config must contain a reports list: {config_path}")
     seen_codes: set[str] = set()
     validated = []
     for item in reports:
         if not isinstance(item, dict):
-            raise RuntimeError("Each report config item must be a JSON object.")
+            raise errors.InvalidConfig("Each report config item must be a JSON object.")
         report_code = str(item.get("report_code") or "").strip()
         if not report_code:
-            raise RuntimeError("Each report config item must contain report_code.")
+            raise errors.InvalidConfig("Each report config item must contain report_code.")
         if report_code in seen_codes:
-            raise RuntimeError(f"Duplicate report_code in reports_config: {report_code}")
+            raise errors.InvalidConfig(f"Duplicate report_code in reports_config: {report_code}")
         missing = sorted(REQUIRED_SCHEDULE_FIELDS - set(item))
         if missing:
-            raise RuntimeError(f"Report {report_code} missing schedule fields: {', '.join(missing)}")
+            raise errors.InvalidConfig(f"Report {report_code} missing schedule fields: {', '.join(missing)}")
         parsed_time_window = parse_time_window_config(
             item,
             context=f"reports.{report_code}",

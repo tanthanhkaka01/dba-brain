@@ -38,6 +38,7 @@ against a live estate.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import re
 from dataclasses import dataclass, replace
 from typing import Any, Iterable, Sequence
@@ -124,13 +125,15 @@ _WINDOWS_PRODUCT_NT = (
 _NT_VERSION_RE = re.compile(r"\b(\d{1,2})\.(\d{1,2})\b")
 
 
-class ToolSelectionError(RuntimeError):
+class ToolSelectionError(errors.DbOpsError, RuntimeError):
     """The stated facts rule out every tool — an operator message, with the fix in it.
 
     Distinct from a driver's own exception for the reason the whole module exists: ``DPY-3010``
     tells you a protocol was refused, this tells you which of ``sql_access.method`` /
     ``oracle_client_mode`` to set and why.
     """
+
+    kind = errors.KIND_CONFIG
 
 
 @dataclass(frozen=True)

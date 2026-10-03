@@ -32,8 +32,8 @@ HOST_LIBRARIES = frozenset({"paramiko", "pypsrp", "winrm", "smbprotocol", "smbcl
 #: of these files still fails.
 NOT_A_HOST_REACH: dict[str, tuple[int, str]] = {
     "jobs/daemon.py": (1, "runs the command lines app_commands.json configures - the scheduler's job"),
-    "telegram/command_processor.py": (2, "runs the command templates the bot is configured with, and "
-                                         "starts its own detached runner for a long one"),
+    "telegram/command_cli.py": (1, "runs the command templates the bot is configured with"),
+    "telegram/command_background.py": (1, "starts the bot's own detached runner for a long command"),
     "telegram/detached_exit.py": (1, "the bot's detached runner: runs the configured command it is given"),
     "sre/cli.py": (1, "sre re-launching its own CLI for a step"),
     "sql_tasks/python_source.py": (1, "a SQL task's input: the operator's own Python script"),

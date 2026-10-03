@@ -9,8 +9,9 @@ Telegram command, or the CLI into the API untranslated, and the result is JSON-s
       "connection": {...},              // REQUIRED since 0.24.0: the login, complete - db_type,
                                         // host, port, username, password (lib.connection_spec)
       "target": "ACME-192-0-2-115",     // the label the answer carries; nothing is looked up
-      "sql": "SELECT TOP 10 * FROM sys.objects",   // or "sql_file": "path/to/query.sql"
-      "database": "SALESDB",               // optional. SQL Server: default is always `master`
+      "sql_text": "SELECT TOP 10 * FROM sys.objects",   // or "sql_file": "path/to/query.sql";
+                                        // "sql" is still read, never written
+      "database_name": "SALESDB",       // optional ("database" still read). SQL Server: default is always `master`
                                         // (say USE, or name it here). Other engines: default is
                                         // the connection's database.
       "max_rows": 50000,

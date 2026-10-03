@@ -86,6 +86,26 @@ python -m db_ops.sla.cli --config config.json validate --format text --notify --
 
 ### What the page shows
 
+Three levels, top to bottom - the estate, each database engine, each instance - laid out the way
+an SLO dashboard is read (overall verdict, a panel per group, a status grid, the breaches, the
+detail). It was rebuilt on 2026-10-02 at the operator's word: the old page listed SLI codes per
+question with no instance named (*AVAILABILITY_SUCCESS_RATIO: STALE* sixteen times) and could not
+say "PostgreSQL is fine, SQL Server is not". It inlines `lib.page_style` - the stylesheet the
+report pages share - plus its own few rules (engine cards, the matrix's group rows, the folded
+instance blocks).
+
+| Section | What it answers |
+| --- | --- |
+| Masthead | the overall verdict, *N instances on M engines, x of y checks passed*, the six counters below |
+| **By database engine** | one card per engine (`lib.engine_sections`: SQL Server, Oracle, PostgreSQL, MySQL, Host only, Other): its verdict, the share of its checks that pass, failed / cannot measure / at risk / passed, *bad right now*, and the instances to look at |
+| **Instance matrix** | rows grouped by engine, one per instance (`server_id`); a column per SLI area that has a check (availability, backup & recovery, replication / HA, performance, capacity, integrity & operations, monitoring); a cell is the worst check in that area with its reading, the policy, objective and data quality in its tooltip |
+| **Needs attention** | every check that did not pass, worst first, naming its engine and instance, with now / measured / objective / data quality / why |
+| **Instance detail** | grouped by engine, one collapsible block per instance - open when anything in it did not pass |
+| Recent runs | the newest `WEB_HISTORY_LIMIT` runs |
+
+The engine is the middle segment of `target_id` (`<server_id>/<db_type>/<service>`); a result whose
+target is `*` names no machine and is listed last as *Fleet-wide*.
+
 The headline splits four questions that used to be one red number:
 
 | Card | Means | Who acts |

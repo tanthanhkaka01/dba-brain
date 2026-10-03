@@ -30,6 +30,7 @@ not own.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import re
 
 import shlex
@@ -49,7 +50,7 @@ SUCCESS_STATUSES = (DELETED, NOT_FOUND)
 WILDCARDS = ("*", "?", "[")
 
 
-class DeleteFileError(ValueError):
+class DeleteFileError(errors.RequestError):
     """The request could not be honoured. Distinct from a file that could not be deleted."""
 
 

@@ -22,6 +22,7 @@ arrive in the request, on stdin.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import os
 import subprocess
 import time
@@ -45,7 +46,7 @@ SKIP_DATABASES = frozenset({"template0", "template1"})
 KINDS = ("sql", "script", "local")
 
 
-class ItemFailure(RuntimeError):
+class ItemFailure(errors.OperationFailed):
     """One item failed in a way its caller must be able to tell apart - carried as data."""
 
     def __init__(self, message: str, *, phase: str = "", kind: str = "other", stdout: Any = "",

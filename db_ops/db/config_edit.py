@@ -35,6 +35,7 @@ is what keeps the two identical by construction.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import json
 from pathlib import Path
 from typing import Any
@@ -54,7 +55,7 @@ from db_ops.db.config_sync import (
 )
 
 
-class ConfigEditError(ValueError):
+class ConfigEditError(errors.RequestError):
     """The requested change cannot be made as asked."""
 
 

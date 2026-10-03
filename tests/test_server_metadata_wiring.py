@@ -186,9 +186,10 @@ def test_a_replay_failure_leaves_the_restore_successful(tmp_path, bundle, monkey
 
 
 def test_a_missing_bundle_names_the_backup_entry_that_should_have_written_it(tmp_path, monkeypatch):
-    """The one mismatch this can be configured into: server_metadata on for the restore and off
-    for the same instance's backup. A bare "bundle not found" would send an operator looking at
-    the restore, which is the half that is correct."""
+    """server_metadata on for the restore and off for the same instance's backup - or, the cause on
+    the 0.26 soak node (1.88), on and inactive here, because another node runs that backup. A bare
+    "bundle not found" would send an operator looking at the restore, which is the half that is
+    correct; asking only for `server_metadata.enabled` sent them to a setting already set."""
     root = tmp_path / "instance_bundles"
     monkeypatch.setattr("db_ops.backup_restore.server_metadata.BUNDLE_ROOT", root)
 
@@ -197,7 +198,8 @@ def test_a_missing_bundle_names_the_backup_entry_that_should_have_written_it(tmp
     )
 
     assert "SKIPPED" in line
-    assert SOURCE in line and "server_metadata.enabled" in line
+    assert SOURCE in line and "server_metadata on" in line and "inactive" in line
+    assert "export-instance-bundle" in line, "and how to put it right on this node"
     assert summary["ok"] is False
 
 

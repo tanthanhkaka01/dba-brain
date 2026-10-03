@@ -25,6 +25,7 @@ turns one such row into two wrong ones.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import csv
 import io
 from typing import Any
@@ -37,8 +38,10 @@ from db_ops.lib.xlsx_import import (
 )
 
 
-class DelimitedImportError(RuntimeError):
+class DelimitedImportError(errors.DbOpsError, RuntimeError):
     """A user-facing failure: undecodable bytes, an empty file, a row wider than the header."""
+
+    kind = errors.KIND_REQUEST
 
 
 #: Candidate delimiters, in the order a tie is broken. Tab first because it is the one that is

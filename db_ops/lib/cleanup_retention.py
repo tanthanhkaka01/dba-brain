@@ -24,6 +24,7 @@ changing configured values: the restore engine spoke hours and the conversion wa
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 from typing import Any
 
 #: The canonical field name. One spelling, both halves of the app.
@@ -41,7 +42,7 @@ LEGACY_FIELDS: dict[str, int] = {
 DEFAULT_SECONDS = 8 * 24 * 3600
 
 
-class CleanupRetentionError(ValueError):
+class CleanupRetentionError(errors.ConfigError):
     """The retention setting is missing or is not a number of seconds."""
 
 

@@ -37,6 +37,7 @@ tested without a host to run it against. Measuring the numbers is the app's job
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 from dataclasses import dataclass
 from typing import Mapping
 
@@ -57,7 +58,7 @@ UNKNOWN_CHOICES: tuple[str, ...] = ("refuse", "proceed")
 _GIB = 1024 ** 3
 
 
-class RestoreSpaceError(ValueError):
+class RestoreSpaceError(errors.RequestError):
     """A ``space_check`` block that cannot be obeyed as written."""
 
 

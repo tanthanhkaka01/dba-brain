@@ -24,6 +24,8 @@ import subprocess
 
 import pytest
 
+from conftest import patch_restore
+
 from db_ops.backup_restore.restore_database import _sqlcmd_argv, _sqlcmd_request, build_sqlcmd_query_command
 from db_ops.common import sqlcmd_run
 from tests.test_backup_restore import make_config
@@ -312,8 +314,8 @@ def test_a_linux_restore_logs_its_progress_too(tmp_path, monkeypatch):
     config = dataclasses.replace(make_config(tmp_path), vm_platform="linux",
                                  vm_credential_target="198.51.100.31")
     events = []
-    monkeypatch.setattr(restore_database, "log_event", lambda _logger, **kw: events.append(kw["message"]))
-    monkeypatch.setattr(restore_database, "_sqlcmd_in_common", lambda request, *, cmd: subprocess.CompletedProcess(
+    patch_restore(monkeypatch, "log_event", lambda _logger, **kw: events.append(kw["message"]))
+    patch_restore(monkeypatch, "_sqlcmd_in_common", lambda request, *, cmd: subprocess.CompletedProcess(
         cmd, 0, "50 percent processed.\n100 percent processed.\n", ""))
 
     restore_database.run_sqlcmd_query_command(

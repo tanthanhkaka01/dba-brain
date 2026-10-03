@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from db_ops.lib import errors
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -23,13 +24,13 @@ class SreOperationalConfig:
         for item in groups.get("shared", []):
             if item.get("name") == "bastion-01" or item.get("role") == "bastion":
                 return str(item["ip"])
-        raise RuntimeError("bastion-01 not found in SRE config inventory.shared.")
+        raise errors.NotConfigured("bastion-01 not found in SRE config inventory.shared.")
 
     def inventory_group(self, group: str) -> list[dict]:
         groups = self.inventory.get("groups") or {}
         nodes = groups.get(group) or []
         if not nodes:
-            raise RuntimeError(f"Inventory group not found or empty: {group}")
+            raise errors.NotConfigured(f"Inventory group not found or empty: {group}")
         return [dict(node) for node in nodes]
 
     def first_node(self, group: str) -> dict:

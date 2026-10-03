@@ -35,6 +35,7 @@ rule changes.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 from typing import Any
 
 from db_ops.common import db_catalog
@@ -45,7 +46,7 @@ from db_ops.lib.sql_access import normalize_db_type
 DEPTHS = ("instance", "database", "schema")
 
 
-class DbStatusError(ValueError):
+class DbStatusError(errors.RequestError):
     """The status could not be *determined*. A server that is down is a result, not this."""
 
 

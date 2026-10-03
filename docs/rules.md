@@ -95,6 +95,8 @@ R38-R45 keep their numbers and stand with the other layer rules; R43 is R11's si
 | R14 | [A request with a password comes on stdin only](#r14) | absolute | - |
 | R15 | [Every answer is one envelope, nothing else on stdout](#r15) | absolute | - |
 | R16 | [Every request and answer is described in the reference](#r16) | absolute | - |
+| R48 | [Every error carries its kind; nothing raises a bare `RuntimeError`](#r48) | absolute | - |
+| R49 | [A `common.cli` request is held to its reference before it is read](#r49) | measured | - |
 
 ### 3. Configuration and data
 
@@ -426,7 +428,7 @@ A request that carries a password is taken on stdin only, never argv.
 
 ### R15
 
-Every `common` and `db` command answers in one envelope - `success`, `operation`, `message`, `error`, `data`, `metrics` - with nothing else on stdout, and an exit code that summarises `success`.
+Every `common` and `db` command answers in one envelope - `success`, `operation`, `message`, `error`, `error_kind`, `data`, `metrics` - with nothing else on stdout, and an exit code that summarises `success`. `error_kind` (0.26.0) is `null` on success and one of `lib.errors.KINDS` on failure, so a caller decides by the kind, never by the sentence.
 
 **Guard:**
 
@@ -448,6 +450,8 @@ Every `common` and `db` command answers in one envelope - `success`, `operation`
 - `tests/test_every_json_the_tool_reads_or_writes_is_described.py::test_every_described_field_is_a_key_its_module_names`
 - `tests/test_a_common_command_works_from_its_request_alone.py::test_every_key_a_successful_answer_carries_is_described`
 - `tests/test_an_answer_that_needs_a_server_is_checked_against_a_fake_one.py::test_every_command_named_answered_is_answered_by_a_test_here`
+- `tests/test_cli_types_match_the_reference.py::test_the_request_and_answer_types_are_the_reference_rendered`
+- `tests/test_answers_are_read_by_the_keys_they_carry.py::test_no_answer_is_read_under_a_key_it_does_not_carry`
 
 **Mark:** absolute since 0.25.0 - the guard's `ANSWER_NOT_YET_SEEN` is empty (60 when 0.24.0 shipped).
 
@@ -456,6 +460,33 @@ Every `common` and `db` command answers in one envelope - `success`, `operation`
 - A command whose job is the store (R09's first kind) is answered from a store of the test's own: `rotate-password` reads an inventory, `users.json` and an encrypted store written on the test's root, never the checkout's `data/`. A share (`smb-*`) is reached by this node's own `smbclient` / `cmdkey`, faked where `common.smb` starts them.
 - Found by the answer check in 0.24.0, and described: `check-references` answering `data_dir`, `list-backup-files` answering `unreadable`, `timezone` answering `config_error`.
 - Found by it in 0.25.0: 16 answer keys the reference did not describe (the ten of `backup-database`'s plan, three of `check-secret-literals`, `inventory-summary`'s `file`, `move-db-docker`'s `ok` and `copy-schema`'s `mode`), and three bugs a successful answer had never been run far enough to show.
+
+### R48
+
+**Every error carries its kind; nothing raises a bare `RuntimeError`.** An exception class derives from a base in `lib.errors` - `RequestError`, `ConfigError`, `NotConfigured`, `Refused`, `Unreachable`, `OperationFailed`, or `DbOpsError` with its `kind` - while keeping the built-in it was (`RuntimeError`, `ValueError`, `OSError`), so no existing `except` changes; a raise site raises the kind it is (`InvalidConfig` / `InvalidRequest` where a `RuntimeError` was raised). The kind is what `common.cli` answers as `error_kind` (R15) and what `lib.common_cli.CommonCliError.kind` hands the app.
+
+**Guard:**
+
+- `tests/test_error_kinds.py::test_every_exception_class_has_a_kind`
+- `tests/test_error_kinds.py::test_no_bare_runtime_error_is_raised`
+- `tests/test_error_kinds.py::test_a_module_error_keeps_the_built_in_it_was`
+- `tests/test_error_kinds.py::test_common_cli_answers_an_exception_with_its_kind`
+
+**Mark:** absolute since 2026-10-02 (`audits/20261002_audit_typed_requests_and_errors.md`): 123 classes given a kind and 191 bare `RuntimeError` raises converted in one pass; the two deliberate exceptions - the console's HTTP refusal (control flow with a status) and the daemon's stop signal (a `BaseException`) - are named in the guard.
+
+
+### R49
+
+**A `common.cli` request is held to its reference before the command reads it** - measured today, refused once real requests measure clean (see the mark). The reader (`common/cli_request.py::_read_json_request`, called through `cli.main`) checks the request against its command's `input_` entry in the **packaged** reference (`lib.request_check`, never a node's `data/` copy - R09): a value of the wrong kind or out of its range, and a required field left out, are refused with the field named and `error_kind` `request` (R15, R48). An unknown key, a deprecated spelling, an unlisted value of an open list and a blank optional field are not refused - a blank optional string is how code says "not given"; unknown keys and deprecated spellings are measured, one JSON line each, into the file `DB_OPS_REQUEST_CHECK_LOG` names.
+
+**Guard:**
+
+- `tests/test_a_request_is_checked_against_the_reference.py::test_a_value_of_the_wrong_kind_is_refused_naming_the_field`
+- `tests/test_a_request_is_checked_against_the_reference.py::test_a_required_field_left_out_is_refused_as_missing`
+- `tests/test_a_request_is_checked_against_the_reference.py::test_an_unknown_key_is_measured_and_not_refused`
+- `tests/test_a_request_is_checked_against_the_reference.py::test_the_reference_is_the_packaged_copy_never_a_node_s_data`
+
+**Mark:** measured, not yet refusing (`lib.request_check.REFUSING` is off). It shipped refusing on 2026-10-03 and the first node to run it refused every SQL task within a minute: the reference called `run-sql`'s `capture` a boolean, the runner sends `"all"` - the reference was wrong, and the suite could not see it, since most app tests fake the transport. So every finding is measured into `DB_OPS_REQUEST_CHECK_LOG` until a node's log of real requests holds no `value` or `missing` finding; then `REFUSING` goes on, and the unknown keys follow. The refusal path is tested with it switched on.
 
 ## 3. Configuration and data
 

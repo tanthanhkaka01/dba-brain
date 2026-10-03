@@ -15,6 +15,7 @@ instance themselves.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +24,7 @@ from db_ops.lib.listing import active_only, hidden_note
 from db_ops.lib.sql_access import KNOWN_DB_TYPES
 
 
-class TargetResolveError(RuntimeError):
+class TargetResolveError(errors.NotConfigured):
     """Raised when a target spec is malformed or matches no configured db instance."""
 
 

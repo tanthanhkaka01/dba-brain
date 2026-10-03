@@ -20,6 +20,7 @@ leaves no way around: ``/pass:`` is its only form, as it was when the app ran it
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import os
 import re
 import shutil
@@ -40,7 +41,7 @@ GET_TIMEOUT_SECONDS = 3600
 BACKENDS = ("smbclient", "unc")
 
 
-class SmbError(ValueError):
+class SmbError(errors.RequestError):
     """The request cannot be run as written, or the share refused it."""
 
 

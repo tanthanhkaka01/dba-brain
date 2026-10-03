@@ -69,6 +69,7 @@ Two rules the format exists to enforce:
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import base64
 import codecs
 import hashlib
@@ -137,7 +138,7 @@ CONTENT_TEXT = "text"
 CONTENT_BASE64 = "base64"
 
 
-class BundleError(ValueError):
+class BundleError(errors.RequestError):
     """A bundle cannot be built, read, or applied as written."""
 
 

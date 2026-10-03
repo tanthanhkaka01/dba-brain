@@ -29,7 +29,8 @@
   }
   *{box-sizing:border-box}
   body{margin:0; background:var(--bg); color:var(--ink); font-family:var(--sans); font-size:14px; line-height:1.5;}
-  .wrap{max-width:1180px; margin:0 auto; padding:0 22px 64px;}
+  /* The whole window, not a centred 1180px column - see the same note in inventory_report.html. */
+  .wrap{max-width:none; margin:0; padding:0 22px 64px;}
   header.masthead{background:linear-gradient(135deg,var(--brand),var(--brand-2)); color:#fff; padding:24px 0 20px; margin-bottom:20px;}
   header .wrap{padding-bottom:0}
   .eyebrow{font-size:11.5px; letter-spacing:.16em; text-transform:uppercase; color:#9db8d6; font-weight:600; margin:0 0 6px}
@@ -38,7 +39,15 @@
   .back{display:inline-block; margin-top:12px; color:#c7d6e8; font-size:12.5px; text-decoration:none; border-bottom:1px dotted #6f89a8}
   .back:hover{color:#fff}
 
-  .picker{display:flex; flex-wrap:wrap; gap:6px; margin:14px 0 18px}
+  /* One row per engine (SQL Server, Oracle, PostgreSQL, Host only): the label column on the left,
+     that engine's servers to its right. */
+  .picker{display:grid; grid-template-columns:max-content 1fr; gap:8px 12px; align-items:start;
+    margin:14px 0 18px; padding:12px 14px; background:var(--surface); border:1px solid var(--line); border-radius:10px}
+  .picker .plabel{font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase;
+    color:var(--brand); padding-top:6px; white-space:nowrap}
+  .picker .plabel b{display:inline-block; margin-left:6px; font-weight:600; color:var(--muted);
+    border:1px solid var(--line); border-radius:999px; padding:0 6px; letter-spacing:0}
+  .picker .prow{display:flex; flex-wrap:wrap; gap:6px}
   .picker button{background:var(--surface); border:1px solid var(--line); border-radius:999px; cursor:pointer;
     padding:5px 12px; font-family:var(--sans); font-size:12px; color:var(--muted);}
   .picker button:hover{border-color:var(--info); color:var(--info)}
@@ -222,7 +231,8 @@ __BANNER_CSS__
 </div>
 
 <script>
-const SERVERS = __SERVERS__;   /* [{slug, name, ip, platform, status, score, file}] — index only */
+const SERVERS = __SERVERS__;   /* [{slug, name, ip, platform, engine, status, score, file}] — index only */
+const ENGINE_SECTIONS = __ENGINE_SECTIONS__;   /* [[key, label], ...] in page order — lib.engine_sections */
 const VERSION = "__STAMP__";   /* cache-buster: a rebuilt page must not serve yesterday's series */
 const WINDOW_DAYS = "__WINDOW_DAYS__";
 const SNAPSHOT_DATE = "__SNAPSHOT_DATE__";  /* kept on every per-server view, not just the landing one */
@@ -890,6 +900,60 @@ function queryStoreBlock(q){
     <div class="tbl-wrap"><table class="rpt">
       <thead><tr><th></th><th>Database</th><th>State</th><th>Storage used</th><th>Capture</th>
         <th>Cleanup</th><th>Wait stats</th><th>Retention</th><th>Max plans</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+    </div></details>`;
+}
+
+/* Query Store findings — QUERY_STORE_QUERY_ISSUES over the last day, one row per query plan,
+   each marked still happening or cleared. The charts could not carry these: the metric's item is
+   the KIND of finding, so three regressed queries became one series with one query's message, a
+   kind seen for the first time had too few samples to be drawn, and a regression that cleared left
+   no trace at all. A day is kept so the morning after a plan flip still shows what happened. */
+function queryStoreFindingsBlock(q){
+  if (!q || !q.summary || !q.summary.collected) return "";
+  const s = q.summary;
+  const n = (v, d=0) => v==null ? "—" : Number(v).toLocaleString(undefined, {maximumFractionDigits:d});
+  const kind = k => String(k||"").replace(/^QUERY_/, "").replace(/_/g, " ").toLowerCase();
+  const sev = v => v==="CRITICAL" ? "crit" : v==="WARNING" ? "warn" : "";
+  if (!q.findings.length){
+    return `<details class="fold"><summary>Query Store findings — none in the last ${s.windowHours} h</summary>
+      <div class="in"><p class="sec-note">QUERY_STORE_QUERY_ISSUES last ran at ${when(s.asOf)} and has
+      reported no query on a worse plan, and no heavy, long or blocked execution, in the last
+      ${s.windowHours} hours.</p></div></details>`;
+  }
+  const rows = q.findings.map(f=>`<tr class="${f.now ? sev(f.severity) : ""}">
+      <td>${f.now ? `<span class="sev ${sev(f.severity)}">NOW</span>` : `<span class="sev">cleared</span>`}</td>
+      <td><span class="sev ${sev(f.worst)}">${esc(f.worst)}</span></td>
+      <td class="metric">${esc(kind(f.kind))}</td>
+      <td class="nowrap mono">${esc(f.database)}</td>
+      <td class="nowrap mono">${esc(f.queryId)} / ${esc(f.planId)}${f.otherPlanId ? ` <span class="muted">vs ${esc(f.otherPlanId)}</span>` : ""}</td>
+      <td class="nowrap mono">${when(f.firstSeen)}</td>
+      <td class="nowrap mono">${when(f.lastSeen)}</td>
+      <td class="nowrap mono">${n(f.reports)}</td>
+      <td class="nowrap mono">${n(f.peakRecentCpuSec, 1)} s${f.queryBadPlans > 1 ? ` <span class="muted">query ${n(f.peakQueryBadCpuSec, 1)} s on ${n(f.queryBadPlans)} plans</span>` : ""}</td>
+      <td class="nowrap mono">${n(f.recentAvgCpuMs, 1)} ms${f.bestAvgCpuMs!=null ? ` <span class="muted">was ${n(f.bestAvgCpuMs, 2)} ms</span>` : ""}</td>
+      <td class="nowrap mono">${f.peakCpuRatio!=null ? n(f.peakCpuRatio, 1)+"×" : "—"}</td>
+      <td class="nowrap mono">${n(f.peakMaxDurationSec, 1)} s</td>
+      <td class="nowrap mono">${n(f.peakMaxLogicalReads)}</td>
+    </tr>`).join("");
+  const head = (s.now ? `${s.now} happening now` + (s.criticalNow ? ` (${s.criticalNow} critical)` : "")
+                      : "nothing happening now")
+    + (s.cleared ? ` · ${s.cleared} cleared` : "") + ` · last ${s.windowHours} h`;
+  return `<details class="fold" open>
+    <summary>Query Store findings — ${esc(head)}</summary>
+    <div class="in">
+    <p class="sec-note">One row per query on one plan over the last ${s.windowHours} hours.
+      <b>NOW</b> is still reported by the newest collection (${when(s.asOf)}); <b>cleared</b> was
+      reported earlier and no longer is. <b>Reports</b> counts the runs that reported it, every
+      15 minutes while it lasted. <b>Plan regressed, frequent</b> is a small statement on a worse
+      plan run often: its average CPU now, what the cheapest other plan of the same query averaged
+      over seven days, and the peak ratio between them; its CPU is judged for the whole query, all its
+      bad plans together, and shown beside the plan's own when there is more than one. The other kinds are one execution being
+      heavy, long or blocked. CPU, ratio, duration and reads are the peaks over the day.</p>
+    <div class="tbl-wrap"><table class="rpt">
+      <thead><tr><th></th><th>Worst</th><th>Finding</th><th>Database</th><th>Query / plan</th>
+        <th>First seen</th><th>Last seen</th><th>Reports</th><th>CPU per run</th><th>Avg CPU</th>
+        <th>Ratio</th><th>Max duration</th><th>Max reads</th></tr></thead>
       <tbody>${rows}</tbody></table></div>
     </div></details>`;
 }
@@ -1799,12 +1863,26 @@ function omittedFoot(omitted){
 /* ---------------- page ---------------- */
 function renderPicker(active){
   /* Buttons carry the server_id because it is unique; the role name (which is not — an FCI
-     pair shares one) rides along in the tooltip for anyone who knows the box by that name. */
-  document.getElementById("picker").innerHTML = SERVERS.map(s=>
+     pair shares one) rides along in the tooltip for anyone who knows the box by that name.
+     One row per engine, in ENGINE_SECTIONS order: a flat row of 77 buttons mixing SQL Server
+     instances, Oracle and PostgreSQL databases and bare hosts made "the Oracle servers" a search. */
+  const button = s=>
     `<button data-slug="${esc(s.slug)}" class="${s.slug===active?"on":""}"
              title="${esc([s.role, s.ip, s.platform].filter(Boolean).join(" · "))}">
        <span class="dot" style="background:${COLOR[cls(s.status)]}"></span>${esc(s.name)}
-     </button>`).join("");
+     </button>`;
+  const known = new Set(ENGINE_SECTIONS.map(([key])=>key));
+  const sectionOf = s=> known.has(s.engine) ? s.engine : "other";
+  document.getElementById("picker").innerHTML = ENGINE_SECTIONS.map(([key, label])=>{
+    // Targets with nothing collected (grey) go to the end of their row: most of them are
+    // registered and switched off, and they buried the monitored servers in front of them.
+    const members = SERVERS.filter(s=>sectionOf(s)===key)
+      .map((s, i)=>[s, i]).sort((a, b)=>((cls(a[0].status)==="unk")-(cls(b[0].status)==="unk")) || a[1]-b[1])
+      .map(([s])=>s);
+    if (!members.length) return "";
+    return `<div class="plabel">${esc(label)}<b>${members.length}</b></div>
+            <div class="prow">${members.map(button).join("")}</div>`;
+  }).join("");
   document.querySelectorAll("#picker button").forEach(b=>b.addEventListener("click",()=>select(b.dataset.slug)));
 }
 
@@ -1890,6 +1968,7 @@ async function select(slug){
     + volumesBlock(d.volumes)
     + capacityBlock(d.capacity)
     + linkedServerBlock(d.linkedServers)
+    + queryStoreFindingsBlock(d.queryStoreFindings)
     + queryStoreBlock(d.queryStore)
     + jobsBlock(d.jobs)
     /* Instance health, then what is broken inside it, then the statements doing the damage —

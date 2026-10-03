@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from db_ops.lib import errors
 import logging
 from datetime import datetime, timezone
 import os
@@ -21,10 +22,10 @@ def build_log_paths(logs_dir: Path, log_scope: str) -> tuple[Path, Path]:
 def validate_log_scope(log_scope: str | None) -> str:
     clean_scope = str(log_scope or "").strip()
     if not clean_scope:
-        raise RuntimeError("log_scope is required for db_ops logging.")
+        raise errors.InvalidConfig("log_scope is required for db_ops logging.")
     invalid_chars = {"/", "\\", ":", "*", "?", '"', "<", ">", "|"}
     if any(char in clean_scope for char in invalid_chars):
-        raise RuntimeError(f"log_scope contains invalid filename character(s): {clean_scope}")
+        raise errors.InvalidConfig(f"log_scope contains invalid filename character(s): {clean_scope}")
     return clean_scope
 
 

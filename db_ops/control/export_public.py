@@ -29,6 +29,7 @@ this step is a gate rather than a report: a tree with a real hostname in it does
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -60,6 +61,10 @@ TEXT_SUFFIXES: frozenset[str] = frozenset({
     # cannot write a compose file without its `.j2`. Twenty-seven files, and the packages that
     # need them do not function without them.
     ".j2", ".html",
+    # The typed overloads of `transport.common_cli.run`, rendered from the reference (0.26.0,
+    # `control.cli request-types`). The public CI runs mypy over them - refused here, the tree it
+    # checks would type every answer as `Any` and the answer-key guard would pass on nothing.
+    ".pyi",
 })
 
 #: Files with no suffix at all that are still text, by name.
@@ -178,7 +183,7 @@ def publishable_repository_above(target: Path) -> tuple[Path, str] | None:
     return None
 
 
-class ExportError(RuntimeError):
+class ExportError(errors.OperationFailed):
     """The export refused. Every message says what to do about it."""
 
 
@@ -531,7 +536,7 @@ def discard(target: Path) -> None:
     shutil.rmtree(target)
 
 
-class ScanRefused(RuntimeError):
+class ScanRefused(errors.Refused):
     """The scan could not look - no identifiers to search for, or nothing to read. The copy stands,
     and nothing about it has been verified."""
 

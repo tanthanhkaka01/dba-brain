@@ -29,6 +29,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import patch_restore
+
 from db_ops.backup_restore import copy_backup, space
 from db_ops.backup_restore.config import BackupRestoreConfig, DatabaseRestoreMapping
 from db_ops.lib import restore_space
@@ -159,6 +161,21 @@ def test_the_batch_reads_the_file_list_of_every_backup_it_is_given():
     assert "/import/full.bak" in sql and "/import/diff.bak" in sql
     assert "sys.dm_os_volume_stats" in sql, "free space as the instance sees its own volume"
     assert "DB_ID(N'Payroll_Main')" in sql
+
+
+def test_an_instance_that_names_no_mount_point_is_matched_by_the_folder_it_writes_to():
+    """Read on the lab's SQL Server 2025 on Linux, 2026-10-03: `sys.dm_os_volume_stats` answers
+    `available_bytes` and a NULL `volume_mount_point`. Matched by mount point alone, the free space
+    was never read there, so every measured restore onto a Linux target was "could not be measured"
+    - refused, or run unmeasured. The same batch with this lookup read 146.8 GiB free on that lab,
+    and nothing for a folder no file of the instance lives in."""
+    sql = space.restore_room_sql(database="Payroll_Main", backups=["/import/full.bak"], **PATHS)
+
+    assert "NULLIF(vs.volume_mount_point, N'') IS NULL" in sql
+    assert "LEFT(LOWER(mf.physical_name), LEN(@folder)) = @folder" in sql
+    assert "PATINDEX(N'%[/\\]%', REVERSE(N'/var/opt/mssql/data/Payroll_Main.mdf'))" in sql, (
+        "the folder is the data path up to its last separator, of either kind")
+    assert "LEN(vs.volume_mount_point)) = LOWER(vs.volume_mount_point)" in sql, "Windows, as before"
 
 
 def test_the_batch_changes_nothing_on_the_target():
@@ -315,7 +332,7 @@ def _restore(tmp_path: Path, monkeypatch, room_answer: str, *, asks: bool = True
         measuring = space.ROOM_MARKER in str(getattr(cmd, "sql", ""))
         return subprocess.CompletedProcess(cmd, 0, room_answer if measuring else "complete", "")
 
-    monkeypatch.setattr(restore_module, "run_sqlcmd_query_command", fake_run_sqlcmd)
+    patch_restore(monkeypatch, "run_sqlcmd_query_command", fake_run_sqlcmd)
 
     def run():
         return restore_module.run_restore_database(

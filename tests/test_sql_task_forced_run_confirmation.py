@@ -21,6 +21,8 @@ from db_ops.common import confirm
 from db_ops.sql_tasks import runner
 from db_ops.sql_tasks.runner import authorize_forced_run, parse_args
 
+from conftest import patch_sql_runner
+
 
 @pytest.fixture(autouse=True)
 def no_terminal(monkeypatch):
@@ -215,12 +217,12 @@ def _main_without_its_world(monkeypatch, tmp_path, *, authorized):
     ran = []
     asked = []
 
-    monkeypatch.setattr(runner, "resolve_config_path", lambda app, path: "config.json")
-    monkeypatch.setattr(runner, "load_config", lambda path: types.SimpleNamespace(log_dir=tmp_path))
-    monkeypatch.setattr(runner, "patch_stdout", lambda *a, **k: None)
-    monkeypatch.setattr(runner, "setup_app_logger", lambda *a, **k: None)
-    monkeypatch.setattr(runner, "log_event", lambda *a, **k: None)
-    monkeypatch.setattr(runner, "telegram_groups", lambda: {})
+    patch_sql_runner(monkeypatch, "resolve_config_path", lambda app, path: "config.json")
+    patch_sql_runner(monkeypatch, "load_config", lambda path: types.SimpleNamespace(log_dir=tmp_path))
+    patch_sql_runner(monkeypatch, "patch_stdout", lambda *a, **k: None)
+    patch_sql_runner(monkeypatch, "setup_app_logger", lambda *a, **k: None)
+    patch_sql_runner(monkeypatch, "log_event", lambda *a, **k: None)
+    patch_sql_runner(monkeypatch, "telegram_groups", lambda: {})
     monkeypatch.setattr(runner.DbOpsStore, "from_config", classmethod(
         lambda cls, config: types.SimpleNamespace(initialize=lambda: None)))
 
@@ -232,9 +234,9 @@ def _main_without_its_world(monkeypatch, tmp_path, *, authorized):
         ran.append(kwargs)
         return types.SimpleNamespace(due_count=1, error_count=0)
 
-    monkeypatch.setattr(runner, "authorize_forced_run", fake_authorize)
-    monkeypatch.setattr(runner, "run_sql_id_tasks", fake_run)
-    monkeypatch.setattr(runner, "run_scheduler_scan", fake_run)
+    patch_sql_runner(monkeypatch, "authorize_forced_run", fake_authorize)
+    patch_sql_runner(monkeypatch, "run_sql_id_tasks", fake_run)
+    patch_sql_runner(monkeypatch, "run_scheduler_scan", fake_run)
     return ran, asked
 
 

@@ -11,6 +11,8 @@ from db_ops.sql_tasks import runner
 from db_ops.lib import sql_task_catalog
 from db_ops.sql_tasks.runner import parse_args, run_sql_id_tasks
 
+from conftest import patch_sql_runner
+
 
 class FakeSqlRunStore:
     def __init__(self):
@@ -69,8 +71,8 @@ def run_command(command, data_dir, monkeypatch):
         executed_sql.append(kwargs["sql_text"].strip())
         return {"row_count": 1, "result_sets": []}
 
-    monkeypatch.setattr(runner, "execute_sql", fake_execute_sql)
-    monkeypatch.setattr(runner, "log_event", lambda logger, level, message: log_messages.append(message))
+    patch_sql_runner(monkeypatch, "execute_sql", fake_execute_sql)
+    patch_sql_runner(monkeypatch, "log_event", lambda logger, level, message: log_messages.append(message))
     inventory, credentials = make_inventory_and_credentials()
 
     success = runner.run_one_sql_task(
@@ -389,9 +391,12 @@ def test_execution_runs_against_the_database_the_target_names(monkeypatch):
     """A task declaring `Globex_Prod` must run there, not in the instance's default database."""
     seen, _ = _run_one(monkeypatch)
 
-    assert seen["database"] == "Globex_Prod"
+    assert seen["database_name"] == "Globex_Prod"
     assert seen["target"] == make_target(database_name="x").server_id
-    assert seen["sql"] == "SELECT 1;"
+    assert seen["sql_text"] == "SELECT 1;"
+    # The reference's spellings only: the old ones are read for callers that still send them, and
+    # this runner sent both until a node measured it (2026-10-03).
+    assert "database" not in seen and "sql" not in seen
 
 
 def test_the_task_timeout_bounds_the_statements_not_the_connect(monkeypatch):
@@ -681,7 +686,7 @@ def test_sql_task_log_uses_neutral_task_identity(monkeypatch):
         script_files=("test.sql",),
         active=True,
     )
-    monkeypatch.setattr(runner, "log_event", lambda logger, level, message: messages.append(message))
+    patch_sql_runner(monkeypatch, "log_event", lambda logger, level, message: messages.append(message))
 
     runner.log_sql_task_event(object(), "sql_tasks.runner.task.start", command=command, status="running", run_id=123)
 
@@ -742,11 +747,11 @@ def test_a_due_task_actually_reaches_the_executor_on_a_scheduled_scan(tmp_path, 
             return False
 
     executed = []
-    monkeypatch.setattr(runner, "mark_stale_running_sql_runs", lambda **kwargs: None)
+    patch_sql_runner(monkeypatch, "mark_stale_running_sql_runs", lambda **kwargs: None)
     monkeypatch.setattr(runner.data_sources, "load_secret_text", lambda _dir: {})
     monkeypatch.setattr(runner.data_sources, "load_inventory", lambda _dir: [])
     monkeypatch.setattr(runner.data_sources, "load_all_credentials", lambda _dir: {})
-    monkeypatch.setattr(runner, "run_one_sql_task",
+    patch_sql_runner(monkeypatch, "run_one_sql_task",
                         lambda **kwargs: (executed.append(kwargs), True)[1])
 
     result = runner.run_scheduler_scan(store=_Store(), data_dir=data_dir, dry_run=False,

@@ -17,6 +17,7 @@ Failures are :class:`RemoteError`, an ``OSError``: code written against SFTP cau
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import base64
 import errno
 import shlex
@@ -57,8 +58,10 @@ NEVER_CONNECTED = ("SSH connection to ", "SSH connect to ")
 CONNECT_RETRY_DELAYS_SECONDS = (2, 5)
 
 
-class RemoteError(OSError):
+class RemoteError(errors.DbOpsError, OSError):
     """The host could not be reached, or the command or transfer did not happen."""
+
+    kind = errors.KIND_FAILED
 
 
 @dataclass(frozen=True)

@@ -23,6 +23,8 @@ from db_ops.common.sql_execution import SqlParameterError
 from db_ops.sql_tasks import runner
 from db_ops.sql_tasks.runner import SqlCommand, SqlTarget
 
+from conftest import patch_telegram, patch_sql_runner
+
 
 # --------------------------------------------------------------------------- #
 # The connect string is assembled, never stored
@@ -150,6 +152,21 @@ def test_the_subprocess_transport_sends_the_password_on_stdin_never_in_the_argum
     assert request["prelude"] == ["alter session set current_schema = LTR"]
     # A launcher states the whole command; the tool still reads its request on stdin.
     assert captured["argv"] == ["docker", "run", "--rm", "-i", "legacy", "--request", "-"]
+
+
+def test_the_tool_started_as_a_script_is_told_to_read_its_request_on_stdin_too(tmp_path):
+    """The script form returned the interpreter and the script alone, and the tool - which reads
+    stdin only when told to - answered *Either --request or --connect is required*: no target with
+    `sql_access.method: "subprocess"` and no launcher ever ran. Found on 2026-10-03, the first time
+    one was tried; every target of the estate goes through the bridge."""
+    (tmp_path / "tools" / "Python27-32").mkdir(parents=True)
+    (tmp_path / "tools" / "Python27-32" / "python.exe").write_text("", encoding="utf-8")
+    (tmp_path / oracle_bridge.LEGACY_CLI_SCRIPT).write_text("", encoding="utf-8")
+
+    argv = oracle_bridge.subprocess_argv({"method": "subprocess", "tool_dir": str(tmp_path)})
+
+    assert argv == [str(tmp_path / "tools" / "Python27-32" / "python.exe"),
+                    str(tmp_path / oracle_bridge.LEGACY_CLI_SCRIPT), "--request", "-"]
 
 
 def test_a_metrics_row_cap_reaches_the_legacy_tool_like_it_reaches_every_other_engine(monkeypatch):
@@ -474,7 +491,7 @@ def test_a_legacy_task_sends_substitutions_instead_of_bind_parameters(monkeypatc
     # The target's own transport rides along, so `run-sql` routes it to the legacy tool.
     assert seen["sql_access"]["method"] == "api"
     # `database_name` means SCHEMA on this transport; it travels in the same field either way.
-    assert seen["database"] == "LTR"
+    assert seen["database_name"] == "LTR"
 
     # The store row, the Telegram table and the export all read this shape.
     assert result == {
@@ -687,7 +704,7 @@ def test_the_listing_command_reports_a_cli_failure_instead_of_an_empty_list(monk
     """An empty list reads as "there are no SQL tasks", which is a different and wrong answer."""
     from db_ops.telegram import command_processor
 
-    monkeypatch.setattr(command_processor, "sql_tasks_listing",
+    patch_telegram(monkeypatch, "sql_tasks_listing",
                         lambda *a, **k: {"ok": False, "error": "config unreadable"})
 
     result = command_processor.execute_list_sql_tasks_command(
@@ -754,9 +771,9 @@ def test_the_dash_answer_still_means_no_values():
 # --------------------------------------------------------------------------- #
 def _queued(monkeypatch):
     messages = []
-    monkeypatch.setattr(runner, "queue_message",
+    patch_sql_runner(monkeypatch, "queue_message",
                         lambda payload, **_kwargs: messages.append(payload))
-    monkeypatch.setattr(runner, "store_block_from", lambda _store: {})
+    patch_sql_runner(monkeypatch, "store_block_from", lambda _store: {})
     return messages
 
 

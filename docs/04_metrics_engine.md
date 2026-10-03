@@ -159,8 +159,10 @@ execution is nowhere near any threshold even at a read ratio in the thousands.
 | Leg | WARNING | CRITICAL |
 | --- | --- | --- |
 | executions of this plan in the recent rows | ≥ 20 | ≥ 20 |
-| CPU this plan burned in the recent rows (`recent_total_cpu_sec`) | ≥ 300 s | ≥ 1,200 s |
+| CPU the query's **bad plans together** burned in the recent rows (`query_bad_cpu_sec`) | ≥ 300 s | ≥ 1,200 s |
 | its recent average CPU ÷ the cheapest **other** plan of the same query (`cpu_ratio`) | ≥ 5 | ≥ 10 |
+
+A *bad plan* is one with ≥ 20 recent executions at the warning ratio or worse; the CPU leg sums them, so a statement that flips between several bad plans is judged on what it burned in all of them (2026-10-03). Replayed on the 2026-10-02 production data at 13:05, one query burned 307 s on two bad plans (210 + 97) and was missed plan by plan. The finding is reported once per query, on its heaviest bad plan; the message carries `query_bad_plan_count` and `query_bad_cpu_sec` beside that plan's own `recent_total_cpu_sec`, and the server page's Query Store findings show the query's total when there is more than one plan. Replayed at 07:05, 08:05, 09:05 and 11:05 the sum changed no verdict.
 
 Its baseline is not the six-hour scan. A flip that survives the night leaves no good plan inside six
 hours, the bad plan becomes its own best and the finding goes quiet while the query is still slow.
@@ -731,8 +733,10 @@ The opposite drift is quieter: a field added to the modern file and not to its 2
 added `client_ip=` to every collector joining `sys.dm_exec_connections` and left the twins, so 144
 of 214 sleeping-transaction rows on 2026-09-30 named no address; 0.26.0 added it to
 `legacy_2008r2/024`, and `tests/test_every_sqlserver_session_collector_names_the_client_address.py`
-holds both folders to it. (`legacy_2008r2/009` counts per database and names no session, so it has
-no address to give.) The first rule keyed on the join and so missed the collectors that had none:
+holds both folders to it. (`legacy_2008r2/009` counted per database and named no session until
+0.26.0 brought it to the current file's head-blocker shape; on 10.50 it counts `open_tran` from
+`sys.dm_tran_session_transactions`, because `sys.dm_exec_sessions.open_transaction_count` is 2012+.)
+The first rule keyed on the join and so missed the collectors that had none:
 `004` (long-running requests) and `026` (long-waiting or rollback) held the join only in a
 commented-out draft, and a `QUERY_LONG_RUNNING` alert of 2026-10-01 named `host=hrms-backend` and
 no address. Both join the request's own connection now (`c.connection_id = r.connection_id`), and
@@ -1254,10 +1258,18 @@ the old gaps were erratic because a single slow host stalled the queue, and a te
 where an incident escalates unobserved.
 
 The residual ~230 s gap on a metric declaring `repeat_interval: 150` is not the collector lagging.
-It is quantisation: the daemon relaunches `APP-METRICS` every 120 s, a metric only becomes due 150 s
+It is quantisation: the daemon relaunched `APP-METRICS` every 120 s, a metric only becomes due 150 s
 after its last collection, and a pass that finds it at 130 s skips it until the next launch. To get
 closer to a declared interval, lower the `APP-METRICS` `repeat_interval` in `data/app_commands.json`
 — raising the parallel cap will not help, because the pass already finishes well inside its window.
+
+**Since 0.26.0 the shipped `APP-METRICS` and `APP-REPORTS-CREATE` run every 30 s** (the operator,
+2026-10-03; they were 120 s). A metric is then late by at most 30 s past its own interval instead
+of up to 120 s, and a report is due within half a minute of its window. A launch that finds nothing
+due ends in about a second, and the daemon never starts a second run of a command while one is
+still going, so a pass longer than 30 s simply delays the next. `init` seeds new nodes with 30 s;
+an existing node keeps the value in its own `data/app_commands.json` until it is changed there -
+`python -m db_ops.common.cli app-command-set`, or the console.
 
 ### A metric's `timeout` is enforced by wall clock
 

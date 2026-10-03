@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import patch_restore
+
 from db_ops.lib.shell import is_powershell_executable
 from db_ops.backup_restore.config import (
     BackupRestoreConfig,
@@ -615,8 +617,8 @@ def test_transient_login_timeout_retries_before_restore_command(tmp_path, monkey
         subprocess.CompletedProcess(cmd, 0, "RESTORE LOG successfully processed", ""),
     ]
 
-    monkeypatch.setattr(
-        restore_module,
+    patch_restore(
+        monkeypatch,
         "_execute_sqlcmd_once",
         lambda *_args, **_kwargs: calls.append(1) or results.pop(0),
     )
@@ -651,16 +653,16 @@ def test_two_restore_ids_dispatch_sql_to_their_own_remote_executor(tmp_path, mon
         vm_credential_target="198.51.100.31",
     )
     calls = []
-    monkeypatch.setattr(restore_module, "log_event", lambda *_args, **_kwargs: None)
+    patch_restore(monkeypatch, "log_event", lambda *_args, **_kwargs: None)
 
-    monkeypatch.setattr(
-        restore_module,
+    patch_restore(
+        monkeypatch,
         "_run_sqlcmd_query_command_streaming",
         lambda cmd, **kwargs: calls.append(("powershell", "198.51.100.129", cmd))
         or subprocess.CompletedProcess(cmd, 0, "", ""),
     )
-    monkeypatch.setattr(
-        restore_module,
+    patch_restore(
+        monkeypatch,
         "_run_sqlcmd_via_ssh",
         lambda cmd, config: calls.append(("ssh", config.vm_credential_target, cmd))
         or subprocess.CompletedProcess(cmd, 0, "", ""),
@@ -908,7 +910,7 @@ def test_run_restore_database_stops_before_recovery_when_full_fails(tmp_path, mo
         calls.append(cmd)
         raise RuntimeError("Msg 3013, Level 16\nRESTORE DATABASE is terminating abnormally.")
 
-    monkeypatch.setattr("db_ops.backup_restore.restore_database.run_sqlcmd_query_command", fail_full)
+    patch_restore(monkeypatch, "run_sqlcmd_query_command", fail_full)
 
     with pytest.raises(RuntimeError, match="Msg 3013"):
         run_restore_database(
@@ -931,8 +933,8 @@ def test_run_restore_database_stops_before_recovery_when_full_fails(tmp_path, mo
 
 
 def test_run_sqlcmd_query_command_treats_restore_error_text_as_failure(monkeypatch):
-    monkeypatch.setattr(
-        "db_ops.backup_restore.restore_database._sqlcmd_in_common",
+    patch_restore(
+        monkeypatch, "_sqlcmd_in_common",
         lambda request, *, cmd: subprocess.CompletedProcess(
             cmd, 0, "Msg 3013, Level 16\nRESTORE LOG is terminating abnormally.", ""))
 
@@ -978,8 +980,8 @@ def test_run_restore_database_logs_execution_timeline_and_sanitizes_secrets(tmp_
         commands.append(cmd)
         return subprocess.CompletedProcess(cmd, 0, "10 percent processed.\ncomplete", "")
 
-    monkeypatch.setattr(restore_module, "run_sqlcmd_query_command", fake_run_sqlcmd)
-    monkeypatch.setattr(restore_module, "log_event", lambda _logger, **kwargs: messages.append(kwargs["message"]))
+    patch_restore(monkeypatch, "run_sqlcmd_query_command", fake_run_sqlcmd)
+    patch_restore(monkeypatch, "log_event", lambda _logger, **kwargs: messages.append(kwargs["message"]))
 
     result = run_restore_database(
         config=config,
@@ -1014,11 +1016,11 @@ def test_run_restore_database_logs_execution_timeline_and_sanitizes_secrets(tmp_
 def test_run_sqlcmd_query_command_streams_restore_progress(monkeypatch):
     messages = []
 
-    monkeypatch.setattr(
-        "db_ops.backup_restore.restore_database._sqlcmd_in_common",
+    patch_restore(
+        monkeypatch, "_sqlcmd_in_common",
         lambda request, *, cmd: subprocess.CompletedProcess(
             cmd, 0, "10 percent processed.\n20 percent processed.\n", ""))
-    monkeypatch.setattr("db_ops.backup_restore.restore_database.log_event", lambda _logger, **kwargs: messages.append(kwargs["message"]))
+    patch_restore(monkeypatch, "log_event", lambda _logger, **kwargs: messages.append(kwargs["message"]))
 
     result = run_sqlcmd_query_command(
         ["sqlcmd", "-Q", "RESTORE"],
@@ -1044,12 +1046,12 @@ def test_restore_log_backups_are_logged_one_file_at_a_time(tmp_path, monkeypatch
     ]
     messages = []
 
-    monkeypatch.setattr(
-        restore_module,
+    patch_restore(
+        monkeypatch,
         "run_sqlcmd_query_command",
         lambda cmd, **_kwargs: subprocess.CompletedProcess(cmd, 0, "RESTORE LOG complete", ""),
     )
-    monkeypatch.setattr(restore_module, "log_event", lambda _logger, **kwargs: messages.append(kwargs["message"]))
+    patch_restore(monkeypatch, "log_event", lambda _logger, **kwargs: messages.append(kwargs["message"]))
 
     result = run_restore_log(config=config, candidate=candidate, selected_backups=logs, logger=object())
 
@@ -1078,7 +1080,7 @@ def test_pitr_restore_log_stopat_recovery_only_on_final_log(tmp_path, monkeypatc
         sql_texts.append(mssql_restore.build_statements(level, fields, [fields["backup_path"]])[0])
         return {"step": "restore-log", "status": "SUCCESS", "stdout": "ok", "stderr": ""}
 
-    monkeypatch.setattr(restore_module, "_run_restore_step", fake_run_step)
+    patch_restore(monkeypatch, "_run_restore_step", fake_run_step)
     stopat = datetime.datetime(2026, 6, 8, 5, 0, tzinfo=datetime.timezone.utc)
 
     run_restore_log(config=config, candidate=candidate, selected_backups=logs, stopat_utc=stopat)
@@ -1098,14 +1100,14 @@ def test_restore_log_failure_is_not_hidden(tmp_path, monkeypatch):
     candidate = build_restore_candidate(full, config)
     messages = []
 
-    monkeypatch.setattr(
-        restore_module,
+    patch_restore(
+        monkeypatch,
         "run_sqlcmd_query_command",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             RuntimeError("The log in this backup set begins at LSN 200, which is too recent to apply.")
         ),
     )
-    monkeypatch.setattr(restore_module, "log_event", lambda _logger, **kwargs: messages.append(kwargs["message"]))
+    patch_restore(monkeypatch, "log_event", lambda _logger, **kwargs: messages.append(kwargs["message"]))
 
     with pytest.raises(RuntimeError, match="too recent to apply"):
         run_restore_log(config=config, candidate=candidate, selected_backups=[log], logger=object())
@@ -1135,8 +1137,8 @@ def test_restore_log_msg_4305_skips_and_tries_next_log(tmp_path, monkeypatch):
             )
         return {"step": "restore-log", "status": "SUCCESS", "stdout": "ok", "stderr": ""}
 
-    monkeypatch.setattr(restore_module, "_run_restore_step", fake_run_step)
-    monkeypatch.setattr(restore_module, "log_event", lambda _logger, **kwargs: messages.append(kwargs["message"]))
+    patch_restore(monkeypatch, "_run_restore_step", fake_run_step)
+    patch_restore(monkeypatch, "log_event", lambda _logger, **kwargs: messages.append(kwargs["message"]))
 
     result = run_restore_log(config=config, candidate=candidate, selected_backups=logs, logger=object())
 
@@ -1155,8 +1157,8 @@ def test_restore_log_all_msg_4305_fails_with_lsn_gap(tmp_path, monkeypatch):
     log = config.vm_import_unc / "APPDB_Prod" / "LOG" / "log_001.trn"
     candidate = build_restore_candidate(full, config)
 
-    monkeypatch.setattr(
-        restore_module,
+    patch_restore(
+        monkeypatch,
         "_run_restore_step",
         lambda **_kwargs: (_ for _ in ()).throw(
             RuntimeError(
@@ -1178,8 +1180,8 @@ def test_msg_4305_skip_applies_only_to_restore_log_not_full_or_diff(tmp_path, mo
     diff = config.vm_import_unc / "APPDB_Prod" / "DIFF" / "diff.bak"
     candidate = build_restore_candidate(full, config)
 
-    monkeypatch.setattr(
-        restore_module,
+    patch_restore(
+        monkeypatch,
         "run_sqlcmd_query_command",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             RuntimeError(
@@ -1211,7 +1213,7 @@ def test_restore_log_non_4305_error_fails_immediately(tmp_path, monkeypatch):
         calls.append(kwargs["metadata"]["file"])
         raise RuntimeError("Msg 9001, Level 16, State 1. Non-4305 failure.")
 
-    monkeypatch.setattr(restore_module, "_run_restore_step", fake_run_step)
+    patch_restore(monkeypatch, "_run_restore_step", fake_run_step)
 
     with pytest.raises(RuntimeError, match="Msg 9001"):
         run_restore_log(config=config, candidate=candidate, selected_backups=logs)
@@ -1232,9 +1234,9 @@ def test_restore_log_timeout_checks_history_and_does_not_duplicate_applied_log(t
         restore_calls.append(kwargs["metadata"]["file"])
         raise restore_module.RestoreCommandTimeoutError("timed out", command_started=True)
 
-    monkeypatch.setattr(restore_module, "_run_restore_step", timeout_once)
-    monkeypatch.setattr(
-        restore_module,
+    patch_restore(monkeypatch, "_run_restore_step", timeout_once)
+    patch_restore(
+        monkeypatch,
         "_inspect_log_restore_resume_state",
         lambda **kwargs: resume_checks.append(kwargs["current_backup"]) or {
             "resume_decision": "confirmed_last_log_restored",
@@ -1263,9 +1265,9 @@ def test_restore_log_timeout_unsafe_resume_fails_explicitly(tmp_path, monkeypatc
         restore_calls.append(kwargs["metadata"]["file"])
         raise restore_module.RestoreCommandTimeoutError("timed out", command_started=True)
 
-    monkeypatch.setattr(restore_module, "_run_restore_step", timeout_once)
-    monkeypatch.setattr(
-        restore_module,
+    patch_restore(monkeypatch, "_run_restore_step", timeout_once)
+    patch_restore(
+        monkeypatch,
         "_inspect_log_restore_resume_state",
         lambda **_kwargs: {
             "resume_decision": "unsafe",
@@ -1290,8 +1292,8 @@ def test_resume_check_requires_exact_log_identity(tmp_path, monkeypatch):
         "DBOPS_RESUME|0|42|100000|200000|2|"
         + str(current_log)
     )
-    monkeypatch.setattr(
-        restore_module,
+    patch_restore(
+        monkeypatch,
         "run_sqlcmd_query_command",
         lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, output, ""),
     )
@@ -1319,8 +1321,8 @@ def test_resume_check_rejects_restoring_state_without_exact_log_identity(tmp_pat
         "DBOPS_RESUME|1|41|1|99999|2|"
         + str(previous_log)
     )
-    monkeypatch.setattr(
-        restore_module,
+    patch_restore(
+        monkeypatch,
         "run_sqlcmd_query_command",
         lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, output, ""),
     )
@@ -2864,13 +2866,13 @@ def test_linux_latest_restore_chain_discovers_remote_diff_and_logs(tmp_path, mon
         str(logs[1]): 400.0,
     }
 
-    monkeypatch.setattr(
-        restore_module,
+    patch_restore(
+        monkeypatch,
         "_linux_file_mtime",
         lambda _config, path: remote_files.get(str(path)),
     )
-    monkeypatch.setattr(
-        restore_module,
+    patch_restore(
+        monkeypatch,
         "_find_linux_files_with_mtime",
         lambda _config, directory, pattern: [
             (mtime, path)
@@ -3630,7 +3632,7 @@ def test_restore_workflow_windows_then_linux_keeps_per_restore_executor(tmp_path
 
     monkeypatch.setattr("db_ops.backup_restore.cli.run_target_preflight", lambda config, logger=None, **_: None)
     monkeypatch.setattr("db_ops.backup_restore.cli.log_event", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(restore_module, "log_event", lambda *_args, **_kwargs: None)
+    patch_restore(monkeypatch, "log_event", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         "db_ops.backup_restore.cli.run_copy_backup",
         lambda config, logger=None, force=False: CopyBackupResult(
@@ -3654,14 +3656,14 @@ def test_restore_workflow_windows_then_linux_keeps_per_restore_executor(tmp_path
             file_results=(),
         ),
     )
-    monkeypatch.setattr(
-        restore_module,
+    patch_restore(
+        monkeypatch,
         "_run_sqlcmd_query_command_streaming",
         lambda cmd, **kwargs: executor_calls.append(("powershell", "198.51.100.129", cmd))
         or subprocess.CompletedProcess(cmd, 0, "", ""),
     )
-    monkeypatch.setattr(
-        restore_module,
+    patch_restore(
+        monkeypatch,
         "_run_sqlcmd_via_ssh",
         lambda cmd, config: executor_calls.append(("ssh", config.vm_credential_target, cmd))
         or subprocess.CompletedProcess(cmd, 0, "", ""),

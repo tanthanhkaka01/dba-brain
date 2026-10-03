@@ -28,7 +28,10 @@
     font-family:var(--sans); font-size:14px; line-height:1.5;
     -webkit-font-smoothing:antialiased;
   }
-  .wrap{max-width:1180px; margin:0 auto; padding:0 22px 64px;}
+  /* The whole window, not a centred 1180px column: on a desktop screen a third of the width was
+     margin while the tables scrolled sideways (the operator, 2026-10-03). lib/page_style.py says
+     the same for the pages built on it. */
+  .wrap{max-width:none; margin:0; padding:0 22px 64px;}
 
   /* ---------- Header ---------- */
   header.masthead{
@@ -121,7 +124,9 @@
   /* mini bar for fill % */
   .bar{position:relative; width:54px; height:7px; border-radius:4px; background:#eceff3; display:inline-block; vertical-align:middle; margin-right:7px; overflow:hidden}
   .bar > i{position:absolute; left:0; top:0; bottom:0; border-radius:4px}
-  .fill-cell{white-space:nowrap}
+  /* The mount and its free space wrap: a long mount point in the fleet matrix's Lowest disk
+     column set the width of the whole table, which then scrolled sideways on a laptop. */
+  .fill-cell{white-space:normal; overflow-wrap:anywhere}
 
   /* ---------- Server detail (collapsible) ---------- */
   details.srv-detail{background:var(--surface); border:1px solid var(--line); border-radius:9px; margin-bottom:8px; overflow:hidden}

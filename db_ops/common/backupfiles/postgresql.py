@@ -57,9 +57,15 @@ def list_files(request: dict[str, Any]) -> list[dict[str, Any]]:
     #
     # The last line is the host's own clock, in the format `stat -c %y` prints: a file's age is
     # then the difference of two instants on one clock (see `age_seconds`).
+    #
+    # A backup directory holding no file at all is not a backup: it is the husk a removed set
+    # leaves, and dated by its own mtime - the removal - it read as the newest full, so a restore
+    # combined it with every incremental after it (the 0.26 node, 2026-10-03). It is skipped.
     command = (
         f"for d in {root}/base/*_FULL {root}/base/*_INCR {root}/wal; do "
         f"[ -e \"$d\" ] || continue; "
+        f"[ \"$d\" = {root}/wal ] || [ -n \"$(find \"$d\" -type f -print -quit 2>/dev/null)\" ] "
+        f"|| continue; "
         f"if [ -f \"$d/backup_manifest\" ]; then m=\"$d/backup_manifest\"; else m=\"$d\"; fi; "
         f"printf '%s|%s|%s\\n' \"$d\" \"$(stat -c %s \"$d\")\" \"$(stat -c %y \"$m\")\"; "
         f"done 2>/dev/null; printf '{HOST_NOW}|%s\\n' \"$(date '+%Y-%m-%d %H:%M:%S')\""

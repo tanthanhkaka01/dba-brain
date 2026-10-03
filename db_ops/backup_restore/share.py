@@ -11,13 +11,14 @@ What stays here is what is this app's: which files, which window, what is obsole
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 from pathlib import Path
 from typing import Any
 
 from db_ops.transport import common_cli
 
 
-class ShareError(RuntimeError):
+class ShareError(errors.OperationFailed):
     """The share answered with a failure, or never answered."""
 
 

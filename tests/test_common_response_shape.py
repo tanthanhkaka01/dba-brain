@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from db_ops.lib import response
 
-KEYS = {"success", "operation", "message", "error", "data", "metrics"}
+KEYS = {"success", "operation", "message", "error", "error_kind", "data", "metrics"}
 
 
 def test_a_success_carries_every_key():

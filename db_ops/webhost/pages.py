@@ -202,7 +202,86 @@ table.logrows tr.WARNING td.lv { color: var(--warn); }
 table.logrows tr.ERROR td.lv, table.logrows tr.CRITICAL td.lv { color: var(--bad); }
 table.logrows tr.raw td { color: var(--muted); }
 #logmore { padding: 10px; text-align: center; color: var(--muted); font-size: 12px; }
+/* Users (Administration) */
+.sub { color: var(--muted); font-size: 11.5px; }
+.lvlnum { color: var(--idle); font-size: 11px; font-variant-numeric: tabular-nums; }
+td.num { font-variant-numeric: tabular-nums; text-align: right; }
+table.users tr.manage-row td { border-top: none; padding-top: 0; }
+details.manage summary { cursor: pointer; color: var(--accent); font-size: 12px; }
+details.manage form.act { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center;
+       margin: 8px 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
+       background: var(--panel-2); font-size: 12.5px; }
+details.manage form.act b { min-width: 74px; }
+details.manage input, details.manage select, form.newuser input, form.newuser select {
+       font: inherit; font-size: 12.5px; padding: 5px 8px; border-radius: 6px;
+       border: 1px solid var(--line); background: var(--bg); color: var(--text); }
+details.manage input.lvl { width: 72px; }
+details.manage input.confirm { width: 150px; }
+form.newuser .grid { display: grid; grid-template-columns: repeat(4, minmax(150px, 1fr)); gap: 10px 14px;
+       margin-bottom: 10px; }
+form.newuser label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+form.newuser label.check { flex-direction: row; align-items: center; }
+button:disabled { opacity: .45; cursor: not-allowed; }
 """
+
+#: The sign-in and password pages: Tabler's sign-in layout - the product mark above a centred card
+#: on a light page - in the report pages' palette (lib.page_style), so the first thing a person sees
+#: looks like the pages they came to read (the operator, 2026-10-02).
+_AUTH_STYLE = """
+:root { --bg:#f5f6f8; --surface:#ffffff; --ink:#1b2430; --muted:#64748b; --line:#e5e9ef;
+        --brand:#0f2540; --brand-2:#1d3b5e; --link:#1d4ed8; --crit:#dc2626; --ok:#15803d; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+       font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+.auth { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
+.auth-box { width: 100%; max-width: 400px; }
+.brand { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 22px;
+         font-weight: 700; font-size: 18px; color: var(--brand); letter-spacing: -.01em; }
+.brand .mark { display: inline-flex; align-items: center; justify-content: center; width: 34px;
+               height: 34px; border-radius: 9px; color: #fff; font-size: 13px; letter-spacing: .04em;
+               background: linear-gradient(135deg, var(--brand), var(--brand-2)); }
+.auth-card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+             padding: 28px 28px 24px; box-shadow: 0 1px 2px rgba(16,24,40,.05); }
+.auth-card h2 { margin: 0 0 4px; font-size: 19px; text-align: center; }
+.auth-card p.sub { margin: 0 0 18px; color: var(--muted); font-size: 13px; text-align: center; }
+.auth-card label { display: block; font-size: 13px; font-weight: 600; margin: 14px 0 6px; }
+.auth-card input { width: 100%; padding: 9px 11px; border-radius: 7px; border: 1px solid var(--line);
+                   background: #fff; color: var(--ink); font: inherit; }
+.auth-card input:focus { outline: none; border-color: var(--link); box-shadow: 0 0 0 3px rgba(29,78,216,.12); }
+.pw { position: relative; display: block; }
+.pw input { padding-right: 64px; }
+.pw button { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); border: none;
+             background: none; color: var(--link); font: inherit; font-size: 12px; cursor: pointer; padding: 4px 6px; }
+button.primary { width: 100%; margin-top: 22px; padding: 10px; border-radius: 7px; border: none;
+                 background: var(--brand); color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+button.primary:hover { background: var(--brand-2); }
+.alert { border-radius: 7px; padding: 9px 12px; font-size: 13px; margin-bottom: 4px; }
+.alert.bad { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; }
+.alert.info { background: #eff6ff; border: 1px solid #c7dbfd; color: #1e3a8a; }
+.alert code { font-size: 12px; }
+.foot { text-align: center; color: var(--muted); font-size: 12px; margin-top: 18px; }
+"""
+
+_SHOW_PASSWORD = ("var i=this.previousElementSibling;i.type=i.type==='password'?'text':'password';"
+                  "this.textContent=i.type==='password'?'Show':'Hide';")
+
+
+def _auth_document(title: str, body: str) -> str:
+    return (
+        "<!doctype html>\n"
+        '<html lang="en"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        f"<title>{escape(title)}</title><style>{_AUTH_STYLE}</style></head>"
+        f"<body>{body}</body></html>"
+    )
+
+
+def _password_input(name: str, *, autocomplete: str, autofocus: bool = False) -> str:
+    """A password field with Tabler's show/hide toggle beside it."""
+    focus = " autofocus" if autofocus else ""
+    return (f'<span class="pw"><input id="{escape(name)}" name="{escape(name)}" type="password" '
+            f'autocomplete="{escape(autocomplete)}" required{focus}>'
+            f'<button type="button" onclick="{_SHOW_PASSWORD}">Show</button></span>')
 
 
 def _document(title: str, body: str) -> str:
@@ -248,20 +327,24 @@ def login_page(*, prefix: str, next_url: str = "", has_users: bool = True,
                   'worker with<br><code>python -m db_ops.webhost.cli user-add --username '
                   '&lt;name&gt; --level 100 --password-stdin</code></div>')
     body = f"""
-<div class="login-wrap"><form class="login" method="post" action="{escape(prefix)}/login">
-  <h1>db_ops console</h1>
-  <p class="sub">DBA operations for the monitored estate.</p>
-  {banner}
-  <label for="username">Username</label>
-  <input id="username" name="username" autocomplete="username" autofocus
-         value="{escape(username)}" required>
-  <label for="password">Password</label>
-  <input id="password" name="password" type="password" autocomplete="current-password" required>
-  <input type="hidden" name="next" value="{escape(next_url)}">
-  <div class="actions"><button class="primary" type="submit">Sign in</button></div>
-</form></div>
+<div class="auth"><div class="auth-box">
+  <div class="brand"><span class="mark">DB</span>DBA Brain</div>
+  <form class="auth-card login" method="post" action="{escape(prefix)}/login">
+    <h2>Sign in to the console</h2>
+    <p class="sub">DBA operations for the monitored estate.</p>
+    {banner}
+    <label for="username">Username</label>
+    <input id="username" name="username" autocomplete="username" autofocus
+           value="{escape(username)}" required>
+    <label for="password">Password</label>
+    {_password_input("password", autocomplete="current-password")}
+    <input type="hidden" name="next" value="{escape(next_url)}">
+    <button class="primary" type="submit">Sign in</button>
+  </form>
+  <p class="foot">No account? An administrator adds one under Administration &rarr; Users.</p>
+</div></div>
 """
-    return _document("Sign in — db_ops", body)
+    return _auth_document("Sign in — db_ops", body)
 
 
 def password_page(*, prefix: str, session: dict[str, Any], forced: bool = False,
@@ -272,22 +355,25 @@ def password_page(*, prefix: str, session: dict[str, Any], forced: bool = False,
         banner = ('<div class="alert info">Choose a new password before using the console. '
                   'At least 8 characters.</div>')
     body = f"""
-<div class="login-wrap"><form class="login" method="post" action="{escape(prefix)}/password">
-  <h1>Change password</h1>
-  <p class="sub">{escape(session.get("username"))}</p>
-  {banner}
-  <input type="hidden" name="csrf" value="{escape(session.get("csrf_token", ""))}">
-  <label for="current_password">Current password</label>
-  <input id="current_password" name="current_password" type="password"
-         autocomplete="current-password" required autofocus>
-  <label for="new_password">New password</label>
-  <input id="new_password" name="new_password" type="password" autocomplete="new-password" required>
-  <label for="new_password_again">New password, again</label>
-  <input id="new_password_again" name="new_password_again" type="password" autocomplete="new-password" required>
-  <div class="actions"><button class="primary" type="submit">Change password</button></div>
-</form></div>
+<div class="auth"><div class="auth-box">
+  <div class="brand"><span class="mark">DB</span>DBA Brain</div>
+  <form class="auth-card login" method="post" action="{escape(prefix)}/password">
+    <h2>Change password</h2>
+    <p class="sub">{escape(session.get("username"))}</p>
+    {banner}
+    <input type="hidden" name="csrf" value="{escape(session.get("csrf_token", ""))}">
+    <label for="current_password">Current password</label>
+    {_password_input("current_password", autocomplete="current-password", autofocus=True)}
+    <label for="new_password">New password</label>
+    {_password_input("new_password", autocomplete="new-password")}
+    <label for="new_password_again">New password, again</label>
+    {_password_input("new_password_again", autocomplete="new-password")}
+    <button class="primary" type="submit">Change password</button>
+  </form>
+  <p class="foot">At least 8 characters. Changing it signs you out everywhere else.</p>
+</div></div>
 """
-    return _document("Change password — db_ops", body)
+    return _auth_document("Change password — db_ops", body)
 
 
 # --------------------------------------------------------------------------- #
@@ -343,7 +429,7 @@ def _shell(*, prefix: str, session: dict[str, Any], nav: list[dict[str, Any]],
     body = f"""
 {_top_bar(prefix, session)}
 <div class="shell">
-  {_sidebar(prefix, nav, active, report_links)}
+  {_sidebar(prefix, nav, active, report_links, can_admin=bool(session.get("can_admin")))}
   <section class="detail">{detail}</section>
 </div>
 """
@@ -351,7 +437,7 @@ def _shell(*, prefix: str, session: dict[str, Any], nav: list[dict[str, Any]],
 
 
 def _sidebar(prefix: str, nav: list[dict[str, Any]], active: str,
-             report_links: list[tuple[str, str]] | tuple = ()) -> str:
+             report_links: list[tuple[str, str]] | tuple = (), *, can_admin: bool = False) -> str:
     """The fourteen apps, top to bottom, with a dot for how each is doing.
 
     The dot carries the whole estate at a glance, which is the one thing the card grid was good
@@ -382,6 +468,15 @@ def _sidebar(prefix: str, nav: list[dict[str, Any]], active: str,
             f'<span class="name">{escape(label)}</span></a>'
             for label, href in report_links)
         reports = f'<div class="group">Reports</div>{links}'
+    # Shown to an admin only: the page refuses everyone else anyway, and a link that answers
+    # "not allowed" is one more thing to read past.
+    admin = ""
+    if can_admin:
+        users_active = " active" if active == ADMIN_USERS else ""
+        admin = (f'<div class="group">Administration</div>'
+                 f'<a class="item{users_active}" href="{escape(prefix)}/users">'
+                 f'<span class="dot idle"></span><span class="ord"></span>'
+                 f'<span class="name">Users</span></a>')
     return f"""
 <nav class="apps">
   <a class="item{overview}" href="{escape(prefix)}/"><span class="dot idle"></span>
@@ -389,7 +484,155 @@ def _sidebar(prefix: str, nav: list[dict[str, Any]], active: str,
   <div class="group">Apps</div>
   {"".join(items)}
   {reports}
+  {admin}
 </nav>"""
+
+
+#: The sidebar key of the Users page - not an app code, so no app can ever be marked active by it.
+ADMIN_USERS = "__users__"
+
+
+def _utc_text(value: Any) -> str:
+    """A stored UTC stamp, readable: ``2026-10-02 14:58 UTC``, or an em dash for none."""
+    text = str(value or "").strip()
+    return f"{escape(text[:16].replace('T', ' '))} UTC" if text else "—"
+
+
+def users_page(*, prefix: str, session: dict[str, Any], blocks: list[dict[str, Any]],
+               report_links: list[tuple[str, str]] | tuple = (), users: list[dict[str, Any]],
+               attempts: list[dict[str, Any]], roles: list[tuple[str, int]], now: Any,
+               notice: str = "", error: str = "") -> str:
+    """Accounts: who can sign in, as what, since when - and the forms that change it.
+
+    Grafana's *Users* page is the model (the operator, 2026-10-02): a list with each user's role
+    and state, a form for a new user, and per user the four things an administrator does - change
+    the role, reset the password, sign them out everywhere, disable. Every form asks for the
+    actor's own password again; the server holds the rules (see ``WebApp._route_users``).
+    """
+    from db_ops.lib.web_auth import role_name
+
+    csrf = escape(session.get("csrf_token") or "")
+    actor_level = int(session.get("user_level") or 0)
+    now_text = str(now.strftime("%Y-%m-%dT%H:%M:%SZ")) if hasattr(now, "strftime") else ""
+    role_options = "".join(
+        f'<option value="{escape(name)}"{" disabled" if at > actor_level else ""}>'
+        f'{escape(name)} (level {at})</option>' for name, at in roles)
+    confirm = ('<input type="password" name="confirm_password" placeholder="your password" '
+               'autocomplete="current-password" required class="confirm">')
+    banner = ""
+    if error:
+        banner = f'<div class="alert bad">{escape(error)}</div>'
+    elif notice:
+        banner = f'<div class="alert ok">{escape(notice)}</div>'
+
+    rows = []
+    for user in users:
+        name = str(user.get("username") or "")
+        level = int(user.get("user_level") or 0)
+        locked = str(user.get("locked_until") or "")
+        state = []
+        if locked and locked > now_text:
+            state.append(f'<span class="tag bad">locked until {_utc_text(locked)}</span>')
+        if int(user.get("must_change_password") or 0):
+            state.append('<span class="tag warn">must change password</span>')
+        if not state:
+            state.append('<span class="tag ok">active</span>')
+        mine = name == session.get("username")
+        above = level > actor_level
+        manage = ""
+        if not above:
+            manage = f"""
+  <details class="manage"><summary>Manage</summary>
+    <form method="post" action="{escape(prefix)}/users/{escape(name)}/level" class="act">
+      <input type="hidden" name="csrf" value="{csrf}">
+      <b>Role</b> <select name="role">{role_options}</select>
+      or level <input type="number" name="level" min="1" max="100" class="lvl" placeholder="{level}">
+      {confirm} <button type="submit" class="small"{" disabled" if mine else ""}>Change role</button>
+    </form>
+    <form method="post" action="{escape(prefix)}/users/{escape(name)}/password" class="act">
+      <input type="hidden" name="csrf" value="{csrf}">
+      <b>Password</b> <input type="password" name="password" placeholder="new password" autocomplete="new-password" required>
+      <input type="password" name="password_again" placeholder="again" autocomplete="new-password" required>
+      <label class="check"><input type="checkbox" name="must_change" value="1" checked> must change at next sign-in</label>
+      {confirm} <button type="submit" class="small"{" disabled" if mine else ""}>Reset password</button>
+    </form>
+    <form method="post" action="{escape(prefix)}/users/{escape(name)}/signout" class="act">
+      <input type="hidden" name="csrf" value="{csrf}">
+      <b>Sessions</b> {confirm} <button type="submit" class="small">Sign out everywhere</button>
+    </form>
+    <form method="post" action="{escape(prefix)}/users/{escape(name)}/disable" class="act">
+      <input type="hidden" name="csrf" value="{csrf}">
+      <b>Disable</b> <input type="text" name="note" placeholder="why (kept with the account)">
+      {confirm} <button type="submit" class="small danger"{" disabled" if mine else ""}>Disable account</button>
+    </form>
+    {'<p class="hint">Your own role and account are changed from another admin&#39;s account; your password on the Change password page.</p>' if mine else ""}
+  </details>"""
+        rows.append(f"""
+<tr>
+  <td class="key"><b>{escape(name)}</b>{f'<div class="sub">{escape(user.get("display_name"))}</div>' if user.get("display_name") else ""}</td>
+  <td><span class="tag">{escape(role_name(level, roles))}</span> <span class="lvlnum">{level}</span></td>
+  <td>{" ".join(state)}</td>
+  <td>{_utc_text(user.get("last_login_at"))}</td>
+  <td class="num">{int(user.get("failed_login_count") or 0)}</td>
+  <td class="num">{int(user.get("sessions") or 0)}</td>
+  <td>{_utc_text(user.get("created_at"))}<div class="sub">{escape(user.get("created_by") or "")}</div></td>
+</tr>
+<tr class="manage-row"><td colspan="7">{manage or '<span class="hint">Above your level - only an account at that level can change it.</span>'}</td></tr>""")
+
+    signed_in, failed = '<span class="tag ok">signed in</span>', '<span class="tag bad">failed</span>'
+    attempt_rows = "".join(
+        f"<tr><td>{_utc_text(a.get('attempted_at'))}</td><td class='key'>{escape(a.get('username_tried'))}</td>"
+        f"<td>{signed_in if int(a.get('succeeded') or 0) else failed}</td>"
+        f"<td>{escape(a.get('reason') or '')}</td><td class='key'>{escape(a.get('client_ip') or '')}</td></tr>"
+        for a in attempts) or '<tr><td colspan="5" class="none">No sign-in attempts recorded.</td></tr>'
+    admins = sum(1 for u in users if int(u.get("user_level") or 0) >= next((at for n, at in roles if n == "Admin"), 90))
+    locked_n = sum(1 for u in users if str(u.get("locked_until") or "") > now_text)
+    must_n = sum(1 for u in users if int(u.get("must_change_password") or 0))
+    ladder = " · ".join(f"<b>{escape(n)}</b> from level {at}" for n, at in roles)
+    detail = f"""
+<h2>Users</h2>
+<p class="lede">Who can sign in to this console and to the report pages, and as what. A role is a
+name for a level on the one 1-100 scale the console and the Telegram bot share: {ladder}.
+Every change asks for your password again.</p>
+{banner}
+<div class="tiles">
+  <div class="tile"><div class="n">{len(users)}</div><div class="l">active users</div></div>
+  <div class="tile"><div class="n">{admins}</div><div class="l">admins</div></div>
+  <div class="tile{" bad" if locked_n else ""}"><div class="n">{locked_n}</div><div class="l">locked</div></div>
+  <div class="tile{" warn" if must_n else ""}"><div class="n">{must_n}</div><div class="l">must change password</div></div>
+</div>
+<h3 class="block">New user</h3>
+<form method="post" action="{escape(prefix)}/users" class="card newuser">
+  <input type="hidden" name="csrf" value="{csrf}">
+  <div class="grid">
+    <label>Username<input name="username" required autocomplete="off"></label>
+    <label>Display name<input name="display_name" autocomplete="off"></label>
+    <label>Role<select name="role">{role_options}</select></label>
+    <label>or exact level<input type="number" name="level" min="1" max="100" placeholder="1-100"></label>
+    <label>Initial password<input type="password" name="password" required autocomplete="new-password"></label>
+    <label>Again<input type="password" name="password_again" required autocomplete="new-password"></label>
+    <label>Note<input name="note" autocomplete="off"></label>
+    <label>Your password<input type="password" name="confirm_password" required autocomplete="current-password"></label>
+  </div>
+  <label class="check"><input type="checkbox" name="must_change" value="1" checked> must change the password at first sign-in</label>
+  <div class="row-actions"><button type="submit">Create user</button>
+    <span class="hint">You cannot create an account above your own level ({actor_level}).</span></div>
+</form>
+<h3 class="block">Accounts</h3>
+<div class="card"><table class="records users">
+  <thead><tr><th>User</th><th>Role</th><th>State</th><th>Last sign-in</th><th>Failed</th><th>Sessions</th><th>Created</th></tr></thead>
+  <tbody>{"".join(rows) or '<tr><td colspan="7" class="none">No active accounts.</td></tr>'}</tbody>
+</table></div>
+<h3 class="block">Recent sign-in attempts</h3>
+<div class="card"><table class="records">
+  <thead><tr><th>When</th><th>Username tried</th><th>Result</th><th>Reason</th><th>From</th></tr></thead>
+  <tbody>{attempt_rows}</tbody>
+</table></div>
+<p class="hint">Disabled accounts are kept, with their history; their name can be issued again.
+The same operations exist on the command line: <code>python -m db_ops.webhost.cli user-list</code>.</p>
+"""
+    return _shell(prefix=prefix, session=session, nav=nav_items(blocks), active=ADMIN_USERS,
+                  detail=detail, title="Users — db_ops", report_links=report_links)
 
 
 def nav_items(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:

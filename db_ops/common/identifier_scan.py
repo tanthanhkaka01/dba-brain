@@ -32,6 +32,7 @@ something to learn.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import json
 import re
 from pathlib import Path
@@ -72,7 +73,7 @@ DEFAULT_PATHS: tuple[str, ...] = (
 #: the environment it happened on. The scan reported those trees clean because it never opened the
 #: file. A type that ships and holds prose has to be read; term coverage is not file coverage.
 DEFAULT_EXTENSIONS: tuple[str, ...] = (
-    ".py", ".sql", ".sh", ".ps1", ".bat", ".cmd",
+    ".py", ".pyi", ".sql", ".sh", ".ps1", ".bat", ".cmd",
     ".json", ".yml", ".yaml", ".toml", ".cfg", ".ini",
     ".md", ".txt", ".env", ".example",
     ".html", ".htm", ".css", ".js", ".j2", ".jinja", ".jinja2", ".xml",
@@ -132,6 +133,12 @@ GENERIC_TERMS: dict[str, str] = {
     "pg_ha-standby-2": "a container name the shipped PostgreSQL HA template creates",
     "mssql_ha-primary": "a container name the shipped SQL Server AG template creates",
     "mssql_ha-secondary": "a container name the shipped SQL Server AG template creates",
+    # The container that holds the toolkit's own runtime store. It names the tool, not a machine,
+    # and it is the natural worked example for "a database in a container" - a test and docs 06
+    # used it, the 2026-10-03 export was refused over those seven lines, and the owner ruled the
+    # name publishable rather than have the examples renamed. Its host and its credential stay
+    # searched for: only the container's name is let through.
+    "db_ops_store": "the container of the toolkit's own runtime store - it names the tool, not a machine",
     "sql-server": "a service *label* an operator typed, and it names the engine, not a machine",
     # A metric's output label that happens to spell a database name. `201_oracle_backup_health.sh`
     # emits `DBBK|<age>` meaning "database backup"; it named no estate before this estate existed.
@@ -172,7 +179,7 @@ ALWAYS_ALLOWED: dict[str, str] = {
 }
 
 
-class IdentifierScanError(RuntimeError):
+class IdentifierScanError(errors.OperationFailed):
     """The scan could not run. A *finding* is not an error; it is the answer."""
 
 

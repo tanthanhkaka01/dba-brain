@@ -27,6 +27,7 @@ the legacy-bridge branch, the answer — is untouched by which of the two doors 
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -36,7 +37,7 @@ from db_ops.lib.target_profile import SOURCE_REQUEST, TargetProfile
 __all__ = ["ConnectionSpec", "ConnectionSpecError"]
 
 
-class ConnectionSpecError(ValueError):
+class ConnectionSpecError(errors.RequestError):
     """The block does not describe a connection — an operator message naming the missing field."""
 
 

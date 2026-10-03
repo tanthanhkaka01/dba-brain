@@ -38,6 +38,7 @@ the same JSON gets the same instructions.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import hashlib
 import json
 from dataclasses import dataclass
@@ -610,7 +611,7 @@ def _files(app_name: str) -> list[tuple[str, dict]]:
 DIRECTORIES = ("data", "logs", "runtime", "secrets", "assets/metrics")
 
 
-class ScaffoldError(RuntimeError):
+class ScaffoldError(errors.OperationFailed):
     """`init` refused. It never overwrites, so the message says what is already there."""
 
 

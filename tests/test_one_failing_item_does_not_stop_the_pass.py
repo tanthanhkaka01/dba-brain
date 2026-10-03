@@ -13,6 +13,8 @@ from db_ops.backup_restore import backup as backup_module
 from db_ops.transport.common_cli import CommonCliError
 from tests.test_an_async_run_never_repeats_a_job_another_run_finished import _backup_job, _Store
 
+from conftest import patch_sql_runner
+
 
 # --------------------------------------------------------------------------- #
 # F10.1 - backups
@@ -51,8 +53,8 @@ def test_a_task_whose_sql_file_is_missing_is_recorded_as_failed(tmp_path, monkey
 
     from db_ops.sql_tasks import runner
 
-    monkeypatch.setattr(runner, "log_event", lambda *args, **kwargs: None)
-    monkeypatch.setattr(runner, "enqueue_sql_task_message", lambda **kwargs: None)
+    patch_sql_runner(monkeypatch, "log_event", lambda *args, **kwargs: None)
+    patch_sql_runner(monkeypatch, "enqueue_sql_task_message", lambda **kwargs: None)
     store = RecordingSqlRunStore()
     inventory, credentials = inventory_and_credentials()
     (tmp_path / "data").mkdir()
@@ -76,13 +78,13 @@ def test_one_task_that_raises_does_not_stop_the_scan(tmp_path, monkeypatch):
     first, second = (sql_command(sql_id=1, sql_code="ONE"), sql_target(sql_id=1)), \
         (sql_command(sql_id=2, sql_code="TWO"), sql_target(sql_id=2))
     for name in ("load_sql_commands", "load_sql_targets"):
-        monkeypatch.setattr(runner, name, lambda *_a, **_k: {})
+        patch_sql_runner(monkeypatch, name, lambda *_a, **_k: {})
     monkeypatch.setattr(runner.data_sources, "load_secret_text", lambda *_a, **_k: {})
     monkeypatch.setattr(runner.data_sources, "load_inventory", lambda *_a, **_k: [])
     monkeypatch.setattr(runner.data_sources, "load_all_credentials", lambda *_a, **_k: {})
-    monkeypatch.setattr(runner, "mark_stale_running_sql_runs", lambda **_k: None)
-    monkeypatch.setattr(runner, "due_sql_tasks", lambda **_k: [first, second])
-    monkeypatch.setattr(runner, "log_event", lambda *args, **kwargs: None)
+    patch_sql_runner(monkeypatch, "mark_stale_running_sql_runs", lambda **_k: None)
+    patch_sql_runner(monkeypatch, "due_sql_tasks", lambda **_k: [first, second])
+    patch_sql_runner(monkeypatch, "log_event", lambda *args, **kwargs: None)
     ran = []
 
     def run_one(*, command, **_k):
@@ -91,7 +93,7 @@ def test_one_task_that_raises_does_not_stop_the_scan(tmp_path, monkeypatch):
             raise RuntimeError("something nobody planned for")
         return True
 
-    monkeypatch.setattr(runner, "run_one_sql_task", run_one)
+    patch_sql_runner(monkeypatch, "run_one_sql_task", run_one)
     store = SimpleNamespace(
         fetch_running_sql_runs=lambda: [], fetch_latest_done_or_running_sql_runs_by_run_key=lambda: {},
         fetch_latest_sql_runs_by_run_key=lambda: {}, sql_run_started_since=lambda *_a: False)

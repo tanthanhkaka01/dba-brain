@@ -9,6 +9,7 @@ it and the SQL failed - because the metric is graded differently for each.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 from typing import Any
 
 from db_ops.lib import sql_access
@@ -31,7 +32,7 @@ POSTGRES_DB_TYPES = frozenset({"postgresql", "postgres"})
 MAX_DATABASES_PER_METRIC = 50
 
 
-class MetricConnectionError(RuntimeError):
+class MetricConnectionError(errors.Unreachable):
     """The collector never reached the target: connect refused, auth rejected, no credential.
 
     Carried as a type rather than left to be guessed from the message, because the caller grades
@@ -43,7 +44,7 @@ class MetricConnectionError(RuntimeError):
     failure_phase = PHASE_CONNECT
 
 
-class MetricExecutionError(RuntimeError):
+class MetricExecutionError(errors.OperationFailed):
     """The connection was open and the metric's own SQL failed — a finding about the check."""
 
     failure_phase = PHASE_EXECUTE

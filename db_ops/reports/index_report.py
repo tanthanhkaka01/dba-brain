@@ -24,7 +24,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from db_ops.lib import page_banner, report_archive
+from db_ops.lib import engine_sections, page_banner, page_style, report_archive
 from db_ops.db.metric_store import MetricStore
 from db_ops.lib.timezone import display_now, format_display, format_display_text
 from db_ops.db import DbOpsStore
@@ -394,7 +394,7 @@ def _markdown_tables_to_html(text: str) -> str:
         if is_row and not is_rule:
             cells = [c.strip() for c in stripped.strip("|").split("|")]
             if not in_table:
-                html.append("<table><thead><tr>"
+                html.append('<div class="tbl-scroll"><table><thead><tr>'
                             + "".join(f"<th>{_escape(c)}</th>" for c in cells)
                             + "</tr></thead><tbody>")
                 in_table = True
@@ -404,20 +404,20 @@ def _markdown_tables_to_html(text: str) -> str:
         if is_rule:
             continue
         if in_table:
-            html.append("</tbody></table>")
+            html.append("</tbody></table></div>")
             in_table = False
         if stripped.startswith("## ") and not stripped.startswith("### "):
             # The one line that qualifies every number on the page, so it is rendered as a banner
             # rather than a paragraph. Buried under the tables, it was read past.
             html.append(f'<div class="banner">{_escape(stripped[3:])}</div>')
         elif stripped.startswith("### "):
-            html.append(f"<h3>{_escape(stripped[4:])}</h3>")
+            html.append(f'<h3 class="part">{_escape(stripped[4:])}</h3>')
         elif stripped.startswith("http://") or stripped.startswith("https://"):
             html.append(f'<p><a href="{_escape(_page_href(stripped))}">{_escape(stripped)}</a></p>')
         elif stripped:
             html.append(f"<p>{_link_urls(_escape(stripped))}</p>")
     if in_table:
-        html.append("</tbody></table>")
+        html.append("</tbody></table></div>")
     return chr(10).join(html)
 
 
@@ -481,10 +481,13 @@ def build_peer_links(servers: dict[str, dict[str, Any]]) -> list[dict[str, str]]
     pages that are being written beside it — the rule the server metrics page follows too, for
     the same reason: a link to a 404 looks like it should work.
     """
+    # The usage metric only marks the PostgreSQL rows and the inventory metric the Oracle ones, so
+    # an entry with neither is SQL Server. Grouped by the rule every page shares (lib.engine_sections).
     return [
         {"server_id": name,
          "file": html_file_name(name),
-         "status": peer_status(servers[name])}
+         "status": peer_status(servers[name]),
+         "engine": engine_sections.section_of(servers[name].get("engine") or "sqlserver")}
         for name in sorted(servers)
     ]
 
@@ -502,13 +505,22 @@ def _peer_nav_html(peers: list[dict[str, str]], current: str) -> str:
     """
     if len(peers) < 2:
         return ""
-    chips: list[str] = []
-    for peer in peers:
-        dot = (f'<span class="dot" style="background:'
-               f'{_PEER_COLORS.get(peer["status"], _PEER_COLORS["ok"])}"></span>')
-        label = dot + _escape(peer["server_id"])
-        chips.append(f'<span class="chip on">{label}</span>' if peer["server_id"] == current
-                     else f'<a class="chip" href="{_escape(peer["file"])}">{label}</a>')
+    # One row per engine, the same sections the server-metrics picker shows (the operator,
+    # 2026-10-02): a flat row of every server mixed SQL Server, Oracle and PostgreSQL pages.
+    rows: list[str] = []
+    for key, label in engine_sections.present_sections(
+            str(peer.get("engine") or "sqlserver") for peer in peers):
+        chips: list[str] = []
+        members = [peer for peer in peers
+                   if engine_sections.section_of(peer.get("engine") or "sqlserver") == key]
+        for peer in members:
+            dot = (f'<span class="dot" style="background:'
+                   f'{_PEER_COLORS.get(peer["status"], _PEER_COLORS["ok"])}"></span>')
+            name = dot + _escape(peer["server_id"])
+            chips.append(f'<span class="chip on">{name}</span>' if peer["server_id"] == current
+                         else f'<a class="chip" href="{_escape(peer["file"])}">{name}</a>')
+        rows.append(f'<span class="picker-label">{_escape(label)} <b>{len(members)}</b></span>'
+                    f'<span class="picker-row">{"".join(chips)}</span>')
     # These pages are archived once a day and served back by `?date=`, so a reader who arrived at
     # a dated snapshot has to stay in it when they click to another server — otherwise the picker
     # silently drops them back into today, on a page that still looks like the one they chose.
@@ -519,8 +531,8 @@ def _peer_nav_html(peers: list[dict[str, str]], current: str) -> str:
         ".forEach(function(a){var h=a.getAttribute('href');"
         "a.setAttribute('href',h+(h.indexOf('?')<0?'?':'&')+'date='+encodeURIComponent(d));});"
         "})();</script>")
-    return ('<div class="picker"><span class="picker-label">Index reports</span>'
-            + "".join(chips) + "</div>" + keep_date)
+    return ('<div class="picker"><span class="picker-title">Index reports</span>'
+            + "".join(rows) + "</div>" + keep_date)
 
 
 def write_index_report_html(entry: dict[str, Any], text: str, out_dir: Path,
@@ -535,36 +547,26 @@ def write_index_report_html(entry: dict[str, Any], text: str, out_dir: Path,
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / html_file_name(entry["server_id"])
+    server_id = str(entry.get("server_id") or "")
+    engine = engine_sections.section_label(engine_sections.section_of(entry.get("engine") or "sqlserver"))
+    # The report text is shared with Telegram and opens with its own title line; on the page the
+    # masthead says it, so the line is not repeated under it.
+    body = "\n".join(line for line in text.splitlines()
+                      if not line.startswith(("Index Usage Report", "Index Inventory Report")))
     page = (
-        "<!doctype html><meta charset='utf-8'>"
-        f"<title>Index Usage — {_escape(entry['server_id'])}</title>"
-        "<style>body{font:14px/1.5 system-ui,sans-serif;margin:24px;max-width:1200px}"
-        "table{border-collapse:collapse;margin:12px 0;width:100%}"
-        "th,td{border:1px solid #ccc;padding:6px 8px;text-align:left;font-size:13px}"
-        "th{background:#f4f4f4}tr:nth-child(even){background:#fafafa}"
-        "h3{margin-top:28px}a{color:#0645ad}"
-        ".picker{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:0 0 18px;"
-        "padding-bottom:14px;border-bottom:1px solid #e5e9ef}"
-        ".picker-label{font-size:11px;letter-spacing:.08em;text-transform:uppercase;"
-        "color:#64748b;font-weight:700;margin-right:4px}"
-        ".chip{border:1px solid #e5e9ef;border-radius:999px;padding:4px 12px;font-size:12px;"
-        "color:#64748b;text-decoration:none;background:#fff}"
-        "a.chip:hover{border-color:#2563eb;color:#2563eb}"
-        ".chip.on{background:#0f2540;border-color:#0f2540;color:#fff;font-weight:600}"
-        ".dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:6px;"
-        "vertical-align:middle}"
-        ".banner{font-size:20px;font-weight:700;line-height:1.35;margin:18px 0 6px;"
-        "padding:14px 16px;border-left:6px solid #b45309;background:#fff7ed;color:#7c2d12;"
-        "border-radius:4px}"
-        + page_banner.CSS + "</style>"
+        "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+        f"<title>Index Usage — {_escape(server_id)}</title>"
+        "<style>" + page_style.CSS + _INDEX_PAGE_CSS + page_banner.CSS + "</style></head><body>"
+        '<header class="masthead"><div class="wrap">'
         + page_banner.render(
             title="Index Usage",
-            scope=str(entry.get("server_id") or ""),
+            scope=server_id,
             # The moment the numbers were measured, not the moment the file was written. A page
             # rebuilt for a past day by the backfill must say that day, or the stamp is a lie that
             # looks like a fact.
             snapshot_at=format_display_text(entry.get("collected_at")),
-            here=html_file_name(str(entry.get("server_id") or "")),
+            here=html_file_name(server_id),
             # Only the pages this report root actually holds. A root whose SLA app has never run
             # has no sla.html, and offering it produces the one thing every page rule here
             # forbids: a link that 404s.
@@ -573,9 +575,15 @@ def write_index_report_html(entry: dict[str, Any], text: str, out_dir: Path,
             # picker over the others.
             links=page_banner.siblings_present(
                 lambda name: (out_dir / name).exists(),
-                index_usage=html_file_name(str(entry.get("server_id") or ""))))
-        + _peer_nav_html(peers or [], str(entry["server_id"]))
-        + _markdown_tables_to_html(text)
+                index_usage=html_file_name(server_id)))
+        + f'<h1 class="title">{_escape(server_id)}</h1>'
+        + f'<p class="subtitle">{_escape(engine)} · index '
+        + ("inventory" if engine == "Oracle" else "usage") + "</p>"
+        + _kpi_strip(entry)
+        + "</div></header><div class=\"wrap content\">"
+        + _peer_nav_html(peers or [], server_id)
+        + _markdown_tables_to_html(body)
+        + "</div></body></html>"
     )
     if stamp:
         (out_dir / report_archive.archive_name(
@@ -584,6 +592,53 @@ def write_index_report_html(entry: dict[str, Any], text: str, out_dir: Path,
         return path
     path.write_text(page, encoding="utf-8")
     return path
+
+
+#: What only the index page needs beyond lib.page_style: the restart caveat as a banner, and tables
+#: that fit their window.
+#:
+#: The first column of every table here is a name, and an index's is one unbroken token -
+#: ``database.schema.table.index``, 125 characters on the estate's largest server - beside fifteen
+#: more columns. Nothing in it can wrap, so the table was half again as wide as any screen and was
+#: read by dragging it sideways (the operator, 2026-10-03). The name may now break anywhere - what
+#: Bootstrap and Tabler call ``text-break`` - in the face and size of every other cell; the other
+#: cells stay whole, and all are a little tighter.
+#:
+#: **The name column takes the same share of every table.** A table spreads its spare width over
+#: its columns by what each holds, so *Fragmented* (eight columns) gave its names 780px and *All
+#: indexes* (sixteen) 640px on the same screen: one page, two tables, and the columns after the
+#: name began in two different places (the operator, the same day: *the two segments show
+#: differently, between the index name and the other columns*). Stated as a share it is the same
+#: in each wherever there is room; on a narrow window the sixteen-column table takes what it needs
+#: and the name gives way, as before.
+_INDEX_PAGE_CSS = (
+    ".banner{font-size:17px;font-weight:700;line-height:1.35;margin:18px 0 6px;padding:13px 16px;"
+    "border-left:6px solid var(--warn);background:var(--warn-bg);color:#7c2d12;border-radius:6px}"
+    ".content > p{margin:6px 0;font-size:13px;color:#3a4757}"
+    ".content thead th,.content tbody td{padding:7px 8px}"
+    ".content thead th:first-child,.content tbody td:first-child{width:34%}"
+    ".content tbody td:first-child{overflow-wrap:anywhere;min-width:200px}"
+)
+
+#: The counters the strip shows, in reading order, and when each is a warning or an alarm.
+_KPI_ORDER = ("indexes_total", "used", "unused", "cold", "disabled", "unusable", "droppable",
+              "fragmented", "stale_statistics", "databases")
+_KPI_LEVEL = {"disabled": "alert", "unusable": "alert", "droppable": "warnum", "fragmented": "warnum",
+              "stale_statistics": "warnum", "stale_stats_30d": "warnum", "never_analyzed": "warnum"}
+
+
+def _kpi_strip(entry: dict[str, Any]) -> str:
+    """The page's totals as stat cards - the shape every report page opens with."""
+    totals = entry.get("totals") or {}
+    keys = [key for key in _KPI_ORDER if key in totals]
+    keys += [key for key in totals if key not in keys and isinstance(totals.get(key), int)][:4]
+    cards = []
+    for key in keys[:10]:
+        value = _int(totals.get(key))
+        level = page_style.kpi_class(value, _KPI_LEVEL.get(key, ""))
+        cards.append(f'<div class="kpi {level}"><div class="num">{value:,}</div>'
+                     f'<div class="lbl">{_escape(key.replace("_", " "))}</div></div>')
+    return f'<div class="kpi-strip">{"".join(cards)}</div>' if cards else ""
 
 
 def _recommend(row: dict[str, Any]) -> str:
@@ -682,7 +737,7 @@ def _fragmented_section(fragmented: list[dict[str, Any]], limit: int | None) -> 
         action = row.get("action") or ("REBUILD" if _float(pct) >= 60 else "REORGANIZE")
         pages = row.get("page_count") or ""
         out.append(
-            f"| `{row['item']}` | {row.get('partition') or '-'} "
+            f"| `{_index_label(row['item'])}` | {row.get('partition') or '-'} "
             f"| {_short_index_type(row.get('index_type'))} | {pct}% "
             f"| {f'{_int(pages):,}' if pages else '-'} | {row.get('size_mb') or '-'} "
             f"| {(row.get('stats_updated') or '-').replace('T', ' ')} | {action} |")
@@ -690,6 +745,17 @@ def _fragmented_section(fragmented: list[dict[str, Any]], limit: int | None) -> 
         out.append(f"| _... and {hidden} more_ | | | | | | | |")
     out.append("")
     return out
+
+
+def _index_label(item: Any) -> str:
+    r"""An index's name as every table of the page writes it: ``database.schema.table.index``.
+
+    The fragmentation collector names its item ``database\schema.table.index`` and the usage
+    collector ``database.schema.table.index``, so one index read two ways in two tables of one page,
+    and a name copied from *Fragmented* was not found by searching *All indexes* (the operator,
+    2026-10-03). Only what is shown changes: the stored item is the series' key and stays as it is.
+    """
+    return str(item).replace("\\", ".", 1)
 
 
 def _short_index_type(value: Any) -> str:

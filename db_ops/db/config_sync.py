@@ -35,6 +35,7 @@ trip is tested with, so file and store cannot drift apart by construction.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -68,7 +69,7 @@ SECRET_KEYS = frozenset({
 })
 
 
-class ConfigSyncError(ValueError):
+class ConfigSyncError(errors.ConfigError):
     """A config file cannot be synced as written."""
 
 

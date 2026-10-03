@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from db_ops.lib import errors as error_kinds
 import datetime as _datetime
 import json
 import os
@@ -114,7 +115,7 @@ def open_sqlserver_odbc(
         candidates = [(name, "yes") for name in dict.fromkeys(name for name, _ in candidates)
                       if name in VERIFYING_DRIVERS]
         if not candidates:
-            raise RuntimeError(
+            raise error_kinds.InvalidConfig(
                 "sqlserver_tls_verify is set, and no installed ODBC driver can verify the server's "
                 f"certificate - install one of: {', '.join(VERIFYING_DRIVERS)}.")
     for candidate_driver, encryption_mode in candidates:
@@ -142,7 +143,7 @@ def open_sqlserver_odbc(
                 raise
     report = "SQL Server connect failed after driver fallback:\n- " + "\n- ".join(errors)
     hint = sqlserver_tls_policy_hint(report)
-    raise RuntimeError(report + hint if hint else report)
+    raise error_kinds.Unreachable(report + hint if hint else report)
 
 
 #: The drivers that take ``TrustServerCertificate=no`` and check the chain and the name.
@@ -316,7 +317,7 @@ def connect_sqlserver_with_fallback(
     command_timeout = connect_timeout if command_timeout is None else command_timeout
     driver = str(driver or "").strip()
     if tls_verify and driver.lower() == "pymssql":
-        raise RuntimeError("sqlserver_tls_verify is set, and sqlserver_driver=pymssql cannot verify "
+        raise error_kinds.InvalidConfig("sqlserver_tls_verify is set, and sqlserver_driver=pymssql cannot verify "
                            "a certificate; name an ODBC driver (17 or 18) or turn verification off.")
     if driver.lower() == "pymssql":
         return _connect_pymssql(
@@ -329,7 +330,7 @@ def connect_sqlserver_with_fallback(
     try:
         import pyodbc  # type: ignore[import-untyped]
     except ImportError as exc:
-        raise RuntimeError(
+        raise error_kinds.NotConfigured(
             "pyodbc is required to connect to SQL Server. Install it with: "
             + install_hint("mssql") + " (and a system ODBC driver)"
         ) from exc
@@ -384,7 +385,7 @@ def _connect_pymssql(
     try:
         import pymssql  # type: ignore[import-not-found]
     except ImportError as exc:
-        raise RuntimeError(
+        raise error_kinds.Unreachable(
             f"SQL Server ODBC connect failed and pymssql is not installed. ODBC error: {odbc_error}"
         ) from exc
     try:
@@ -399,7 +400,7 @@ def _connect_pymssql(
             autocommit=autocommit,
         )
     except Exception as exc:  # noqa: BLE001 - keep both driver errors visible for troubleshooting.
-        raise RuntimeError(
+        raise error_kinds.Unreachable(
             f"SQL Server pymssql connect failed: {exc}. ODBC error: {odbc_error}"
         ) from exc
     return SqlServerConnection(conn=conn, driver="pymssql", odbc_error=odbc_error)
@@ -464,7 +465,7 @@ def choose_sqlserver_driver(pyodbc_module: Any) -> str:
     candidates = sqlserver_driver_candidates(pyodbc_module)
     if candidates:
         return candidates[0][0]
-    raise RuntimeError("No ODBC driver found for SQL Server.")
+    raise error_kinds.NotConfigured("No ODBC driver found for SQL Server.")
 
 
 def sqlserver_driver_candidates(pyodbc_module: Any, preferred_driver: str = "") -> list[tuple[str, str]]:
@@ -487,7 +488,7 @@ def sqlserver_driver_candidates(pyodbc_module: Any, preferred_driver: str = "") 
     preferred_driver = preferred_driver.strip()
     if preferred_driver:
         if preferred_driver not in drivers:
-            raise RuntimeError(f"Configured SQL Server ODBC driver is not installed: {preferred_driver}")
+            raise error_kinds.InvalidConfig(f"Configured SQL Server ODBC driver is not installed: {preferred_driver}")
         if preferred_driver == "ODBC Driver 18 for SQL Server":
             # Prefer encrypted transport ("optional" = encrypt when the server offers
             # a cert, proceed if not) over plaintext ("no"), so credentials/data are

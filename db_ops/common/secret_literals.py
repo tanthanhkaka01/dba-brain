@@ -23,6 +23,7 @@ the value it found has moved the leak into the log.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import base64
 import os
 from pathlib import Path
@@ -46,7 +47,7 @@ PLACEHOLDER_VALUES: frozenset[str] = frozenset({
 })
 
 
-class SecretLiteralError(RuntimeError):
+class SecretLiteralError(errors.OperationFailed):
     """The store could not be read, so nothing can be said about the tree."""
 
 

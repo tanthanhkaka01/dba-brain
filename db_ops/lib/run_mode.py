@@ -28,6 +28,7 @@ claim closes.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 from dataclasses import dataclass
 
 SYNC = "sync"
@@ -47,7 +48,7 @@ DEFAULT_MAX_PARALLEL = 4
 MAX_PARALLEL_LIMIT = 32
 
 
-class RunModeError(ValueError):
+class RunModeError(errors.ConfigError):
     """An app command whose ``run_mode`` block cannot be obeyed as written."""
 
 

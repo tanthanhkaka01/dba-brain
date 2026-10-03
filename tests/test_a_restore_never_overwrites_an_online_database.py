@@ -18,6 +18,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from conftest import patch_restore
+
 from db_ops.backup_restore import restore_by_id
 from db_ops.backup_restore.restore_script import load_script_restores
 from db_ops.common.restorestep import sqlserver as mssql
@@ -55,7 +57,7 @@ def test_the_drill_entry_s_word_reaches_the_restore(monkeypatch):
 
     config = SimpleNamespace(overwrite_existing=True)
     candidate = SimpleNamespace(restore_database_name="HR", restore_data_file_on_vm="d", restore_log_file_on_vm="l")
-    monkeypatch.setattr(restore_database, "_target_path_str", lambda path, cfg: str(path))
+    patch_restore(monkeypatch, "_target_path_str", lambda path, cfg: str(path))
 
     fields = restore_database._restore_step("full", candidate, config, path="/in/hr.bak")
 

@@ -32,6 +32,14 @@ def test_the_2008r2_sleeping_transaction_collector_is_one_of_them():
     assert COLLECTORS / "legacy_2008r2" / "024_sqlserver_sleeping_open_transaction.sql" in _joining_collectors()
 
 
+def test_the_2008r2_blocking_collector_names_the_head_blocker_and_so_is_one_of_them():
+    """Until 0.26.0 the 2008 R2 `009` counted blocked sessions per database: it joined no connection,
+    so the rule below never asked it for an address, and its alert named no session to deal with."""
+    path = COLLECTORS / "legacy_2008r2" / "009_sqlserver_blocking_sessions.sql"
+    assert path in _joining_collectors()
+    assert "'Head blocker. '" in _live_sql(path)
+
+
 @pytest.mark.parametrize("path", _joining_collectors(), ids=lambda p: str(p.relative_to(COLLECTORS)))
 def test_a_collector_that_joins_the_connection_names_the_client_address(path):
     assert "client_ip=" in _live_sql(path)

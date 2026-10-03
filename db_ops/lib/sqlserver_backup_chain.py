@@ -20,11 +20,38 @@ window as before: a narrowed copy that guessed wrong fails the restore, a wide o
 
 from __future__ import annotations
 
+import datetime as dt
+import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 #: The folder each kind of backup lives in, one level under the database's folder.
 KINDS = ("FULL", "DIFF", "LOG")
+
+#: ``_YYYYMMDD_HHMMSS`` in a backup's name, with ``Z`` when the stamp is UTC. Here since 2026-10-03:
+#: the copy to another machine (``common``) reads a chain from names too, and ``common`` imports
+#: only ``lib`` (rules R04) - it was ``backup_restore.shell_quoting``'s, which re-exports it.
+BACKUP_TIMESTAMP_RE = re.compile(r"_(\d{8})_(\d{6})(Z?)")
+
+
+def backup_time_from_name(name: str) -> float | None:
+    """The time a backup file's name records (``..._YYYYMMDD_HHMMSS[Z].bak``), as epoch seconds.
+
+    A trailing ``Z`` says the stamp is UTC - what db_ops' own backup scripts write since 0.20.0.
+    A name without it is read in this process's local time, as it always was: backups written by
+    other tools on the source server (a maintenance-plan or Ola Hallengren job) stamp local time and
+    carry no marker, and reading those as UTC would move every one of them by the server's offset.
+    """
+    match = BACKUP_TIMESTAMP_RE.search(name)
+    if not match:
+        return None
+    try:
+        moment = dt.datetime.strptime(match.group(1) + match.group(2), "%Y%m%d%H%M%S")
+    except ValueError:
+        return None
+    if match.group(3):
+        moment = moment.replace(tzinfo=dt.timezone.utc)
+    return moment.timestamp()
 
 
 def kind_from_folder(name: str) -> str:

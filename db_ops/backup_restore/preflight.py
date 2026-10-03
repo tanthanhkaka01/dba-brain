@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from db_ops.lib import errors
 import dataclasses
 import os
 import socket
@@ -12,7 +13,7 @@ from db_ops.backup_restore.space import RestoreSpaceRefused, check_free_space
 from db_ops.lib.shell import POWERSHELL_NOT_FOUND_HINT, powershell_executable
 
 
-class PreflightError(RuntimeError):
+class PreflightError(errors.Refused):
     """
     Raised when restore target preflight validation fails.
 

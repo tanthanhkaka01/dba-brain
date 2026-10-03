@@ -65,6 +65,8 @@ Steps, in order (each one idempotent - a file already moved plans nothing):
   moved-commands      a command line naming a command that moved to another CLI is pointed at it:
                       "db_ops.common.cli", "self-status" -> "db_ops.db.cli", "self-status" (the
                       last-run column is read from the store, which only db.cli opens)
+  console-apps        an app this version's console lists and webhost_config.json does not is
+                      added to it. Only added: an entry the file already holds is left as it is
 
 A record whose two spellings DISAGREE is a conflict: its file is not written, and the answer names
 the record. After a write, check-objects and check-references are run and their counts reported -
@@ -77,7 +79,7 @@ Exit code 1 when a conflict left a file unwritten.
 """
 
 STEPS = ("reference-files", "field-names", "restore-machine-ids", "telegram-active",
-         "inventory-into-reports", "moved-commands")
+         "inventory-into-reports", "moved-commands", "console-apps")
 
 
 #: The app command that was a report (0.22.0), and the report it becomes.
@@ -262,6 +264,50 @@ def _moved_commands(root: Path, *, dry_run: bool, before_write: Any) -> dict[str
     return {"files": files}
 
 
+#: The console's layout file, and the list in it that grows when a version adds a component.
+CONSOLE_FILE = "webhost_config.json"
+
+
+def _console_apps(root: Path, *, dry_run: bool, before_write: Any) -> dict[str, Any]:
+    """Add the console apps this version ships and this node's ``webhost_config.json`` lacks.
+
+    `init` writes the file once, from the package. A node carried forward - by `pip install
+    --upgrade`, or filled from another node's bundle - keeps the list it had, so a component a
+    later version added is never offered: the 0.26 soak node, filled by bundle, had no `transport`
+    app, which 0.24.0 introduced (the 0.26 sheet, section 6, C2).
+
+    **Only added, never changed.** An entry the file already holds is the operator's - renamed,
+    re-ordered, its app commands edited - and stays as it is; an entry is new by its `app_code`
+    alone. The bot's commands are deliberately not treated this way: a command has no off switch
+    but its level, so adding one widens what the bot does - that file is the operator's to edit
+    (`telegram.cli command-level`).
+    """
+    from db_ops.common import scaffold
+
+    shipped = scaffold.packaged_default("data/" + CONSOLE_FILE)
+    path = root / CONSOLE_FILE
+    if not isinstance(shipped, dict) or not path.is_file():
+        return {"files": []}
+    document = json.loads(path.read_bytes().decode("utf-8-sig"))
+    apps = document.get("apps") if isinstance(document, dict) else None
+    if not isinstance(apps, list):
+        return {"files": []}
+    held = {str(item.get("app_code")) for item in apps if isinstance(item, dict)}
+    missing = [item for item in shipped.get("apps") or []
+               if isinstance(item, dict) and item.get("app_code")
+               and str(item["app_code"]) not in held]
+    written = bool(missing) and not dry_run
+    if written:
+        before_write(path)
+        apps.extend(json.loads(json.dumps(item)) for item in missing)
+        atomic_write_text(path, json.dumps(document, ensure_ascii=False,
+                                           indent=indent_of(path)) + "\n")
+    return {"files": [{"file": CONSOLE_FILE, "records_changed": len(missing), "conflicts": [],
+                       "changes": [{"field": "apps[]", "to": str(item["app_code"]),
+                                    "action": "added"} for item in missing],
+                       "written": written}]}
+
+
 #: The files this version ships as REFERENCE rather than configuration: nobody edits them, every node
 #: holds the same bytes, and the other steps are checked against them. They go first, because an
 #: older copy calls every field the next step moves an unknown one.
@@ -401,6 +447,8 @@ def upgrade(request: dict[str, Any]) -> tuple[str, dict[str, Any]]:
             files = _telegram_active(root, dry_run=dry_run, before_write=before_write)["files"]
         elif step == "moved-commands":
             files = _moved_commands(root, dry_run=dry_run, before_write=before_write)["files"]
+        elif step == "console-apps":
+            files = _console_apps(root, dry_run=dry_run, before_write=before_write)["files"]
         else:
             files = _inventory_into_reports(root, dry_run=dry_run, before_write=before_write)["files"]
         results.append({

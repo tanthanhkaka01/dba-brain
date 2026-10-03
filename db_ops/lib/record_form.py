@@ -35,6 +35,7 @@ and inventing an escaping scheme for one is how a field silently lands in the wr
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import json
 from dataclasses import dataclass, field as dataclass_field
 from typing import Any
@@ -56,7 +57,7 @@ KIND_LIST_PREFIX = "list-"
 _SCALAR_KINDS = {KIND_STR, KIND_INT, KIND_FLOAT, KIND_BOOL, KIND_NULL}
 
 
-class RecordFormError(ValueError):
+class RecordFormError(errors.RequestError):
     """A submitted field cannot be read back as the value it claims to be."""
 
 

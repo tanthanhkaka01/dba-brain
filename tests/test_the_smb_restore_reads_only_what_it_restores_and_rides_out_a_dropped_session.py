@@ -24,6 +24,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import patch_restore
+
 from db_ops.backup_restore import copy_backup, restore_database
 from db_ops.backup_restore.config import BackupRestoreConfig, DatabaseRestoreMapping
 from db_ops.common import sqlcmd_run
@@ -133,7 +135,7 @@ class _OneSession:
 def test_the_whole_chain_is_checked_in_one_session(tmp_path, monkeypatch):
     chain = [Path("/imp/APPDB/FULL/f.bak")] + [Path(f"/imp/APPDB/LOG/{n}.trn") for n in range(97)]
     session = _OneSession(missing=["/imp/APPDB/LOG/5.trn"])
-    monkeypatch.setattr(restore_database, "open_ssh_connection", lambda config: session)
+    patch_restore(monkeypatch, "open_ssh_connection", lambda config: session)
 
     missing = restore_database._missing_backup_paths(_config(tmp_path, tmp_path), chain)
 

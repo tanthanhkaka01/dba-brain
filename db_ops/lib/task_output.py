@@ -14,10 +14,11 @@ of the four places that ask "does this task attach something?".
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 from typing import Any
 
 
-class TaskOutputError(ValueError):
+class TaskOutputError(errors.ConfigError):
     """An output word that is not one of :data:`OUTPUT_FORMATS`."""
 
 

@@ -31,6 +31,7 @@ boolean form (``"logging_on_run": true``). Both are normalized to the same
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -60,7 +61,7 @@ DEFAULT_RUN_LEVEL = "logging"
 DEFAULT_ERROR_LEVEL = "error"
 
 
-class NotifyConfigError(ValueError):
+class NotifyConfigError(errors.ConfigError):
     """A notify block that cannot be honored as written."""
 
 

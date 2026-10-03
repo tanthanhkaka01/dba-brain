@@ -21,6 +21,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import patch_telegram
+
 from db_ops.lib.common_cli import common_invocation
 from db_ops.telegram import command_processor
 
@@ -110,7 +112,7 @@ def restart(monkeypatch, tmp_path):
                                       "password": "a-password-only-stdin-may-carry"},
                 "policy": {}, "rules": {"level": 100, "confirmations": 2, "challenge": "target_id"}}
 
-    monkeypatch.setattr(command_processor, "finish_common_request", finish)
+    patch_telegram(monkeypatch, "finish_common_request", finish)
     command = command_processor.SupportCommand(
         command_id=9, command_text="spbot_restart_server", command_type=1, reply_default=0, reply_text="",
         is_group=1, is_private=1, need_file=0, action_type="cli_execute",
@@ -162,7 +164,7 @@ def test_a_server_the_node_cannot_finish_is_refused_before_anything_starts(monke
     def cannot(command, request, **_kwargs):
         raise command_processor.TelegramCommandError("LAB-GONE: no such server_id", exit_code=2)
 
-    monkeypatch.setattr(command_processor, "finish_common_request", cannot)
+    patch_telegram(monkeypatch, "finish_common_request", cannot)
     command = command_processor.SupportCommand(
         command_id=9, command_text="spbot_restart_server", command_type=1, reply_default=0, reply_text="",
         is_group=1, is_private=1, need_file=0, action_type="cli_execute",

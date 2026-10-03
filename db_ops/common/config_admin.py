@@ -21,6 +21,7 @@ to call from the Telegram worker without side effects beyond the three files.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import argparse
 import json
 import os
@@ -120,7 +121,7 @@ def default_sql_task_chats() -> tuple[str, str]:
 MANUAL_SCHEDULE = "manual"
 
 
-class ConfigAdminError(ValueError):
+class ConfigAdminError(errors.RequestError):
     """Raised for any invalid add-sql request (bad db_type, empty name, ...)."""
 
 

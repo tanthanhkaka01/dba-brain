@@ -6,7 +6,7 @@ The SQL Task Runner runs scheduled SQL task workflows against configured targets
 
 ## Package / Files
 
-- `db_ops/sql_tasks/`
+- `db_ops/sql_tasks/` - the runner is `runner.py` (the CLI, the scheduler scan, the forced-run gate, and `run_one_sql_task`) over four modules split out of it on 2026-10-03, in import order: `runner_plan.py` (the execution plan, the progress line, the notify rule), `runner_parameters.py` (named, positional and legacy DEFINE values, bound into the SQL), `runner_output.py` (the result formatted, trimmed for the store, written to a file, queued to Telegram) and `runner_execute.py` (the SQL files resolved, the login stated, the text checked, the run bounded by its deadline, a failed connect diagnosed). `runner` re-exports every name; a test replaces a collaborator with `conftest.patch_sql_runner`, which reaches every module that binds it
 - `data/sql_commands.json`
 - `data/sql_targets.json`
 - `assets/tasks/` — the SQL, and `assets/tasks/python/` for a task fed by a program
@@ -454,6 +454,13 @@ Every scan begins with `mark_stale_running_sql_runs`. A run row still `running` 
 `timeout` is closed as `error` with `metadata_json` = `{"stale_running": true}`, so the run_key is
 free and the task can be scheduled again — `due_sql_tasks` refuses to start a target whose latest
 run is `running`, so without this one dead process would stop the task for good.
+
+**A run of a task no longer configured is swept too - when this node left it (2026-10-03, 1.86).**
+A task removed from `sql_commands.json` is never scanned, so a run it left `running` stayed open for
+ever (three September runs on the 0.26 soak store, closed by hand). Such a row is judged like any
+other, with the default timeout (`DEFAULT_SQL_TIMEOUT_SECONDS`), and its message says the task is
+gone - but only a row this node started (its `claim_node`, or, on a row without one, its host
+name): a shared store's other node may still run that task, with a timeout this one cannot know.
 
 It reads **every** `running` row (`store.fetch_running_sql_runs`), not the newest one per
 run_key. Until 2026-09-04 it read `fetch_latest_done_or_running_sql_runs_by_run_key`, which is the

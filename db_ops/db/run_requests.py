@@ -43,6 +43,7 @@ itself makes.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -74,7 +75,7 @@ OPEN_STATUSES = (STATUS_PENDING, STATUS_CLAIMED, STATUS_STARTED)
 DEFAULT_REQUEST_TTL_SECONDS = 900
 
 
-class RunRequestError(RuntimeError):
+class RunRequestError(errors.OperationFailed):
     """A run request cannot be recorded or advanced as asked."""
 
 

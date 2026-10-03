@@ -21,10 +21,11 @@ key in the secret store.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 from typing import Any, Mapping
 
 
-class SecretValueError(RuntimeError):
+class SecretValueError(errors.NotConfigured):
     """A secret the object names could not be resolved."""
 
 

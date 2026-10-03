@@ -30,6 +30,7 @@ said only "disabled" would let an operator believe they had stopped the thing fi
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import re
 from pathlib import Path
 from typing import Any, Callable
@@ -48,7 +49,7 @@ _SAFE_JOB_NAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_ .$#:-]{0,127}$")
 _DBMS_JOB_PREFIX = "DBMS_JOB:"
 
 
-class JobControlError(RuntimeError):
+class JobControlError(errors.OperationFailed):
     """A user-facing failure: unknown target, unsupported engine, no such job."""
 
 

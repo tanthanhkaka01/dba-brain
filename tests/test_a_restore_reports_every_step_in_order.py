@@ -48,6 +48,7 @@ def _job(db_type="postgresql", *, remote=True, metadata=False):
         backup_dir="/b/PG_LAB_A", source_backup_host_dir="/b/PG_LAB_A",
         target_backup_dir="/b/pg_restore_from_a", target_visible_dir="/b/pg_restore_from_a",
         cleanup_retention=259200, copy_mode="auto", space_check=restore_space.SpaceCheck(),
+        copy_selection="chain", copy_recent_hours=24,
         server_metadata=SimpleNamespace(enabled=metadata))
 
 
@@ -65,7 +66,7 @@ def drill(monkeypatch):
     state = {"events": [], "ops": [], "calls": []}
 
     def run(job, *, plan=PG_PLAN, verify_ok=True, fail_op=None, copy_fails=False,
-            point_in_time=""):
+            point_in_time="", metadata_report=None):
         monkeypatch.setattr(restore_script, "load_script_restores", lambda _p=None: [job])
         monkeypatch.setattr(restore_by_id, "_host_block", lambda j, **_: {"host": "h"})
         monkeypatch.setattr(restore_by_id, "assert_target_is_not_source", lambda *a, **k: None)
@@ -93,7 +94,7 @@ def drill(monkeypatch):
             state["calls"].append(("metadata", phase))
             events.announce(on_phase, "METADATA_START", f"replaying {phase}")
             events.announce(on_phase, "METADATA_DONE", f"{phase} replayed")
-            return "", {"ok": True}
+            return "", (metadata_report or {"ok": True})
 
         monkeypatch.setattr(restore_script, "transfer_backup_to_target", transfer)
         monkeypatch.setattr(restore_script, "prune_staged_backups",
@@ -416,3 +417,47 @@ def test_what_a_copy_command_says_while_working_never_reaches_its_answer(monkeyp
     assert code == 0
     assert json.loads(out.out)["data"] == {"include": ["wal/"], "narrowed": True}
     assert "Connecting to" in out.err
+
+
+
+def test_metadata_asked_for_and_not_replayed_is_a_warning_on_the_restore(drill):
+    """The 100.250 drill restored its three databases, replayed no login and ended SUCCESS with no
+    word of it in its answer - the skip was an event only, and 23 users were orphaned (1.88)."""
+    skipped = {"ok": False, "status": "SKIPPED",
+               "error": "no bundle at runtime/instance_bundles/SRC: it is written by the node that "
+                        "runs the backup entry of SRC with server_metadata on"}
+
+    answer = drill(_job("sqlserver", metadata=True), metadata_report=skipped, plan=[
+        {"op": "restore-full", "request": {"database_name": "APPDB", "backup_path": "/b/APPDB_FULL.bak"}},
+        {"op": "verify-restore", "request": {}}])
+
+    assert len(answer["warnings"]) == 2, "one per phase that was asked for"
+    assert all("instance metadata" in w and "not replayed" in w for w in answer["warnings"])
+    assert "written by the node that runs the backup entry" in answer["warnings"][0]
+    assert answer["verify"] == {"checked": 2, "failed": 0}, "still a restore that worked"
+
+
+def test_metadata_replayed_adds_no_warning(drill):
+    answer = drill(_job("sqlserver", metadata=True), plan=[
+        {"op": "restore-full", "request": {"database_name": "APPDB", "backup_path": "/b/APPDB_FULL.bak"}},
+        {"op": "verify-restore", "request": {}}])
+
+    assert answer["warnings"] == []
+
+
+def test_the_skip_names_the_node_that_writes_the_bundle_and_the_command_that_exports_it(tmp_path, monkeypatch):
+    """It said "the backup entry needs server_metadata.enabled too" - on the soak node the entry had
+    it on and was inactive, the worker running it; the advice pointed at a setting already set."""
+    from db_ops.backup_restore import server_metadata
+
+    monkeypatch.setattr(server_metadata, "instance_bundle_dir", lambda server_id: tmp_path / server_id)
+    plan = SimpleNamespace(enabled=True, phases=("pre-database", "post-database"))
+
+    line, report = server_metadata.replay_phase(
+        plan, phase="pre-database", label="R (sqlserver)", source_server_id="SRC",
+        target_server_id="DST", target_container="", target_host="", data_dir=None,
+        announce=None)
+
+    assert report["status"] == "SKIPPED"
+    assert "server_metadata.enabled too" not in line
+    assert "export-instance-bundle" in report["error"] and "inactive" in report["error"]

@@ -26,6 +26,7 @@ that looks symmetrical:
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import posixpath
 import sys
 import time
@@ -42,7 +43,7 @@ from db_ops.lib import instance_bundle
 from db_ops.lib import response
 
 
-class RestoreByIdError(ValueError):
+class RestoreByIdError(errors.RequestError):
     """The entry cannot be restored as configured."""
 
 
@@ -455,12 +456,18 @@ def _execute(op: str, request: dict[str, Any]) -> dict[str, Any]:
         raise RestoreByIdError(str(exc)) from exc
 
 
-def _metadata_phase(job: Any, phase: str, *, data_dir: Any, on_phase: Any) -> None:
-    """One instance-metadata phase around the restore, announced either way.
+def _metadata_phase(job: Any, phase: str, *, data_dir: Any, on_phase: Any) -> str | None:
+    """One instance-metadata phase around the restore, announced either way; a warning when it
+    was asked for and not replayed.
 
     An entry without ``server_metadata`` is told so once, on the first phase - its stdout gains
     nothing (an entry that never asked must not), but a Telegram reader following the steps
     otherwise cannot tell "not configured" from "forgotten".
+
+    An entry that asked and got nothing ended ``SUCCESS`` with no word of it in the restore's
+    answer - the skip was an event only - and the 100.250 drill left 23 users orphaned and no login
+    behind a clean result (1.88). It is a warning now: the workflow ends *done with a warning* and
+    raises the alert to ``warning``. Still never a failure - the databases are the deliverable.
     """
     from db_ops.backup_restore.restore_script import replay_metadata_phase
 
@@ -473,8 +480,12 @@ def _metadata_phase(job: Any, phase: str, *, data_dir: Any, on_phase: Any) -> No
                       else "not replayed - server_metadata is off for this entry")
             announce(on_phase, "METADATA_SKIP",
                      f"Restore {job.restore_id}: instance metadata {reason}.")
-        return
-    replay_metadata_phase(job, phase=phase, data_dir=data_dir, on_phase=on_phase)
+        return None
+    _line, report = replay_metadata_phase(job, phase=phase, data_dir=data_dir, on_phase=on_phase)
+    if report is None or report.get("ok", True):
+        return None
+    return (f"instance metadata ({phase}) was asked for and not replayed - "
+            f"{report.get('error') or report.get('status') or 'see the restore events'}")
 
 
 def _plan_summary(steps: list[dict[str, Any]]) -> str:
@@ -625,7 +636,8 @@ def restore_by_id(request: dict[str, Any], *, data_dir: Any = None,
     # order the engine path and the old script runner keep. When the move onto this function
     # (2.69.52) took the copy but left its events behind, it left this behind too: a container
     # SQL Server entry with `server_metadata` on restored its databases and never its logins.
-    _metadata_phase(job, instance_bundle.PRE_DATABASE, data_dir=data_dir, on_phase=on_phase)
+    metadata_warnings = [w for w in [_metadata_phase(job, instance_bundle.PRE_DATABASE,
+                                                     data_dir=data_dir, on_phase=on_phase)] if w]
 
     plan = _plan_summary(steps)
     moment = f"to {point_in_time}" if point_in_time else "to the newest backup"
@@ -647,7 +659,7 @@ def restore_by_id(request: dict[str, Any], *, data_dir: Any = None,
                      {"steps": len(restoring), "restore_seconds": seconds})
 
     results: list[dict[str, Any]] = []
-    warnings: list[str] = []
+    warnings: list[str] = list(metadata_warnings)
     verify: dict[str, Any] | None = None
     for step in steps:
         if step.get("warning"):
@@ -676,7 +688,10 @@ def restore_by_id(request: dict[str, Any], *, data_dir: Any = None,
                     f"{outcome.get('failed')} of {outcome.get('checked')} database(s) unusable.")
     _restore_done()
     # Only after a restore that worked: Agent job steps name databases that have to exist.
-    _metadata_phase(job, instance_bundle.POST_DATABASE, data_dir=data_dir, on_phase=on_phase)
+    post_warning = _metadata_phase(job, instance_bundle.POST_DATABASE, data_dir=data_dir,
+                                   on_phase=on_phase)
+    if post_warning:
+        warnings.append(post_warning)
 
     pruned = None
     if transferred is not None and target_host is not None:

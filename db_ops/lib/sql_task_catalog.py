@@ -13,6 +13,7 @@ deprecation found while reading is handed to ``on_warning`` for the caller to lo
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -118,7 +119,7 @@ def _target_notify(item: dict[str, Any]) -> dict[str, NotifyRule]:
     app's defaults, which meant a target's routing could only be discovered by running it.
     """
     if not isinstance(item.get("notify"), dict):
-        raise RuntimeError(
+        raise errors.InvalidConfig(
             f"sql_targets.sql_id={item.get('sql_id')} target_no={item.get('target_no')}: "
             f"'notify' is required and must be an object, e.g. "
             f'{{"logging_on_run": {{"enabled": true, "telegram_chat": "sql", "chat_id": ""}}, '
@@ -350,16 +351,16 @@ def load_sql_script_definition(item: dict[str, Any], *, data_dir: Path) -> dict[
     command_name = str(item.get("sql_code", item.get("sql_id")))
     legacy_keys = [key for key in ("file_name", "file_names", "folder_name") if key in item]
     if legacy_keys:
-        raise RuntimeError(f"SQL command {command_name} uses deprecated script field(s): {', '.join(legacy_keys)}. Use script_type with script_path or script_paths.")
+        raise errors.InvalidConfig(f"SQL command {command_name} uses deprecated script field(s): {', '.join(legacy_keys)}. Use script_type with script_path or script_paths.")
 
     script_type = str(item.get("script_type", "")).strip().lower()
     if script_type not in {"single", "array", "folder"}:
-        raise RuntimeError(f"SQL command {command_name} has unsupported script_type: {script_type or '<missing>'}. Expected single, array, or folder.")
+        raise errors.InvalidConfig(f"SQL command {command_name} has unsupported script_type: {script_type or '<missing>'}. Expected single, array, or folder.")
 
     # Orthogonal to script_type, like input_type: it says *when* a file runs, not what the task is.
     raw_final = item.get("final_script_paths") or []
     if not isinstance(raw_final, list):
-        raise RuntimeError(
+        raise errors.InvalidConfig(
             f"SQL command {command_name} final_script_paths must be an array of file paths.")
     final_script_files = tuple(str(value).strip() for value in raw_final if str(value).strip())
 
@@ -369,9 +370,9 @@ def load_sql_script_definition(item: dict[str, Any], *, data_dir: Path) -> dict[
 
     if script_type == "single":
         if not raw_script_path:
-            raise RuntimeError(f"SQL command {command_name} script_type=single requires script_path.")
+            raise errors.InvalidConfig(f"SQL command {command_name} script_type=single requires script_path.")
         if has_script_paths:
-            raise RuntimeError(f"SQL command {command_name} script_type=single must not define script_paths.")
+            raise errors.InvalidConfig(f"SQL command {command_name} script_type=single must not define script_paths.")
         return {
             "script_type": script_type,
             "script_path": raw_script_path,
@@ -382,13 +383,13 @@ def load_sql_script_definition(item: dict[str, Any], *, data_dir: Path) -> dict[
 
     if script_type == "array":
         if has_script_path:
-            raise RuntimeError(f"SQL command {command_name} script_type=array must not define script_path.")
+            raise errors.InvalidConfig(f"SQL command {command_name} script_type=array must not define script_path.")
         raw_script_paths = item.get("script_paths")
         if not isinstance(raw_script_paths, list):
-            raise RuntimeError(f"SQL command {command_name} script_type=array requires script_paths as a non-empty array.")
+            raise errors.InvalidConfig(f"SQL command {command_name} script_type=array requires script_paths as a non-empty array.")
         script_paths = tuple(str(value).strip() for value in raw_script_paths if str(value).strip())
         if not script_paths:
-            raise RuntimeError(f"SQL command {command_name} script_type=array requires script_paths as a non-empty array.")
+            raise errors.InvalidConfig(f"SQL command {command_name} script_type=array requires script_paths as a non-empty array.")
         return {
             "script_type": script_type,
             "script_path": None,
@@ -398,13 +399,13 @@ def load_sql_script_definition(item: dict[str, Any], *, data_dir: Path) -> dict[
         }
 
     if not raw_script_path:
-        raise RuntimeError(f"SQL command {command_name} script_type=folder requires script_path.")
+        raise errors.InvalidConfig(f"SQL command {command_name} script_type=folder requires script_path.")
     if has_script_paths:
-        raise RuntimeError(f"SQL command {command_name} script_type=folder must not define script_paths.")
+        raise errors.InvalidConfig(f"SQL command {command_name} script_type=folder must not define script_paths.")
     folder_path = resolve_sql_folder(raw_script_path, data_dir=data_dir)
     script_files = tuple(str(path) for path in sorted(folder_path.glob("*.sql"), key=lambda path: path.name))
     if not script_files:
-        raise RuntimeError(f"SQL command {command_name} script_type=folder has no *.sql files in script_path: {raw_script_path}.")
+        raise errors.InvalidConfig(f"SQL command {command_name} script_type=folder has no *.sql files in script_path: {raw_script_path}.")
     return {
         "script_type": script_type,
         "script_path": raw_script_path,
@@ -431,16 +432,16 @@ def load_input_definition(item: dict[str, Any], *, command_name: str) -> dict[st
     """
     input_type = str(item.get("input_type") or "none").strip().lower()
     if input_type not in INPUT_TYPES:
-        raise RuntimeError(
+        raise errors.InvalidConfig(
             f"SQL command {command_name} has unsupported input_type: {input_type or '<missing>'}. "
             f"Expected one of {sorted(INPUT_TYPES)}.")
 
     block = item.get("input") or {}
     if not isinstance(block, dict):
-        raise RuntimeError(f"SQL command {command_name} input must be an object.")
+        raise errors.InvalidConfig(f"SQL command {command_name} input must be an object.")
     if input_type == "none":
         if block:
-            raise RuntimeError(
+            raise errors.InvalidConfig(
                 f"SQL command {command_name} carries an input block but input_type is none, so "
                 "nothing would read it. Set input_type, or remove the block.")
         return {"input_type": input_type, "python_source": None}
@@ -448,7 +449,7 @@ def load_input_definition(item: dict[str, Any], *, command_name: str) -> dict[st
     source = task_input.parse(block, command_name=command_name)
     declared = {str(p.get("name") or "").strip() for p in (item.get("parameters") or [])}
     if source.parameter not in declared:
-        raise RuntimeError(
+        raise errors.InvalidConfig(
             f"SQL command {command_name} binds each batch to @{source.parameter}, which is not in "
             "its parameters. Declare it there with type nvarchar(max): that entry is what writes "
             f"the DECLARE the SQL reads. Declared: {sorted(declared) or 'none'}.")
@@ -553,7 +554,7 @@ def _target_output(item: dict[str, Any]) -> dict[str, str]:
     """
     raw = item.get("output")
     if not isinstance(raw, dict):
-        raise RuntimeError(
+        raise errors.InvalidConfig(
             f"sql_targets.sql_id={item.get('sql_id')} target_no={item.get('target_no')}: "
             f"'output' is required and must be an object. Add one naming what to do with the "
             f"result set, e.g. "
@@ -566,7 +567,7 @@ def _target_output(item: dict[str, Any]) -> dict[str, str]:
     try:
         parsed = parse_output(raw)
     except TaskOutputError as exc:
-        raise RuntimeError(f"sql_targets.sql_id={item.get('sql_id')}: {exc}") from exc
+        raise errors.InvalidConfig(f"sql_targets.sql_id={item.get('sql_id')}: {exc}") from exc
     return {
         "output_format": parsed["format"],
         "output_chat": parsed["telegram_chat"],
@@ -626,4 +627,4 @@ def resolve_sql_folder(folder_name: str, *, data_dir: Path) -> Path:
         resolved = candidate.resolve()
         if resolved.is_dir():
             return resolved
-    raise RuntimeError(f"SQL folder not found or not a folder: {folder_name}")
+    raise errors.InvalidConfig(f"SQL folder not found or not a folder: {folder_name}")

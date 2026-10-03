@@ -23,6 +23,7 @@ know which cells are date-formatted, and those are rendered ISO. Nothing else is
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import base64
 import datetime as _datetime
 import io
@@ -33,8 +34,10 @@ from typing import Any, Iterator
 from xml.etree import ElementTree as ET
 
 
-class XlsxImportError(RuntimeError):
+class XlsxImportError(errors.DbOpsError, RuntimeError):
     """A user-facing failure: not a workbook, no sheet, an unreadable part, an empty header."""
+
+    kind = errors.KIND_REQUEST
 
 
 # The main SpreadsheetML namespace. Every part uses it, and every reader here strips it rather

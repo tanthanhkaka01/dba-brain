@@ -31,6 +31,7 @@ one, so nothing here supplies it.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import json
 from pathlib import Path
 from typing import Any
@@ -45,8 +46,10 @@ from db_ops.lib.json_io import atomic_write_text
 CONFIG_FILENAME = "restore_config.json"
 
 
-class RegistrationError(RuntimeError):
+class RegistrationError(errors.DbOpsError, RuntimeError):
     """The entry cannot be registered as asked. Nothing was written."""
+
+    kind = errors.KIND_REQUEST
 
 
 BACKUP_ADD_USAGE = r"""usage: python -m db_ops.backup_restore.cli backup-add <json>|@<file>|- [--key-base64 ...]
@@ -252,6 +255,30 @@ def _instance_field(root: Path, server_id: str, field: str) -> Any:
     return None
 
 
+def _put_entry(entries: list[Any], id_field: str, entry_id: str,
+               entry: dict[str, Any]) -> list[Any]:
+    """The list with *entry* where the entry of that id was, or at the end when it is new.
+
+    Until 2026-10-03 a replaced entry was removed and appended, so ``replace`` moved it to the end
+    of its list. The order means nothing to the scheduler, but the file's diff after one ``replace``
+    showed an entry removed and an entry added and no way to see what had changed in it - while
+    ``sql-command-add`` and ``sql-target-add`` replaced in place (the 0.26 sheet, section 6). A
+    second entry carrying the same id - a hand-edit - is dropped, as it always was.
+    """
+    result: list[Any] = []
+    placed = False
+    for item in entries:
+        if isinstance(item, dict) and str(item.get(id_field)) == entry_id:
+            if not placed:
+                result.append(entry)
+                placed = True
+            continue
+        result.append(item)
+    if not placed:
+        result.append(entry)
+    return result
+
+
 def add_backup(request: dict[str, Any] | None = None, *,
                data_dir: str | Path | None = None,
                key: str | None = None) -> dict[str, Any]:
@@ -342,10 +369,7 @@ def add_backup(request: dict[str, Any] | None = None, *,
     if env_secrets:
         entry["env_secrets"] = env_secrets
 
-    section["backups"] = [item for item in section["backups"]
-                          if not (isinstance(item, dict)
-                                  and str(item.get("backup_id")) == backup_id)]
-    section["backups"].append(entry)
+    section["backups"] = _put_entry(section["backups"], "backup_id", backup_id, entry)
     _validate(path, document, load_backup_jobs)
 
     written: list[str] = []
@@ -510,10 +534,7 @@ def add_restore(request: dict[str, Any] | None = None, *,
         block[ref_field] = ref
         entry[block_name] = block
 
-    section["restores"] = [item for item in section["restores"]
-                           if not (isinstance(item, dict)
-                                   and str(item.get("restore_id")) == restore_id)]
-    section["restores"].append(entry)
+    section["restores"] = _put_entry(section["restores"], "restore_id", restore_id, entry)
     # Both loaders, because each reads only its own shape: `load_restore_configs` steps over a
     # script-driven entry, so an entry of that shape was checked by nothing. A PostgreSQL restore
     # routed to a notify level no Telegram group defines was written, and from then on

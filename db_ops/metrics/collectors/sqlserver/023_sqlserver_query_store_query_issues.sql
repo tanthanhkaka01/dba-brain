@@ -34,9 +34,10 @@ DECLARE @p_BaselineFromUtc datetime = DATEADD(MINUTE, -@p_UtcOffsetMin, @p_Basel
 -- although that is 43 minutes of CPU and made every caller ten times slower. It needs all three:
 -- the plan now running costs several times the cheapest plan the same query has used, it has run
 -- often enough for that average to mean something, and the CPU it burned recently is material.
+-- The CPU leg is the QUERY's: the recent CPU of all its bad plans together (see query_bad below).
 DECLARE @p_FreqMinExecutions   int   = 20;    -- per plan, recent and baseline alike
 DECLARE @p_FreqWarnCpuRatio    float = 5;     -- recent avg CPU / cheapest other plan's avg CPU
-DECLARE @p_FreqWarnTotalCpuSec float = 300;   -- CPU burned by this plan in the recent rows
+DECLARE @p_FreqWarnTotalCpuSec float = 300;   -- CPU burned by the query's bad plans, recent rows
 DECLARE @p_FreqCritCpuRatio    float = 10;
 DECLARE @p_FreqCritTotalCpuSec float = 1200;
 
@@ -182,20 +183,24 @@ END;
 CLOSE db_cur;
 DEALLOCATE db_cur;
 
--- Baseline for QUERY_PLAN_REGRESSED_FREQUENT. Only a query whose plan burned a material amount
+-- Baseline for QUERY_PLAN_REGRESSED_FREQUENT. Only a query whose plans burned a material amount
 -- of CPU in the rows touched inside the alert window is a candidate, so this second read is a
--- handful of query_ids per database and usually none at all.
+-- handful of query_ids per database and usually none at all. The CPU is the query's, summed over
+-- its plans that ran often enough to judge - the same leg query_bad applies below, so a query whose
+-- bad plans are each under the threshold still gets its baseline read.
 INSERT INTO #qs_cand (database_name, query_id)
-SELECT DISTINCT r.database_name, r.query_id
+SELECT r.database_name, r.query_id
 FROM
 (
-    SELECT database_name, query_id, plan_id
+    SELECT database_name, query_id, plan_id,
+           SUM(avg_cpu_sec * ISNULL(count_executions, 0)) AS recent_total_cpu_sec
     FROM #qs_raw
     WHERE last_execution_time_local >= @p_AlertFromLocal
     GROUP BY database_name, query_id, plan_id
-    HAVING SUM(avg_cpu_sec * ISNULL(count_executions, 0)) >= @p_FreqWarnTotalCpuSec
-       AND SUM(ISNULL(count_executions, 0)) >= @p_FreqMinExecutions
-) AS r;
+    HAVING SUM(ISNULL(count_executions, 0)) >= @p_FreqMinExecutions
+) AS r
+GROUP BY r.database_name, r.query_id
+HAVING SUM(r.recent_total_cpu_sec) >= @p_FreqWarnTotalCpuSec;
 
 DECLARE base_cur CURSOR LOCAL FAST_FORWARD FOR
 SELECT DISTINCT database_name
@@ -277,6 +282,51 @@ recent_agg AS
     WHERE last_execution_time_local >= @p_AlertFromLocal
     GROUP BY database_name, query_id, plan_id
 ),
+-- Each recent plan beside the cheapest OTHER plan of the same query over the baseline window, by
+-- average CPU. Another plan, never this one: a plan compared with its own history has ratio ~1 by
+-- construction.
+recent_vs_best AS
+(
+    SELECT
+        p.*,
+        b.best_avg_cpu_sec,
+        b.best_cpu_plan_id,
+        cpu_ratio = p.recent_avg_cpu_sec / NULLIF(b.best_avg_cpu_sec, 0)
+    FROM recent_agg p
+    OUTER APPLY
+    (
+        SELECT TOP 1
+            best_avg_cpu_sec = bb.avg_cpu_sec,
+            best_cpu_plan_id = bb.plan_id
+        FROM #qs_base bb
+        WHERE bb.database_name = p.database_name
+          AND bb.query_id = p.query_id
+          AND bb.plan_id <> p.plan_id
+          AND bb.executions >= @p_FreqMinExecutions
+          AND bb.avg_cpu_sec > 0
+        ORDER BY bb.avg_cpu_sec ASC
+    ) AS b
+),
+-- QUERY_PLAN_REGRESSED_FREQUENT's CPU leg is the query's, not one plan's. On 2026-10-02 at 07:05 a
+-- statement that had flipped between two bad plans burned 384 s on them (268 + 115) and another
+-- 378 s (262 + 116): every plan under 300 s, so neither query was reported, though each was as
+-- slow for its callers as the one that was. A bad plan here is one run often enough to judge, at
+-- the warning ratio or worse; the recent CPU of a query's bad plans is summed, and the finding is
+-- reported once per query - on its heaviest bad plan, with the sum and the count in the message.
+query_bad AS
+(
+    SELECT
+        database_name,
+        query_id,
+        plan_id,
+        query_bad_plan_count = COUNT(*) OVER (PARTITION BY database_name, query_id),
+        query_bad_cpu_sec = SUM(recent_total_cpu_sec) OVER (PARTITION BY database_name, query_id),
+        bad_rank = ROW_NUMBER() OVER (PARTITION BY database_name, query_id
+                                      ORDER BY recent_total_cpu_sec DESC, plan_id ASC)
+    FROM recent_vs_best
+    WHERE recent_executions >= @p_FreqMinExecutions
+      AND cpu_ratio >= @p_FreqWarnCpuRatio
+),
 query_best AS
 (
     SELECT
@@ -316,9 +366,11 @@ detail AS
         p.recent_executions,
         p.recent_total_cpu_sec,
         p.recent_avg_cpu_sec,
-        b.best_avg_cpu_sec,
-        b.best_cpu_plan_id,
-        cpu_ratio = p.recent_avg_cpu_sec / NULLIF(b.best_avg_cpu_sec, 0),
+        p.best_avg_cpu_sec,
+        p.best_cpu_plan_id,
+        p.cpu_ratio,
+        qb.query_bad_plan_count,
+        qb.query_bad_cpu_sec,
         q.plan_count,
         q.best_logical_reads,
         logical_read_ratio =
@@ -379,10 +431,11 @@ detail AS
                 WHEN p.max_duration_sec >= 1800
                 THEN 'QUERY_LONG_DURATION_OTHER'
 
-                -- small query, worse plan, executed often (see the thresholds at the top)
+                -- small query, worse plan(s), executed often (the thresholds at the top, query_bad)
                 WHEN p.recent_executions >= @p_FreqMinExecutions
-                     AND p.recent_total_cpu_sec >= @p_FreqWarnTotalCpuSec
-                     AND p.recent_avg_cpu_sec / NULLIF(b.best_avg_cpu_sec, 0) >= @p_FreqWarnCpuRatio
+                     AND p.cpu_ratio >= @p_FreqWarnCpuRatio
+                     AND qb.bad_rank = 1
+                     AND qb.query_bad_cpu_sec >= @p_FreqWarnTotalCpuSec
                 THEN 'QUERY_PLAN_REGRESSED_FREQUENT'
 
                 ELSE 'OK'
@@ -438,19 +491,21 @@ detail AS
                 THEN 'WARNING'
 
                 WHEN p.recent_executions >= @p_FreqMinExecutions
-                     AND p.recent_total_cpu_sec >= @p_FreqCritTotalCpuSec
-                     AND p.recent_avg_cpu_sec / NULLIF(b.best_avg_cpu_sec, 0) >= @p_FreqCritCpuRatio
+                     AND p.cpu_ratio >= @p_FreqCritCpuRatio
+                     AND qb.bad_rank = 1
+                     AND qb.query_bad_cpu_sec >= @p_FreqCritTotalCpuSec
                 THEN 'CRITICAL'
 
                 WHEN p.recent_executions >= @p_FreqMinExecutions
-                     AND p.recent_total_cpu_sec >= @p_FreqWarnTotalCpuSec
-                     AND p.recent_avg_cpu_sec / NULLIF(b.best_avg_cpu_sec, 0) >= @p_FreqWarnCpuRatio
+                     AND p.cpu_ratio >= @p_FreqWarnCpuRatio
+                     AND qb.bad_rank = 1
+                     AND qb.query_bad_cpu_sec >= @p_FreqWarnTotalCpuSec
                 THEN 'WARNING'
 
                 ELSE 'OK'
             END
     
-    FROM recent_agg p
+    FROM recent_vs_best p
     JOIN plan_agg h
         ON h.database_name = p.database_name
        AND h.query_id = p.query_id
@@ -458,21 +513,10 @@ detail AS
     JOIN query_best q
         ON q.database_name = p.database_name
        AND q.query_id = p.query_id
-    -- The cheapest OTHER plan of the same query over the baseline window, by average CPU. Another
-    -- plan, never this one: a plan compared with its own history has ratio ~1 by construction.
-    OUTER APPLY
-    (
-        SELECT TOP 1
-            best_avg_cpu_sec = bb.avg_cpu_sec,
-            best_cpu_plan_id = bb.plan_id
-        FROM #qs_base bb
-        WHERE bb.database_name = p.database_name
-          AND bb.query_id = p.query_id
-          AND bb.plan_id <> p.plan_id
-          AND bb.executions >= @p_FreqMinExecutions
-          AND bb.avg_cpu_sec > 0
-        ORDER BY bb.avg_cpu_sec ASC
-    ) AS b
+    LEFT JOIN query_bad qb
+        ON qb.database_name = p.database_name
+       AND qb.query_id = p.query_id
+       AND qb.plan_id = p.plan_id
 ),
 issue_rows AS
 (
@@ -557,6 +601,9 @@ SELECT
         + ', best_avg_cpu_sec=' + ISNULL(CAST(CAST(best_avg_cpu_sec AS decimal(18,6)) AS varchar(40)), 'NULL')
         + ', best_cpu_plan_id=' + ISNULL(CAST(best_cpu_plan_id AS varchar(30)), 'NULL')
         + ', cpu_ratio=' + ISNULL(CAST(CAST(cpu_ratio AS decimal(18,2)) AS varchar(40)), 'NULL')
+        -- The query's bad plans together - what the frequency finding is judged on.
+        + ', query_bad_plan_count=' + ISNULL(CAST(query_bad_plan_count AS varchar(20)), '0')
+        + ', query_bad_cpu_sec=' + ISNULL(CAST(CAST(query_bad_cpu_sec AS decimal(18,2)) AS varchar(40)), 'NULL')
         + ', cpu_baseline_window=last_7_days'
         -- Both windows are printed because a reader who sees a 6-hour baseline next to a
         -- 30-minute alert window can tell "this just happened" from "this is what it is

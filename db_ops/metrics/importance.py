@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from db_ops.lib import errors
 import json
 import warnings
 from pathlib import Path
@@ -24,18 +25,18 @@ def load_metric_importance_overrides(
     with overrides_path.open("r", encoding="utf-8-sig") as file:
         data = json.load(file)
     if not isinstance(data, dict):
-        raise RuntimeError(f"metric_importance_overrides.json root must be an object: {overrides_path}")
+        raise errors.InvalidConfig(f"metric_importance_overrides.json root must be an object: {overrides_path}")
 
     scale = data.get("scale") or {}
     if int(scale.get("min", -1)) != 0 or int(scale.get("max", -1)) != 5:
-        raise RuntimeError("metric_importance_overrides.json scale must have min=0 and max=5.")
+        raise errors.InvalidConfig("metric_importance_overrides.json scale must have min=0 and max=5.")
 
     for item in data.get("instance_overrides", []) or []:
         if not isinstance(item, dict):
             continue
         importance = item.get("importance") or {}
         if not isinstance(importance, dict):
-            raise RuntimeError("instance_overrides[].importance must be an object keyed by metric_code.")
+            raise errors.InvalidConfig("instance_overrides[].importance must be an object keyed by metric_code.")
         for metric_code, value in importance.items():
             if known_metric_codes is not None and str(metric_code) not in known_metric_codes:
                 warnings.warn(
@@ -47,7 +48,7 @@ def load_metric_importance_overrides(
                 )
             int_value = int(value)
             if not 0 <= int_value <= 5:
-                raise RuntimeError(f"Override importance for {metric_code} must be from 0 to 5.")
+                raise errors.InvalidConfig(f"Override importance for {metric_code} must be from 0 to 5.")
     return data
 
 

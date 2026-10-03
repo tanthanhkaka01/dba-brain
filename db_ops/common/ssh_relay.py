@@ -19,6 +19,7 @@ The rules are ``relay-file``'s, and each one is a failure already had:
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import shlex
 from pathlib import PurePosixPath
 from typing import Any
@@ -29,7 +30,7 @@ PARTIAL_SUFFIX = ".dbops_partial"
 _RELAY_CHUNK = 1 << 18
 
 
-class RelayError(RuntimeError):
+class RelayError(errors.OperationFailed):
     """The stream could not be completed, or what arrived is not what was sent."""
 
 

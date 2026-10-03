@@ -31,6 +31,8 @@ from db_ops.sql_tasks import runner
 from test_sql_task_claims import (RecordingSqlRunStore, inventory_and_credentials, sql_command,
                                   sql_target)
 
+from conftest import patch_sql_runner
+
 CANNOT_OPEN = ('[42000] [Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Cannot open database '
                '"APPDB_PROD" requested by the login. The login failed. (4060) (SQLDriverConnect)')
 
@@ -126,8 +128,8 @@ def _run(tmp_path, monkeypatch, *, target, inventory=None, execute=None, listing
     data_dir = tmp_path / "data"
     (data_dir / "sql").mkdir(parents=True)
     (data_dir / "sql" / "task.sql").write_text("EXEC dbo.engine;", encoding="utf-8")
-    monkeypatch.setattr(runner, "log_event", lambda *args, **kwargs: None)
-    monkeypatch.setattr(runner, "execute_sql", execute or (lambda **_: {"row_count": 0, "result_sets": []}))
+    patch_sql_runner(monkeypatch, "log_event", lambda *args, **kwargs: None)
+    patch_sql_runner(monkeypatch, "execute_sql", execute or (lambda **_: {"row_count": 0, "result_sets": []}))
     asked = []
 
     def run_allowing_failure(command, request):
@@ -136,7 +138,7 @@ def _run(tmp_path, monkeypatch, *, target, inventory=None, execute=None, listing
 
     monkeypatch.setattr(runner.common_cli, "run_allowing_failure", run_allowing_failure)
     sent = []
-    monkeypatch.setattr(runner, "enqueue_sql_task_message", lambda **kwargs: sent.append(kwargs))
+    patch_sql_runner(monkeypatch, "enqueue_sql_task_message", lambda **kwargs: sent.append(kwargs))
     store = RecordingSqlRunStore()
     default_inventory, credentials = inventory_and_credentials()
     runner.run_one_sql_task(
@@ -204,7 +206,7 @@ def test_sql_server_messages_carry_no_service_name(tmp_path, monkeypatch):
 
 def test_the_telegram_block_shows_the_database_not_the_service_on_sql_server(monkeypatch):
     queued = []
-    monkeypatch.setattr(runner, "queue_message", lambda payload, **_: queued.append(payload))
+    patch_sql_runner(monkeypatch, "queue_message", lambda payload, **_: queued.append(payload))
     rule = runner.NotifyRule(enabled=True, telegram_chat="sql", chat_id="-1")
     target = dataclasses.replace(sql_target(database_name=None), service_name="APPDB-PROD")
 

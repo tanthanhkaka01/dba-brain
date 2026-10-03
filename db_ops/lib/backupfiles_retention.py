@@ -36,6 +36,7 @@ are not the same fact, and only one of them is a reason to delete something.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 from datetime import datetime, timedelta, timezone
 from typing import Any
 # Re-exported: the vocabulary itself lives in db_ops/lib/backup_kinds.py, once.
@@ -58,7 +59,7 @@ KEEP = "keep"
 OBSOLETE = "obsolete"
 
 
-class RetentionError(ValueError):
+class RetentionError(errors.ConfigError):
     """The retention plan could not be produced."""
 
 

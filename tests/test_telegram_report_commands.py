@@ -1,7 +1,7 @@
 import json
 import sqlite3
 import subprocess
-from conftest import shipped_config
+from conftest import shipped_config, patch_telegram
 
 #: Captured before any stub replaces it. Queueing a reply goes through the common CLI now
 #: and shares this module's subprocess.run, so the stubs below let those calls through to
@@ -408,12 +408,12 @@ def test_cli_result_file_failure_queues_failure_not_completed(monkeypatch, tmp_p
         "raw_json": json.dumps({"from": {"id": 100, "username": "admin"}}),
     }
     monkeypatch.setenv("DB_OPS_SECRET_KEY", "test-passphrase")
-    monkeypatch.setattr(command_processor, "run_configured_cli_command", lambda **_kwargs: {"stdout": "ok"})
+    patch_telegram(monkeypatch, "run_configured_cli_command", lambda **_kwargs: {"stdout": "ok"})
 
     def fail_create_file(**_kwargs):
         raise command_processor.TelegramCommandError("Result column not found in SQL run output: ResultJson", exit_code=1)
 
-    monkeypatch.setattr(command_processor, "create_sql_run_result_file", fail_create_file)
+    patch_telegram(monkeypatch, "create_sql_run_result_file", fail_create_file)
 
     with pytest.raises(command_processor.TelegramCommandError):
         command_processor.execute_configured_cli_command(
@@ -436,7 +436,7 @@ def test_cli_result_file_failure_queues_failure_not_completed(monkeypatch, tmp_p
 
 
 def test_sql_run_result_export_creates_safe_timestamp_folder(tmp_path, monkeypatch):
-    monkeypatch.setattr(command_processor, "TOOL_ROOT", tmp_path)
+    patch_telegram(monkeypatch, "TOOL_ROOT", tmp_path)
     result_json = json.dumps(
         {
             "files": [
@@ -479,7 +479,7 @@ def test_sql_run_result_export_creates_safe_timestamp_folder(tmp_path, monkeypat
 
 
 def test_sql_run_result_export_reports_folder_creation_failure(tmp_path, monkeypatch):
-    monkeypatch.setattr(command_processor, "TOOL_ROOT", tmp_path)
+    patch_telegram(monkeypatch, "TOOL_ROOT", tmp_path)
     result_json = json.dumps(
         {
             "files": [
@@ -511,7 +511,7 @@ def test_sql_run_result_export_reports_folder_creation_failure(tmp_path, monkeyp
 
 
 def test_sql_run_result_export_keeps_raw_file_when_json_validation_fails(tmp_path, monkeypatch):
-    monkeypatch.setattr(command_processor, "TOOL_ROOT", tmp_path)
+    patch_telegram(monkeypatch, "TOOL_ROOT", tmp_path)
     result_json = json.dumps(
         {
             "files": [
@@ -650,7 +650,7 @@ def test_spbot_restore_uses_generic_background_cli_checker(tmp_path, monkeypatch
         "restore-workflow completed status=SUCCESS",
         encoding="utf-8",
     )
-    monkeypatch.setattr(command_processor, "_is_pid_alive", lambda _pid: False)
+    patch_telegram(monkeypatch, "_is_pid_alive", lambda _pid: False)
     monkeypatch.setattr(command_processor.sys, "platform", "linux")
 
     check_result = check_cli_background_tasks(sqlite_path=sqlite_path)

@@ -24,6 +24,7 @@ Three things it does that a hand-edit does not:
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import json
 from pathlib import Path
 from typing import Any
@@ -34,8 +35,10 @@ from db_ops.lib.json_io import atomic_write_text
 BOT_CONFIG_FILENAME = "bot_telegram.json"
 
 
-class UseBotError(RuntimeError):
+class UseBotError(errors.DbOpsError, RuntimeError):
     """The node could not be pointed at that bot. Nothing was written."""
+
+    kind = errors.KIND_REQUEST
 
 
 USAGE = """usage: python -m db_ops.telegram.cli use-bot --ref <SECRET_REF> [--dry-run]

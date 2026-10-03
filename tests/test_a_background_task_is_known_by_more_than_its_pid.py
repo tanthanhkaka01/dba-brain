@@ -25,6 +25,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import patch_telegram
+
 from db_ops.db import DbOpsStore
 from db_ops.lib.process_liveness import is_pid_alive, process_start_marker
 from db_ops.telegram import command_processor
@@ -51,7 +53,7 @@ def _task(tmp_path: Path, *, pid: int, started: str | None, age_seconds: int = 0
 @pytest.fixture
 def kills(monkeypatch):
     stopped: list[int] = []
-    monkeypatch.setattr(command_processor, "_stop_task_tree", lambda pid, recorded=None: stopped.append(pid))
+    patch_telegram(monkeypatch, "_stop_task_tree", lambda pid, recorded=None: stopped.append(pid))
     monkeypatch.setattr(command_processor.os, "kill",
                         lambda *a: pytest.fail("a bare os.kill on a task PID"))
     return stopped
@@ -60,8 +62,8 @@ def kills(monkeypatch):
 def test_a_pid_now_held_by_another_process_is_never_killed(tmp_path, monkeypatch, kills):
     """Same number, different start time: a stranger. Past the timeout it used to be killed."""
     sqlite_path, _ = _task(tmp_path, pid=4242, started="111", age_seconds=600, timeout=60)
-    monkeypatch.setattr(command_processor, "_is_pid_alive", lambda _pid: True)
-    monkeypatch.setattr(command_processor, "process_start_marker", lambda _pid: "999")
+    patch_telegram(monkeypatch, "_is_pid_alive", lambda _pid: True)
+    patch_telegram(monkeypatch, "process_start_marker", lambda _pid: "999")
 
     command_processor.check_cli_background_tasks(sqlite_path=sqlite_path)
 
@@ -71,8 +73,8 @@ def test_a_pid_now_held_by_another_process_is_never_killed(tmp_path, monkeypatch
 def test_a_task_that_wrote_its_exit_code_is_finished_whoever_holds_the_pid(tmp_path, monkeypatch, kills):
     sqlite_path, stdout_path = _task(tmp_path, pid=4242, started="111", age_seconds=600, timeout=60)
     Path(str(stdout_path) + ".rc").write_text("0", encoding="utf-8")
-    monkeypatch.setattr(command_processor, "_is_pid_alive", lambda _pid: True)
-    monkeypatch.setattr(command_processor, "process_start_marker", lambda _pid: "111")
+    patch_telegram(monkeypatch, "_is_pid_alive", lambda _pid: True)
+    patch_telegram(monkeypatch, "process_start_marker", lambda _pid: "111")
 
     counts = command_processor.check_cli_background_tasks(sqlite_path=sqlite_path)
 
@@ -82,8 +84,8 @@ def test_a_task_that_wrote_its_exit_code_is_finished_whoever_holds_the_pid(tmp_p
 
 def test_our_own_task_past_its_timeout_is_stopped_as_a_tree(tmp_path, monkeypatch, kills):
     sqlite_path, _ = _task(tmp_path, pid=4242, started="111", age_seconds=600, timeout=60)
-    monkeypatch.setattr(command_processor, "_is_pid_alive", lambda _pid: True)
-    monkeypatch.setattr(command_processor, "process_start_marker", lambda _pid: "111")
+    patch_telegram(monkeypatch, "_is_pid_alive", lambda _pid: True)
+    patch_telegram(monkeypatch, "process_start_marker", lambda _pid: "111")
 
     counts = command_processor.check_cli_background_tasks(sqlite_path=sqlite_path)
 

@@ -16,11 +16,12 @@ linked server that cannot be recreated on this network should not cost the login
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import re
 from typing import Any
 
 
-class MetadataReplayError(ValueError):
+class MetadataReplayError(errors.RequestError):
     """The replay could not be attempted."""
 
 

@@ -46,6 +46,7 @@ repository has already had:
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import os
 import shlex
 import time
@@ -78,7 +79,7 @@ __all__ = [
 ]
 
 
-class FileTransferError(RuntimeError):
+class FileTransferError(errors.OperationFailed):
     """A user-facing failure: unknown target, missing source, refused overwrite, short copy."""
 
 

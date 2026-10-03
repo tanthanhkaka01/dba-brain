@@ -32,6 +32,7 @@ from db_ops.telegram.send_queue import (
     send_pending_messages,
 )
 from db_ops.telegram import bot_info, get_updates, send_message
+from db_ops.telegram.command_permissions import set_command_level
 from db_ops.telegram.updates import add_group, set_group_level, set_user_level
 from db_ops.telegram.updates import fetch_and_save_updates
 from db_ops.telegram.workflow import run_bot_workflow
@@ -126,6 +127,26 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
              "daemon starts. Without this flag an unknown name is refused, because it is usually "
              "a typo and a level is a permission.")
     user_level_parser.set_defaults(telegram_function=set_user_level, pending=False)
+
+    command_level_parser = subparsers.add_parser(
+        "command-level",
+        help="Give a bot command the level that decides who may run it (command_type in "
+             "telegram_support_commands.json). A node's file is used as written, so a node filled "
+             "from another node's bundle keeps that node's levels until this is run.")
+    command_level_parser.add_argument("--bot-command", default="", dest="bot_command",
+                                      help="The command's name, with or without the leading /, "
+                                           "e.g. spbot_add_sql. No substring match: a level is a "
+                                           "permission. May be left out with --shipped.")
+    command_level_parser.add_argument("--level", type=int, default=None,
+                                      help="What the user and the chat must be cleared to. 0 is "
+                                           "the public tier; -1 switches the command off.")
+    command_level_parser.add_argument("--shipped", action="store_true",
+                                      help="Take this version's own level instead of a typed one - "
+                                           "only ever upward. Without --bot-command: every command "
+                                           "the file holds below the shipped level.")
+    command_level_parser.add_argument("--dry-run", action="store_true",
+                                      help="Print what would change, and write nothing.")
+    command_level_parser.set_defaults(telegram_function=set_command_level)
 
     updates_parser = subparsers.add_parser("get-updates", help="Call Telegram getUpdates.")
     updates_parser.add_argument("--offset", type=int, default=None, help="Optional update offset.")
@@ -351,6 +372,14 @@ def main(argv: list[str]) -> int:
             except UseBotError as exc:
                 print(f"ERROR: {exc}", file=sys.stderr)
                 return 1
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
+
+        if args.command == "command-level":
+            # Ahead of the token check, as `use-bot` is: who may run a command is decided before a
+            # node has a bot at all, and it asks Telegram nothing.
+            result = call_telegram_function(telegram_function=args.telegram_function, args=args,
+                                            config=config, config_path=config_path)
             print(json.dumps(result, ensure_ascii=False, indent=2))
             return 0
 

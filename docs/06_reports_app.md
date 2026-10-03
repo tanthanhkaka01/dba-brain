@@ -6,7 +6,7 @@ The Reports App builds manual or scheduled reports from collected metric data an
 
 ## Package / Files
 
-- `db_ops/reports/`
+- `db_ops/reports/` - `server-metrics.html` is built by `server_report.py` (the payload, the page, the publish) over four layers split out of it on 2026-10-03: `server_series.py` (the catalog, one server's series, freshness - imports nothing else of the page), `server_health.py` (areas, problems, timeline, health), `server_sections.py` (linked servers, volumes, capacity, Query Store, databases, jobs, access) and `server_oracle.py` (tablespaces and the Oracle sections). `server_report` re-exports every name, so `server_report.build_volumes` and the other names below still resolve; the catalog's caches are `server_series`'s
 - `data/reports_config.json`
 - the runtime store declared in `data/store_config.json` (PostgreSQL in this tree; `runtime/db_ops.sqlite` when the backend is `sqlite`)
 
@@ -242,6 +242,40 @@ of reachable only by whoever remembers the file naming rule. Only servers whose 
 written this run, or already on disk, are offered — a link to a 404 looks like it should work. The
 picker is HTML only: the stored copy feeds Telegram, where a fleet-sized nav block would eat the
 4096-character budget.
+
+**The page is built like the other report pages** (`lib.page_style`, 2026-10-02): a masthead with
+the server and its engine (*SQL Server · index usage*, *Oracle · index inventory*), the totals as
+stat cards - a disabled or unusable index red, drop candidates, fragmented indexes and stale
+statistics amber, a zero never coloured - then the picker, the restart caveat as a banner, and every
+table in a bordered card. The report text is unchanged (it is the Telegram body too); only its first
+line, the title, is not repeated under the masthead.
+
+**Every report page takes the whole window** (2026-10-03) - the model's *fluid* layout
+(`container-fluid`), where each page had capped its content at 1180px and centred it. A table
+that still cannot fit scrolls inside its own box (`.tbl-scroll`, the model's `table-responsive`),
+and two cells that used to force that were let wrap: an index's name on this page - one unbroken
+`database.schema.table.index`, up to 125 characters beside fifteen more columns, which made the
+table 1898px wide in a 1134px box - and the *Lowest disk* cell of the inventory's fleet matrix.
+Measured in a browser at 1280, 1366 and 1920 pixels on the 0.26 node's pages: no table of the
+inventory, index or SLA page scrolls sideways.
+
+**The tables of one index page line up, and name an index one way.** The name column takes the same
+share of every table (34%): a table spreads its spare width by what its columns hold, so
+*Fragmented* (eight columns) gave its names 780px and *All indexes* (sixteen) 640px on one screen,
+and the columns after the name began in two places. On a window too narrow for that share the
+sixteen-column table takes what it needs and the name gives way. The name is set in the face and
+size of the other cells. And *Fragmented* writes `database.schema.table.index` as every other table
+does - the fragmentation collector's own item is `database\schema.table.index`, so a name copied
+from one table was not found by searching the other; only what is shown changes, the stored item is
+the series' key.
+
+**Both pickers - this one and `server-metrics.html`'s - show one row per engine** (SQL Server,
+Oracle, PostgreSQL, Host only, then anything else), each labelled with its count, in the order
+`lib.engine_sections` gives (the operator, 2026-10-02). A flat row of 77 buttons mixed SQL Server
+instances, Oracle and PostgreSQL databases and bare hosts, so "the Oracle servers" was a search. On
+`server-metrics.html` the section comes from the inventory's `db_type` (`osOnly` is Host only) and a
+target with nothing collected sorts to the end of its row; on the index pages an entry is Oracle or
+PostgreSQL by the rows it holds, and SQL Server otherwise.
 
 
 ## Runtime Tables
@@ -589,6 +623,22 @@ That is a per-page scan of the whole pool joined to `sys.allocation_units` and `
 on a 95 GB pool, roughly 12 million rows — so it cannot become a 15-minute collector. Measured
 composition belongs in a deliberately-run command or a low-frequency job during a quiet window,
 which is a decision about production load rather than a reporting change, and is open.
+
+## Query Store findings — what ran badly in the last day (on `server-metrics.html`)
+
+Above the coverage section: `QUERY_STORE_QUERY_ISSUES` over the last `QUERY_STORE_FINDINGS_HOURS`
+(24), **one row per query plan** - *NOW* when the newest collection still reports it, *cleared*
+otherwise - with its first and last report, how many runs reported it, its worst severity, and the
+peaks over the day (CPU per run, the ratio to the cheapest other plan, duration, reads), plus the
+average CPU now beside what the other plan averaged (`build_query_store_findings`).
+
+It is a table because the charts could not carry it (2026-10-02, the plan flip of 03:00-13:28 on
+one production database, simulated through the page builders): the metric's `metric_item` is the
+*kind* of finding, so three regressed queries in one run were one series showing one query's
+message; a kind seen for the first time had fewer than `MIN_POINTS` samples and was not drawn while
+the fleet page already showed a WARNING card; and a regression that cleared left nothing on the
+page. A day is kept at the operator's word, so the morning after shows what happened overnight.
+Nothing about alerting changes - the alert path reads the same rows as before.
 
 ## Query Store — where a slowdown can still be investigated (on `server-metrics.html`)
 
@@ -1042,7 +1092,12 @@ the server, which hides every late one behind it. `MetricStore.fetch_metric_fres
 `last_attempt` / `last_success` / current error per `(server, metric_code)`;
 `server_report.build_freshness` turns that into `OK` / `LATE` / `FAILED` against the cadence in
 `data/metric_definitions.json`, plus `notCollected` for catalog metrics with no evidence at all.
+A metric is expected of an engine only through a variant the catalog does not mark
+`"supported": false` - counting those made the Oracle page read *26 of 66* and the PostgreSQL one
+*22 of 66*, forty SQL Server-only metrics "not collected" (2026-10-02).
 A health area whose own metric is LATE or FAILED reports UNKNOWN, not the last value that worked.
+The Backup area reads every engine's backup-result code (`backup_policy.BACKUP_LAST_RESULT_CODES`);
+fed `BACKUP_LAST_RESULT` alone, a PostgreSQL server read "not collected" over collected backups.
 
 A *success* is decided by `error_type`, not by status: `CHECK_FAILED` means the collector ran and
 did not like the answer, everything else in `event_policy.COLLECTOR_FAILURE_ERROR_TYPES` means it
@@ -1053,6 +1108,16 @@ cannot tell the two apart.
 (`{code, items, exclude, units}`) in priority order, and the tile picks by
 `(severity, selector priority, value)`. Comparing raw values first is what let disk read
 throughput in KB/s decide an area measured in percent, and SQL memory % stand in for CPU.
+
+**A database in a container reads its container's CPU and memory (2026-10-03).** It has no host
+login, so no `OS_*` collector runs for it, and its CPU and Memory tiles read *not collected* - the
+0.26 node's PostgreSQL 5433 did - while `DOCKER_CONTAINER_STATS` collected the container's own CPU
+and memory every five minutes under the same target. That collector names items after the
+container (`db_ops_store:cpu`), so a selector can match by `item_suffix` (`:cpu`, `:memory`), and
+both areas end with it: a target with OS or SQL Server readings shows those, a container target
+shows its container's. The container's CPU is percent of one core (200% is two cores busy) and
+nothing judges it; its memory is percent of the container's limit, WARNING at 90%. A container
+problem carries its own action - the docker host, `docker ps -a`, `docker logs` - not the CPU note.
 
 **Backup is judged per database against a policy**, never from the newest backup evidence on the
 instance — see `data/backup_policy.json` and `db_ops/lib/backup_policy.py`. Each database gets

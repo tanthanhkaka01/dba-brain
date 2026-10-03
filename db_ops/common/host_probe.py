@@ -31,6 +31,7 @@ box itself was reachable.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import socket
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -51,7 +52,7 @@ __all__ = [
 ]
 
 
-class HostProbeError(RuntimeError):
+class HostProbeError(errors.OperationFailed):
     """The probe could not be set up — a bad request or an unknown target."""
 
 

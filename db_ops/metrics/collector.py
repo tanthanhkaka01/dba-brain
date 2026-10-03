@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+from db_ops.lib import errors
 from db_ops.lib.coerce import as_optional_int as _optional_int, as_text
 from db_ops.lib.text_format import format_utc as _format_utc  # noqa: F401 - one definition, see that module
 
@@ -40,11 +42,13 @@ SUPPORTED_CMD_PLATFORMS = {"windows", "linux"}
 SUPPORTED_RESULT_STATUSES = {"OK", "WARN", "WARNING", "CRITICAL", "UNKNOWN", "ERROR", "NO_DATA", "LOGGING"}
 
 
-class UnsupportedCollectorType(RuntimeError):
+class UnsupportedCollectorType(errors.DbOpsError, RuntimeError):
+    kind = errors.KIND_CONFIG
     pass
 
 
-class UnsupportedExecutionMethod(RuntimeError):
+class UnsupportedExecutionMethod(errors.DbOpsError, RuntimeError):
+    kind = errors.KIND_CONFIG
     pass
 
 
@@ -241,7 +245,7 @@ def collect_metrics(
     if db_type:
         definitions = [item for item in definitions if _metric_supports_db_type(item, db_type.lower(), include_unsupported=True)]
     if metric_code and not definitions:
-        raise RuntimeError(f"metric_code not found or inactive: {metric_code}")
+        raise errors.InvalidRequest(f"metric_code not found or inactive: {metric_code}")
 
     overrides = load_metric_importance_overrides(
         DEFAULT_OVERRIDES_PATH,
@@ -523,7 +527,7 @@ def _results(
                                collector_failed=True, **kwargs)]
 
 
-class MetricCommandError(RuntimeError):
+class MetricCommandError(errors.OperationFailed):
     def __init__(
         self,
         message: str,
@@ -553,7 +557,7 @@ def _run_sql_file(*, metric: MetricDefinition, target: MetricTarget, secrets: di
 def _prepare_sql_file(*, metric: MetricDefinition, target: MetricTarget, secrets: dict[str, str]) -> Prepared:
     path = _resolve_metric_file_path(metric, target)
     if path is None:
-        raise RuntimeError(f"Metric SQL path is not resolved: {metric.metric_code}")
+        raise errors.InvalidConfig(f"Metric SQL path is not resolved: {metric.metric_code}")
     sql_text = Path(path).read_text(encoding="utf-8-sig")
     sql = prepare_sql(
         target=target,
@@ -623,10 +627,10 @@ def _prepare_docker_metric(*, metric: MetricDefinition, target: MetricTarget, se
     script + JSON contract as the cmd/OS collectors, so the logic is a visible/editable asset."""
     container = str(target.container_name or "").strip()
     if not container:
-        raise RuntimeError(f"No container_name configured for docker metric {metric.metric_code} on {target.target_id}.")
+        raise errors.NotConfigured(f"No container_name configured for docker metric {metric.metric_code} on {target.target_id}.")
     path = _resolve_metric_file_path(metric, target)
     if path is None:
-        raise RuntimeError(f"Docker metric script is not resolved: {metric.metric_code}")
+        raise errors.InvalidConfig(f"Docker metric script is not resolved: {metric.metric_code}")
     collector_env = {
         **_collector_env(metric=metric, target=target, secrets=secrets),
         "DOCKER_CONTAINER": container,
@@ -648,14 +652,14 @@ def _run_command_file(*, metric: MetricDefinition, target: MetricTarget, secrets
 def _prepare_command_file(*, metric: MetricDefinition, target: MetricTarget, secrets: dict[str, str]) -> Prepared:
     path = _resolve_metric_file_path(metric, target)
     if path is None:
-        raise RuntimeError(f"Metric command path is not resolved: {metric.metric_code}")
+        raise errors.InvalidConfig(f"Metric command path is not resolved: {metric.metric_code}")
     cmd_access = target.cmd_access or {}
     if not bool(cmd_access.get("enabled", False)):
-        raise RuntimeError(f"Command access is not enabled for target: {target.target_id}")
+        raise errors.NotConfigured(f"Command access is not enabled for target: {target.target_id}")
     # A config error recorded at load time (bad method, missing credential): report it here so
     # it lands as this target's failing metric rather than having aborted the whole scan.
     if cmd_access.get("error"):
-        raise RuntimeError(str(cmd_access["error"]))
+        raise errors.InvalidConfig(str(cmd_access["error"]))
     method = str(cmd_access.get("method") or "").strip().lower()
     collector_env = _collector_env(metric=metric, target=target, secrets=secrets)
     if method == "local":
@@ -719,7 +723,7 @@ def _collector_env(
             if not name or value in (None, ""):
                 continue
             if sensitive_env_name(name):
-                raise RuntimeError(
+                raise errors.InvalidConfig(
                     f"collector_env must not carry secrets: {name} ({target.target_id}). "
                     "Use env_secrets, which takes a ref into the encrypted store instead of a value."
                 )
@@ -735,7 +739,7 @@ def _collector_env(
             if not value:
                 # Fail loudly rather than run the script without it: a validation that silently
                 # skips decryption is exactly the false CRITICAL this feature exists to end.
-                raise RuntimeError(
+                raise errors.NotConfigured(
                     f"{metric.metric_code} on {target.target_id}: env_secrets maps {name} to secret "
                     f"ref '{ref_name}', which is not in the secret store. Add it, or pass "
                     "--key/--key-base64 so the store can be read."
@@ -1049,10 +1053,10 @@ def _validate_normalized_rows(rows: list[dict[str, Any]], *, context: str) -> No
     for index, row in enumerate(rows, start=1):
         missing = [field for field in NORMALIZED_RESULT_FIELDS if field not in row]
         if missing:
-            raise RuntimeError(f"{context} row {index} missing required field(s): {', '.join(missing)}.")
+            raise errors.OperationFailed(f"{context} row {index} missing required field(s): {', '.join(missing)}.")
         status = str(row.get("status") or "").strip().upper()
         if status not in SUPPORTED_RESULT_STATUSES:
-            raise RuntimeError(f"{context} row {index} has unsupported status: {status or '<missing>'}.")
+            raise errors.OperationFailed(f"{context} row {index} has unsupported status: {status or '<missing>'}.")
 
 
 # Progress lines are the only record of a pass in the daemon log, and several server workers write
@@ -1173,14 +1177,14 @@ def _metric_disabled_by_collector_type(metric: MetricDefinition, target: MetricT
     metrics_cfg = target.metrics_config if isinstance(target.metrics_config, dict) else {}
     disabled = metrics_cfg.get("disabled_collector_types") or []
     if not isinstance(disabled, list):
-        raise RuntimeError(
+        raise errors.InvalidConfig(
             f"metrics.disabled_collector_types must be a list for {target.target_id}, "
             f"e.g. [\"cmd\"]."
         )
     normalized = {str(item or "").strip().lower() for item in disabled}
     unknown = normalized - set(SUPPORTED_COLLECTOR_TYPES_FOR_TARGET)
     if unknown:
-        raise RuntimeError(
+        raise errors.InvalidConfig(
             f"metrics.disabled_collector_types has unknown value(s) {sorted(unknown)} for "
             f"{target.target_id}; supported: {list(SUPPORTED_COLLECTOR_TYPES_FOR_TARGET)}."
         )
@@ -1427,13 +1431,13 @@ def _resolve_metric_file_path(metric: MetricDefinition, target: MetricTarget) ->
             # configured and working, so the reader's attention is on that block — and `platform`
             # is not in it. It belongs on the target itself, because it describes the machine
             # rather than the way in.
-            raise RuntimeError(
+            raise errors.InvalidConfig(
                 f"Target platform is required for cmd metric: {target.target_id}. "
                 f"Set \"platform\": \"linux\" or \"windows\" on the db instance (not inside "
                 f"cmd_access), or an \"os\" field it can be inferred from."
             )
         if profile.platform not in SUPPORTED_CMD_PLATFORMS:
-            raise RuntimeError(f"Unsupported target platform for cmd metric: {profile.platform}")
+            raise errors.InvalidConfig(f"Unsupported target platform for cmd metric: {profile.platform}")
         variants = candidate_variants(metric.variants, profile, match_platform=True)
     else:
         variants = candidate_variants(metric.variants, profile)

@@ -40,6 +40,14 @@ restore moves to, and `sys.dm_os_volume_stats` for the free space of the volume 
 It is asked of the instance because the path is the instance's - in a container it is not a path on
 the host. A drill run again over its own last restore therefore needs only what the database grew by.
 
+**A Linux instance names no mount point.** A Windows instance lists each volume with its mount point
+and the data path is matched to the longest one. SQL Server on Linux answers the free bytes with
+`volume_mount_point` NULL (read on the lab's SQL Server 2025, 2026-10-03), so matched that way the
+free space was never read and every measured restore onto a Linux target was *could not be measured*
+- until 0.26.0 took the volume, there, from a file the instance already keeps in the folder the
+restore writes to. On that lab the batch now answers 146.8 GiB free on `/var/opt/mssql/data/`. A
+folder that holds no file of the instance is still unread: which volume it is on cannot be told.
+
 ```
 restore-db restore_id=DRILL database=Payroll_Main restore room: 366.6 GiB of database files to
   create, x2 = 733.2 GiB needed, 394.0 GiB free - SHORT BY 339.2 GiB on /var/opt/mssql
@@ -142,10 +150,28 @@ and still how old a staged FULL the restore step takes - so keep it reaching the
 
 **`copy_selection` chooses which of the two the copy takes** (the operator, 2026-10-01), on the
 `backup_restore` block and, overriding it, on a restore entry: `"chain"` (the default) or
-`"window"` - every file of `copy_recent_hours`, as before 0.26.0, for a target that must hold every
-restore point of the range and has the room. The space check counts whichever list is copied, so a
-`window` entry that will not fit is refused before the first byte. Any other value is refused when
-the configuration is read (`config.COPY_SELECTIONS`).
+`"window"` - for a target that must hold every restore point of the range and has the room. The
+space check counts whichever list is copied, so a `window` entry that will not fit is refused before
+the first byte. Any other value is refused when the configuration is read (`config.COPY_SELECTIONS`).
+
+**Every engine, both ways to a target, the same two choices (2026-10-03, the operator: *check window
+and chain for SQL Server, PostgreSQL and Oracle - all three, both kinds of copy*).** Until then only
+the share-driven SQL Server restore read `copy_selection`; a copy to another machine ignored it -
+PostgreSQL and Oracle always took their chain, SQL Server the whole directory.
+
+| | `chain` | `window` |
+| --- | --- | --- |
+| SQL Server | each database's newest FULL, its newest DIFF, the LOGs after them, and `_cert/` - from the share listing, or (to another machine) from `<database>/FULL|DIFF|LOG/` and the time in each name | the chain **and** every file written in `copy_recent_hours` |
+| PostgreSQL | the newest `base/<stamp>_FULL`, the `_INCR`s after it, `wal/` | the chain and every file of the window |
+| Oracle | the pieces RMAN names for the newest level 0 onward | the chain and every piece of the window |
+| a point in time | everything, in either mode | everything |
+
+A window never holds fewer backups than the chain: a window shorter than the FULL interval still
+stages the FULL the restore applies (on the share copy too, since the same day - it took the window
+alone). A SQL Server database with no FULL, or a layout with no `FULL` / `DIFF` / `LOG` folders, is
+copied whole to another machine, by its window from a share. `copy_recent_hours: 0` with `window`
+is the whole directory. Each cell is a test that names the files:
+`tests/test_every_engine_copies_its_chain_or_its_window.py`.
 
 **The free space is read where the staged files will land, even before that folder exists.** The
 copy makes the staging folder, and it runs after this check - so on a target never restored to,
@@ -156,7 +182,7 @@ space*.
 
 ## Package / Files
 
-- `db_ops/backup_restore/`
+- `db_ops/backup_restore/` - the SQL Server share-driven restore is `restore_database.py` (the `run_restore_*` entry points, the plan, the per-database run) over four modules split out of it on 2026-10-03: `restore_base.py` (the candidate and how a step is logged), `restore_find.py` (which FULL / DIFF / LOG files a restore needs, latest or to a moment, on a share or a Linux host), `restore_sql.py` (recovery, recovery model, CHECKDB, the composed RESTORE a dry run shows - the RESTORE itself is written once, in `common/restorestep/sqlserver.py`, R43) and `restore_sqlcmd.py` (running a step with sqlcmd: request, transport, progress, resume state, output judged). `restore_database` re-exports every name; a test replaces a collaborator with `conftest.patch_restore`, which reaches every module that binds it
 - `db_ops/backup_restore/sql/sqlserver/`
 - `data/restore_config.json`
 - `data/backup_policy.json` — owned here (`app_code: backup_restore`), read by `reports`
@@ -1525,6 +1551,19 @@ covers PostgreSQL, Oracle and container SQL Server, whether the scheduler, `/spb
 | `METADATA_*` | the post-database phase, only after a restore that worked | `sqlserver-replay-instance` |
 | `DELETE_START` / `DELETE_DONE` | the staging folder past the entry's retention, only after a verify that passed | `prune-staged-backups` |
 | `END` / `ERROR` | `restored=`, `verified=` and every `warning=` in the message | - |
+
+**Metadata asked for and not replayed is a warning on the restore (2026-10-03, 1.88).** A phase
+of an entry with `server_metadata` on that was SKIPPED or FAILED used to be an event only, and
+the run ended `done` with no word of it - the 100.250 drill left 23 users orphaned behind a clean
+result. It is now in the answer's `warnings`, so the run ends *done with a warning* and its alert
+is `warning`. Never a failure: the databases are the deliverable.
+
+The bundle a restore replays is written beside a backup by **the node that runs that backup**. A
+node restoring a source whose backup another node runs (a soak node beside the worker) has none,
+and the skip says so - it used to ask for `server_metadata.enabled`, which was already on.
+`python -m db_ops.backup_restore.cli export-instance-bundle --backup-id <id>` exports it on this
+node, for any backup entry, active here or not (read-only on the source; refused as
+`not_configured` for an entry with `server_metadata` off).
 
 Every one of these messages carries `restore_mode`: `LATEST`, or `POINT_IN_TIME` with
 `point_in_time=` (as typed) and `point_in_time_utc=`. Until the .251 drill (2026-09-25) a

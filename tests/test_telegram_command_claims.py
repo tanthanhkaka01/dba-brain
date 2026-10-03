@@ -14,6 +14,8 @@ from db_ops.db import DbOpsStore
 from db_ops.telegram import command_processor
 from db_ops.telegram.command_processor import CLAIM_STALE_SECONDS, process_pending_command_messages
 
+from conftest import patch_telegram
+
 from test_telegram_report_commands import insert_command_message, write_json
 
 
@@ -87,7 +89,7 @@ def test_a_pending_command_is_dispatched_once_even_if_the_workflow_runs_again(tm
         assert second["processed"] == 0
         return {"status": "success"}
 
-    monkeypatch.setattr(command_processor, "execute_command_action", fake_action)
+    patch_telegram(monkeypatch, "execute_command_action", fake_action)
 
     first = process_pending_command_messages(sqlite_path=sqlite_path, commands_path=commands_path)
 

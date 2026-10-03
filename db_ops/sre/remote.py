@@ -11,6 +11,7 @@ store with ``--key``/``--key-base64`` (or ``DB_OPS_SECRET_KEY``). The SSH connec
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 from pathlib import Path
 
 from db_ops.lib.data_sources import resolve_ssh_key, resolve_ssh_password, ssh_login
@@ -18,7 +19,7 @@ from db_ops.lib.secret_value import SecretValueError
 from db_ops.lib.ssh_errors import SshError
 
 
-class RemoteHostError(RuntimeError):
+class RemoteHostError(errors.OperationFailed):
     """The login for a host could not be resolved from what the operator gave."""
 
 

@@ -27,6 +27,7 @@ What is left to translate is listed in :func:`translate_statement`.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import re
 import sqlite3
 from collections.abc import Mapping
@@ -49,7 +50,7 @@ def quote_identifier(name: str) -> str:
     return '"' + str(name).replace('"', '""') + '"'
 
 
-class StoreBackendError(RuntimeError):
+class StoreBackendError(errors.OperationFailed):
     """The store backend could not be opened or a statement could not be translated."""
 
 

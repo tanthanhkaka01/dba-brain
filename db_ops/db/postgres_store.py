@@ -15,6 +15,7 @@ PostgreSQL targets, so no new dependency and no build/system deps in the image.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -32,7 +33,7 @@ MAINTENANCE_DATABASE = "postgres"
 _SAFE_IDENTIFIER = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 
 
-class PostgresStoreError(RuntimeError):
+class PostgresStoreError(errors.OperationFailed):
     """A store provisioning/connection step failed."""
 
 

@@ -27,6 +27,8 @@ from db_ops.lib.telegram_severity import classify_message
 from db_ops.sql_tasks import runner
 from tests.test_common_sql_run import _STATED, FakeConn, FakeCursor, _patch
 
+from conftest import patch_sql_runner
+
 WARNING_8153 = ("01003", "[01003] [Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Warning: Null "
                 "value is eliminated by an aggregate or other SET operation. (8153) (SQLMoreResults)")
 REAL_ERROR = ("42000", "[42000] [Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Invalid object "
@@ -177,11 +179,11 @@ def test_a_task_that_finished_past_a_warning_is_done_at_warning_level(tmp_path, 
     data_dir = tmp_path / "data"
     (data_dir / "sql").mkdir(parents=True)
     (data_dir / "sql" / "engine.sql").write_text("EXEC dbo.engine;", encoding="utf-8")
-    monkeypatch.setattr(runner, "execute_sql", lambda **_: {
+    patch_sql_runner(monkeypatch, "execute_sql", lambda **_: {
         "row_count": 0, "result_sets": [], "warnings": [WARNING_8153[1]]})
-    monkeypatch.setattr(runner, "log_event", lambda *args, **kwargs: None)
+    patch_sql_runner(monkeypatch, "log_event", lambda *args, **kwargs: None)
     sent = []
-    monkeypatch.setattr(runner, "enqueue_sql_task_message", lambda **kwargs: sent.append(kwargs))
+    patch_sql_runner(monkeypatch, "enqueue_sql_task_message", lambda **kwargs: sent.append(kwargs))
     store = RecordingSqlRunStore()
     inventory, credentials = inventory_and_credentials()
 

@@ -10,6 +10,8 @@ from db_ops.db import DbOpsStore
 from db_ops.sql_tasks import runner
 from db_ops.lib import sql_task_catalog
 
+from conftest import patch_sql_runner
+
 
 class RecordingSqlRunStore:
     def __init__(self):
@@ -325,7 +327,7 @@ def test_two_scans_that_find_the_same_dead_run_report_it_once(tmp_path, monkeypa
     listing = _stale_running_row(sql_run_id=run_id)
     target = sql_target(timeout=1, alert_on_error=runner.NotifyRule(enabled=True, telegram_chat="sql"))
     sent: list[dict] = []
-    monkeypatch.setattr(runner, "enqueue_sql_task_message", lambda **kwargs: sent.append(kwargs))
+    patch_sql_runner(monkeypatch, "enqueue_sql_task_message", lambda **kwargs: sent.append(kwargs))
 
     for _scan in range(2):
         runner.mark_stale_running_sql_runs(
@@ -405,8 +407,8 @@ def test_array_script_failure_stops_later_script_and_records_failed_file(tmp_pat
             raise RuntimeError("boom in 002_fail.sql")
         return {"row_count": 1, "result_sets": []}
 
-    monkeypatch.setattr(runner, "execute_sql", fake_execute_sql)
-    monkeypatch.setattr(runner, "log_event", lambda *args, **kwargs: None)
+    patch_sql_runner(monkeypatch, "execute_sql", fake_execute_sql)
+    patch_sql_runner(monkeypatch, "log_event", lambda *args, **kwargs: None)
     inventory, credentials = inventory_and_credentials()
 
     success = runner.run_one_sql_task(

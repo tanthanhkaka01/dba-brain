@@ -29,9 +29,36 @@ import sys
 from dataclasses import dataclass
 from typing import Any
 
+from db_ops.lib import errors
 
-class CommonCliError(RuntimeError):
-    """A ``common`` CLI command did not answer, or answered that the work failed."""
+
+class CommonCliError(errors.DbOpsError, RuntimeError):
+    """A ``common`` CLI command did not answer, or answered that the work failed.
+
+    ``kind`` is the answer's ``error_kind`` (``lib.errors.KINDS``), so the app that called decides
+    by it - ``exc.kind == "unreachable"`` - instead of matching the sentence. A command that gave no
+    answer at all is ``internal``: nothing on the other side said what went wrong.
+    """
+
+    def __init__(self, message: str = "", *, kind: str = errors.KIND_FAILED) -> None:
+        super().__init__(message)
+        self.kind = kind if kind in errors.KINDS else errors.KIND_INTERNAL
+
+
+class Answer(tuple):
+    """``(success, data, error)`` - unpacked as three, as every caller does - and ``.kind``.
+
+    A tuple of three rather than a fourth element, so the callers that unpack it are unchanged; the
+    answer's ``error_kind`` rides along as an attribute for the ones that want it.
+    """
+
+    kind: str | None
+
+    def __new__(cls, success: bool, data: dict[str, Any], error: str,
+                kind: str | None = None) -> "Answer":
+        answer = super().__new__(cls, (success, data, error))
+        answer.kind = kind
+        return answer
 
 
 #: The dispatcher a command belongs to. ``db_ops.db.cli`` owns the commands that open the runtime
@@ -124,11 +151,13 @@ def read_answer(command: str, *, returncode: int | None, stdout: str,
     answer = _envelope(text)
     if not isinstance(answer, dict):
         detail = (stderr or text or "").strip()[:400]
-        raise CommonCliError(f"{command} exited {returncode} without a JSON response: {detail}") from None
+        raise CommonCliError(f"{command} exited {returncode} without a JSON response: {detail}",
+                             kind=errors.KIND_INTERNAL) from None
     data = answer.get("data")
-    return (bool(answer.get("success")),
-            data if isinstance(data, dict) else {},
-            str(answer.get("error") or ""))
+    success = bool(answer.get("success"))
+    # An answer from before `error_kind` existed (0.26.0) carries none; its failure is `failed`.
+    kind = None if success else str(answer.get("error_kind") or errors.KIND_FAILED)
+    return Answer(success, data if isinstance(data, dict) else {}, str(answer.get("error") or ""), kind)
 
 
 def data_or_raise(command: str, answer: tuple[bool, dict[str, Any], str]) -> dict[str, Any]:
@@ -139,7 +168,8 @@ def data_or_raise(command: str, answer: tuple[bool, dict[str, Any], str]) -> dic
     """
     success, data, error = answer
     if not success:
-        raise CommonCliError(f"{command} failed: {error or 'no reason given'}")
+        raise CommonCliError(f"{command} failed: {error or 'no reason given'}",
+                             kind=getattr(answer, "kind", None) or errors.KIND_FAILED)
     return data
 
 

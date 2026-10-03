@@ -23,6 +23,7 @@ question.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import json
 from pathlib import Path
 from typing import Any
@@ -33,7 +34,7 @@ from db_ops.lib.paths import builtin_asset_root, resolve_tool_path
 __all__ = ["LiftError", "lift_example", "referenced_files"]
 
 
-class LiftError(RuntimeError):
+class LiftError(errors.OperationFailed):
     """The lift cannot be written, and the message says which record is at fault."""
 
 

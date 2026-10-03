@@ -219,6 +219,52 @@ def test_a_store_derived_name_is_mapped_even_when_it_is_an_ordinary_word(tmp_pat
     assert mapping.as_dict()["ShiftRoster"] != "ShiftRoster"
 
 
+def test_a_store_derived_name_the_page_s_stylesheet_uses_is_the_product_s_word(tmp_path, monkeypatch):
+    """Tables called `Area`, `Fact` and `Product` renamed the classes the server page builds its
+    health cards from, inside script strings where markup cannot be told from data, and the cards
+    came out unstyled (2026-10-03). A word the page's own stylesheet selects is the product's, so it
+    is left - and named among the ordinary words, so the call can be checked.
+    """
+    from db_ops.common import identifier_scan, showcase
+
+    monkeypatch.setattr(identifier_scan, "collect_identifiers",
+                        lambda _=None: {"10.1.2.3": "address"})
+    pages = ('<style>.card .area, #kpi > div.fact:hover { color: red }</style>'
+             r"<td>SALESDB\ops.Area.IX_Area_Date</td><td>SALESDB\ops.ShiftRoster.IX_Shift</td>")
+    mapping = showcase.build_mapping(data_dir=tmp_path, pages_text=pages)
+
+    assert "Area" not in mapping.as_dict()
+    assert "Area" in mapping.skipped_as_ordinary
+    assert mapping.apply('<div class="area">') == '<div class="area">'
+    # A name the stylesheet does not use is still the customer's.
+    assert mapping.apply("ShiftRoster") != "ShiftRoster"
+
+
+def test_a_plain_word_the_page_code_prints_is_left_as_the_product_s_prose(tmp_path, monkeypatch):
+    """Tables called `Item`, `Machine` and `Integration` turned "78 item(s)" into "78
+    BillingArchive(s)" and "which machine the fix belongs on" into "which SalesLine ..." across the
+    showcase (2026-10-03). The operator's call: a plain word the pages' own code prints is the
+    product's, so a customer table called `Item` is shown as `Item` - and a name built from several
+    words, or one named by hand, is still replaced.
+    """
+    from db_ops.common import identifier_scan, showcase
+
+    assert {"item", "machine"} <= showcase.page_code_words()
+    monkeypatch.setattr(identifier_scan, "collect_identifiers",
+                        lambda _=None: {"10.1.2.3": "address"})
+    pages = (r"<td>SALESDB\ops.Item.IX_Item_Date</td><td>SALESDB\ops.Machine.PK_Machine</td>"
+             r"<td>SALESDB\ops.ShiftRoster.IX_Shift</td>")
+    mapping = showcase.build_mapping(data_dir=tmp_path, pages_text=pages)
+
+    assert mapping.apply("78 item(s) - which machine") == "78 item(s) - which machine"
+    assert {"Item", "Machine"} <= set(mapping.skipped_as_ordinary)
+    assert mapping.apply("ShiftRoster") != "ShiftRoster"
+
+    by_hand = showcase.build_mapping(data_dir=tmp_path, pages_text=pages,
+                                     extra_terms={"Machine": "table"})
+    assert by_hand.apply("Machine") != "Machine"
+
+
 def test_an_estate_that_names_no_identifiers_is_refused_rather_than_certified_clean(tmp_path, monkeypatch):
     from db_ops.common import identifier_scan, showcase
 
@@ -415,6 +461,32 @@ def test_the_code_that_renders_a_page_is_not_rewritten_with_the_estate():
     assert "ACME2-10-1-2-3" not in rewritten
     # ...as is the page's own text.
     assert "<td>Color</td>" not in rewritten
+
+
+def test_the_markup_of_a_page_is_not_rewritten_with_the_estate():
+    """Tables called `meta` and `Area` turned `<meta charset="utf-8">` into `<TerritoryHistory
+    charset="utf-8">` and `class="area"` into `class="ShipmentHeader"`.
+
+    Found 2026-10-03 by opening the refreshed showcase - and in the one already published: pages
+    with no charset (every emoji and `·` read as cp1252 off a server that does not send one), no
+    viewport, and unstyled health cards. Certified clean, because a tag is no identifier.
+    """
+    from db_ops.common import showcase
+
+    mapping = pseudonym.Mapping({"meta": "table", "Area": "table", "ACME2-10-1-2-3": "server_id"})
+    document = ('<head><meta charset="utf-8"><meta name="viewport" content="width=device-width">'
+                '</head><div class="area" id="area" style="color:red" title="ACME2-10-1-2-3 down">'
+                '<a href="index-usage_ACME2-10-1-2-3.html" data-server="ACME2-10-1-2-3">Area</a>'
+                '<!-- ACME2-10-1-2-3 --></div><details id="inst-acme2-10-1-2-3"></details>')
+
+    rewritten = showcase.apply_to_document(mapping, document)
+
+    assert '<meta charset="utf-8"><meta name="viewport" content="width=device-width">' in rewritten
+    assert '<div class="area" id="area" style="color:red" title="' in rewritten
+    # What the page says is still the estate's: its text, a link, a tooltip, a data attribute and
+    # a comment - and a server_id inside a code value, which the page builds an anchor from.
+    assert "acme2-10-1-2-3" not in rewritten.casefold()
+    assert ">Area<" not in rewritten
 
 
 def test_a_data_file_keeps_the_name_its_page_asks_for(tmp_path):

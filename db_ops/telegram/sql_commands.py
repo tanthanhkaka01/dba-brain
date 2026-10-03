@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from db_ops.lib import errors
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +26,7 @@ DEFAULT_SQL_TO_XLSX_MAX_ROWS = DEFAULT_MAX_ROWS
 # the xlsx-shaped wrapper below. The error type is this app's own since 2026-08-15: importing
 # `sql_run.SqlRunError` meant importing the engine to name its exception, which is the whole thing
 # the CLI boundary exists to stop. Callers catch it by this name and always did.
-class SqlToXlsxError(RuntimeError):
+class SqlToXlsxError(errors.OperationFailed):
     """A ``/spbot_sql_to_xlsx`` run that failed for a reason the operator can read."""
 
 
@@ -37,14 +38,14 @@ def _finished(request: dict[str, Any], *, data_dir: str | Path | None = None) ->
     try:
         return request_fill.fill_request("run-sql", request, data_dir=data_dir)
     except request_fill.RequestFillError as exc:
-        raise RuntimeError(str(exc)) from exc
+        raise errors.NotConfigured(str(exc)) from exc
 
 
 def execute_sql_support_command(*, command: Any, args: list[str]) -> dict[str, Any]:
     config = dict(command.action_config or {})
     db_type = str(config.get("db_type") or "sqlserver").lower()
     if db_type != "sqlserver":
-        raise RuntimeError(f"Unsupported Telegram SQL command db_type: {db_type}")
+        raise errors.InvalidConfig(f"Unsupported Telegram SQL command db_type: {db_type}")
 
     sql_path = resolve_telegram_sql_file(str(config["sql_file"]))
     sql_text = sql_path.read_text(encoding="utf-8-sig")
@@ -76,7 +77,7 @@ def execute_sql_support_command(*, command: Any, args: list[str]) -> dict[str, A
                                           DEFAULT_CONNECT_TIMEOUT_SECONDS)),
     }))
     if not success:
-        raise RuntimeError(error or "run-sql failed without a reason.")
+        raise errors.OperationFailed(error or "run-sql failed without a reason.")
 
     return {
         "ok": True,
@@ -153,15 +154,15 @@ def build_sql_params(parameter_config: list[dict[str, Any]], *, args: list[str])
     for item in parameter_config:
         source = str(item.get("source") or "arg")
         if source != "arg":
-            raise RuntimeError(f"Unsupported SQL parameter source: {source}")
+            raise errors.InvalidConfig(f"Unsupported SQL parameter source: {source}")
         position = int(item.get("position", len(params) + 1))
         if position < 1:
-            raise RuntimeError(f"Parameter position must be >= 1: {position}")
+            raise errors.InvalidConfig(f"Parameter position must be >= 1: {position}")
         required = bool(item.get("required", True))
         value = args[position - 1] if len(args) >= position else None
         if required and (value is None or str(value).strip() == ""):
             name = str(item.get("name") or f"arg_{position}")
-            raise RuntimeError(f"Missing required argument: {name}")
+            raise errors.InvalidRequest(f"Missing required argument: {name}")
         params.append(value)
     return params
 
@@ -184,7 +185,7 @@ def find_database(config: dict[str, Any]) -> dict[str, Any]:
             resolved["company_code"] = server.get("company_code")
             resolved["ip"] = server.get("ip")
             return resolved
-    raise RuntimeError(f"Telegram SQL target not found: {config.get('server_id')}/{config.get('service_name')}")
+    raise errors.NotConfigured(f"Telegram SQL target not found: {config.get('server_id')}/{config.get('service_name')}")
 
 
 def find_credential(config: dict[str, Any]) -> dict[str, Any]:

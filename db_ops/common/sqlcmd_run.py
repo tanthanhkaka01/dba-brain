@@ -24,6 +24,7 @@ off mid-way leaves a database whose state has to be inspected, not retried blind
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import shlex
 import sys
 import time
@@ -39,7 +40,7 @@ _LINUX_TOOL_PATH = "export PATH=$PATH:/opt/mssql-tools/bin:/opt/mssql-tools18/bi
 CONTAINER_SQLCMD = "/opt/mssql-tools18/bin/sqlcmd"
 
 
-class SqlcmdRunError(ValueError):
+class SqlcmdRunError(errors.RequestError):
     """The request cannot be run as written."""
 
 

@@ -16,6 +16,7 @@ response nobody can parse.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import os
 import re
 import shutil
@@ -30,7 +31,7 @@ from db_ops.common.docker_db.compose import MASKED_PASSWORD, ProvisionPlan
 from db_ops.lib.docker_db_spec import DEFAULT_CONTAINERS_DIR, DockerDbSpec
 
 
-class ProvisionError(RuntimeError):
+class ProvisionError(errors.OperationFailed):
     """A provisioning guard failed (port in use, folder exists, missing password)."""
 
 

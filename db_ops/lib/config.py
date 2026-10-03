@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from db_ops.lib import errors
 import json
 import os
 import sys
@@ -164,7 +165,7 @@ class TelegramConfig:
             return ""
         secret_token = str(data.get(self.telegram_bot_token_ref, "")).strip()
         if not secret_token:
-            raise RuntimeError(
+            raise errors.NotConfigured(
                 f"Telegram bot token ref '{self.telegram_bot_token_ref}' was not found in secret text "
                 f"under {self.secret_text_file.parent}."
             )
@@ -239,7 +240,7 @@ class PostgresStoreConfig:
         if not self.password_ref:
             return ""
         if self.secret_text_dir is None:
-            raise RuntimeError(
+            raise errors.NotConfigured(
                 f"Store password ref '{self.password_ref}' cannot be resolved: no secret-text "
                 "directory was resolved for the store config."
             )
@@ -249,7 +250,7 @@ class PostgresStoreConfig:
         secrets = secret_text.load_secret_text(self.secret_text_dir, key=key)
         password = str(secrets.get(self.password_ref, "")).strip()
         if not password:
-            raise RuntimeError(
+            raise errors.NotConfigured(
                 f"Store password ref '{self.password_ref}' was not found in the secret text under "
                 f"{self.secret_text_dir}."
             )
@@ -319,17 +320,17 @@ class StoreConfig:
         only; that refusal is gone now that they run on either backend.
         """
         if self.backend not in STORE_BACKENDS:
-            raise RuntimeError(
+            raise errors.InvalidConfig(
                 f"Unknown store backend '{self.backend}'. Use one of: {', '.join(STORE_BACKENDS)}."
             )
         if self.is_sqlite:
             if not str(self.sqlite.path):
-                raise RuntimeError("Store backend 'sqlite' requires a sqlite.path (or connection_string).")
+                raise errors.InvalidConfig("Store backend 'sqlite' requires a sqlite.path (or connection_string).")
             return
 
         postgres = self.postgresql
         if not postgres.explicit_connection_string and not (postgres.host and postgres.database):
-            raise RuntimeError(
+            raise errors.InvalidConfig(
                 "Store backend 'postgresql' needs either a connection_string or host + database "
                 f"in {self.config_file or DEFAULT_STORE_CONFIG_FILE}."
             )
@@ -813,7 +814,7 @@ def _load_json_object(path: Path | None) -> dict[str, Any]:
     with path.open("r", encoding="utf-8-sig") as file:
         data = json.load(file)
     if not isinstance(data, dict):
-        raise RuntimeError(f"Config file must be a JSON object: {path}")
+        raise errors.InvalidConfig(f"Config file must be a JSON object: {path}")
     return data
 
 
@@ -825,7 +826,7 @@ def _load_telegram_bot_config(path: Path | None) -> dict[str, Any]:
         data = json.load(file)
 
     if not isinstance(data, dict):
-        raise RuntimeError(f"Telegram bot config must be a JSON object: {path}")
+        raise errors.InvalidConfig(f"Telegram bot config must be a JSON object: {path}")
     return data
 
 

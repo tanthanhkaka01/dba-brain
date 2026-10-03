@@ -9,6 +9,8 @@ from db_ops.telegram.command_processor import (
     _render_completion_probe,
 )
 
+from conftest import patch_telegram
+
 PROBE = {
     "table": "job_runs",
     "success_job_code": "backup_restore.restore-workflow.end",
@@ -111,7 +113,7 @@ def test_a_running_process_is_alive(monkeypatch, tmp_path):
     proc.mkdir()
     (proc / "stat").write_text("4243 (python3) S 1 4243 0 0 -1 4194560 0 0\n", encoding="utf-8")
     monkeypatch.setattr(cp.sys, "platform", "linux")
-    monkeypatch.setattr(cp, "open", lambda path, *a, **kw: (proc / "stat").open(*a, **kw), raising=False)
+    patch_telegram(monkeypatch, "open", lambda path, *a, **kw: (proc / "stat").open(*a, **kw), raising=False)
     monkeypatch.setattr(cp.os, "kill", lambda pid, sig: None)
 
     assert cp._is_zombie(4243) is False

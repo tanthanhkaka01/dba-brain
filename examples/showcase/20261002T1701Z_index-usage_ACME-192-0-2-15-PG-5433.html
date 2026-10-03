@@ -1,0 +1,534 @@
+<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'><title>Index Usage — ACME-192-0-2-15-PG-5433</title><style>
+:root{
+  --bg:#f5f6f8; --surface:#ffffff; --surface-2:#fafbfc;
+  --ink:#1b2430; --muted:#64748b; --faint:#94a3b8; --line:#e5e9ef;
+  --brand:#0f2540; --brand-2:#1d3b5e; --link:#1d4ed8;
+  --crit:#dc2626; --crit-bg:#fef2f2; --crit-line:#fecaca;
+  --warn:#c2700a; --warn-bg:#fff8ed; --warn-line:#fde3bf;
+  --ok:#15803d; --ok-bg:#f0fdf4; --ok-line:#bbf7d0;
+  --idle-bg:#f1f5f9;
+  --mono:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+}
+
+*{box-sizing:border-box}
+html{-webkit-print-color-adjust:exact; print-color-adjust:exact}
+body{margin:0; background:var(--bg); color:var(--ink); font-family:var(--sans); font-size:14px; line-height:1.5}
+a{color:var(--link)}
+.wrap{max-width:none; margin:0; padding:0 22px 64px}
+header.masthead{background:linear-gradient(135deg,var(--brand),var(--brand-2)); color:#fff; padding:26px 0 24px; margin-bottom:22px}
+header.masthead .wrap{padding-bottom:0}
+h1.title{font-size:26px; font-weight:700; margin:0 0 4px; letter-spacing:-.01em}
+.subtitle{color:#c7d6e8; font-size:13px; margin:0}
+.subtitle a{color:#c7d6e8}
+.verdict{display:inline-flex; gap:10px; align-items:baseline; flex-wrap:wrap; margin-top:16px; padding:8px 14px; border-radius:9px; font-weight:650; font-size:15px}
+.verdict .scope{font-weight:500; font-size:13px; opacity:.9}
+.verdict.ok{background:#14532d; color:#bbf7d0} .verdict.warn{background:#713f12; color:#fde68a}
+.verdict.crit{background:#7f1d1d; color:#fecaca} .verdict.idle{background:#334155; color:#e2e8f0}
+.kpi-strip{display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:12px; margin-top:18px}
+.kpi{background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.14); border-radius:10px; padding:11px 14px}
+.kpi .num{font-size:24px; font-weight:700; line-height:1}
+.kpi .lbl{font-size:11px; color:#a9c0db; margin-top:5px}
+.kpi.alert .num{color:#ffb4ad} .kpi.warnum .num{color:#ffd79b} .kpi.good .num{color:#9be8b5}
+.notes p{margin:4px 0; font-size:12.5px; color:var(--muted)}
+section{margin-top:30px}
+.sec-head{display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin-bottom:12px; padding-bottom:8px; border-bottom:2px solid var(--line)}
+.sec-head h2{font-size:18px; font-weight:700; margin:0}
+.sec-head .hint{font-size:12.5px; color:var(--muted)}
+h3.part{font-size:15px; font-weight:700; margin:26px 0 10px; padding-bottom:6px; border-bottom:2px solid var(--line)}
+.callout{margin:16px 0; padding:12px 16px; border-left:5px solid var(--warn); background:var(--warn-bg); border-radius:6px; color:#7c2d12; font-weight:600}
+.tbl-scroll{overflow-x:auto; max-width:100%; border:1px solid var(--line); border-radius:10px; background:var(--surface); margin:8px 0 14px}
+table{border-collapse:collapse; width:100%; font-size:12.5px}
+thead th{background:var(--surface-2); text-align:left; font-weight:650; color:#475569; padding:8px 11px; border-bottom:1px solid var(--line); white-space:nowrap; font-size:11.5px}
+tbody td{padding:8px 11px; border-bottom:1px solid var(--line); vertical-align:middle}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover td{background:var(--surface-2)}
+td.srv{font-family:var(--mono); font-size:11.5px}
+td.prose{white-space:normal; min-width:220px; color:#3a4757}
+.num-cell{font-family:var(--mono); text-align:right}
+.center{text-align:center}
+.badge,.cell{display:inline-block; font-size:11px; font-weight:600; padding:2px 8px; border-radius:6px; white-space:nowrap; border:1px solid transparent}
+.b-ok{background:var(--ok-bg); color:var(--ok); border-color:var(--ok-line)}
+.b-warn{background:var(--warn-bg); color:var(--warn); border-color:var(--warn-line)}
+.b-crit{background:var(--crit-bg); color:var(--crit); border-color:var(--crit-line)}
+.b-idle{background:var(--idle-bg); color:var(--muted); border-color:var(--line)}
+.dot{display:inline-block; width:9px; height:9px; border-radius:50%; background:var(--faint)}
+.dot.ok{background:var(--ok)} .dot.warn{background:var(--warn)} .dot.crit{background:var(--crit)}
+.legend{display:flex; flex-wrap:wrap; gap:14px; margin-top:8px; font-size:12px; color:var(--muted)}
+.muted{color:var(--muted); font-size:12px}
+.meta{display:flex; flex-wrap:wrap; gap:6px 18px; font-size:12.5px; color:var(--muted); margin:4px 0 8px}
+.meta b{color:var(--ink); font-weight:600}
+.picker{display:grid; grid-template-columns:max-content 1fr; gap:8px 12px; align-items:start;
+  margin:0 0 18px; padding:12px 14px; background:var(--surface); border:1px solid var(--line); border-radius:10px}
+.picker-title{grid-column:1/-1; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); font-weight:700}
+.picker-label{font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--brand); font-weight:700; padding-top:4px; white-space:nowrap}
+.picker-label b{font-weight:600; color:var(--muted); border:1px solid var(--line); border-radius:999px; padding:0 6px; letter-spacing:0}
+.picker-row{display:flex; flex-wrap:wrap; gap:6px}
+.chip{border:1px solid var(--line); border-radius:999px; padding:4px 12px; font-size:12px; color:var(--muted); text-decoration:none; background:var(--surface)}
+a.chip:hover{border-color:var(--link); color:var(--link)}
+.chip.on{background:var(--brand); border-color:var(--brand); color:#fff; font-weight:600}
+.chip .dot{width:6px; height:6px; margin-right:6px; vertical-align:middle}
+@media (max-width:760px){.kpi-strip{grid-template-columns:repeat(3,1fr)}}
+.banner{font-size:17px;font-weight:700;line-height:1.35;margin:18px 0 6px;padding:13px 16px;border-left:6px solid var(--warn);background:var(--warn-bg);color:#7c2d12;border-radius:6px}.content > p{margin:6px 0;font-size:13px;color:#3a4757}.content thead th,.content tbody td{padding:7px 8px}.content thead th:first-child,.content tbody td:first-child{width:34%}.content tbody td:first-child{overflow-wrap:anywhere;min-width:200px}
+.dbo-banner{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 14px;
+  margin:0 0 18px;padding:14px 16px;border-radius:6px;
+  background:#0f2540;color:#e8eef7;font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+.dbo-banner .dbo-product{font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+  color:#7fa6d9;font-weight:700}
+.dbo-banner .dbo-title{font-size:17px;font-weight:700;color:#fff}
+.dbo-banner .dbo-scope{font-size:13px;color:#b9cbe4;font-family:ui-monospace,SFMono-Regular,
+  "Cascadia Mono",Consolas,monospace}
+.dbo-banner .dbo-stamp{font-size:12px;color:#8fb0d8;margin-left:auto;white-space:nowrap}
+.dbo-banner .dbo-links{flex-basis:100%;display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+.dbo-banner .dbo-links a{font-size:12px;color:#cfe0f5;text-decoration:none;
+  border:1px solid #2c4a70;border-radius:999px;padding:3px 11px;cursor:pointer}
+.dbo-banner .dbo-links a:hover{border-color:#7fa6d9;color:#fff}
+.dbo-banner .dbo-links a.dbo-here{background:#e8eef7;color:#0f2540;font-weight:600;
+  border-color:#e8eef7}
+@media print{.dbo-banner{background:#fff;color:#000;border:1px solid #000}
+  .dbo-banner .dbo-title,.dbo-banner .dbo-product,.dbo-banner .dbo-scope,
+  .dbo-banner .dbo-stamp{color:#000}.dbo-banner .dbo-links{display:none}}
+</style></head><body><header class="masthead"><div class="wrap"><div class="dbo-banner"><span class="dbo-product">DBA Brain</span><span class="dbo-title">Index Usage</span><span class="dbo-scope">ACME-192-0-2-15-PG-5433</span><span class="dbo-stamp">snapshot 2026-10-03 01:01:40 +08</span><span class="dbo-links"><a href="20261003T1234Z_database-inventory.html">Fleet inventory</a><a href="20261003T1234Z_server-metrics.html">Server metrics</a><a href="20261003T1212Z_sla.html">SLA</a><a class="dbo-here" aria-current="page">Index usage</a></span></div><h1 class="title">ACME-192-0-2-15-PG-5433</h1><p class="subtitle">PostgreSQL · index usage</p><div class="kpi-strip"><div class="kpi "><div class="num">287</div><div class="lbl">indexes total</div></div><div class="kpi "><div class="num">97</div><div class="lbl">used</div></div><div class="kpi "><div class="num">73</div><div class="lbl">unused</div></div><div class="kpi "><div class="num">117</div><div class="lbl">cold</div></div><div class="kpi "><div class="num">0</div><div class="lbl">disabled</div></div><div class="kpi warnum"><div class="num">133</div><div class="lbl">droppable</div></div><div class="kpi "><div class="num">0</div><div class="lbl">disabled clustered</div></div><div class="kpi "><div class="num">89</div><div class="lbl">tables</div></div><div class="kpi "><div class="num">0</div><div class="lbl">missing suggestions</div></div><div class="kpi "><div class="num">1</div><div class="lbl">databases covered</div></div></div></div></header><div class="wrap content"><div class="picker"><span class="picker-title">Index reports</span><span class="picker-label">SQL Server <b>13</b></span><span class="picker-row"><a class="chip" href="20261002T1704Z_index-usage_ACME-203-0-113-170.html"><span class="dot" style="background:#c2700a"></span>ACME-203-0-113-170</a><a class="chip" href="20261002T1704Z_index-usage_ACME-198-51-100-45.html"><span class="dot" style="background:#c2700a"></span>ACME-198-51-100-45</a><a class="chip" href="20261002T1702Z_index-usage_ACME-192-0-2-15-MSSQL25-1433.html"><span class="dot" style="background:#c2700a"></span>ACME-192-0-2-15-MSSQL25-1433</a><a class="chip" href="20261002T1703Z_index-usage_ACME-198-51-100-66.html"><span class="dot" style="background:#c2700a"></span>ACME-198-51-100-66</a><a class="chip" href="20261002T1702Z_index-usage_ACME-198-51-100-210.html"><span class="dot" style="background:#c2700a"></span>ACME-198-51-100-210</a><a class="chip" href="20261002T1702Z_index-usage_ACME-198-51-100-60.html"><span class="dot" style="background:#c2700a"></span>ACME-198-51-100-60</a><a class="chip" href="20261002T1703Z_index-usage_ACME-192-0-2-243.html"><span class="dot" style="background:#c2700a"></span>ACME-192-0-2-243</a><a class="chip" href="20261002T1702Z_index-usage_ACME-203-0-113-99.html"><span class="dot" style="background:#c2700a"></span>ACME-203-0-113-99</a><a class="chip" href="20261002T1702Z_index-usage_ACME-198-51-100-92.html"><span class="dot" style="background:#c2700a"></span>ACME-198-51-100-92</a><a class="chip" href="20261002T1702Z_index-usage_ACME-203-0-113-69.html"><span class="dot" style="background:#c2700a"></span>ACME-203-0-113-69</a><a class="chip" href="20261002T1720Z_index-usage_ACME-192-0-2-97.html"><span class="dot" style="background:#c2700a"></span>ACME-192-0-2-97</a><a class="chip" href="20261002T1702Z_index-usage_ACME-192-0-2-242.html"><span class="dot" style="background:#c2700a"></span>ACME-192-0-2-242</a><a class="chip" href="20261002T1702Z_index-usage_ACME-203-0-113-155.html"><span class="dot" style="background:#c2700a"></span>ACME-203-0-113-155</a></span><span class="picker-label">Oracle <b>1</b></span><span class="picker-row"><a class="chip" href="20261002T1701Z_index-usage_ACME-198-51-100-125.html"><span class="dot" style="background:#15803d"></span>ACME-198-51-100-125</a></span><span class="picker-label">PostgreSQL <b>1</b></span><span class="picker-row"><span class="chip on"><span class="dot" style="background:#c2700a"></span>ACME-192-0-2-15-PG-5433</span></span></div><script>(function(){var d=new URLSearchParams(location.search).get('date');if(!d)return;document.querySelectorAll('.picker a.chip,a[data-keep-date]').forEach(function(a){var h=a.getAttribute('href');a.setAttribute('href',h+(h.indexOf('?')<0?'?':'&')+'date='+encodeURIComponent(d));});})();</script><p>Host: 192.0.2.15</p>
+<p>Collected: 2026-10-02T17:01:40Z</p>
+<p>Server dashboard: <a href="20261003T1234Z_server-metrics.html">http://203.0.113.28:8080/report_dba/server-metrics.html?server=ACME-192-0-2-15-PG-5433</a></p>
+<p>Fleet inventory: <a href="20261003T1234Z_database-inventory.html">http://203.0.113.28:8080/report_dba/database-inventory.html</a></p>
+<div class="tbl-scroll"><table><thead><tr><th>Metric</th><th>Count</th><th>Meaning</th></tr></thead><tbody>
+<tr><td>indexes_total</td><td>287</td><td>every index on a user table</td></tr>
+<tr><td>used</td><td>97</td><td>had a seek, scan or lookup</td></tr>
+<tr><td>unused</td><td>73</td><td>written but never read</td></tr>
+<tr><td>cold</td><td>117</td><td>never read AND never written since restart</td></tr>
+<tr><td>disabled</td><td>0</td><td>ALTER INDEX ... DISABLE was run</td></tr>
+<tr><td>droppable</td><td>133</td><td>nonclustered, not unique, no constraint, never read</td></tr>
+</tbody></table></div>
+<h3 class="part">By database</h3>
+<div class="tbl-scroll"><table><thead><tr><th>Database</th><th>Total</th><th>Cold</th><th>Disabled</th><th>Droppable</th><th>Recommend action</th></tr></thead><tbody>
+<tr><td>db_ops</td><td>287</td><td>117</td><td>0</td><td>133</td><td>review the drop candidates above</td></tr>
+</tbody></table></div>
+<h3 class="part">Drop candidates (133)</h3>
+<p>Nonclustered, not unique, not enforcing a constraint, never read. Highest write cost first — that is what the index is charging for.</p>
+<div class="tbl-scroll"><table><thead><tr><th>Index</th><th>user_updates</th><th>last_read</th><th>State</th><th>Recommend action</th></tr></thead><tbody>
+<tr><td>db_ops.db_ops.metric_results.IX_InvoiceMonthly</td><td>6506109</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.metric_results.IX_StaffingDetail</td><td>6506109</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.metric_results.IX_ShiftAudit</td><td>6506109</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.metric_results.IX_WarehouseSummary</td><td>6506109</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.metric_results.IX_ReconcileStatus</td><td>2381518</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.metric_results.IX_InvoiceMonthly</td><td>2381518</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.metric_results.IX_ShiftAudit</td><td>2381518</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.ContractAudit.IX_OrdersAudit</td><td>1889650</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.WarehouseDetail.IX_CampaignSummary</td><td>1191076</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.WarehouseDetail.IX_SettlementDaily</td><td>468583</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.TicketDetail.IX_BillingStaging</td><td>155153</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.ClaimQueue.IX_ShiftSummary</td><td>127887</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.BatchLine.IX_TicketHeader</td><td>70637</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.BatchLine.IX_BookingSnapshot</td><td>70637</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.TicketDetail.IX_BillingStaging</td><td>54522</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.ShiftHeader.IX_SettlementSummary</td><td>47712</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.ShiftHeader.IX_ReconcileHistory</td><td>47712</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.BatchLine.IX_TicketHeader</td><td>37002</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.BatchLine.IX_BookingSnapshot</td><td>37002</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.SettlementStatus.IX_QuotaQueue</td><td>21272</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.reports.IX_PayrollLog</td><td>13892</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.reports.IX_MeterResult</td><td>13892</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.reports.IX_BillingDetail</td><td>13892</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.reports.IX_PayrollLog</td><td>12690</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.reports.IX_MeterResult</td><td>12690</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.reports.IX_BillingDetail</td><td>12690</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.SettlementStatus.IX_QuotaQueue</td><td>11730</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.ShiftHeader.IX_SettlementSummary</td><td>3871</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.ShiftHeader.IX_ReconcileHistory</td><td>3871</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.StaffingResult.IX_OrdersQueue</td><td>270</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.ReconcileArchive.IX_SettlementEntry</td><td>206</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.ReconcileArchive.IX_CatalogArchive</td><td>206</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.ReconcileArchive.IX_WarehouseMonthly</td><td>206</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.ReconcileArchive.IX_OrdersDaily</td><td>206</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.ReconcileArchive.IX_CatalogSummary</td><td>206</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.SettlementDaily.IX_BillingSnapshot</td><td>156</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.SettlementDaily.IX_OrdersLog</td><td>156</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.RouteEntry.IX_CampaignLog</td><td>142</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.RouteEntry.IX_SupplierSummary</td><td>142</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.SettlementEntry.IX_BillingResult</td><td>130</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.TerritoryStaging.IX_RosterSnapshot</td><td>96</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.SettlementEntry.IX_BillingResult</td><td>94</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.RouteEntry.IX_SupplierSummary</td><td>79</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.StaffingResult.IX_OrdersQueue</td><td>61</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.ReconcileArchive.IX_SettlementEntry</td><td>60</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.ReconcileArchive.IX_CatalogArchive</td><td>60</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.ReconcileArchive.IX_WarehouseMonthly</td><td>60</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.ReconcileArchive.IX_OrdersDaily</td><td>60</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.ReconcileArchive.IX_CatalogSummary</td><td>60</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.PricingResult.IX_PolicyArchive</td><td>56</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.PricingResult.IX_ForecastLog</td><td>56</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.PricingResult.IX_MeterAudit</td><td>56</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.SettlementDaily.IX_BillingSnapshot</td><td>44</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.SettlementDaily.IX_OrdersLog</td><td>44</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.PricingResult.IX_PolicyArchive</td><td>25</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.PricingResult.IX_ForecastLog</td><td>25</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.PricingResult.IX_MeterAudit</td><td>25</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.SupplierLog.IX_ContractResult</td><td>22</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.AssetAudit.IX_OrdersMonthly</td><td>7</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.RouteLog.IX_InvoiceLine</td><td>6</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.RouteLog.IX_CustomerEntry</td><td>6</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.AssetAudit.IX_OrdersMonthly</td><td>4</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.PricingSummary.IX_TicketArchive</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.PricingSummary.IX_AssetEntry</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.QuotaHistory.IX_ShiftHistory</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.TerritoryStaging.IX_RosterSnapshot</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.LedgerArchive.IX_ShipmentEntry</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.LedgerArchive.IX_PricingStaging</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.PolicyLine.IX_CustomerDetail</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.PolicyLine.IX_OrdersDaily</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.PricingSummary.IX_TicketArchive</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.PricingSummary.IX_AssetEntry</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.QuotaHistory.IX_ShiftHistory</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.SettlementDaily.IX_BillingSnapshot</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.SettlementDaily.IX_OrdersLog</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.SettlementEntry.IX_WarehouseEntry</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.SettlementEntry.IX_BillingResult</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.StaffingResult.IX_OrdersQueue</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.WarehouseDetail.IX_PayrollResult</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.WarehouseDetail.IX_InvoiceHistory</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.WarehouseDetail.IX_SettlementDaily</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.WarehouseDetail.IX_CampaignSummary</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.TicketDetail.IX_BillingStaging</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.metric_results.IX_PayrollSnapshot</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.metric_results.IX_ReconcileStatus</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.metric_results.IX_InvoiceMonthly</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.metric_results.IX_StaffingDetail</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.metric_results.IX_BillingStaging</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.metric_results.IX_ShiftAudit</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.metric_results.IX_WarehouseSummary</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.ContractAudit.IX_OrdersAudit</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.SettlementStatus.IX_QuotaQueue</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.TerritoryStaging.IX_RosterSnapshot</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.reports.IX_PayrollLog</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.reports.IX_MeterResult</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.reports.IX_BillingDetail</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.AssetAudit.IX_OrdersMonthly</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.ShiftHeader.IX_SettlementSummary</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.ShiftHeader.IX_ContractSummary</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.ShiftHeader.IX_ReconcileHistory</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.RouteEntry.IX_CampaignLog</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.RouteEntry.IX_SupplierSummary</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.ClaimQueue.IX_MeterMonthly</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.ClaimQueue.IX_ShiftSummary</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.ClaimQueue.IX_RouteEntry</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.BatchLine.IX_TicketHeader</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.BatchLine.IX_BookingSnapshot</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.SupplierDaily.IX_BillingDaily</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.ReconcileArchive.IX_SettlementEntry</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.ReconcileArchive.IX_CatalogArchive</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.ReconcileArchive.IX_WarehouseMonthly</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.ReconcileArchive.IX_ContractLine</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.ReconcileArchive.IX_OrdersDaily</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.ReconcileArchive.IX_CatalogSummary</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.RouteLog.IX_InvoiceLine</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.RouteLog.IX_CustomerEntry</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.PricingResult.IX_PolicyArchive</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.PricingResult.IX_ForecastLog</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.PricingResult.IX_MeterAudit</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.RouteHeader.IX_StaffingEntry</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.RouteHeader.IX_CampaignSummary</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.LedgerArchive.IX_ShipmentEntry</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.LedgerArchive.IX_PricingStaging</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.PolicyLine.IX_CustomerDetail</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.PolicyLine.IX_OrdersDaily</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.PricingSummary.IX_TicketArchive</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.QuotaHistory.IX_ShiftHistory</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.ContractAudit.IX_OrdersAudit</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.LedgerArchive.IX_SalesSnapshot</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.LedgerArchive.IX_ShipmentEntry</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.LedgerArchive.IX_PricingStaging</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.PolicyLine.IX_CustomerDetail</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.PolicyLine.IX_OrdersDaily</td><td>0</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+</tbody></table></div>
+<h3 class="part">All indexes (287)</h3>
+<p>Every index on the instance, including the healthy ones — the answer to "is THIS index used?" has to be here, not only the problems.</p>
+<div class="tbl-scroll"><table><thead><tr><th>Index</th><th>id</th><th>Type</th><th>Uniq</th><th>PK</th><th>Constr</th><th>Filt</th><th>Disabled</th><th>seeks</th><th>scans</th><th>lookups</th><th>updates</th><th>last_read</th><th>last_stats_update</th><th>State</th><th>Recommend action</th></tr></thead><tbody>
+<tr><td>db_ops.db_ops.PricingSummary.IX_ForecastEntry</td><td>49445</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.db_ops.PricingSummary.IX_TicketArchive</td><td>49447</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.PricingSummary.IX_AssetEntry</td><td>49448</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.PricingSummary.UX_SupplierResult</td><td>49449</td><td>btree</td><td>Y</td><td></td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review carefully — unique</td></tr>
+<tr><td>db_ops.db_ops.QuotaHistory.IX_ShiftHistory</td><td>248903</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.SettlementDaily.IX_PricingEntry</td><td>49348</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>78</td><td>0</td><td>0</td><td>156</td><td>2026-10-01T23:07:01.32918+00:00</td><td>never</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.db_ops.SettlementDaily.IX_BillingSnapshot</td><td>49336</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>156</td><td>never</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.SettlementDaily.IX_OrdersLog</td><td>49343</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>156</td><td>never</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.SettlementHistory.IX_AssetHeader</td><td>49383</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>258</td><td>0</td><td>0</td><td>104</td><td>2026-10-01T08:43:56.020082+00:00</td><td>2026-09-30 08:10:45</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.db_ops.SettlementHistory.UQ_WarehouseStaging</td><td>49390</td><td>btree</td><td>Y</td><td></td><td>Y</td><td></td><td></td><td>258</td><td>0</td><td>0</td><td>104</td><td>2026-10-01T08:43:56.020082+00:00</td><td>2026-09-30 08:10:45</td><td>USED</td><td>KEEP — constraint owns it</td></tr>
+<tr><td>db_ops.db_ops.CampaignStaging.IX_SalesQueue</td><td>49271</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>130</td><td>never</td><td>never</td><td>UNUSED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.db_ops.CampaignStaging.UQ_MeterSnapshot</td><td>49273</td><td>btree</td><td>Y</td><td></td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>130</td><td>never</td><td>never</td><td>UNUSED</td><td>KEEP — constraint owns it</td></tr>
+<tr><td>db_ops.db_ops.SettlementEntry.IX_StaffingDetail</td><td>49299</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>254</td><td>0</td><td>0</td><td>130</td><td>2026-10-01T08:43:53.884426+00:00</td><td>2026-09-30 08:16:45</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.db_ops.SettlementEntry.IX_WarehouseEntry</td><td>49315</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>258</td><td>0</td><td>0</td><td>130</td><td>2026-10-01T08:43:56.020082+00:00</td><td>2026-09-30 08:16:45</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.db_ops.SettlementEntry.IX_BillingResult</td><td>49316</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>130</td><td>never</td><td>2026-09-30 08:16:45</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.SettlementEntry.UX_QuotaMonthly</td><td>49317</td><td>btree</td><td>Y</td><td></td><td></td><td>Y</td><td></td><td>1373</td><td>0</td><td>0</td><td>130</td><td>2026-10-01T08:43:56.020082+00:00</td><td>2026-09-30 08:16:45</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.db_ops.StaffingResult.IX_CatalogDaily</td><td>49374</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>258</td><td>0</td><td>0</td><td>61</td><td>2026-10-01T08:43:56.020082+00:00</td><td>2026-09-30 08:10:45</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.db_ops.StaffingResult.IX_InvoiceDetail</td><td>49376</td><td>btree</td><td>Y</td><td></td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>61</td><td>never</td><td>2026-09-30 08:10:45</td><td>UNUSED</td><td>KEEP — constraint owns it</td></tr>
+<tr><td>db_ops.db_ops.StaffingResult.IX_OrdersQueue</td><td>49320</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>61</td><td>never</td><td>2026-09-30 08:10:45</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.WarehouseDetail.IX_PayrollResult</td><td>46502</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>2761</td><td>0</td><td>0</td><td>1191076</td><td>2026-10-02T14:54:27.198532+00:00</td><td>2026-10-02 05:53:17</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.db_ops.WarehouseDetail.IX_InvoiceHistory</td><td>46505</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>1369133</td><td>0</td><td>0</td><td>1191076</td><td>2026-10-02T17:01:39.026036+00:00</td><td>2026-10-02 05:53:17</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.db_ops.WarehouseDetail.IX_SettlementDaily</td><td>46507</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>4362</td><td>0</td><td>0</td><td>1191076</td><td>2026-10-02T16:59:58.571615+00:00</td><td>2026-10-02 05:53:17</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.db_ops.WarehouseDetail.IX_CampaignSummary</td><td>46509</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>1191076</td><td>never</td><td>2026-10-02 05:53:17</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.WarehouseDetail.IX_StaffingDetail</td><td>46514</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>21455069</td><td>0</td><td>0</td><td>1191076</td><td>2026-10-02T17:01:40.269034+00:00</td><td>2026-10-02 05:53:17</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.db_ops.WarehouseDetail.UX_SupplierLine</td><td>473550</td><td>btree</td><td>Y</td><td></td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>0</td><td>1191076</td><td>never</td><td>2026-10-02 05:53:17</td><td>UNUSED</td><td>review carefully — unique</td></tr>
+<tr><td>db_ops.db_ops.TicketDetail.IX_BillingStaging</td><td>46498</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>155153</td><td>never</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.metric_results.IX_PayrollSnapshot</td><td>49487</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>37036</td><td>0</td><td>0</td><td>6506109</td><td>2026-10-02T17:00:29.758713+00:00</td><td>2026-10-02 14:41:29</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.db_ops.metric_results.IX_ReconcileStatus</td><td>49486</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>57</td><td>0</td><td>0</td><td>6506109</td><td>2026-10-02T00:14:46.526947+00:00</td><td>2026-10-02 14:41:29</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.db_ops.metric_results.IX_InvoiceMonthly</td><td>49484</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>6506109</td><td>never</td><td>2026-10-02 14:41:29</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.metric_results.IX_StaffingDetail</td><td>49485</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>6506109</td><td>never</td><td>2026-10-02 14:41:29</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.metric_results.IX_BillingStaging</td><td>49488</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>544585</td><td>0</td><td>0</td><td>6506109</td><td>2026-10-02T16:56:10.783194+00:00</td><td>2026-10-02 14:41:29</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.db_ops.metric_results.IX_ShiftAudit</td><td>49489</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>6506109</td><td>never</td><td>2026-10-02 14:41:29</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.metric_results.IX_WarehouseSummary</td><td>49490</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>6506109</td><td>never</td><td>2026-10-02 14:41:29</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.metric_results.IX_SalesDetail</td><td>49491</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>6087701</td><td>0</td><td>0</td><td>6506109</td><td>2026-10-02T17:00:58.61902+00:00</td><td>2026-10-02 14:41:29</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.db_ops.metric_results.IX_BatchResult</td><td>49492</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>8839</td><td>0</td><td>0</td><td>6506109</td><td>2026-10-02T17:00:10.404144+00:00</td><td>2026-10-02 14:41:29</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.db_ops.ContractAudit.IX_OrdersAudit</td><td>47914</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>1889650</td><td>never</td><td>2026-10-01 03:39:22</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.SupplierMonthly.IX_CampaignAudit</td><td>49239</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>8882</td><td>0</td><td>0</td><td>8744</td><td>2026-10-02T17:00:58.670587+00:00</td><td>2026-09-30 22:06:07</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.db_ops.SettlementStatus.IX_QuotaQueue</td><td>49416</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>21272</td><td>never</td><td>2026-10-02 16:43:31</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.SettlementStatus.IX_CatalogHistory</td><td>49420</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>21272</td><td>0</td><td>0</td><td>21272</td><td>2026-10-02T17:00:14.865668+00:00</td><td>2026-10-02 16:43:31</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.db_ops.TerritoryStaging.IX_RosterSnapshot</td><td>49398</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.TerritoryStaging.IX_BookingHeader</td><td>49399</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.db_ops.reports.IX_PayrollLog</td><td>505334</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>12690</td><td>never</td><td>2026-10-02 10:20:22</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.reports.IX_MeterResult</td><td>505332</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>12690</td><td>never</td><td>2026-10-02 10:20:22</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.reports.IX_BillingDetail</td><td>505333</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>12690</td><td>never</td><td>2026-10-02 10:20:22</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.reports.IX_MeterQueue</td><td>473606</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>8505</td><td>0</td><td>0</td><td>12690</td><td>2026-10-02T17:00:14.595179+00:00</td><td>2026-10-02 10:20:22</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.db_ops.AssetAudit.IX_OrdersMonthly</td><td>285096</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>4</td><td>never</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.AssetAudit.IX_StaffingDetail</td><td>285094</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>4</td><td>0</td><td>0</td><td>4</td><td>2026-09-30T08:41:56.654615+00:00</td><td>never</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.db_ops.MeterDaily.IX_BookingStaging</td><td>49443</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.db_ops.ShiftHeader.IX_SettlementSummary</td><td>46624</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>47712</td><td>never</td><td>2026-10-02 07:09:22</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.ShiftHeader.IX_ContractSummary</td><td>46626</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>284</td><td>0</td><td>0</td><td>47712</td><td>2026-10-02T16:04:35.526514+00:00</td><td>2026-10-02 07:09:22</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.db_ops.ShiftHeader.IX_ReconcileHistory</td><td>46627</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>47712</td><td>never</td><td>2026-10-02 07:09:22</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.ShiftHeader.IX_InvoiceHistory</td><td>46631</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>47712</td><td>never</td><td>2026-10-02 07:09:22</td><td>UNUSED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.db_ops.RouteEntry.IX_CampaignLog</td><td>49357</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>142</td><td>never</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.RouteEntry.IX_SupplierSummary</td><td>49358</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>142</td><td>never</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.RouteEntry.IX_ReconcileArchive</td><td>49362</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>48422</td><td>0</td><td>0</td><td>142</td><td>2026-10-02T16:04:35.526514+00:00</td><td>never</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.db_ops.ClaimQueue.IX_MeterMonthly</td><td>35408</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>24152</td><td>0</td><td>0</td><td>140177</td><td>2026-10-02T17:01:30.861563+00:00</td><td>2026-10-02 12:43:26</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.db_ops.ClaimQueue.IX_ShiftSummary</td><td>35410</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>2</td><td>0</td><td>0</td><td>140177</td><td>2026-09-30T08:29:42.448423+00:00</td><td>2026-10-02 12:43:26</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.db_ops.ClaimQueue.IX_RouteEntry</td><td>35411</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>186233</td><td>0</td><td>0</td><td>140177</td><td>2026-10-02T17:01:40.719578+00:00</td><td>2026-10-02 12:43:26</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.db_ops.ClaimQueue.IX_PolicyHistory</td><td>35412</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>13705627</td><td>0</td><td>0</td><td>140177</td><td>2026-10-02T17:01:38.710312+00:00</td><td>2026-10-02 12:43:26</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.db_ops.ClaimQueue.UX_RouteArchive</td><td>473551</td><td>btree</td><td>Y</td><td></td><td></td><td>Y</td><td></td><td>1</td><td>0</td><td>0</td><td>140177</td><td>2026-09-30T08:29:42.448423+00:00</td><td>2026-10-02 12:43:26</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.db_ops.BatchLine.IX_TicketHeader</td><td>46623</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>70637</td><td>never</td><td>2026-10-01 23:28:42</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.BatchLine.IX_BookingSnapshot</td><td>46630</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>70637</td><td>never</td><td>2026-10-01 23:28:42</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.BatchLine.IX_TicketDaily</td><td>46633</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>70637</td><td>never</td><td>2026-10-01 23:28:42</td><td>UNUSED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.db_ops.BatchLine.UX_LedgerQueue</td><td>46721</td><td>btree</td><td>Y</td><td></td><td></td><td></td><td></td><td>4372</td><td>0</td><td>0</td><td>70637</td><td>2026-10-02T17:01:00.274899+00:00</td><td>2026-10-01 23:28:42</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.db_ops.SupplierDaily.IX_BillingDaily</td><td>49356</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>123324</td><td>0</td><td>0</td><td>2</td><td>2026-10-02T17:01:36.370767+00:00</td><td>never</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.db_ops.SupplierDaily.IX_SalesHistory</td><td>49359</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>1</td><td>0</td><td>0</td><td>2</td><td>2026-10-01T06:35:59.153603+00:00</td><td>never</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.db_ops.ReconcileArchive.IX_SettlementEntry</td><td>473580</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>60</td><td>never</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.ReconcileArchive.IX_CatalogArchive</td><td>473584</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>60</td><td>never</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.ReconcileArchive.IX_WarehouseMonthly</td><td>473582</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>60</td><td>never</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.ReconcileArchive.IX_ContractLine</td><td>473583</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>123337</td><td>0</td><td>0</td><td>60</td><td>2026-10-02T17:01:36.243046+00:00</td><td>never</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.db_ops.ReconcileArchive.IX_OrdersDaily</td><td>473579</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>60</td><td>never</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.ReconcileArchive.IX_CatalogSummary</td><td>473581</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>60</td><td>never</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.ReconcileArchive.IX_LedgerEntry</td><td>473572</td><td>btree</td><td>Y</td><td></td><td>Y</td><td></td><td></td><td>71482414</td><td>0</td><td>0</td><td>60</td><td>2026-10-02T17:01:36.188509+00:00</td><td>never</td><td>USED</td><td>KEEP — constraint owns it</td></tr>
+<tr><td>db_ops.db_ops.ReconcileArchive.IX_ShipmentAudit</td><td>473570</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>47</td><td>0</td><td>0</td><td>60</td><td>2026-10-01T06:35:50.517347+00:00</td><td>never</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.db_ops.RouteLog.IX_InvoiceLine</td><td>47988</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>11</td><td>0</td><td>0</td><td>33</td><td>2026-10-01T06:35:38.557331+00:00</td><td>never</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.db_ops.RouteLog.IX_CustomerEntry</td><td>47995</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>123324</td><td>0</td><td>0</td><td>33</td><td>2026-10-02T17:01:36.302819+00:00</td><td>never</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.db_ops.RouteLog.IX_InvoiceHeader</td><td>47998</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>756</td><td>0</td><td>0</td><td>33</td><td>2026-10-01T06:35:49.260671+00:00</td><td>never</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.db_ops.PricingResult.IX_PolicyArchive</td><td>49297</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>25</td><td>never</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.PricingResult.IX_ForecastLog</td><td>49318</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>25</td><td>never</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.PricingResult.IX_MeterAudit</td><td>49319</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>25</td><td>never</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.PricingResult.IX_CampaignQueue</td><td>49321</td><td>btree</td><td>Y</td><td></td><td>Y</td><td></td><td></td><td>53</td><td>0</td><td>0</td><td>25</td><td>2026-10-01T06:35:45.9428+00:00</td><td>never</td><td>USED</td><td>KEEP — constraint owns it</td></tr>
+<tr><td>db_ops.db_ops.PricingResult.IX_ContractLine</td><td>49326</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>13</td><td>0</td><td>0</td><td>25</td><td>2026-10-01T06:35:09.170257+00:00</td><td>never</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.db_ops.RouteHeader.IX_StaffingEntry</td><td>49237</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>17492</td><td>0</td><td>0</td><td>20735</td><td>2026-10-02T17:01:15.619716+00:00</td><td>2026-10-01 00:03:11</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.db_ops.RouteHeader.IX_CampaignSummary</td><td>49238</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>123324</td><td>0</td><td>0</td><td>20735</td><td>2026-10-02T17:01:36.423459+00:00</td><td>2026-10-01 00:03:11</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.db_ops.RouteHeader.IX_LedgerEntry</td><td>49261</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>27789</td><td>0</td><td>0</td><td>20735</td><td>2026-10-02T17:00:16.725468+00:00</td><td>2026-10-01 00:03:11</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.db_ops.SupplierLog.IX_ContractResult</td><td>314329</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>22</td><td>never</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.SupplierLog.IX_ForecastLog</td><td>314328</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>11</td><td>0</td><td>0</td><td>22</td><td>2026-10-01T06:35:38.509031+00:00</td><td>never</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.db_ops.SupplierLog.IX_OrdersDaily</td><td>314319</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>22</td><td>never</td><td>never</td><td>UNUSED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.db_ops.SupplierLog.IX_ForecastMonthly</td><td>314321</td><td>btree</td><td>Y</td><td></td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>22</td><td>never</td><td>never</td><td>UNUSED</td><td>KEEP — constraint owns it</td></tr>
+<tr><td>db_ops.db_ops.LedgerArchive.IX_ShipmentEntry</td><td>49401</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.LedgerArchive.IX_PricingStaging</td><td>49402</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.LedgerArchive.IX_ShiftStaging</td><td>49408</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.db_ops.PolicyLine.IX_CustomerDetail</td><td>49361</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.PolicyLine.IX_OrdersDaily</td><td>49364</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.db_ops.PolicyLine.UQ_SupplierResult</td><td>49370</td><td>btree</td><td>Y</td><td></td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — constraint owns it</td></tr>
+<tr><td>db_ops.db_ops.PolicyLine.IX_BatchResult</td><td>49372</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.db_ops.ShipmentMonthly.UX_ClaimSummary</td><td>49427</td><td>btree</td><td>Y</td><td></td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review carefully — unique</td></tr>
+<tr><td>db_ops.db_ops.ShipmentMonthly.IX_CampaignMonthly</td><td>49428</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.report.PricingSummary.IX_ForecastEntry</td><td>305448</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.report.PricingSummary.IX_TicketArchive</td><td>305457</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.PricingSummary.IX_AssetEntry</td><td>305456</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.PricingSummary.UX_SupplierResult</td><td>305455</td><td>btree</td><td>Y</td><td></td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review carefully — unique</td></tr>
+<tr><td>db_ops.report.QuotaHistory.IX_ShiftHistory</td><td>305463</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.SettlementDaily.IX_PricingEntry</td><td>305195</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.report.SettlementDaily.IX_BillingSnapshot</td><td>305197</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.SettlementDaily.IX_OrdersLog</td><td>305198</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.SettlementHistory.IX_AssetHeader</td><td>305249</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.report.SettlementHistory.UQ_WarehouseStaging</td><td>305251</td><td>btree</td><td>Y</td><td></td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — constraint owns it</td></tr>
+<tr><td>db_ops.report.CampaignStaging.IX_SalesQueue</td><td>305322</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.report.CampaignStaging.UQ_MeterSnapshot</td><td>305324</td><td>btree</td><td>Y</td><td></td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — constraint owns it</td></tr>
+<tr><td>db_ops.report.SettlementEntry.IX_StaffingDetail</td><td>305290</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.report.SettlementEntry.IX_WarehouseEntry</td><td>305298</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.SettlementEntry.IX_BillingResult</td><td>305299</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.SettlementEntry.UX_QuotaMonthly</td><td>305297</td><td>btree</td><td>Y</td><td></td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review carefully — unique</td></tr>
+<tr><td>db_ops.report.StaffingResult.IX_CatalogDaily</td><td>305221</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.report.StaffingResult.IX_InvoiceDetail</td><td>305223</td><td>btree</td><td>Y</td><td></td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — constraint owns it</td></tr>
+<tr><td>db_ops.report.StaffingResult.IX_OrdersQueue</td><td>305225</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.WarehouseDetail.IX_PayrollResult</td><td>304649</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.WarehouseDetail.IX_InvoiceHistory</td><td>304650</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.WarehouseDetail.IX_SettlementDaily</td><td>304651</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.WarehouseDetail.IX_CampaignSummary</td><td>304652</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.WarehouseDetail.IX_StaffingDetail</td><td>304647</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.report.TicketDetail.IX_BillingStaging</td><td>304658</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.metric_results.IX_PayrollSnapshot</td><td>305006</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.metric_results.IX_ReconcileStatus</td><td>305012</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.metric_results.IX_InvoiceMonthly</td><td>305011</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.metric_results.IX_StaffingDetail</td><td>305008</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.metric_results.IX_BillingStaging</td><td>305009</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.metric_results.IX_ShiftAudit</td><td>305010</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.metric_results.IX_WarehouseSummary</td><td>305007</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.metric_results.IX_BatchResult</td><td>305004</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.report.ContractAudit.IX_OrdersAudit</td><td>305018</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.SupplierMonthly.IX_CampaignAudit</td><td>304989</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.report.SettlementStatus.IX_QuotaQueue</td><td>304948</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.SettlementStatus.IX_CatalogHistory</td><td>304946</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.report.TerritoryStaging.IX_RosterSnapshot</td><td>304868</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.TerritoryStaging.IX_BookingHeader</td><td>304866</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.report.reports.IX_PayrollLog</td><td>305180</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.reports.IX_MeterResult</td><td>305178</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.reports.IX_BillingDetail</td><td>305179</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.reports.IX_MeterQueue</td><td>305171</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.report.AssetAudit.IX_OrdersMonthly</td><td>304849</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.AssetAudit.IX_StaffingDetail</td><td>304847</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.report.MeterDaily.IX_BookingStaging</td><td>304627</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.report.ShiftHeader.IX_SettlementSummary</td><td>305115</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.ShiftHeader.IX_ContractSummary</td><td>305114</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.ShiftHeader.IX_ReconcileHistory</td><td>305116</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.ShiftHeader.IX_InvoiceHistory</td><td>305107</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.report.RouteEntry.IX_CampaignLog</td><td>305069</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.RouteEntry.IX_SupplierSummary</td><td>305070</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.RouteEntry.IX_ReconcileArchive</td><td>305067</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.report.ClaimQueue.IX_MeterMonthly</td><td>304691</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.ClaimQueue.IX_ShiftSummary</td><td>304692</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.ClaimQueue.IX_RouteEntry</td><td>304693</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.ClaimQueue.IX_PolicyHistory</td><td>304689</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.report.BatchLine.IX_TicketHeader</td><td>305045</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.BatchLine.IX_BookingSnapshot</td><td>305044</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.BatchLine.IX_TicketDaily</td><td>305041</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.report.BatchLine.UX_LedgerQueue</td><td>305043</td><td>btree</td><td>Y</td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review carefully — unique</td></tr>
+<tr><td>db_ops.report.SupplierDaily.IX_BillingDaily</td><td>304824</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.SupplierDaily.IX_SalesHistory</td><td>304822</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.report.ReconcileArchive.IX_SettlementEntry</td><td>305145</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.ReconcileArchive.IX_CatalogArchive</td><td>305149</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.ReconcileArchive.IX_WarehouseMonthly</td><td>305147</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.ReconcileArchive.IX_ContractLine</td><td>305148</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.ReconcileArchive.IX_OrdersDaily</td><td>305144</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.ReconcileArchive.IX_CatalogSummary</td><td>305146</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.ReconcileArchive.IX_BookingStaging</td><td>305137</td><td>btree</td><td>Y</td><td></td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — constraint owns it</td></tr>
+<tr><td>db_ops.report.ReconcileArchive.IX_ClaimDetail</td><td>305135</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.report.RouteLog.IX_InvoiceLine</td><td>304770</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.RouteLog.IX_CustomerEntry</td><td>304769</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.RouteLog.IX_InvoiceHeader</td><td>304767</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.report.PricingResult.IX_PolicyArchive</td><td>304713</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.PricingResult.IX_ForecastLog</td><td>304712</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.PricingResult.IX_MeterAudit</td><td>304714</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.PricingResult.IX_CampaignQueue</td><td>304710</td><td>btree</td><td>Y</td><td></td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — constraint owns it</td></tr>
+<tr><td>db_ops.report.PricingResult.IX_ContractLine</td><td>304708</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.report.RouteHeader.IX_StaffingEntry</td><td>304798</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.RouteHeader.IX_CampaignSummary</td><td>304797</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.RouteHeader.IX_LedgerEntry</td><td>304795</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.report.LedgerArchive.IX_ShipmentEntry</td><td>305427</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.LedgerArchive.IX_PricingStaging</td><td>305428</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.LedgerArchive.IX_ShiftStaging</td><td>305420</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.report.PolicyLine.IX_CustomerDetail</td><td>305400</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.PolicyLine.IX_OrdersDaily</td><td>305399</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.report.PolicyLine.UQ_SupplierResult</td><td>305392</td><td>btree</td><td>Y</td><td></td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — constraint owns it</td></tr>
+<tr><td>db_ops.report.PolicyLine.IX_BatchResult</td><td>305390</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.report.ShipmentMonthly.UX_ClaimSummary</td><td>305366</td><td>btree</td><td>Y</td><td></td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review carefully — unique</td></tr>
+<tr><td>db_ops.report.ShipmentMonthly.IX_CampaignMonthly</td><td>305364</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.billing.PricingSummary.IX_ForecastEntry</td><td>344543</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>16</td><td>0</td><td>0</td><td>0</td><td>2026-10-02T09:32:40.413349+00:00</td><td>never</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.billing.PricingSummary.IX_TicketArchive</td><td>344552</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.PricingSummary.IX_AssetEntry</td><td>344551</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>281905</td><td>0</td><td>0</td><td>0</td><td>2026-10-02T17:01:39.676204+00:00</td><td>never</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.billing.PricingSummary.UX_SupplierResult</td><td>344550</td><td>btree</td><td>Y</td><td></td><td></td><td>Y</td><td></td><td>140954</td><td>0</td><td>0</td><td>0</td><td>2026-10-02T17:01:39.479981+00:00</td><td>never</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.billing.QuotaHistory.IX_ShiftHistory</td><td>344558</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.SettlementDaily.IX_PricingEntry</td><td>344290</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>16</td><td>0</td><td>0</td><td>44</td><td>2026-10-02T09:32:40.413349+00:00</td><td>never</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.billing.SettlementDaily.IX_BillingSnapshot</td><td>344292</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>44</td><td>never</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.SettlementDaily.IX_OrdersLog</td><td>344293</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>44</td><td>never</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.SettlementHistory.IX_AssetHeader</td><td>344344</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>988</td><td>0</td><td>0</td><td>450</td><td>2026-10-02T13:23:11.861362+00:00</td><td>2026-10-02 13:06:25</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.billing.SettlementHistory.UQ_WarehouseStaging</td><td>344346</td><td>btree</td><td>Y</td><td></td><td>Y</td><td></td><td></td><td>972</td><td>0</td><td>0</td><td>450</td><td>2026-10-02T13:23:11.861362+00:00</td><td>2026-10-02 13:06:25</td><td>USED</td><td>KEEP — constraint owns it</td></tr>
+<tr><td>db_ops.billing.CampaignStaging.IX_SalesQueue</td><td>344417</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>16</td><td>0</td><td>0</td><td>94</td><td>2026-10-02T09:32:40.413349+00:00</td><td>never</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.billing.CampaignStaging.UQ_MeterSnapshot</td><td>344419</td><td>btree</td><td>Y</td><td></td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>94</td><td>never</td><td>never</td><td>UNUSED</td><td>KEEP — constraint owns it</td></tr>
+<tr><td>db_ops.billing.SettlementEntry.IX_StaffingDetail</td><td>344385</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>192</td><td>0</td><td>0</td><td>94</td><td>2026-10-02T13:05:44.34135+00:00</td><td>2026-10-02 13:06:25</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.billing.SettlementEntry.IX_WarehouseEntry</td><td>344393</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>1782</td><td>0</td><td>0</td><td>94</td><td>2026-10-02T13:23:11.861362+00:00</td><td>2026-10-02 13:06:25</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.billing.SettlementEntry.IX_BillingResult</td><td>344394</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>94</td><td>never</td><td>2026-10-02 13:06:25</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.SettlementEntry.UX_QuotaMonthly</td><td>344392</td><td>btree</td><td>Y</td><td></td><td></td><td>Y</td><td></td><td>4236</td><td>0</td><td>0</td><td>94</td><td>2026-10-02T13:23:11.763295+00:00</td><td>2026-10-02 13:06:25</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.billing.StaffingResult.IX_CatalogDaily</td><td>344316</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>988</td><td>0</td><td>0</td><td>270</td><td>2026-10-02T13:23:11.861362+00:00</td><td>2026-10-02 13:23:26</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.billing.StaffingResult.IX_InvoiceDetail</td><td>344318</td><td>btree</td><td>Y</td><td></td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>270</td><td>never</td><td>2026-10-02 13:23:26</td><td>UNUSED</td><td>KEEP — constraint owns it</td></tr>
+<tr><td>db_ops.billing.StaffingResult.IX_OrdersQueue</td><td>344320</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>270</td><td>never</td><td>2026-10-02 13:23:26</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.WarehouseDetail.IX_PayrollResult</td><td>343701</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>2387</td><td>0</td><td>0</td><td>468583</td><td>2026-10-02T16:58:55.910864+00:00</td><td>2026-10-02 08:05:20</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.billing.WarehouseDetail.IX_InvoiceHistory</td><td>343702</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>67637</td><td>0</td><td>0</td><td>468583</td><td>2026-10-02T17:01:31.51078+00:00</td><td>2026-10-02 08:05:20</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.billing.WarehouseDetail.IX_SettlementDaily</td><td>343703</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>468583</td><td>never</td><td>2026-10-02 08:05:20</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.WarehouseDetail.IX_CampaignSummary</td><td>343704</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>11</td><td>0</td><td>0</td><td>468583</td><td>2026-10-02T13:46:11.188558+00:00</td><td>2026-10-02 08:05:20</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.billing.WarehouseDetail.IX_StaffingDetail</td><td>343699</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>14682978</td><td>0</td><td>0</td><td>468583</td><td>2026-10-02T17:01:39.383977+00:00</td><td>2026-10-02 08:05:20</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.billing.WarehouseDetail.UX_SupplierLine</td><td>397615</td><td>btree</td><td>Y</td><td></td><td></td><td>Y</td><td></td><td>8</td><td>0</td><td>0</td><td>468583</td><td>2026-10-02T09:32:40.413349+00:00</td><td>2026-10-02 08:05:20</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.billing.TicketDetail.IX_BillingStaging</td><td>343710</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>54522</td><td>never</td><td>2026-10-02 13:24:27</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.metric_results.IX_PayrollSnapshot</td><td>344101</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>2354914</td><td>0</td><td>0</td><td>2381518</td><td>2026-10-02T17:01:40.891775+00:00</td><td>2026-10-02 03:22:43</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.billing.metric_results.IX_ReconcileStatus</td><td>344107</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>2381518</td><td>never</td><td>2026-10-02 03:22:43</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.metric_results.IX_InvoiceMonthly</td><td>344106</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>2381518</td><td>never</td><td>2026-10-02 03:22:43</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.metric_results.IX_StaffingDetail</td><td>344103</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>800101</td><td>0</td><td>0</td><td>2381518</td><td>2026-10-02T17:01:40.853195+00:00</td><td>2026-10-02 03:22:43</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.billing.metric_results.IX_BillingStaging</td><td>344104</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>69983</td><td>0</td><td>0</td><td>2381518</td><td>2026-10-02T16:27:26.697021+00:00</td><td>2026-10-02 03:22:43</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.billing.metric_results.IX_ShiftAudit</td><td>344105</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>2381518</td><td>never</td><td>2026-10-02 03:22:43</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.metric_results.IX_WarehouseSummary</td><td>344102</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>586579</td><td>0</td><td>0</td><td>2381518</td><td>2026-10-02T17:01:40.853195+00:00</td><td>2026-10-02 03:22:43</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.billing.metric_results.IX_BatchResult</td><td>344099</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>4799</td><td>0</td><td>0</td><td>2381518</td><td>2026-10-02T17:00:04.38915+00:00</td><td>2026-10-02 03:22:43</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.billing.ContractAudit.IX_OrdersAudit</td><td>344113</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.SupplierMonthly.IX_CampaignAudit</td><td>344084</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>4778</td><td>0</td><td>0</td><td>4667</td><td>2026-10-02T17:00:04.19302+00:00</td><td>2026-10-02 04:59:13</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.billing.SettlementStatus.IX_QuotaQueue</td><td>344043</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>11730</td><td>never</td><td>2026-10-02 16:54:31</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.SettlementStatus.IX_CatalogHistory</td><td>344041</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>11730</td><td>0</td><td>0</td><td>11730</td><td>2026-10-02T17:00:09.309376+00:00</td><td>2026-10-02 16:54:31</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.billing.TerritoryStaging.IX_RosterSnapshot</td><td>343963</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>96</td><td>never</td><td>2026-09-30 09:39:47</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.TerritoryStaging.IX_BookingHeader</td><td>343961</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>96</td><td>0</td><td>0</td><td>96</td><td>2026-10-02T09:32:40.413349+00:00</td><td>2026-09-30 09:39:47</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.billing.reports.IX_PayrollLog</td><td>870102</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>13892</td><td>never</td><td>2026-10-02 09:33:21</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.reports.IX_MeterResult</td><td>870100</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>13892</td><td>never</td><td>2026-10-02 09:33:21</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.reports.IX_BillingDetail</td><td>870101</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>13892</td><td>never</td><td>2026-10-02 09:33:21</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.reports.IX_MeterQueue</td><td>862264</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>214</td><td>0</td><td>0</td><td>13892</td><td>2026-10-02T17:00:08.165595+00:00</td><td>2026-10-02 09:33:21</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.billing.AssetAudit.IX_OrdersMonthly</td><td>343944</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>7</td><td>never</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.AssetAudit.IX_StaffingDetail</td><td>343942</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>7</td><td>0</td><td>0</td><td>7</td><td>2026-10-02T13:43:09.843585+00:00</td><td>never</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.billing.MeterDaily.IX_BookingStaging</td><td>343679</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>40</td><td>0</td><td>0</td><td>40</td><td>2026-10-02T09:32:40.805729+00:00</td><td>never</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.billing.ShiftHeader.IX_SettlementSummary</td><td>344210</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>3871</td><td>never</td><td>2026-10-01 11:05:26</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.ShiftHeader.IX_ContractSummary</td><td>344209</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>163</td><td>0</td><td>0</td><td>3871</td><td>2026-10-02T16:22:08.229303+00:00</td><td>2026-10-01 11:05:26</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.billing.ShiftHeader.IX_ReconcileHistory</td><td>344211</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>3871</td><td>never</td><td>2026-10-01 11:05:26</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.ShiftHeader.IX_InvoiceHistory</td><td>344202</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>16</td><td>0</td><td>0</td><td>3871</td><td>2026-10-02T09:32:40.413349+00:00</td><td>2026-10-01 11:05:26</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.billing.RouteEntry.IX_CampaignLog</td><td>344164</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>11</td><td>0</td><td>0</td><td>79</td><td>2026-09-28T02:22:52.190773+00:00</td><td>2026-10-02 06:55:16</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.billing.RouteEntry.IX_SupplierSummary</td><td>344165</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>79</td><td>never</td><td>2026-10-02 06:55:16</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.RouteEntry.IX_ReconcileArchive</td><td>344162</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>4289</td><td>0</td><td>0</td><td>79</td><td>2026-10-02T16:22:08.229303+00:00</td><td>2026-10-02 06:55:16</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.billing.ClaimQueue.IX_MeterMonthly</td><td>343743</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>76031</td><td>0</td><td>0</td><td>127887</td><td>2026-10-02T17:01:04.94938+00:00</td><td>2026-10-02 06:46:17</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.billing.ClaimQueue.IX_ShiftSummary</td><td>343744</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>127887</td><td>never</td><td>2026-10-02 06:46:17</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.ClaimQueue.IX_RouteEntry</td><td>343745</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>140460</td><td>0</td><td>0</td><td>127887</td><td>2026-10-02T17:01:40.13467+00:00</td><td>2026-10-02 06:46:17</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.billing.ClaimQueue.IX_PolicyHistory</td><td>343741</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>7354911</td><td>0</td><td>0</td><td>127887</td><td>2026-10-02T17:01:40.365943+00:00</td><td>2026-10-02 06:46:17</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.billing.ClaimQueue.UX_RouteArchive</td><td>397616</td><td>btree</td><td>Y</td><td></td><td></td><td>Y</td><td></td><td>10</td><td>0</td><td>0</td><td>127887</td><td>2026-10-02T09:32:40.413349+00:00</td><td>2026-10-02 06:46:17</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.billing.BatchLine.IX_TicketHeader</td><td>344140</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>37002</td><td>never</td><td>2026-10-01 13:09:29</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.BatchLine.IX_BookingSnapshot</td><td>344139</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>37002</td><td>never</td><td>2026-10-01 13:09:29</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.BatchLine.IX_TicketDaily</td><td>344136</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>16</td><td>0</td><td>0</td><td>37002</td><td>2026-10-02T09:32:40.413349+00:00</td><td>2026-10-01 13:09:29</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.billing.BatchLine.UX_LedgerQueue</td><td>344138</td><td>btree</td><td>Y</td><td></td><td></td><td></td><td></td><td>2331</td><td>0</td><td>0</td><td>37002</td><td>2026-10-02T17:00:05.461175+00:00</td><td>2026-10-01 13:09:29</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.billing.SupplierDaily.IX_BillingDaily</td><td>343919</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>42724</td><td>0</td><td>0</td><td>48</td><td>2026-10-02T17:01:37.372659+00:00</td><td>never</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.billing.SupplierDaily.IX_SalesHistory</td><td>343917</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>60</td><td>0</td><td>0</td><td>48</td><td>2026-10-02T14:02:05.169732+00:00</td><td>never</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.billing.ReconcileArchive.IX_SettlementEntry</td><td>862238</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>206</td><td>never</td><td>2026-10-02 09:33:20</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.ReconcileArchive.IX_CatalogArchive</td><td>862242</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>206</td><td>never</td><td>2026-10-02 09:33:20</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.ReconcileArchive.IX_WarehouseMonthly</td><td>862240</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>206</td><td>never</td><td>2026-10-02 09:33:20</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.ReconcileArchive.IX_ContractLine</td><td>862241</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>3262</td><td>0</td><td>0</td><td>206</td><td>2026-10-02T17:01:37.244618+00:00</td><td>2026-10-02 09:33:20</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.billing.ReconcileArchive.IX_OrdersDaily</td><td>862237</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>206</td><td>never</td><td>2026-10-02 09:33:20</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.ReconcileArchive.IX_CatalogSummary</td><td>862239</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>206</td><td>never</td><td>2026-10-02 09:33:20</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.ReconcileArchive.IX_BookingStaging</td><td>862230</td><td>btree</td><td>Y</td><td></td><td>Y</td><td></td><td></td><td>548088</td><td>0</td><td>0</td><td>206</td><td>2026-10-02T17:01:37.183976+00:00</td><td>2026-10-02 09:33:20</td><td>USED</td><td>KEEP — constraint owns it</td></tr>
+<tr><td>db_ops.billing.ReconcileArchive.IX_ClaimDetail</td><td>862228</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>38</td><td>0</td><td>0</td><td>206</td><td>2026-10-02T14:01:57.109487+00:00</td><td>2026-10-02 09:33:20</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.billing.RouteLog.IX_InvoiceLine</td><td>343822</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>6</td><td>never</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.RouteLog.IX_CustomerEntry</td><td>343821</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>6</td><td>never</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.RouteLog.IX_InvoiceHeader</td><td>343819</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>18</td><td>0</td><td>0</td><td>6</td><td>2026-10-02T14:01:50.126813+00:00</td><td>never</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.billing.PricingResult.IX_PolicyArchive</td><td>343765</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>56</td><td>never</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.PricingResult.IX_ForecastLog</td><td>343764</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>56</td><td>never</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.PricingResult.IX_MeterAudit</td><td>343766</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>56</td><td>never</td><td>never</td><td>UNUSED</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.PricingResult.IX_CampaignQueue</td><td>343762</td><td>btree</td><td>Y</td><td></td><td>Y</td><td></td><td></td><td>93</td><td>0</td><td>0</td><td>56</td><td>2026-10-02T14:01:50.591517+00:00</td><td>never</td><td>USED</td><td>KEEP — constraint owns it</td></tr>
+<tr><td>db_ops.billing.PricingResult.IX_ContractLine</td><td>343760</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>1139</td><td>0</td><td>0</td><td>56</td><td>2026-10-02T14:01:53.089677+00:00</td><td>never</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.billing.RouteHeader.IX_StaffingEntry</td><td>343893</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>9492</td><td>0</td><td>0</td><td>268822</td><td>2026-10-02T17:00:55.549315+00:00</td><td>2026-10-02 15:49:31</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.billing.RouteHeader.IX_CampaignSummary</td><td>343892</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>51358</td><td>0</td><td>0</td><td>268822</td><td>2026-10-02T17:01:37.512726+00:00</td><td>2026-10-02 15:49:31</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.billing.RouteHeader.IX_LedgerEntry</td><td>343890</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>232874</td><td>0</td><td>0</td><td>268822</td><td>2026-10-02T17:00:38.685254+00:00</td><td>2026-10-02 15:49:31</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.billing.SupplierLog.IX_ContractResult</td><td>343865</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>518</td><td>0</td><td>0</td><td>658</td><td>2026-10-02T14:01:53.742624+00:00</td><td>2026-10-02 09:38:20</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.billing.SupplierLog.IX_ForecastLog</td><td>343864</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>272</td><td>0</td><td>0</td><td>658</td><td>2026-10-02T14:01:53.64974+00:00</td><td>2026-10-02 09:38:20</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.billing.SupplierLog.IX_OrdersDaily</td><td>343855</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>16</td><td>0</td><td>0</td><td>658</td><td>2026-10-02T09:32:40.413349+00:00</td><td>2026-10-02 09:38:20</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.billing.SupplierLog.IX_ForecastMonthly</td><td>343857</td><td>btree</td><td>Y</td><td></td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>658</td><td>never</td><td>2026-10-02 09:38:20</td><td>UNUSED</td><td>KEEP — constraint owns it</td></tr>
+<tr><td>db_ops.billing.LedgerArchive.IX_SalesSnapshot</td><td>870103</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.LedgerArchive.IX_ShipmentEntry</td><td>344522</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.LedgerArchive.IX_PricingStaging</td><td>344523</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.LedgerArchive.IX_ShiftStaging</td><td>344515</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>16</td><td>0</td><td>0</td><td>0</td><td>2026-10-02T09:32:40.413349+00:00</td><td>never</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.billing.PolicyLine.IX_CustomerDetail</td><td>344495</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.PolicyLine.IX_OrdersDaily</td><td>344494</td><td>btree</td><td></td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>review, then DROP</td></tr>
+<tr><td>db_ops.billing.PolicyLine.UQ_SupplierResult</td><td>344487</td><td>btree</td><td>Y</td><td></td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>0</td><td>0</td><td>never</td><td>never</td><td>COLD</td><td>KEEP — constraint owns it</td></tr>
+<tr><td>db_ops.billing.PolicyLine.IX_BatchResult</td><td>344485</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>16</td><td>0</td><td>0</td><td>0</td><td>2026-10-02T09:32:40.413349+00:00</td><td>never</td><td>USED</td><td>KEEP — primary key</td></tr>
+<tr><td>db_ops.billing.ShipmentMonthly.UX_ClaimSummary</td><td>344461</td><td>btree</td><td>Y</td><td></td><td></td><td>Y</td><td></td><td>14</td><td>0</td><td>0</td><td>0</td><td>2026-10-02T15:07:19.270719+00:00</td><td>never</td><td>USED</td><td>keep — in use</td></tr>
+<tr><td>db_ops.billing.ShipmentMonthly.IX_CampaignMonthly</td><td>344459</td><td>btree</td><td>Y</td><td>Y</td><td></td><td></td><td></td><td>16</td><td>0</td><td>0</td><td>0</td><td>2026-10-02T09:32:40.413349+00:00</td><td>never</td><td>USED</td><td>KEEP — primary key</td></tr>
+</tbody></table></div></div></body></html>

@@ -86,7 +86,8 @@ def test_rows_collected_before_the_new_fields_still_appear_rather_than_vanishing
     # The store holds weeks of them; hiding them would look like the fragmentation had been fixed.
     older = {"item": "DB\\dbo.T.IX", "pct": "72.0"}
     text = "\n".join(_fragmented_section([older], None))
-    assert "DB\\dbo.T.IX" in text
+    # Shown as every other table of the page names an index (2026-10-03); the row is still there.
+    assert "DB.dbo.T.IX" in text
     assert "72.0%" in text
     assert "| - |" in text
 

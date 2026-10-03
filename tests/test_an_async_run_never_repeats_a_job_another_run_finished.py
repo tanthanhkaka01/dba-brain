@@ -25,6 +25,8 @@ from db_ops.backup_restore.server_metadata import ServerMetadataPlan
 from db_ops.db.store import RunAlreadyClaimed, utc_now_text
 from db_ops.lib.time_window import TimeWindow
 
+from conftest import patch_sql_runner
+
 
 class _Store:
     """job_runs with the store's claim rule: one RUNNING row per claim key, rows read as mappings."""
@@ -189,11 +191,11 @@ def test_a_scheduled_sql_scan_does_not_repeat_a_task_another_scan_finished(tmp_p
             started[other_key] = utc_now_text()        # the other scan ran task 2 meanwhile
         return True
 
-    monkeypatch.setattr(runner, "mark_stale_running_sql_runs", lambda **kwargs: None)
+    patch_sql_runner(monkeypatch, "mark_stale_running_sql_runs", lambda **kwargs: None)
     monkeypatch.setattr(runner.data_sources, "load_secret_text", lambda _dir: {})
     monkeypatch.setattr(runner.data_sources, "load_inventory", lambda _dir: [])
     monkeypatch.setattr(runner.data_sources, "load_all_credentials", lambda _dir: {})
-    monkeypatch.setattr(runner, "run_one_sql_task", run_one)
+    patch_sql_runner(monkeypatch, "run_one_sql_task", run_one)
 
     result = runner.run_scheduler_scan(store=_SqlStore(), data_dir=data_dir, dry_run=False,
                                        telegram_groups={}, logger=None)

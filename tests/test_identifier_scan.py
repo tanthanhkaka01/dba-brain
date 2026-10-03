@@ -237,6 +237,24 @@ def test_an_oracle_free_labs_sid_is_not_searched_for(tmp_path) -> None:
     assert "FREE" not in terms and "FREEPDB1" not in terms
 
 
+def test_the_toolkits_own_store_container_is_not_searched_for(tmp_path) -> None:
+    """The container of the runtime store is in the inventory because it is backed up, and it names
+    the tool. An export was refused over a worked example that used it (2026-10-03); the owner ruled
+    the name publishable. Only the name: the machine it runs on and its login are still terms."""
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "db_instances.json").write_text(json.dumps({"db_instances": [
+        {"server_id": "ACME-192-0-2-15-PG-5433", "db_type": "postgresql", "ip": "192.0.2.15",
+         "db_instance_name": "db_ops_store", "instance_name": "db_ops_store",
+         "default_credential_name": "postgresql_db_ops_store_postgres"}]}), encoding="utf-8")
+
+    terms = identifier_scan.collect_identifiers(data)
+
+    assert "db_ops_store" not in terms
+    assert "ACME-192-0-2-15-PG-5433" in terms and "192.0.2.15" in terms
+    assert "postgresql_db_ops_store_postgres" in terms
+
+
 def test_a_telegram_id_and_username_are_searched_for(tmp_path) -> None:
     """The loaders take a file path first; passing the folder there made every Telegram read fail
     in silence, and a person's id shipped in a test (found 2026-09-25)."""

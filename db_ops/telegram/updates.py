@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from db_ops.lib import errors
 import json
 from pathlib import Path
 from typing import Any
@@ -38,7 +39,7 @@ def fetch_and_save_updates(
     next_update_offset = get_next_update_offset(updates)
     paths = TelegramUpdatePaths.from_data_dir(data_dir)
     if sqlite_path is None:
-        raise RuntimeError("sqlite_path is required for saving Telegram messages.")
+        raise errors.InvalidRequest("sqlite_path is required for saving Telegram messages.")
     store = DbOpsStore(sqlite_path)
     saved = save_updates(updates, paths=paths, store=store)
     return {
@@ -362,12 +363,12 @@ def _add_group_unlocked(
     path = Path(groups_path) if groups_path else GROUPS_PATH
     wanted = str(group_id or "").strip()
     if not wanted:
-        raise RuntimeError("group_id is required: the numeric chat id, e.g. -1001234567890.")
+        raise errors.InvalidRequest("group_id is required: the numeric chat id, e.g. -1001234567890.")
 
     confirmed_title, confirmed_type, verified = str(title or "").strip(), "", False
     if verify:
         if not str(bot_token or "").strip():
-            raise RuntimeError(
+            raise errors.NotConfigured(
                 "no bot token, so the chat id cannot be confirmed. Store one and run "
                 "`telegram use-bot --ref <SECRET_REF>` first, or pass verify=False to write the "
                 "entry unconfirmed.")
@@ -456,7 +457,7 @@ def _set_group_level_unlocked(
     path = Path(groups_path) if groups_path else GROUPS_PATH
     records = load_json_list(path, root_key="telegram_groups")
     if not records:
-        raise RuntimeError(
+        raise errors.NotConfigured(
             f"no groups in {path}. Run `save-updates` first: a group has to be discovered "
             "before it can be given a level.")
 
@@ -468,10 +469,10 @@ def _set_group_level_unlocked(
                         if wanted.casefold() in str(item.get("title", "")).casefold()]
     if not matches:
         titles = ", ".join(sorted(str(item.get("title") or item.get("group_id")) for item in records))
-        raise RuntimeError(f"no group matches {wanted!r}. Known: {titles}")
+        raise errors.InvalidRequest(f"no group matches {wanted!r}. Known: {titles}")
     if len(matches) > 1:
         titles = ", ".join(sorted(str(item.get("title")) for item in matches))
-        raise RuntimeError(
+        raise errors.InvalidRequest(
             f"{wanted!r} matches {len(matches)} groups ({titles}). Name one exactly, or use its id.")
 
     target = matches[0]
@@ -529,7 +530,7 @@ def _set_user_level_unlocked(
     (``commands.can_run_command``); 0 is the public tier, so level 0 runs public commands only.
     """
     if int(level) < 0:
-        raise RuntimeError("a user level is 0 or more; 0 runs public commands only. "
+        raise errors.InvalidRequest("a user level is 0 or more; 0 runs public commands only. "
                            "To stop a user, set their status in the file instead.")
     path = Path(users_path) if users_path else USERS_PATH
     records = load_json_list(path, root_key="telegram_users")
@@ -546,14 +547,14 @@ def _set_user_level_unlocked(
         # claimed is how it reaches the wrong person. Pre-authorising is possible but it is asked
         # for, never inferred - see the `pending` branch below.
         if not records:
-            raise RuntimeError(
+            raise errors.NotConfigured(
                 f"no users in {path}. A user is recorded when they first message the bot; send it "
                 "anything, let the intake run (the daemon does it every second), then run this "
                 "again - or pass pending to set the level before they ever message.")
         known = ", ".join(sorted(
             f"{item.get('username') or item.get('first_name') or '?'} ({item.get('user_id')})"
             for item in records))
-        raise RuntimeError(
+        raise errors.InvalidRequest(
             f"no user matches {wanted!r}. Known: {known}. "
             "Pass pending to set a level for somebody who has not messaged this bot yet.")
 
@@ -570,7 +571,7 @@ def _set_user_level_unlocked(
     # `user_id`, and `merge_user_record` adopts it the moment that username first speaks.
     if not matches:
         if not name or name.isdigit():
-            raise RuntimeError(
+            raise errors.InvalidRequest(
                 f"{wanted!r} cannot be pre-authorised: it must be a @username. The intake matches "
                 "an arriving message to a pending record by username - a numeric id it has never "
                 "seen matches nothing, so the level would never be adopted.")
@@ -599,7 +600,7 @@ def _set_user_level_unlocked(
                      "moment they first message the bot."),
         }
     if len(matches) > 1:
-        raise RuntimeError(f"{wanted!r} matches {len(matches)} users. Use the numeric id.")
+        raise errors.InvalidRequest(f"{wanted!r} matches {len(matches)} users. Use the numeric id.")
 
     target = matches[0]
     before = target.get("user_type")

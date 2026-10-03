@@ -40,6 +40,7 @@ Three findings from that night are encoded here rather than left to the next ope
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import re
 import time
 from pathlib import Path
@@ -69,7 +70,7 @@ EXIT_SUCCESS = 0
 EXIT_SUCCESS_RESTART_REQUIRED = 3010
 
 
-class SqlServerPatchError(RuntimeError):
+class SqlServerPatchError(errors.OperationFailed):
     """A user-facing failure: unknown target, no installer path, unreadable setup output."""
 
 

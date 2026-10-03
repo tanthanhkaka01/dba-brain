@@ -36,6 +36,7 @@ Two rules hold for every state-changing request here, and both are checked befor
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import importlib.util
 
 import json
@@ -109,7 +110,7 @@ def safe_next(target: str, *, default: str) -> str:
     return text
 
 
-class WebAppError(RuntimeError):
+class WebAppError(errors.OperationFailed):
     """The console cannot serve a request as configured."""
 
 
@@ -386,8 +387,12 @@ class WebApp:
             # Parsed and never checked before (review 0.25.0, B6.3): raising it hid nothing.
             raise Refused(403, f"Viewing the console needs level {self.settings.min_level_view}; "
                                f"{session['username']} is level {session['user_level']}.")
+        # The pages decide whether to show the Administration links from the session itself.
+        session["can_admin"] = self._can(session, self.settings.min_level_admin)
         if not segments or head == "dashboard":
             return self._get_overview(request, session)
+        if head == "users":
+            return self._route_users(segments[1:], request, session)
         if head == "app":
             return self._get_app(segments[1:], request, session)
         if head == "config":
@@ -749,6 +754,165 @@ class WebApp:
         if user is None:
             raise Refused(403, f"Changing {what} decides what runs on the worker, or who may run it: "
                                "enter your password in the confirmation box and save again.")
+
+    def _require_password_again(self, request: Request, session: dict[str, Any], what: str) -> None:
+        """The signed-in user's own password, typed again, before a change to who may do what.
+
+        Checked against the account in this session, so a script running in the operator's browser
+        - the XSS case - cannot make the change without knowing it. A wrong password counts as a
+        failed sign-in, like any other.
+        """
+        user, _reason = self.auth.authenticate(
+            username=session["username"], password=request.form.get("confirm_password") or "",
+            client_ip=request.client_ip, user_agent=request.headers.get("user-agent", ""),
+            max_failed=self.settings.max_failed_logins,
+            lockout_minutes=self.settings.lockout_minutes)
+        if user is None:
+            raise Refused(403, f"{what} needs your password in the confirmation box.")
+
+    # ------------------------------------------------------------------ #
+    # Users (Administration)
+    # ------------------------------------------------------------------ #
+    def role_table(self) -> list[tuple[str, int]]:
+        return web_auth.roles(view=self.settings.min_level_view, edit=self.settings.min_level_edit,
+                              run=self.settings.min_level_run, admin=self.settings.min_level_admin)
+
+    def _route_users(self, rest: list[str], request: Request, session: dict[str, Any]) -> Response:
+        """Accounts, managed from the console - Grafana's *Users* page, on this console's levels.
+
+        Until 2026-10-02 accounts could only be managed with ``webhost.cli``; the operator asked for
+        the basic functions in the console (*add a user, set permissions*). Reading the list is an
+        admin's too: who can sign in, and when they last did, is not for every viewer.
+
+        The rules every change keeps: admin level and the actor's password again; nobody grants a
+        level above their own or touches an account above their own; nobody lowers or disables
+        their own account here (another admin does - a slip would lock its owner out); and the last
+        active admin is never lowered or disabled. Disabling and a password reset end the account's
+        sessions (the store does it); a level change applies at the next request, because a
+        session reads its level from the account.
+        """
+        self._require_level(session, self.settings.min_level_admin, "Managing users")
+        if request.method != "POST":
+            return self._users_page(request, session)
+        self._require_csrf(request, session)
+        form = request.form
+        try:
+            if not rest:
+                return self._create_user(form, request, session)
+            if len(rest) == 2 and rest[1] in ("level", "password", "signout", "disable"):
+                return self._change_user(rest[0], rest[1], form, request, session)
+        except web_auth.WebAuthError as exc:
+            return self._users_page(request, session, error=str(exc), status=400)
+        except Exception as exc:  # noqa: BLE001 - the store's own refusals read as the page's error.
+            from db_ops.db.web_auth_store import WebAuthError as StoreAuthError
+
+            if isinstance(exc, StoreAuthError):
+                return self._users_page(request, session, error=str(exc), status=400)
+            raise
+        return Response.html(pages.error_page("Not found", f"No user action /users/{'/'.join(rest)}.",
+                                              prefix=self.prefix), status=404)
+
+    def _users_page(self, request: Request, session: dict[str, Any], *, error: str = "",
+                    status: int = 200) -> Response:
+        users = [dict(row) for row in self.auth.list_users(include_inactive=False)]
+        sessions: dict[int, int] = {}
+        for row in self.auth.list_sessions(limit=1000):
+            sessions[int(row["web_user_id"])] = sessions.get(int(row["web_user_id"]), 0) + 1
+        for user in users:
+            user["sessions"] = sessions.get(int(user["web_user_id"]), 0)
+        return Response.html(pages.users_page(
+            prefix=self.prefix, session=session, blocks=self.app_blocks(),
+            report_links=self.report_links, users=users,
+            attempts=[dict(row) for row in self.auth.recent_attempts(limit=30)],
+            roles=self.role_table(), notice=request.first.get("done", ""), error=error,
+            now=self._now()), status=status)
+
+    def _requested_level(self, form: dict[str, str]) -> int:
+        """The level a form asks for: a named role, or an exact level typed beside it."""
+        exact = (form.get("level") or "").strip()
+        if exact:
+            return web_auth.coerce_level(exact)
+        role = (form.get("role") or "").strip()
+        for name, at in self.role_table():
+            if name.lower() == role.lower():
+                return int(at)
+        raise web_auth.WebAuthError("Choose a role, or type a level from 1 to 100.")
+
+    def _active_admins(self) -> list[str]:
+        return [str(row["username"]) for row in self.auth.list_users(include_inactive=False)
+                if int(row["user_level"]) >= int(self.settings.min_level_admin)]
+
+    def _create_user(self, form: dict[str, str], request: Request,
+                     session: dict[str, Any]) -> Response:
+        level = self._requested_level(form)
+        if level > int(session["user_level"]):
+            raise Refused(403, f"You are level {session['user_level']}: you cannot create an account "
+                               f"at level {level}.")
+        self._require_password_again(request, session, "Creating a user")
+        username = web_auth.normalize_username(form.get("username"))
+        password = form.get("password") or ""
+        if password != (form.get("password_again") or ""):
+            raise web_auth.WebAuthError("The two passwords are not the same.")
+        self.auth.create_user(username=username, password=password, level=level,
+                              display_name=form.get("display_name", ""), email=form.get("email", ""),
+                              actor=session["username"], note=form.get("note", ""),
+                              must_change_password=bool(form.get("must_change")))
+        role = web_auth.role_name(level, self.role_table())
+        return Response.redirect(
+            f"{self.prefix}/users?done={quote(f'Created {username} as {role} (level {level}).')}")
+
+    def _change_user(self, username: str, action: str, form: dict[str, str], request: Request,
+                     session: dict[str, Any]) -> Response:
+        name = web_auth.normalize_username(username)
+        target = self.auth.get_user(name)
+        if target is None:
+            raise Refused(404, f"No active user {name}.")
+        actor = str(session["username"])
+        if int(target["user_level"]) > int(session["user_level"]):
+            raise Refused(403, f"{name} is level {target['user_level']}, above yours "
+                               f"({session['user_level']}): only someone at that level can change it.")
+        admins = self._active_admins()
+        last_admin = admins == [name]
+        if action == "level":
+            level = self._requested_level(form)
+            if level > int(session["user_level"]):
+                raise Refused(403, f"You are level {session['user_level']}: you cannot grant level {level}.")
+            if name == actor:
+                raise Refused(403, "Change your own level from another admin's account - lowering it "
+                                   "here could leave you unable to undo it.")
+            if last_admin and level < int(self.settings.min_level_admin):
+                raise Refused(403, f"{name} is the only active admin; lowering it would leave nobody "
+                                   "able to manage users.")
+            self._require_password_again(request, session, f"Changing {name}'s level")
+            self.auth.set_level(username=name, level=level, actor=actor)
+            done = f"{name} is now {web_auth.role_name(level, self.role_table())} (level {level})."
+        elif action == "password":
+            password = form.get("password") or ""
+            if password != (form.get("password_again") or ""):
+                raise web_auth.WebAuthError("The two passwords are not the same.")
+            if name == actor:
+                raise Refused(403, "Change your own password on the Change password page.")
+            self._require_password_again(request, session, f"Resetting {name}'s password")
+            self.auth.set_password(username=name, password=password, actor=actor,
+                                   revoke_sessions=True, password_ref="",
+                                   must_change_password=bool(form.get("must_change")))
+            done = f"{name}'s password was reset; every session of {name} was ended."
+        elif action == "signout":
+            self._require_password_again(request, session, f"Signing {name} out")
+            ended = self.auth.revoke_user_sessions(int(target["web_user_id"]),
+                                                   reason=f"signed out by {actor}")
+            done = f"{name} was signed out of {ended} session(s)."
+        else:  # disable
+            if name == actor:
+                raise Refused(403, "You cannot disable your own account; another admin can.")
+            if last_admin:
+                raise Refused(403, f"{name} is the only active admin; disabling it would leave nobody "
+                                   "able to manage users.")
+            self._require_password_again(request, session, f"Disabling {name}")
+            self.auth.deactivate_user(username=name, actor=actor,
+                                      note=form.get("note") or f"disabled by {actor} in the console")
+            done = f"{name} was disabled and signed out. The name can be issued again."
+        return Response.redirect(f"{self.prefix}/users?done={quote(done)}")
 
     def _submitted_payload(self, request: Request) -> Any:
         """The record the operator just edited — from the field grid, or from the JSON box.

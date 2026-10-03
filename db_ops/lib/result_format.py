@@ -32,6 +32,7 @@ for a spreadsheet is the more likely reading.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import datetime
 import decimal
 import json
@@ -57,7 +58,7 @@ __all__ = [
 ]
 
 
-class ResultFormatError(ValueError):
+class ResultFormatError(errors.RequestError):
     """An unusable format name, or a format that needs an output path and was not given one."""
 
 

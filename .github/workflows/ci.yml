@@ -47,7 +47,7 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e . pytest
+          python -m pip install -e . pytest mypy
 
       # Collection first, and on its own. A collection error makes pytest exit 2 with the reason
       # buried above a wall of output, and the annotation a reader sees says only "exit code 2" —

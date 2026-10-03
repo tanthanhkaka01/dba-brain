@@ -26,13 +26,14 @@ columns" are different facts and only one of them is safe to act on.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 from typing import Any, Iterable, Mapping, Sequence
 
 from db_ops.common import sql_run
 from db_ops.lib import mssql_ddl
 
 
-class SchemaCatalogError(RuntimeError):
+class SchemaCatalogError(errors.OperationFailed):
     """A catalogue read failed, or a schema/object the caller named is not there."""
 
 

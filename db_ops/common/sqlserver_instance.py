@@ -36,6 +36,7 @@ What is portable between two instances is a per-estate decision, so it lives in
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import json
 import re
 from datetime import datetime, timezone
@@ -57,7 +58,7 @@ from db_ops.lib.paths import TOOL_ROOT  # noqa: F401 - one definition, see that 
 
 
 
-class SqlServerInstanceError(RuntimeError):
+class SqlServerInstanceError(errors.OperationFailed):
     """Any request this module refuses: bad payload, wrong engine, unusable bundle."""
 
 

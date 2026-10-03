@@ -497,8 +497,9 @@ def test_no_store_sql_uses_an_untranslatable_strftime_form():
     import re
 
     root = pathlib.Path(__file__).resolve().parents[1] / "db_ops"
+    # db/store.py was split by table family on 2026-10-03; its SQL lives in the store_* modules.
     store_modules = [
-        root / "db" / "store.py",
+        *sorted((root / "db").glob("store*.py")),
         root / "metrics" / "storage.py",
         root / "sla" / "storage.py",
         root / "backup_restore" / "history.py",
@@ -539,7 +540,7 @@ def test_no_store_sql_calls_a_sqlite_date_function_on_a_column():
 
     root = pathlib.Path(__file__).resolve().parents[1] / "db_ops"
     store_modules = [
-        root / "db" / "store.py",
+        *sorted((root / "db").glob("store*.py")),
         root / "db" / "metric_store.py",
         root / "db" / "sla_store.py",
         root / "db" / "backup_restore_history.py",

@@ -331,8 +331,13 @@ class Mapping:
         """Every pair, longest real term first, so no replacement can eat another's prefix."""
         return sorted(self._map.items(), key=lambda pair: (-len(pair[0]), pair[0]))
 
-    def apply(self, text: str) -> str:
+    def apply(self, text: str, *, words: bool = True) -> str:
         """Rewrite every occurrence, in every spelling the estate writes it in.
+
+        ``words=False`` leaves out the whole-name pass and keeps the two that match inside a token:
+        terms carrying an address, the operator's hand-named ones, and shorthands. For a page's code
+        - an `id="inst-<server_id>"` - where a whole word is the product's (`class="area"`) but a
+        `server_id` inside it is still the estate's.
 
         Case-insensitive: SQL Server compares object names case-insensitively by default, so the
         same table is `EmployeeShift` in one page and `EMPLOYEESHIFT` in a message built by an
@@ -348,7 +353,7 @@ class Mapping:
         """
         result = str(text or "")
         tokens, loose, bounded = self._passes()
-        if tokens:
+        if tokens and words:
             result = _TOKEN_RE.sub(
                 lambda match: tokens.get(match.group(0).casefold()) or match.group(0), result)
         for entry in (loose, bounded):

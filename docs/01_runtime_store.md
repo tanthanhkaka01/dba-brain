@@ -71,7 +71,7 @@ other column in the store. See `docs/14_lib.md` §Timezone for why that line mus
 
 | Layer | Rule |
 | --- | --- |
-| `db_ops/db/store.py` — `DbOpsStore` | owns `schema_meta`, `runtime_nodes`, `job_runs`, `sql_runs`, `reports*`, `telegram_*` |
+| `db_ops/db/store.py` — `DbOpsStore` | owns `schema_meta`, `runtime_nodes`, `job_runs`, `sql_runs`, `reports*`, `telegram_*`. Since 2026-10-03 composed of one mixin per table family - `store_job_runs.py` (job runs, runtime nodes, the archive), `store_telegram.py`, `store_reports.py`, `store_sql_runs.py` - with `store_base.py` (run claims, archive columns, `utc_now_text`) and `store_schema.py` (`SCHEMA_SQL` and the migrations); `store.py` keeps the constructor, `initialize` and `connect`, and re-exports every name it used to define |
 | `db_ops/db/metric_store.py` — `MetricStore` | owns `metric_runs`, `metric_results`, `metric_results_archive`, `target_health` |
 | `db_ops/db/sla_store.py` — `SlaStore` | owns `sla_runs`, `sla_results` |
 | `db_ops/db/backup_restore_history.py` — `BackupRestoreHistory` | owns `backup_restore_history` |
@@ -365,7 +365,7 @@ Every app keeps reading `config.sqlite_path`; that value is now derived from the
 
 ## Schema Initialization
 
-Most tables are initialized by `DbOpsStore.initialize()` in `db_ops/db/store.py`. Metrics also initialize `metric_runs`, `metric_results`, `metric_results_archive` and `target_health` from `db_ops/db/metric_store.py`. Backup restore initializes `backup_restore_history` from `db_ops/db/backup_restore_history.py`. The SLA/SLO app initializes `sla_runs` and `sla_results` from `db_ops/db/sla_store.py`.
+Most tables are initialized by `DbOpsStore.initialize()` in `db_ops/db/store.py`, from `SCHEMA_SQL` and the migrations in `db_ops/db/store_schema.py`. Metrics also initialize `metric_runs`, `metric_results`, `metric_results_archive` and `target_health` from `db_ops/db/metric_store.py`. Backup restore initializes `backup_restore_history` from `db_ops/db/backup_restore_history.py`. The SLA/SLO app initializes `sla_runs` and `sla_results` from `db_ops/db/sla_store.py`.
 
 The config mirror initializes `config_sources`, `config_collections`, `config_items` and `config_item_revisions` from `db_ops/db/config_store.py`. The web console initializes `web_users`, `web_sessions` and `web_login_attempts` from `db_ops/db/web_auth_store.py`, and the run queue initializes `app_command_requests` from `db_ops/db/run_requests.py`.
 

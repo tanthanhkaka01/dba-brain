@@ -34,6 +34,7 @@ so no architecture YAML file is required.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -117,7 +118,7 @@ def load_metric_definition_records(
     data = load_json_file(source)
     records = data.get("metrics")
     if not isinstance(records, list):
-        raise RuntimeError(f"metric_definitions.json must contain a 'metrics' list: {source}")
+        raise errors.InvalidConfig(f"metric_definitions.json must contain a 'metrics' list: {source}")
     return [item for item in records if isinstance(item, dict)]
 
 
@@ -253,7 +254,7 @@ def group_credentials_by_type(groups: list[dict[str, Any]]) -> dict[str, list[di
     return by_type
 
 
-class CredentialNotFound(RuntimeError):
+class CredentialNotFound(errors.NotConfigured):
     """No credential could be resolved for a target — a refusal, never a guess."""
 
 

@@ -28,6 +28,7 @@ Secrets are never logged, echoed, or returned. Results carry a status and a serv
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import re
 import secrets as _secrets
 import string
@@ -53,7 +54,7 @@ DEFAULT_TIMEOUT_SECONDS = 10
 SUPPORTED_ENGINES = ("sqlserver", "postgresql", "oracle", "mysql")
 
 
-class PasswordRotationError(RuntimeError):
+class PasswordRotationError(errors.OperationFailed):
     """A rotation could not be attempted: bad request, unknown ref, unsupported engine."""
 
 

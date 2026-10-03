@@ -355,6 +355,25 @@ def test_a_backup_id_is_not_silently_overwritten(tmp_path):
     assert document["backup_restore"]["backups"][0]["backup_dir"] == "/backup/moved"
 
 
+def test_a_replaced_entry_stays_where_it_was_in_the_file(tmp_path):
+    """`replace` removed the entry and appended it, so the file's diff after one replace showed an
+    entry gone and an entry added, and nothing of what had changed in it (the 0.26 sheet, section 6)."""
+    for name in ("FIRST", "SECOND", "THIRD"):
+        registration.add_backup(_backup(backup_id=name), data_dir=tmp_path, key=KEY)
+        registration.add_restore(_restore(restore_id=name), data_dir=tmp_path, key=KEY)
+
+    registration.add_backup(_backup(backup_id="FIRST", backup_dir="/backup/moved", replace=True),
+                            data_dir=tmp_path, key=KEY)
+    registration.add_restore(_restore(restore_id="SECOND", cleanup_retention=7200, replace=True),
+                             data_dir=tmp_path, key=KEY)
+
+    section = json.loads((tmp_path / "restore_config.json").read_text(encoding="utf-8"))["backup_restore"]
+    assert [item["backup_id"] for item in section["backups"]] == ["FIRST", "SECOND", "THIRD"]
+    assert section["backups"][0]["backup_dir"] == "/backup/moved"
+    assert [item["restore_id"] for item in section["restores"]] == ["FIRST", "SECOND", "THIRD"]
+    assert section["restores"][1]["cleanup_retention"] == 7200
+
+
 def test_db_type_is_taken_from_the_inventory_rather_than_retyped(tmp_path):
     instance_admin.add_instance({"server_id": "ACME-192-0-2-10", "ip": "192.0.2.10",
                                  "db_type": "postgresql", "db_name": "postgres"},

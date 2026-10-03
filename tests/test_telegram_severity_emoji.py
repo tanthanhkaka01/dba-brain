@@ -272,3 +272,34 @@ def test_the_recorded_message_id_is_the_first_part_not_the_last(monkeypatch):
 
     assert len(posted) > 1
     assert result["result"]["message_id"] == 1
+
+
+def test_a_reply_still_goes_out_when_the_message_it_quotes_is_gone(monkeypatch, tmp_path):
+    """The bot deletes a typed password from the chat, and a member may delete their own command.
+    Quoting a deleted message, Telegram refused the whole reply - *400: message to be replied not
+    found* - and the next question or the result never arrived (64 replies on the soak store)."""
+    from db_ops.telegram.api import send_document, send_message
+
+    posted = []
+
+    def fake_call(*, bot_token, method_name, payload, api_url, timeout_seconds):
+        posted.append(payload)
+        return {"ok": True, "result": {"message_id": len(posted)}}
+
+    def fake_multipart(*, payload, **_kw):
+        posted.append(payload)
+        return {"ok": True, "result": {"message_id": len(posted)}}
+
+    monkeypatch.setattr("db_ops.telegram.api.call_telegram_api", fake_call)
+    monkeypatch.setattr("db_ops.telegram.api.call_telegram_multipart_api", fake_multipart)
+
+    send_message(bot_token="t", chat_id="-100", text="Which secret?", reply_to_message_id=77)
+    send_message(bot_token="t", chat_id="-100", text="Not a reply")
+
+    document = tmp_path / "result.xlsx"
+    document.write_bytes(b"x")
+    send_document(bot_token="t", chat_id="-100", document_path=document, reply_to_message_id=78)
+
+    assert posted[0]["allow_sending_without_reply"] == "true"
+    assert "allow_sending_without_reply" not in posted[1]
+    assert posted[2]["allow_sending_without_reply"] == "true"

@@ -93,7 +93,7 @@ all = [
     "paramiko>=3.0.0",
     "pypsrp",
 ]
-dev = ["pytest>=8.0.0"]
+dev = ["pytest>=8.0.0", "mypy>=1.10"]
 
 # One command, apps as subcommands. `db-ops metrics --help` rather than twelve entry points a
 # reader has to discover — and it becomes `dbabrain` with the package rename, which is the whole

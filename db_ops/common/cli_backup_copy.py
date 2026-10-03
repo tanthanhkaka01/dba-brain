@@ -28,7 +28,7 @@ Usage: <request> | python -m db_ops.common.cli backup-chain -
 
 Which parts of a backup directory a restore needs, as path prefixes. Reads no config.
 
-  {{"db_type": "postgresql",                  // postgresql | oracle | sqlserver
+  {{"db_type": "postgresql",                  // postgresql | oracle | sqlserver - each narrows
    "source": {_LOGIN},
    "source_dir": "/opt/db_ops/backup/PG_LAB_A",   // on the source host
    "backup_dir": "/opt/db_ops/backup/ORA_LAB_A",  // oracle: the path RMAN's catalog names
@@ -36,6 +36,9 @@ Which parts of a backup directory a restore needs, as path prefixes. Reads no co
    "point_in_time": ""}}                          // set: the whole directory
 
 data: {{"include": [prefix, ...], "narrowed": bool}} - an empty include means "everything".
+The chain: PostgreSQL the newest _FULL, the _INCRs after it and wal/; Oracle the pieces RMAN names;
+SQL Server each database's newest FULL, its newest DIFF and the LOGs after them, and _cert/ (a
+database with no FULL, or a layout with no FULL/DIFF/LOG folders, is copied whole).
 """,
     "copy-backup-dir": f"""\
 Usage: <request> | python -m db_ops.common.cli copy-backup-dir -
@@ -47,6 +50,8 @@ Copy a backup directory from one host to another as one tar stream, mirroring th
    "target": {_LOGIN},
    "target_dir": "/opt/db_ops/backup/pg_restore_from_a",
    "include": ["base/20260925T004710Z_FULL", "wal/"],   // from backup-chain; [] = everything
+   "window_hours": 0,            // > 0: also every file written in the last N hours (copy_selection
+                                 // window) - the chain and every other restore point of the window
    "make_readable": true,       // sudo chmod -R a+rX on the source first (a live archivelog job)
    "open_for_engine": true,      // chmod -R a+rX on the target after (the engine's own uid)
    "copy_mode": "auto",          // auto: tar, else file by file | tar | sftp - pinned, no step down
@@ -149,7 +154,8 @@ def _copy_backup_dir(request: dict[str, Any]) -> dict[str, Any]:
                 source_session=source, source_dir=source_dir,
                 target_session=target, target_dir=target_dir,
                 include=tuple(str(item) for item in request.get("include") or ()), log=_log,
-                copy_mode=copy_mode, space_check=space_check)
+                copy_mode=copy_mode, space_check=space_check,
+                window_since=_window_since(request.get("window_hours")))
             opened = (backup_copy.open_for_the_engine(target, target_dir, log=_log)
                       if request.get("open_for_engine", True) else False)
         finally:
@@ -157,6 +163,20 @@ def _copy_backup_dir(request: dict[str, Any]) -> dict[str, Any]:
     finally:
         source.close()
     return {**result.as_dict(), "opened_for_engine": opened}
+
+
+def _window_since(hours: Any) -> float | None:
+    """The epoch a window copy reaches back to; ``None`` for no window (0, absent, negative).
+
+    The source's file times are absolute epochs, so this host's clock is the one to subtract from.
+    """
+    import time
+
+    try:
+        span = float(hours or 0)
+    except (TypeError, ValueError):
+        raise ValueError(f"window_hours must be a number of hours; got {hours!r}.") from None
+    return time.time() - span * 3600 if span > 0 else None
 
 
 def _prune_staged_backups(request: dict[str, Any]) -> dict[str, Any]:

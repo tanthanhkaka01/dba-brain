@@ -24,6 +24,8 @@ Import the driver lazily, per engine: a node that only monitors SQL Server must 
 """
 
 from __future__ import annotations
+
+from db_ops.lib import errors
 from db_ops.lib.packaging import install_hint
 from db_ops.lib.sql_text import DEFAULT_CONNECT_TIMEOUT_SECONDS  # noqa: F401 - one definition
 
@@ -67,7 +69,7 @@ def default_database(db_type: str) -> str:
     return _ENGINE_DEFAULTS[engine][1] or ""
 
 
-class DbConnectError(RuntimeError):
+class DbConnectError(errors.Unreachable):
     """A connect failed, or the engine/driver is not available — an operator message."""
 
 

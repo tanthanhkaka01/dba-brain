@@ -4,6 +4,8 @@ implementations and never duplicate logic."""
 
 import pytest
 
+from conftest import patch_sql_runner
+
 
 def test_common_cli_usage_and_delegation():
     from db_ops.common import cli
@@ -45,6 +47,6 @@ def test_sql_tasks_cli_delegates_to_runner(monkeypatch):
     from db_ops.sql_tasks import cli, runner
 
     seen = {}
-    monkeypatch.setattr(runner, "main", lambda argv: seen.update(argv=argv) or 0)
+    patch_sql_runner(monkeypatch, "main", lambda argv: seen.update(argv=argv) or 0)
     assert cli.main(["--dry-run"]) == 0
     assert seen["argv"] == ["--dry-run"]

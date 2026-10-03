@@ -23,6 +23,7 @@ directory up in between. This reads the encrypted store, adds the entry, and wri
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import json
 from pathlib import Path
 from typing import Any
@@ -90,6 +91,11 @@ stopping is a target that collects nothing - the record exists and nothing can l
   password_ref     the name of a secret that already exists
   credential_name  optional; derived from server_id + db_type when absent
   replace        overwrite an existing server_id instead of refusing
+  keep_default   add this login BESIDE a registered server's default, which stays its
+                 default: users.json and the secret are written, db_instances.json is not.
+                 Needs the server already registered (db_type and ip as on its record), a
+                 username, and a credential_name other than the default's; no inventory
+                 field. With replace, a login of that name is overwritten
 
 Anything else in the object is passed through to the inventory record, so major_version,
 service_name, environment, platform, cmd_access and note all reach it unchanged. An older spelling
@@ -107,8 +113,10 @@ default_credential_name is a reference rather than a password.
 """
 
 
-class InstanceAdminError(RuntimeError):
+class InstanceAdminError(errors.DbOpsError, RuntimeError):
     """The target cannot be registered as asked."""
+
+    kind = errors.KIND_REQUEST
 
 
 def _read(path: Path, root_key: str) -> dict[str, Any]:
@@ -153,7 +161,8 @@ def add_instance(request: dict[str, Any] | None = None, *,
     the inventory record, under the standard names (``lib.field_names``) whatever spelling the
     request used. ``username`` plus either ``password`` or ``password_ref`` supply the login;
     ``credential_name`` is derived from the target when it is not given. ``replace`` allows
-    overwriting an existing ``server_id``.
+    overwriting an existing ``server_id``. ``keep_default`` adds the login beside a registered
+    server's default instead (:func:`_add_beside_default`).
     """
     payload, _renamed, conflicts = field_names.standardize(dict(request or {}), "db_instance")
     if conflicts:
@@ -194,6 +203,17 @@ def add_instance(request: dict[str, Any] | None = None, *,
             "would be stored where nothing reads it. Register the host without a username, then "
             "give it an OS login with 'remote-credential-add', which writes users.json "
             "remote_credentials and the cmd_access block that names it.")
+    # Before anything is written, because the refusal says nothing was: until 0.26.0 it was raised
+    # after users.json already held the new login, a credential with no secret behind it.
+    if username and password is not None and not key:
+        raise InstanceAdminError(
+            "a password was given but no passphrase is available to encrypt it. Export "
+            "DB_OPS_SECRET_KEY, or pass --key-base64. Nothing was written.")
+
+    if payload.get("keep_default"):
+        return _add_beside_default(
+            payload, root, server_id=server_id, db_type=db_type, username=username,
+            password=password, password_ref=password_ref, key=key)
 
     # Every engine but SQL Server connects to a NAMED database, and when the record does not name
     # one the target builder falls back to `service_name or instance_name or server_name or
@@ -223,7 +243,7 @@ def add_instance(request: dict[str, Any] | None = None, *,
     record: dict[str, Any] = {
         key_name: value for key_name, value in payload.items()
         if key_name not in {"username", "password", "password_ref", "credential_name",
-                            "replace", "verify", "role"}
+                            "replace", "verify", "role", "keep_default"}
     }
     record["server_id"] = server_id
     record["db_type"] = db_type
@@ -241,41 +261,19 @@ def add_instance(request: dict[str, Any] | None = None, *,
     secret_written = ""
 
     if username:
-        users_path = data_sources.users_path(root)
-        users = _read(users_path, "database_credentials")
-        users.setdefault("database_credentials", [])
-        credential = {
+        users_path, users, _ = _with_credential(root, server_id, db_type, {
             "credential_name": credential_name,
             "username": username,
             "password_ref": password_ref or credential_name,
             "role": str(payload.get("role") or "monitor"),
-        }
-        # The credential is replaced INSIDE its group, never the group itself. A server
-        # legitimately carries more than one database login - a monitor account and a DBA
-        # account, or `sys` beside an application user - and four of this estate's do. Replacing
-        # the group to add one silently deleted the others, which is only visible later as a
-        # target that resolves to the wrong login or to none. Measured 2026-09-14, standing a
-        # node up one `instance-add` at a time: 38 groups on the master came back as 34.
-        group = next((item for item in users["database_credentials"]
-                      if isinstance(item, dict) and str(item.get("server_id")) == server_id), None)
-        if group is None:
-            group = {"server_id": server_id, "db_type": db_type, "credentials": []}
-            users["database_credentials"].append(group)
-        else:
-            group["db_type"] = db_type
-        group["credentials"] = [item for item in (group.get("credentials") or [])
-                                if str(item.get("credential_name") or "") != credential_name]
-        group["credentials"].append(credential)
+        })
+        # The secret first: a store that will not open with this passphrase refuses here, and the
+        # refusal says nothing was written - until 0.26.0 users.json already held the login by then.
+        if password is not None:
+            secret_written = _store_secret(root, credential_name, str(password), str(key))
+            written.append(Path(secret_written).name)
         _write(users_path, users)
         written.append(users_path.name)
-
-        if password is not None:
-            if not key:
-                raise InstanceAdminError(
-                    "a password was given but no passphrase is available to encrypt it. Export "
-                    "DB_OPS_SECRET_KEY, or pass --key-base64. Nothing was written.")
-            secret_written = _store_secret(root, credential_name, str(password), key)
-            written.append(Path(secret_written).name)
 
     # The inventory is written last, so a failure encrypting the password does not leave a target
     # registered with a credential that has no value behind it - the exact half-configured state
@@ -295,6 +293,129 @@ def add_instance(request: dict[str, Any] | None = None, *,
             "db-ops check-credentials",
             f"db-ops common.cli run-sql '{{\"target\":\"{server_id}\",\"sql\":\"SELECT 1\"}}'",
             "db-ops metrics collect --dry-run",
+        ],
+    }
+
+
+def _with_credential(root: Path, server_id: str, db_type: str,
+                     credential: dict[str, Any]) -> tuple[Path, dict[str, Any], bool]:
+    """``users.json`` with ``credential`` put into its server's group - in memory, not yet written.
+
+    Returns the path, the document, and whether a login of that name was already there.
+    """
+    users_path = data_sources.users_path(root)
+    users = _read(users_path, "database_credentials")
+    users.setdefault("database_credentials", [])
+    # The credential is replaced INSIDE its group, never the group itself. A server
+    # legitimately carries more than one database login - a monitor account and a DBA
+    # account, or `sys` beside an application user - and four of this estate's do. Replacing
+    # the group to add one silently deleted the others, which is only visible later as a
+    # target that resolves to the wrong login or to none. Measured 2026-09-14, standing a
+    # node up one `instance-add` at a time: 38 groups on the master came back as 34.
+    group = next((item for item in users["database_credentials"]
+                  if isinstance(item, dict) and str(item.get("server_id")) == server_id), None)
+    if group is None:
+        group = {"server_id": server_id, "db_type": db_type, "credentials": []}
+        users["database_credentials"].append(group)
+    else:
+        group["db_type"] = db_type
+    name = str(credential["credential_name"])
+    before = list(group.get("credentials") or [])
+    group["credentials"] = [item for item in before
+                            if str(item.get("credential_name") or "") != name]
+    had_it = len(group["credentials"]) != len(before)
+    group["credentials"].append(credential)
+    return users_path, users, had_it
+
+
+#: What a ``keep_default`` request may carry: the login, and the three fields that say which
+#: registered server it is for. Anything else is an inventory field, and this path writes none.
+_BESIDE_DEFAULT_FIELDS: frozenset[str] = frozenset({
+    "server_id", "db_type", "ip", "username", "password", "password_ref", "credential_name",
+    "role", "replace", "keep_default",
+})
+
+
+def _add_beside_default(payload: dict[str, Any], root: Path, *, server_id: str, db_type: str,
+                        username: str, password: Any, password_ref: str,
+                        key: str | None) -> dict[str, Any]:
+    """A second database login on a registered server, its default left as it is.
+
+    Until 0.26.0 the only way to write one was to register the server again with the new login -
+    which moved its ``default_credential_name`` - and then again with the old one to move it back
+    (0.26.0 sheet §6 C8: ten such logins on the estate, copied between nodes by hand). Every
+    refusal here is a request that would otherwise write something other than what it says.
+    """
+    instances_path = data_sources.db_instances_path(root)
+    instances = _read(instances_path, "db_instances")
+    record = next((item for item in instances["db_instances"]
+                   if isinstance(item, dict) and str(item.get("server_id")) == server_id), None)
+    if record is None:
+        raise InstanceAdminError(
+            f"keep_default adds a login beside a registered server's default, and {server_id} is "
+            f"not in {instances_path.name}. Register it first, without keep_default.")
+    # db_type and ip are required of every instance-add request; here they must name the record,
+    # so a login meant for one server is not filed under another one's server_id.
+    stated = {"db_type": db_type, "ip": str(payload.get("ip") or "").strip()}
+    on_record = {"db_type": str(record.get("db_type") or "").strip().lower(),
+                 "ip": str(record.get("ip") or "").strip()}
+    differing = [f"{name} {stated[name]!r} (the record says {on_record[name]!r})"
+                 for name in stated if stated[name] != on_record[name]]
+    if differing:
+        raise InstanceAdminError(
+            f"keep_default: the request does not describe {server_id} as registered - "
+            + "; ".join(differing) + ". Nothing was written.")
+    extra = sorted(name for name in payload if name not in _BESIDE_DEFAULT_FIELDS)
+    if extra:
+        raise InstanceAdminError(
+            "keep_default writes no inventory field, so these would be ignored: "
+            + ", ".join(extra) + ". Change the record with replace, without keep_default.")
+    if not username:
+        raise InstanceAdminError(
+            "keep_default adds a login, and the request names none: give username, with password "
+            "or password_ref.")
+    credential_name = str(payload.get("credential_name") or "").strip()
+    default_name = str(record.get("default_credential_name") or "").strip()
+    # The derived name is the one a server's default login is given, so deriving it here would
+    # write the new login over the default this request asks to keep.
+    if not credential_name:
+        raise InstanceAdminError(
+            f"keep_default needs a credential_name: the derived one "
+            f"({_default_credential_name(server_id, db_type)}) is the name a default login gets.")
+    if credential_name == default_name:
+        raise InstanceAdminError(
+            f"{credential_name} is {server_id}'s default login, which keep_default leaves as it is. "
+            "To change the default, run without keep_default, with replace.")
+
+    users_path, users, had_it = _with_credential(root, server_id, db_type, {
+        "credential_name": credential_name,
+        "username": username,
+        "password_ref": password_ref or credential_name,
+        "role": str(payload.get("role") or "monitor"),
+    })
+    if had_it and not payload.get("replace"):
+        raise InstanceAdminError(
+            f"{server_id} already has a login named {credential_name}. Pass replace to overwrite "
+            "it - a silent overwrite of a login somebody else added is not something to guess at.")
+
+    written: list[str] = []
+    if password is not None:
+        written.append(Path(_store_secret(root, credential_name, str(password), str(key))).name)
+    _write(users_path, users)
+    written.append(users_path.name)
+    return {
+        "server_id": server_id,
+        "db_type": db_type,
+        "port": record.get("port"),
+        "credential_name": credential_name,
+        "password_ref": password_ref or credential_name,
+        "password_stored_encrypted": password is not None,
+        "replaced": had_it,
+        "files_written": written,
+        "next": [
+            "db-ops check-credentials",
+            f"db-ops common.cli run-sql '{{\"target\":\"{server_id}\",\"credential_name\":"
+            f"\"{credential_name}\",\"sql\":\"SELECT 1\"}}'",
         ],
     }
 

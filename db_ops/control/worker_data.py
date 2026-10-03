@@ -11,6 +11,8 @@ same host/user/key resolution as every other control command):
 """
 
 from __future__ import annotations
+
+from db_ops.lib import errors
 from db_ops.lib.data_sources import REGISTRY_FILENAME  # noqa: F401 - one definition
 
 import copy
@@ -94,12 +96,14 @@ FIELD_MERGED_ON_DEPLOY: tuple[tuple[str, str, tuple[str, ...], tuple[tuple[str, 
 )
 
 
-class SecretMergeConflict(RuntimeError):
+class SecretMergeConflict(errors.Refused):
     """The same secret ref holds different values in stores being merged."""
 
 
-class WorkerConfigUnreadable(RuntimeError):
+class WorkerConfigUnreadable(errors.DbOpsError, RuntimeError):
     """A worker config file exists but cannot be read, so the merge cannot honour it."""
+
+    kind = errors.KIND_CONFIG
 
 
 def _remote_exists(client, remote: str) -> bool:

@@ -1750,7 +1750,7 @@
                         "min": 1
                     },
                     "measured_against": "hours before the run",
-                    "purpose": "The fallback copy window for a database whose restore chain cannot be settled, and how old a staged FULL the restore step still takes; overrides the section's copy_recent_hours. Since 0.26.0 a SQL Server restore copies its chain (the newest FULL at or before the moment, its newest DIFF, the LOGs after), not every file of this window.",
+                    "purpose": "With copy_selection window, how far back every file is copied beside the chain; the fallback window of a share copy for a database whose chain cannot be settled; and how old a staged FULL the share restore step still takes. Overrides the section's copy_recent_hours.",
                     "rule": "Long enough to reach the newest FULL: a source whose FULL is weekly needs a week and a day (192) - 24 copied only LOGs and a DIFF of 100.250 on 2026-09-29, and there was no chain to restore"
                 },
                 {
@@ -1770,7 +1770,7 @@
                         "case_insensitive": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "What this entry's SQL Server restore copies from its source - and so what its space check counts: chain, the backups the restore applies (the newest FULL at or before the moment, its newest DIFF, the LOGs after; a database whose chain cannot be settled falls back to its window), or window, every file written in copy_recent_hours. Overrides the section's copy_selection.",
+                    "purpose": "What this entry's restore copies from its source - for every engine since 2026-10-03, and so what its space check counts. chain: the backups the restore applies (SQL Server each database's newest FULL at or before the moment, its newest DIFF and the LOGs after, with _cert/; PostgreSQL the newest _FULL, its _INCRs and wal/; Oracle the pieces RMAN names). window: the chain AND every other file the source wrote in copy_recent_hours - every restore point of the window, never fewer backups than chain. A point in time copies everything either way. A database or layout whose chain cannot be read is copied whole (to another machine) or by its window (from a share).",
                     "rule": "chain unless the target must hold the whole range - every restore point of the window, not only the latest chain - and has the room: on 2026-10-01 the window of the 100.250 drill was 527.9 GiB, its chain 56.8 GiB"
                 },
                 {
@@ -8303,8 +8303,8 @@
             "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 6,
-            "required_field_count": 6,
+            "field_count": 7,
+            "required_field_count": 7,
             "fields": [
                 {
                     "field": "success",
@@ -8361,6 +8361,29 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "Why it failed; null on success."
+                },
+                {
+                    "field": "error_kind",
+                    "type": "string",
+                    "required": true,
+                    "default": "always present",
+                    "range_text": "request | not_configured | refused | unreachable | failed | config | internal; null on success",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true,
+                        "enum": [
+                            "request",
+                            "not_configured",
+                            "refused",
+                            "unreachable",
+                            "failed",
+                            "config",
+                            "internal"
+                        ]
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "What kind of failure, so a caller decides by the kind and never by the sentence (lib.errors); null on success."
                 },
                 {
                     "field": "data",
@@ -13112,7 +13135,7 @@
             "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 9,
+            "field_count": 10,
             "required_field_count": 4,
             "fields": [
                 {
@@ -13184,6 +13207,20 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "Path prefixes to copy (backup-chain's answer); empty = everything."
+                },
+                {
+                    "field": "window_hours",
+                    "type": "number",
+                    "required": false,
+                    "default": "absent - no window",
+                    "range_text": "hours, 0 and up; 0 or absent = none",
+                    "constraint": {
+                        "kind": "number",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "hours before the copy starts, on this host's clock",
+                    "purpose": "Also copy every file the source wrote in the last N hours, beside the include - copy_selection window. Ignored when include is empty (everything is copied)."
                 },
                 {
                     "field": "make_readable",
@@ -14452,9 +14489,9 @@
             "kind": "output",
             "required": false,
             "one_line": "What one shell command printed on a host.",
-            "parsed_in": "db_ops/common/cli.py",
+            "parsed_in": "db_ops/common/cli_host.py",
             "produced_in": [
-                "db_ops/common/cli.py",
+                "db_ops/common/cli_host.py",
                 "db_ops/common/remote_exec.py"
             ],
             "commands": [
@@ -17564,7 +17601,7 @@
             "parsed_in": "db_ops/common/file_transfer.py",
             "parsers": [
                 "db_ops/common/file_transfer.py",
-                "db_ops/common/cli.py"
+                "db_ops/common/cli_host.py"
             ],
             "commands": [
                 "fetch-file",
@@ -17987,17 +18024,17 @@
                 },
                 {
                     "field": "target",
-                    "type": "string",
+                    "type": "object",
                     "required": false,
                     "default": "none - optional",
-                    "range_text": "text",
+                    "range_text": "object",
                     "constraint": {
-                        "kind": "string",
+                        "kind": "object",
                         "nullable": true,
-                        "allow_empty": true
+                        "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The machine or instance: a server_id, or `<db_type> <ip>[:port]`."
+                    "purpose": "SQL Server: the instance that lists its own backup folder - {host, port, username, password}."
                 },
                 {
                     "field": "path",
@@ -19732,17 +19769,17 @@
                 },
                 {
                     "field": "host",
-                    "type": "string",
+                    "type": "object",
                     "required": false,
                     "default": "none - optional",
-                    "range_text": "text",
+                    "range_text": "object",
                     "constraint": {
-                        "kind": "string",
+                        "kind": "object",
                         "nullable": true,
-                        "allow_empty": true
+                        "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "Its address."
+                    "purpose": "Oracle / PostgreSQL: the host block the check runs on - {host, port, username, password|key_file, runtime}."
                 },
                 {
                     "field": "port",
@@ -21241,7 +21278,8 @@
             "parsed_in": "db_ops/common/instance_admin.py",
             "parsers": [
                 "db_ops/common/instance_admin.py",
-                "db_ops/lib/field_names.py"
+                "db_ops/lib/field_names.py",
+                "db_ops/common/cli.py"
             ],
             "commands": [
                 "instance-add"
@@ -21253,7 +21291,7 @@
                 "db_name": "database_name",
                 "enabled": "active"
             },
-            "field_count": 13,
+            "field_count": 14,
             "required_field_count": 3,
             "fields": [
                 {
@@ -21435,6 +21473,19 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "Registered switched on (default) or off."
+                },
+                {
+                    "field": "keep_default",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Add this login beside a registered server's default, which stays its default: no inventory field is written."
                 }
             ]
         },
@@ -23179,7 +23230,7 @@
             "parsed_in": "db_ops/common/sql_run.py",
             "parsers": [
                 "db_ops/common/sql_run.py",
-                "db_ops/common/cli.py"
+                "db_ops/common/cli_sql.py"
             ],
             "commands": [
                 "run-sql"
@@ -23430,16 +23481,21 @@
                 },
                 {
                     "field": "capture",
-                    "type": "boolean",
+                    "type": "string",
                     "required": false,
-                    "default": "none - optional",
-                    "range_text": "true | false",
+                    "default": "first",
+                    "range_text": "first | all",
                     "constraint": {
-                        "kind": "boolean",
-                        "nullable": true
+                        "kind": "string",
+                        "nullable": true,
+                        "enum": [
+                            "first",
+                            "all"
+                        ],
+                        "case_insensitive": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "Capture every result set."
+                    "purpose": "Which result sets to keep: first (the default) or all."
                 },
                 {
                     "field": "max_rows",
@@ -23532,10 +23588,11 @@
             "kind": "input",
             "required": false,
             "one_line": "One shell command on a host.",
-            "parsed_in": "db_ops/common/cli.py",
+            "parsed_in": "db_ops/common/cli_host.py",
             "parsers": [
-                "db_ops/common/cli.py",
-                "db_ops/common/host_ops.py"
+                "db_ops/common/cli_host.py",
+                "db_ops/common/host_ops.py",
+                "db_ops/common/confirm.py"
             ],
             "commands": [
                 "run-cmd"
@@ -23735,7 +23792,7 @@
             "parsed_in": "db_ops/common/session_trace.py",
             "parsers": [
                 "db_ops/common/session_trace.py",
-                "db_ops/common/cli.py"
+                "db_ops/common/cli_sql.py"
             ],
             "commands": [
                 "trace-session"
@@ -23853,7 +23910,7 @@
             "parsed_in": "db_ops/common/dbstatus.py",
             "parsers": [
                 "db_ops/common/dbstatus.py",
-                "db_ops/common/cli.py",
+                "db_ops/common/cli_sql.py",
                 "db_ops/common/sql_run.py"
             ],
             "commands": [
@@ -23947,7 +24004,7 @@
             "parsed_in": "db_ops/common/host_probe.py",
             "parsers": [
                 "db_ops/common/host_probe.py",
-                "db_ops/common/cli.py"
+                "db_ops/common/cli_host.py"
             ],
             "commands": [
                 "probe-host"
@@ -25716,7 +25773,7 @@
                         "min": 1
                     },
                     "measured_against": "hours before the run",
-                    "purpose": "The fallback copy window, and how old a staged FULL the restore step still takes - the copy itself takes the restore chain since 0.26.0."
+                    "purpose": "With copy_selection window, how far back every file is copied beside the chain; the fallback window of a share copy for a database whose chain cannot be settled; and how old a staged FULL the share restore step still takes. Overrides the section's copy_recent_hours."
                 },
                 {
                     "field": "copy_selection",
@@ -25735,7 +25792,7 @@
                         "case_insensitive": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "What a SQL Server restore copies from its source, and its space check counts: chain (the backups the restore applies) or window (every file of copy_recent_hours). An entry may set its own."
+                    "purpose": "What this entry's restore copies from its source - for every engine since 2026-10-03, and so what its space check counts. chain: the backups the restore applies (SQL Server each database's newest FULL at or before the moment, its newest DIFF and the LOGs after, with _cert/; PostgreSQL the newest _FULL, its _INCRs and wal/; Oracle the pieces RMAN names). window: the chain AND every other file the source wrote in copy_recent_hours - every restore point of the window, never fewer backups than chain. A point in time copies everything either way. A database or layout whose chain cannot be read is copied whole (to another machine) or by its window (from a share)."
                 },
                 {
                     "field": "backups",

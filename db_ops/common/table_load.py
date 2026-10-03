@@ -42,6 +42,7 @@ values per driver, and the create-then-load transaction.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 import re
 import time
 from pathlib import Path
@@ -53,7 +54,7 @@ from db_ops.common import sql_run
 from db_ops.lib import xlsx_import
 
 
-class TableLoadError(RuntimeError):
+class TableLoadError(errors.OperationFailed):
     """A user-facing failure: bad workbook, table already there, a value too long, load refused."""
 
 

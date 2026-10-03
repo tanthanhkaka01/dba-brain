@@ -41,6 +41,7 @@ no sweeper job has to be running for a stale session to stop working.
 
 from __future__ import annotations
 
+from db_ops.lib import errors
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -80,8 +81,10 @@ DEFAULT_LOCKOUT_MINUTES = 15
 DEFAULT_MAX_FAILED_PER_IP = 5
 
 
-class WebAuthError(RuntimeError):
+class WebAuthError(errors.DbOpsError, RuntimeError):
     """An account operation cannot be carried out as asked."""
+
+    kind = errors.KIND_REQUEST
 
 
 def utc_now() -> datetime:
@@ -270,9 +273,27 @@ class WebAuthStore:
             row = conn.execute("SELECT COUNT(*) AS n FROM web_users").fetchone()
         if int(row["n"] or 0):
             return False
+        return self.add_bootstrap_admin(actor="bootstrap",
+                                        note="created on first run; password must be changed at "
+                                             "first sign-in")
+
+    def add_bootstrap_admin(self, *, actor: str, note: str = "") -> bool:
+        """Add the first-run ``admin`` / ``admin`` to a store that already holds other accounts.
+
+        The first run creates it only on an empty table, and a store that outlived its first node
+        never gets one: the 0.26 soak node reused a store whose only account was a person's, made
+        by an earlier test run, and nobody could sign in (2026-10-03, the operator: *dbabrain is a
+        public tool - admin/admin for the first sign-in*). Asked for by name
+        (``webhost.cli bootstrap-admin``), so it never comes back by itself. Changed at its first
+        sign-in like the first run's. False when an active ``admin`` already exists - its password
+        is somebody's, and this never resets one.
+        """
+        if self.get_user(BOOTSTRAP_USERNAME) is not None:
+            return False
         self.create_user(username=BOOTSTRAP_USERNAME, password=BOOTSTRAP_PASSWORD, level=100,
-                         display_name="Administrator", actor="bootstrap",
-                         note="created on first run; password must be changed at first sign-in",
+                         display_name="Administrator", actor=actor,
+                         note=note or "added by bootstrap-admin; password must be changed at "
+                                      "first sign-in",
                          must_change_password=True, check_quality=False)
         return True
 

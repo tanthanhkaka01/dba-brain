@@ -519,7 +519,11 @@ def subprocess_argv(sql_access: dict[str, Any]) -> list[str]:
             "Python 2.7 32-bit runtime (tools/python32_legacy/README.md explains how it is "
             "provisioned); it is deliberately not part of the db_ops venv."
         )
-    return [str(python_exe), str(script)]
+    # The request is on stdin for this form too, and the tool reads it only when told to. Until
+    # 2026-10-03 this returned the two paths alone: the tool answered "Either --request or
+    # --connect is required" and no script-form subprocess target ever ran - found the first time
+    # one was tried, on a test instance; every target of the estate uses the bridge ('api').
+    return [str(python_exe), str(script), "--request", "-"]
 
 
 def _tool_dir(sql_access: dict[str, Any]) -> Path:
