@@ -763,6 +763,20 @@ def postgresql_chain_include(source_session, *, source_dir: str, log: Any = None
 # completed. Everything the catalog recorded at or after that moment travels.
 _ORACLE_PREVIEW = "RESTORE DATABASE PREVIEW;\nEXIT;\n"
 
+# Where the restore will STOP, which is not the newest level 0. A DUPLICATE from a backup location
+# with no UNTIL recovers through the newest archived-log backup in it and ends there, so a level 0
+# taken after that log is one it cannot use: it needs the level 0 before. Measured on the 0.26.0
+# lab, 2026-10-04: a level 0 checkpointed at SCN 2899140, the newest log backup ending at 2898894,
+# the chain cut at that level 0 - and RMAN-06023 "no backup or copy of datafile 1 found to
+# restore" on every run until the next archivelog job. So the preview is asked UNTIL that SCN.
+_ORACLE_NEWEST_LOG_SQL = """set pagesize 0 feedback off heading off
+SELECT MAX(r.next_change#)
+FROM v$backup_redolog r
+JOIN v$backup_piece p ON p.set_stamp = r.set_stamp AND p.set_count = r.set_count
+WHERE p.status = 'A' AND p.handle LIKE '{directory}/%';
+EXIT;
+"""
+
 _ORACLE_CHAIN_SQL = """set pagesize 0 feedback off heading off linesize 32767 trimspool on
 SELECT p.handle
 FROM v$backup_piece p
@@ -802,7 +816,8 @@ def oracle_chain_include(source_session, *, backup_dir: str, container: str,
     (review 0.25.0, G2.9): RMAN could not name the chain, so neither can this.
     """
     directory = backup_dir.rstrip("/")
-    handles = _oracle_preview_handles(source_session, container, log=log)
+    until_scn = _oracle_newest_log_scn(source_session, container, directory)
+    handles = _oracle_preview_handles(source_session, container, until_scn=until_scn, log=log)
     if not handles:
         raise ChainUnknownError(
             f"RMAN preview in {container} named no backup pieces - the restore chain is unknown.")
@@ -825,11 +840,25 @@ def oracle_chain_include(source_session, *, backup_dir: str, container: str,
     return tuple(sorted(set(names)))
 
 
-def _oracle_preview_handles(source_session, container: str, *, log: Any = None) -> list[str]:
-    """The datafile piece handles from ``RESTORE DATABASE PREVIEW`` - RMAN's own answer."""
+def _oracle_newest_log_scn(source_session, container: str, directory: str) -> int | None:
+    """The SCN the newest archived-log backup in ``directory`` reaches, or ``None`` if it holds none."""
+    rows = _oracle_sql(source_session, container,
+                       _ORACLE_NEWEST_LOG_SQL.format(directory=directory.replace("'", "''")))
+    for line in rows:
+        if line.strip().isdigit():
+            return int(line.strip())
+    return None
+
+
+def _oracle_preview_handles(source_session, container: str, *, until_scn: int | None = None,
+                            log: Any = None) -> list[str]:
+    """The datafile piece handles from ``RESTORE DATABASE PREVIEW`` - RMAN's own answer, for the
+    point the restore will recover to when the backup location holds a log backup to stop at."""
+    script = (f"RESTORE DATABASE UNTIL SCN {until_scn} PREVIEW;\nEXIT;\n" if until_scn
+              else _ORACLE_PREVIEW)
     out = _run_in_container(
         source_session, container,
-        f"printf {shlex.quote(_ORACLE_PREVIEW)} | rman target / log /dev/stdout 2>&1",
+        f"printf {shlex.quote(script)} | rman target / log /dev/stdout 2>&1",
     )
     handles = []
     for line in out.splitlines():

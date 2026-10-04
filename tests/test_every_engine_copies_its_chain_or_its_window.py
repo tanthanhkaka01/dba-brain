@@ -275,6 +275,35 @@ def test_oracle_chain_moves_the_pieces_rman_names(monkeypatch):
     assert _copied(monkeypatch, "oracle", ORACLE, selection="chain") == sorted(ORACLE_CHAIN)
 
 
+def test_oracle_chain_reaches_back_to_the_level_0_the_newest_log_can_recover(monkeypatch):
+    """A level 0 taken after the newest archived-log backup is one a DUPLICATE cannot use: with no
+    UNTIL it recovers through that log and stops, so it needs the level 0 before. On the 0.26.0 lab
+    (2026-10-04) the chain was cut at the new level 0 (SCN 2899140) while the newest log backup
+    ended at 2898894, and every run failed RMAN-06023 until the next archivelog job. RMAN is now
+    asked for the preview UNTIL that SCN, so it names the level 0 the restore will really use."""
+    asked: list[str] = []
+    older_l0, newer_l0 = "FREE_L0_20261003_old_1316_1_1.bkp", "FREE_L0_20261004_new_1330_1_1.bkp"
+
+    class _LabSource:
+        def open_stream(self, command, timeout_seconds=None):
+            asked.append(command)
+            if "v$backup_redolog" in command:            # the newest log backup in the directory
+                text = "   2898894\n"
+            elif "rman target" in command:                # the level 0 RMAN would use up to there
+                piece = older_l0 if "UNTIL SCN 2898894" in command else newer_l0
+                text = f"  Piece Name: {ORACLE_DIR}/{piece}\n"
+            else:                                         # the catalog from that piece's set on
+                names = [older_l0, newer_l0] if older_l0 in command else [newer_l0]
+                text = "".join(f"{ORACLE_DIR}/{name}\n" for name in names)
+            return None, _Out(text), None
+
+    include = backup_copy.oracle_chain_include(_LabSource(), backup_dir=ORACLE_DIR,
+                                               container="ORACLE_LAB")
+
+    assert any("RESTORE DATABASE UNTIL SCN 2898894 PREVIEW" in command for command in asked)
+    assert set(include) == {older_l0, newer_l0}
+
+
 def test_oracle_window_adds_every_piece_of_the_window_to_the_chain(monkeypatch):
     moved = _copied(monkeypatch, "oracle", ORACLE, selection="window")
 

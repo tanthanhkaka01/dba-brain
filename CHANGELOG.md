@@ -494,6 +494,11 @@ do about it. Not the internal refactor that made it possible.
   in `QUERY_LONG_RUNNING` and `QUERY_LONG_WAITING_OR_ROLLBACK_REQUESTS` on SQL Server (both variants).
   0.25.0 added it to the metrics that already joined `sys.dm_exec_connections`, and these two had the
   join only in a commented-out draft.
+- **An Oracle restore right after a level 0 no longer fails until the next archivelog backup.** The
+  copy took the chain from the newest level 0, but the DUPLICATE recovers only through the newest
+  archived-log backup - so a level 0 taken after that log was one it could not use, and every run
+  failed `RMAN-06023 no backup or copy of datafile 1 found to restore` until the archivelog job ran
+  again. RMAN is now asked which level 0 it needs to reach that log, and the chain starts there.
 - **`build-showcase` leaves a page's markup alone.** It rewrote every word outside script and
   style, tags included: an estate with tables called `meta` and `Area` produced
   `<TerritoryHistory charset="utf-8">` and unstyled health cards - certified clean, and already in

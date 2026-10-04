@@ -163,7 +163,7 @@ PostgreSQL and Oracle always took their chain, SQL Server the whole directory.
 | --- | --- | --- |
 | SQL Server | each database's newest FULL, its newest DIFF, the LOGs after them, and `_cert/` - from the share listing, or (to another machine) from `<database>/FULL|DIFF|LOG/` and the time in each name | the chain **and** every file written in `copy_recent_hours` |
 | PostgreSQL | the newest `base/<stamp>_FULL`, the `_INCR`s after it, `wal/` | the chain and every file of the window |
-| Oracle | the pieces RMAN names for the newest level 0 onward | the chain and every piece of the window |
+| Oracle | the pieces RMAN names from the level 0 the restore can recover to the newest log backup | the chain and every piece of the window |
 | a point in time | everything, in either mode | everything |
 
 A window never holds fewer backups than the chain: a window shorter than the FULL interval still
@@ -1354,7 +1354,7 @@ differs per engine, because the engines state it differently — and the differe
 | Engine | How the chain is decided | Implemented in |
 | --- | --- | --- |
 | PostgreSQL | From the directory layout: newest `<stamp>_FULL`, every `_INCR` sorting after it, and `wal/` whole | `_postgresql_chain_include` |
-| Oracle | **By asking RMAN**: `RESTORE DATABASE PREVIEW` names the datafile pieces, then the catalog returns every piece recorded from that level 0 onward | `_oracle_chain_include` |
+| Oracle | **By asking RMAN**: `RESTORE DATABASE UNTIL SCN <the newest archived-log backup in the directory> PREVIEW` names the datafile pieces, then the catalog returns every piece recorded from that level 0 onward. The UNTIL is where the DUPLICATE stops: it recovers through the newest log backup and no further, so a level 0 taken after that log is one it cannot use - cutting the chain there failed every run with RMAN-06023 until the next archivelog job (0.26.0 lab, 2026-10-04). With no log backup the preview has no UNTIL | `_oracle_chain_include` |
 | SQL Server | Not narrowed — the copy is already small, and the restore script picks its own chain per database | — |
 
 **Oracle must never be narrowed by reading file names.** An RMAN directory is flat and its chain is
