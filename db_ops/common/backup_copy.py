@@ -840,7 +840,8 @@ def oracle_chain_include(source_session, *, backup_dir: str, container: str,
             f"no catalog piece of the restore chain lies under {directory} - the directory being "
             "transferred does not hold the chain.")
     if log:
-        log(f"transfer narrowed to the RMAN chain: {len(names)} piece(s) from the newest level 0")
+        point = f"recoverable to SCN {until_scn}, the newest log backup" if until_scn else "the newest"
+        log(f"transfer narrowed to the RMAN chain: {len(names)} piece(s) from the level 0 {point}")
     return tuple(sorted(set(names)))
 
 
