@@ -201,12 +201,15 @@ def sql_tasks_listing(sql_id: str | int | None = None) -> dict[str, Any]:
     produced is reported to the operator, and a prompt decision that cannot be made falls back to
     not prompting - the behaviour that was correct for every task before parameters existed.
     """
-    from db_ops.lib import sql_task_catalog
+    from db_ops.lib import paths, sql_task_catalog
 
     wanted = str(sql_id or "").strip()
     try:
+        # Read at call time, as it was before the module split: the name this module bound at
+        # import is a copy, and a data folder set afterwards never reached it. The 0.26.0 public
+        # suite found it - its test read this repo's own data/ in the private tree and passed.
         return dict(sql_task_catalog.collect_sql_tasks(
-            Path(DEFAULT_DATA_DIR).resolve(), sql_id=int(wanted) if wanted else None))
+            Path(paths.DEFAULT_DATA_DIR).resolve(), sql_id=int(wanted) if wanted else None))
     except (OSError, ValueError, RuntimeError) as exc:
         _dispatch_log(
             None, f"telegram.command_processor.sql_tasks_listing.failed|error={safe_error_summary(exc)}",
