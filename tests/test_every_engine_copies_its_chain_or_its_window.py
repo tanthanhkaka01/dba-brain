@@ -304,6 +304,16 @@ def test_oracle_chain_reaches_back_to_the_level_0_the_newest_log_can_recover(mon
     assert set(include) == {older_l0, newer_l0}
 
 
+def test_no_sql_sent_through_printf_carries_a_format_character():
+    """The Oracle queries reach sqlplus as `printf <text> | sqlplus`, and printf reads `%` as a
+    format: a `LIKE '<dir>/%'` failed the newest-log query on the lab (2026-10-04, "printf: `;':
+    invalid format character") and the chain silently fell back to the newest level 0."""
+    for text in (backup_copy._ORACLE_NEWEST_LOG_SQL.format(directory=ORACLE_DIR),
+                 backup_copy._ORACLE_CHAIN_SQL.format(handles="'x'"),
+                 backup_copy._ORACLE_PREVIEW):
+        assert "%" not in text
+
+
 def test_oracle_window_adds_every_piece_of_the_window_to_the_chain(monkeypatch):
     moved = _copied(monkeypatch, "oracle", ORACLE, selection="window")
 

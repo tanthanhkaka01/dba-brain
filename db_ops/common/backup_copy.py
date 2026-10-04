@@ -769,11 +769,15 @@ _ORACLE_PREVIEW = "RESTORE DATABASE PREVIEW;\nEXIT;\n"
 # lab, 2026-10-04: a level 0 checkpointed at SCN 2899140, the newest log backup ending at 2898894,
 # the chain cut at that level 0 - and RMAN-06023 "no backup or copy of datafile 1 found to
 # restore" on every run until the next archivelog job. So the preview is asked UNTIL that SCN.
+#
+# No `%` anywhere in it: the text reaches sqlplus through `printf`, which reads `%` as a format, and
+# a `LIKE '<dir>/%'` failed the query on the lab - the chain then quietly fell back to the newest
+# level 0. INSTR says "starts with" without one.
 _ORACLE_NEWEST_LOG_SQL = """set pagesize 0 feedback off heading off
 SELECT MAX(r.next_change#)
 FROM v$backup_redolog r
 JOIN v$backup_piece p ON p.set_stamp = r.set_stamp AND p.set_count = r.set_count
-WHERE p.status = 'A' AND p.handle LIKE '{directory}/%';
+WHERE p.status = 'A' AND INSTR(p.handle, '{directory}/') = 1;
 EXIT;
 """
 
