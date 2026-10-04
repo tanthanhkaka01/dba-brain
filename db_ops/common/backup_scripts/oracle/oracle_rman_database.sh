@@ -216,6 +216,14 @@ else
 # and DELETE NOPROMPT OBSOLETE below acts on THAT policy, not on RETENTION_DAYS=${retention_days}."
 fi
 
+# The backup ends with its own archived logs. A level 0 or 1 taken with the database open is fuzzy:
+# to open it, a restore applies the redo written WHILE it was taken, and that redo sat in the online
+# log until the next archivelog job - up to its interval later. Until then the backup could not be
+# used: a DUPLICATE recovers through the newest archived-log backup and stops, so on the 0.26.0 lab
+# (2026-10-04) a level 0 checkpointed at SCN 2899140, the newest log backup ending at 2898894, made
+# the restore fall back to the level 0 before (RMAN-06023 while the copy held only the new one).
+# So the current log is archived and every log not yet backed up goes into this backup's
+# directory, under the archivelog job's own name, before the controlfile that records them.
 RMAN_IN="$(cat <<RMANEOF
 ${enc_line}
 SHOW ALL;
@@ -223,6 +231,8 @@ ${configure_lines}
 RUN {
   ALLOCATE CHANNEL c1 DEVICE TYPE DISK FORMAT '${backup_dir}/%d_L${level}_%T_%U.bkp';
   BACKUP INCREMENTAL LEVEL ${level} DATABASE TAG 'DBOPS_L${level}';
+  SQL 'ALTER SYSTEM ARCHIVE LOG CURRENT';
+  BACKUP ARCHIVELOG ALL NOT BACKED UP 1 TIMES TAG 'DBOPS_ARCH' FORMAT '${backup_dir}/arch_%d_%T_%U.bkp';
   BACKUP CURRENT CONTROLFILE TAG 'DBOPS_CTL';
   RELEASE CHANNEL c1;
 }

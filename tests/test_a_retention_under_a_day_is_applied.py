@@ -150,6 +150,21 @@ def test_oracle_removes_backups_through_rman_only_after_a_level_zero_that_succee
     assert "DELETE NOPROMPT OBSOLETE;" in text
 
 
+def test_an_oracle_database_backup_carries_its_own_archived_logs():
+    """A level 0 taken with the database open needs the redo written while it was taken, and that
+    redo waited in the online log for the next archivelog job. On the 0.26.0 lab (2026-10-04) a
+    restore right after a level 0 fell back to the level 0 before it, and failed while the copy
+    held only the new one. The backup now archives the current log and backs up every log not yet
+    backed up - after the datafiles, before the controlfile that records them."""
+    text = _script("oracle/oracle_rman_database.sh")
+    datafiles = text.index("BACKUP INCREMENTAL LEVEL ${level} DATABASE TAG 'DBOPS_L${level}';")
+    switch = text.index("SQL 'ALTER SYSTEM ARCHIVE LOG CURRENT';")
+    logs = text.index("BACKUP ARCHIVELOG ALL NOT BACKED UP 1 TIMES TAG 'DBOPS_ARCH' "
+                      "FORMAT '${backup_dir}/arch_%d_%T_%U.bkp';")
+    controlfile = text.index("BACKUP CURRENT CONTROLFILE TAG 'DBOPS_CTL';")
+    assert datafiles < switch < logs < controlfile
+
+
 def test_a_failed_oracle_sweep_is_a_warning_and_not_the_backups_verdict():
     text = _script("oracle/oracle_rman_database.sh")
     sweep = text[text.index('if [ -n "$retention_seconds" ] && [ "$level" = "0" ]; then'):]

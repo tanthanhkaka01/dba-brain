@@ -499,6 +499,9 @@ do about it. Not the internal refactor that made it possible.
   archived-log backup - so a level 0 taken after that log was one it could not use, and every run
   failed `RMAN-06023 no backup or copy of datafile 1 found to restore` until the archivelog job ran
   again. RMAN is now asked which level 0 it needs to reach that log, and the chain starts there.
+  **And an Oracle level 0 or 1 backup ends with its own archived logs** (the current log archived,
+  every log not yet backed up, before the controlfile), so the backup a restore finds is usable at
+  once and the restore reaches it - not the previous level 0, minutes older.
 - **`build-showcase` leaves a page's markup alone.** It rewrote every word outside script and
   style, tags included: an estate with tables called `meta` and `Area` produced
   `<TerritoryHistory charset="utf-8">` and unstyled health cards - certified clean, and already in
