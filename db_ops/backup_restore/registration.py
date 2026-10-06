@@ -120,8 +120,10 @@ instance they are restored onto, and which databases to carry across.
                  password_ref / password, sql_instance, sql_username,
                  sql_password_ref / sql_password, restore_data_dir, ...
                  (password_env / sql_password_env are the old spellings, still taken)
-  database_mappings  list of {source_database, target_database}. An empty list goes on
-                 restoring whatever it finds, including files nobody produces any more
+  database_mappings  list of {source_database, target_database} - the databases restored
+  restore_all_databases  true: every database whose FULL is on the share, each under its
+                 backup's own name. A SQL Server entry states one of the two (rules R50);
+                 an empty list alone is refused. Script-driven entries restore the instance
   server_metadata  optional {enabled, artifacts, phases}
   notify         REQUIRED {logging_on_run, alert_on_error}, each {enabled, telegram_chat,
                  chat_id} - which chat this entry's runs and failures go to. Absent it
@@ -197,16 +199,16 @@ def _load_every_restore(path: Path, *, registering: str = "") -> None:
     """Load ``restores[]`` the way each consumer does: the SQL Server engine path, then the
     script-driven one the scheduler and ``restore-workflow`` run.
 
-    ``registering`` is the entry being written. The script loader keeps an inactive entry it cannot
-    read out of its answer rather than refusing the file (``ScriptRestores``), so an old retired
-    entry no longer blocks a new one - but the entry being registered is held to the rule whether
-    it is active or not: one that could never run is not written.
+    ``registering`` is the entry being written. Both loaders keep an inactive entry they cannot
+    read out of their answer rather than refusing the file (``RestoreConfigs``, ``ScriptRestores``),
+    so an old retired entry no longer blocks a new one - but the entry being registered is held to
+    the rule whether it is active or not: one that could never run is not written.
     """
     from db_ops.backup_restore.config import load_restore_configs
     from db_ops.backup_restore.restore_script import load_script_restores, unusable_reason
 
-    load_restore_configs(path)
-    why_not = unusable_reason(load_script_restores(path), registering)
+    why_not = (unusable_reason(load_restore_configs(path), registering)
+               or unusable_reason(load_script_restores(path), registering))
     if why_not:
         raise ValueError(why_not)
 

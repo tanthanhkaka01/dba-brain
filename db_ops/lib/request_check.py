@@ -40,13 +40,13 @@ from db_ops.lib.paths import PACKAGED_CATALOGUE
 #: The findings that refuse a request - once :data:`REFUSING` is on. Everything else is measured.
 REFUSED_KINDS = frozenset({"value", "missing"})
 
-#: Off until what the apps really send has been measured clean. The suite could not certify it -
-#: most app tests fake the transport - and the first node to run the check proved why: every SQL
-#: task was refused within a minute, because the reference described `run-sql`'s `capture` as a
-#: boolean while the runner sends "all", which `sql_run` reads (2026-10-03). The reference was
-#: wrong, not the request; a check is only as right as what it checks against. So the findings
-#: that would refuse are measured beside the rest until a node's log of them is empty.
-REFUSING = False
+#: **On since 0.27.0** (the operator, 2026-10-05). It was off until what the apps really send had
+#: been measured clean: the suite cannot certify it - most app tests fake the transport - and the
+#: first node to run it refused every SQL task within a minute, because the reference described
+#: `run-sql`'s `capture` as a boolean while the runner sends "all" (2026-10-03). The 0.26.0 soak
+#: node then measured 24 hours of real requests with no finding at all. A reference still wrong
+#: somewhere is now a refusal with the field named, and the 0.27.0 soak is where it shows.
+REFUSING = True
 
 #: The reference, read once per process: a command reads one request, and the file is 1 MB.
 _REFERENCE: list[dict[str, Any]] | None = None

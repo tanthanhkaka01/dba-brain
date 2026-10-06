@@ -120,6 +120,20 @@ def row_metadata(row: object) -> dict:
     return loaded if isinstance(loaded, dict) else {}
 
 
+def row_host(row: object) -> str:
+    """A run row's own ``host_name`` column, or ``""`` - what :func:`claim_owner` takes as
+    ``host_fallback``.
+
+    Every reader of a claim passes it, not only the daemon's start-up: a row an older build wrote
+    keeps its ``pid`` in the metadata and its host only in this column, and a reader that left it
+    out judged that row differently from the one that read it (0.27.0 item 1.96).
+    """
+    try:
+        return str(row["host_name"] or "").strip()  # type: ignore[index]
+    except (KeyError, IndexError, TypeError):
+        return ""
+
+
 def claim_owner(metadata: dict | None, *, host_fallback: str = "") -> tuple[int | None, str]:
     """The ``(pid, host)`` recorded on a row, as far as it recorded anything.
 
@@ -153,8 +167,13 @@ def reap_verdict(
     foreign_grace_seconds: int = FOREIGN_HOST_GRACE_SECONDS,
     this_node: str = "",
     at_timeout: bool = False,
+    host_fallback: str = "",
 ) -> ReapVerdict:
     """May this ``running`` row be closed and its key released?
+
+    ``host_fallback`` is the row's own ``host_name`` column: a row an older build wrote keeps its
+    ``pid`` in the metadata and its host only there, and read without it the row looked like the
+    reaper's own (0.27.0 item 1.96).
 
     ``pid_alive`` is the caller's reading of the recorded pid — ``None`` when there was no pid to
     read, or when the row belongs to another host and the question cannot be asked from here.
@@ -168,7 +187,8 @@ def reap_verdict(
     verdict = _owner_verdict(
         metadata=metadata, this_host=this_host, elapsed_seconds=elapsed_seconds,
         timeout_seconds=timeout_seconds, pid_alive=pid_alive,
-        foreign_grace_seconds=foreign_grace_seconds, this_node=this_node)
+        foreign_grace_seconds=foreign_grace_seconds, this_node=this_node,
+        host_fallback=host_fallback)
     if verdict.reap or not at_timeout:
         return verdict
     if timeout_seconds and elapsed_seconds >= timeout_seconds:
@@ -187,9 +207,10 @@ def _owner_verdict(
     pid_alive: bool | None,
     foreign_grace_seconds: int,
     this_node: str,
+    host_fallback: str = "",
 ) -> ReapVerdict:
     """The table of the module docstring: who owns the row, and is that owner still there."""
-    pid, host = claim_owner(metadata)
+    pid, host = claim_owner(metadata, host_fallback=host_fallback)
 
     if pid is not None and host and host == this_host:
         if pid_alive:
@@ -207,6 +228,15 @@ def _owner_verdict(
             f"its processes ended with that host")
 
     if pid is not None and host and host != this_host:
+        if not timeout_seconds:
+            # A service - timeout 0, it runs until its own daemon stops - is never reaped on age,
+            # as the docstring above says; from another host its pid cannot be read either. Its
+            # own host closes it. On 2026-09-30 a daemon started on the master against the
+            # worker's store closed the worker's live web host this way (0.27.0 item 1.96); the
+            # claim is per host, so leaving another host's row costs this one nothing.
+            return ReapVerdict(
+                False,
+                f"claimed by pid {pid} on {host}: another host's service, closed only by its own host")
         if elapsed_seconds >= max(timeout_seconds, 0) + foreign_grace_seconds:
             return ReapVerdict(
                 True,
@@ -235,6 +265,7 @@ def startup_verdict(
     pid_alive: bool | None,
     foreign_grace_seconds: int = FOREIGN_HOST_GRACE_SECONDS,
     this_node: str = "",
+    host_fallback: str = "",
 ) -> ReapVerdict:
     """The same question asked at daemon startup, where one more fact is known.
 
@@ -249,12 +280,16 @@ def startup_verdict(
     Another host's row is still judged on age and grace, because this host learns nothing new about
     that one by having restarted.
     """
-    pid, host = claim_owner(metadata)
+    # The row's own host column too: a row an older build wrote names its host only there, and
+    # read without it another host's run was "pid N is gone" here - the master's daemon closed two
+    # of the worker's runs two seconds after they started, and its web host (0.27.0 item 1.96).
+    pid, host = claim_owner(metadata, host_fallback=host_fallback)
     if pid is not None and host and host != this_host:
         return reap_verdict(
             metadata=metadata, this_host=this_host, elapsed_seconds=elapsed_seconds,
             timeout_seconds=timeout_seconds, pid_alive=None,
-            foreign_grace_seconds=foreign_grace_seconds, this_node=this_node)
+            foreign_grace_seconds=foreign_grace_seconds, this_node=this_node,
+            host_fallback=host_fallback)
     if pid is not None and pid_alive:
         return ReapVerdict(False, f"pid {pid} outlived its daemon and is still working")
     if pid is not None:
@@ -275,6 +310,7 @@ __all__ = [
     "claim_node",
     "claim_owner",
     "claim_started",
+    "row_host",
     "row_metadata",
     "reap_verdict",
     "startup_verdict",

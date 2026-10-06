@@ -31,6 +31,7 @@ import base64
 import binascii
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -177,6 +178,28 @@ def add_key_argument(parser: Any, *, inherited: bool = False) -> None:
             "Use this instead of --key when the passphrase contains shell-sensitive characters."
         ),
     )
+
+
+#: A passphrase flag and its value: `--key x`, `--key-base64=x`, `--key_base64 "x y"`. Only these
+#: three names - `--key-file` or `--keyring` is not one.
+_KEY_FLAG = re.compile(r"""(?P<name>--key(?:[-_]base64)?)(?P<sep>=|\s+)(?P<value>"[^"]*"|'[^']*'|\S+)""")
+#: The passphrase variables, only when assigned: `-e DB_OPS_SECRET_KEY` alone passes the caller's
+#: value without naming it, and the word after it is not the key.
+_KEY_VARIABLE = re.compile(
+    r"""\b(?P<name>DB_OPS_SECRET_KEY|DB_OPS_KEY_BASE64)=(?P<value>"[^"]*"|'[^']*'|\S+)""")
+
+
+def redact_key_arguments(text: str) -> str:
+    """``text`` - a command line about to be shown - with every passphrase it carries hidden.
+
+    The value after ``--key`` / ``--key-base64`` / ``--key_base64``, and the value assigned to
+    ``DB_OPS_SECRET_KEY`` or ``DB_OPS_KEY_BASE64``, quoted values whole: the upgrade procedure's
+    ``-e DB_OPS_SECRET_KEY="$(echo <base64 key> | base64 -d)"`` carries the key inside the quotes.
+    ``worker-run`` echoed such lines verbatim, the key in clear on the master's console and in any
+    log of the session (2026-10-05, 0.27.0 item 1.92).
+    """
+    text = _KEY_FLAG.sub(lambda match: f"{match['name']}{match['sep']}***", str(text))
+    return _KEY_VARIABLE.sub(lambda match: f"{match['name']}=***", text)
 
 
 def load_secret_text_file(path: str | Path, *, key: str | None = None) -> dict[str, str]:

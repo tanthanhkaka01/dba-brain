@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 import datetime as dt
 from pathlib import Path, PureWindowsPath
 from db_ops.lib.paths import DEFAULT_DATA_DIR
+from collections.abc import Callable
 from typing import Any
 
 from db_ops.lib.notify import (
@@ -18,7 +19,7 @@ from db_ops.lib.notify import (
     NotifyRule,
     parse_notify_config,
 )
-from db_ops.lib import cleanup_retention, field_names, restore_space
+from db_ops.lib import cleanup_retention, errors, field_names, restore_space, stated_facts
 from db_ops.lib.time_window import TimeWindow, parse_time_window_config
 from db_ops.lib.config import DEFAULT_CONFIG_PATH
 
@@ -134,7 +135,8 @@ RESTORE_PARSER_DEFAULTS = {
     "remote_command_timeout_seconds": 60,
     "restore_command_timeout_seconds": 0,
     "certificate_api_url": "",
-    "certificate_api_token_ref": "TOKEN_192_0_2_112_VAULT",
+    # No built-in ref (rules R50): an entry with a certificate API names its token's secret.
+    "certificate_api_token_ref": "",
     # Verified by default (review 0.25.0, B5.4): the request carries the Vault token and returns the
     # certificate's private key. An internal CA is named with certificate_api_ca_file.
     "certificate_api_verify_tls": True,
@@ -217,7 +219,7 @@ class BackupRestoreConfig:
     restore_log_file_on_vm: Path | None = None
     databases: tuple[DatabaseRestoreMapping, ...] = ()
     certificate_api_url: str = ""
-    certificate_api_token_ref: str = "TOKEN_192_0_2_112_VAULT"
+    certificate_api_token_ref: str = ""
     certificate_api_verify_tls: bool = True
     certificate_api_ca_file: str = ""
     backup_certificate: BackupCertificateSource | None = None
@@ -234,6 +236,10 @@ class BackupRestoreConfig:
     # so (owner decision G2.10): REPLACE overwrites it, users and all. A drill that runs again over
     # its own last restore states `overwrite_existing: true`.
     overwrite_existing: bool = False
+    # Every database whose FULL is on the share, each under its backup's own name - stated, never
+    # implied by an empty `database_mappings` (0.27.0 1.101): the entry says either which databases
+    # or this. The check after the restore then opens each one the run restored.
+    restore_all_databases: bool = False
     # Opt-in: also replay the source instance's server-level metadata around this restore. The
     # same block, the same parser and the same two phases the script path uses - see
     # db_ops.backup_restore.server_metadata. Absent means this entry behaves exactly as it did
@@ -314,7 +320,8 @@ def load_restore_configs(config_path: str | Path | None = None) -> list[BackupRe
         if section is None:
             section = {}
         if isinstance(section, list):
-            return [parse_restore_config({**values, **{key: value for key, value in item.items() if value is not None}}) for item in section]
+            return _parse_entries(section, merge=lambda item: {
+                **values, **{key: value for key, value in item.items() if value is not None}})
         if not isinstance(section, dict):
             raise ValueError("backup_restore config must be a JSON object or array.")
         restores = section.get("restores")
@@ -326,7 +333,8 @@ def load_restore_configs(config_path: str | Path | None = None) -> list[BackupRe
         values.update({key: value for key, value in section.items() if value is not None})
 
     if values.get("restores") is not None:
-        return _parse_restore_items(values=RESTORE_PARSER_DEFAULTS, section=values)
+        return _parse_restore_items(values=RESTORE_PARSER_DEFAULTS, section=values,
+                                    raw_block=_default_restore_section())
     if values.get("sources") is not None:
         return _parse_restore_sources(values=RESTORE_PARSER_DEFAULTS, section=values)
     if "prod_backup_share" not in values:
@@ -471,7 +479,8 @@ def _without_empty_values(raw: object) -> dict[str, Any]:
     return {key: value for key, value in raw.items() if value is not None and str(value).strip() != ""}
 
 
-def _parse_restore_items(*, values: dict[str, Any], section: dict[str, Any]) -> list[BackupRestoreConfig]:
+def _parse_restore_items(*, values: dict[str, Any], section: dict[str, Any],
+                         raw_block: dict[str, Any] | None = None) -> list[BackupRestoreConfig]:
     restores = section.get("restores")
     if not isinstance(restores, list):
         raise ValueError("backup_restore.restores must be an array.")
@@ -488,10 +497,12 @@ def _parse_restore_items(*, values: dict[str, Any], section: dict[str, Any]) -> 
     if dupes:
         raise ValueError(f"Duplicate restore_id values in backup_restore.restores: {dupes}")
     common = {key: value for key, value in section.items() if key not in ("restores", "sources") and value is not None}
-    return [
-        parse_restore_config(_merge_source_config(values=values, common=common, item=item))
-        for item in restores
-    ]
+    # The facts an entry must state (rules R50) are read from the file as written - its block and
+    # the entry - never from `values`, where the parser's own defaults would answer for them.
+    block = section if raw_block is None else raw_block
+    return _parse_entries(restores, merge=lambda item: _merge_source_config(
+        values=values, common=common, item=item),
+        gaps=lambda item: stated_facts.restore_gaps(block, item))
 
 
 def _parse_restore_sources(*, values: dict[str, Any], section: dict[str, Any]) -> list[BackupRestoreConfig]:
@@ -499,10 +510,62 @@ def _parse_restore_sources(*, values: dict[str, Any], section: dict[str, Any]) -
     if not isinstance(sources, list):
         raise ValueError("backup_restore.sources must be an array.")
     common = {key: value for key, value in section.items() if key != "sources" and value is not None}
-    return [
-        parse_restore_config(_merge_source_config(values=values, common=common, item=item))
-        for item in sources
-    ]
+    return _parse_entries(sources, merge=lambda item: _merge_source_config(
+        values=values, common=common, item=item))
+
+
+class RestoreConfigs(list):
+    """The SMB entries that can run - and, apart, the inactive ones that cannot be read.
+
+    ``unusable`` is ``{restore_id: why}``, the shape of the script-driven loader's
+    ``ScriptRestores``, so ``restore_script.unusable_reason`` reads either. That loader stopped
+    refusing its whole file over one retired entry in 0.26.0 (review 0.25.0, U2); this one still
+    did, and an inactive SMB entry missing a path stopped every SQL Server restore on the node,
+    ``list-restores`` and ``restore-add`` with it (0.27.0). An **active** entry that cannot be read
+    is still refused outright: it is about to run. An **inactive** one runs nothing.
+    """
+
+    def __init__(self, *args: Any) -> None:
+        super().__init__(*args)
+        self.unusable: dict[str, str] = {}
+
+
+def _parse_entries(items: list[Any], *, merge: Callable[[Any], dict[str, Any]],
+                   gaps: Callable[[Any], list[dict[str, str]]] | None = None) -> RestoreConfigs:
+    """Each entry merged with what it inherits (``merge``) and parsed - see :class:`RestoreConfigs`.
+
+    ``gaps`` names the facts the entry leaves to a default (rules R50): an entry with any is
+    refused like one missing a required field - with the file when it is active, kept out with its
+    reason when it is not."""
+    configs = RestoreConfigs()
+    for item in items:
+        merged = merge(item)
+        try:
+            unstated = gaps(item) if gaps is not None else []
+            if unstated:
+                raise errors.ConfigError(stated_facts.sentence(unstated))
+            configs.append(parse_restore_config(merged))
+        except ValueError as exc:
+            restore_id = str(item.get("restore_id") or "").strip()
+            if not restore_id or _parse_bool(merged.get("active"), default=True):
+                raise
+            # Kept out with its reason (RestoreConfigs): a retired entry is how an estate stops a
+            # restore, and refusing the file over it stopped the active ones too.
+            configs.unusable[restore_id] = (str(exc) if restore_id in str(exc)
+                                            else f"{restore_id}: {exc}")
+    return configs
+
+
+def _default_restore_section() -> dict[str, Any]:
+    """The node's own restore file's ``backup_restore`` block as written, defaults not merged."""
+    if not DEFAULT_RESTORE_CONFIG_PATH.exists():
+        return {}
+    with DEFAULT_RESTORE_CONFIG_PATH.open("r", encoding="utf-8-sig") as file:
+        raw = json.load(file)
+    section = raw.get("backup_restore") if isinstance(raw, dict) else None
+    if section is None and _looks_like_restore_config(raw):
+        section = raw
+    return section if isinstance(section, dict) else {}
 
 
 def _load_default_restore_values() -> dict[str, Any]:
@@ -547,6 +610,31 @@ REQUIRED_RESTORE_FIELDS: dict[str, str] = {
 }
 
 
+def _restore_all_databases(values: dict[str, Any]) -> bool:
+    """``restore_all_databases``, held to what it means (0.27.0 1.101).
+
+    Strictly a boolean: ``"yes"`` read as true would restore every database on a share on a
+    spelling. And alone: with ``database_mappings`` the entry says two things about which databases;
+    with ``restore_database_name`` every database would be restored under that one name.
+    """
+    raw = values.get("restore_all_databases")
+    label = str(values.get("restore_id") or "?")
+    if raw is None:
+        return False
+    if not isinstance(raw, bool):
+        raise ValueError(f"backup_restore.restores[{label}]: restore_all_databases must be true or "
+                         f"false, got {raw!r}.")
+    if raw and field_names.read(values, "restore_entry", "database_mappings"):
+        raise ValueError(f"backup_restore.restores[{label}]: states both database_mappings and "
+                         "restore_all_databases - state one: the databases by name, or every one on "
+                         "the share.")
+    if raw and str(values.get("restore_database_name") or "").strip():
+        raise ValueError(f"backup_restore.restores[{label}]: restore_all_databases restores each "
+                         "database under its backup's own name, and restore_database_name would "
+                         "restore every one under that single name - drop restore_database_name.")
+    return raw
+
+
 def _optional_path(value: Any) -> Path | None:
     """A Path, or None for an absent or blank value.
 
@@ -581,6 +669,7 @@ def parse_restore_config(raw: dict[str, Any]) -> BackupRestoreConfig:
     # Before anything is constructed: six of the fields below are read by subscript, and the first
     # one missing would otherwise be the entire error message.
     _assert_restore_fields(values)
+    restore_all = _restore_all_databases(values)
     # Imported here, not at module scope: server_metadata imports common.sqlserver_instance,
     # which imports this module for TOOL_ROOT.
     from db_ops.backup_restore.server_metadata import parse_server_metadata
@@ -638,7 +727,7 @@ def parse_restore_config(raw: dict[str, Any]) -> BackupRestoreConfig:
         databases=_parse_database_mappings(
             field_names.read(values, "restore_entry", "database_mappings")),
         certificate_api_url=str(values.get("certificate_api_url") or values.get("api_link_get_cer") or ""),
-        certificate_api_token_ref=str(values.get("certificate_api_token_ref") or "TOKEN_192_0_2_112_VAULT"),
+        certificate_api_token_ref=str(values.get("certificate_api_token_ref") or ""),
         certificate_api_verify_tls=_parse_bool(values.get("certificate_api_verify_tls"), default=True),
         certificate_api_ca_file=str(values.get("certificate_api_ca_file") or "").strip(),
         backup_certificate=_parse_backup_certificate(
@@ -648,6 +737,7 @@ def parse_restore_config(raw: dict[str, Any]) -> BackupRestoreConfig:
         active=_parse_bool(values.get("active"), default=True),
         checkdb=_parse_bool(values.get("checkdb"), default=True),
         overwrite_existing=values.get("overwrite_existing") is True,
+        restore_all_databases=restore_all,
         time_window=parse_time_window_config(
             values, context=f"backup_restore.restores[{values.get('restore_id') or '?'}]"
         ).time_window,
@@ -732,6 +822,10 @@ def _with_source_target_pair(raw: dict[str, Any]) -> dict[str, Any]:
             "restore_command_timeout_seconds": "restore_command_timeout_seconds",
             "restore_data_dir": "restore_data_dir_on_vm",
             "vm_platform": "vm_platform",
+            # Where sqlcmd is inside `sql_container` (rules R50). Until 0.27.0 it passed through only
+            # when the key was not in `values` already - and the parser's default "sqlcmd" always
+            # was, so a target that stated it was silently ignored and the path inferred.
+            "sqlcmd_path": "sqlcmd_path",
         }
         for old_key, new_key in target_map.items():
             if old_key in target and _should_apply_nested_value(values, new_key):

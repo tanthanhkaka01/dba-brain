@@ -303,10 +303,11 @@ def test_an_in_place_sql_server_entry_states_the_target_port(tmp_path):
     """Without it the restore connected to the source's own port: production restored over itself."""
     from db_ops.backup_restore.restore_script import load_script_restores
 
+    # The login stated, as every SQL Server entry must (rules R50): the port is what is tested.
     with pytest.raises(ValueError, match="env.MSSQL_PORT"):
-        load_script_restores(_script_config(tmp_path, db_type="sqlserver"))
+        load_script_restores(_script_config(tmp_path, db_type="sqlserver", env={"MSSQL_USER": "sa"}))
     job = load_script_restores(_script_config(tmp_path, db_type="sqlserver",
-                                              env={"MSSQL_PORT": "11433"}))[0]
+                                              env={"MSSQL_PORT": "11433", "MSSQL_USER": "sa"}))[0]
     assert job.env["MSSQL_PORT"] == "11433"
 
 

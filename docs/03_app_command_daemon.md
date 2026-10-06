@@ -224,6 +224,8 @@ When the daemon process is killed or crashes while a child subprocess is active,
 
 **Startup recovery** — `recover_stale_running_jobs` runs once at daemon startup. It queries `job_runs` for rows where `status = 'running'` and `started_at + timeout_seconds <= now`. Any matching row is updated to `status = 'timeout'` with a `finished_at` timestamp so the command is eligible to be scheduled again on the next scan.
 
+**It closes only this node's rows** (0.27.0). A row of a command whose `node_role` this daemon does not run is skipped; a row's owner is read with its `host_name` column as well as its claim, so a row an older build wrote is another host's when that column says so, not "pid gone"; a service (timeout 0) is closed only when the verdict allows it - left by this host with no live pid - and another host's service is never reaped on age. On 2026-09-30 a daemon started on the master against the worker's store closed the worker's live web host and two runs two seconds old; `worker-status` then showed the web host as timed out for five days while it served.
+
 **Per-scan detection** — `app_command_is_due` also handles stale RUNNING rows. If the latest row for a command has `status = 'running'` and `started_at + timeout_seconds <= now`, the command is treated as due (not blocked by a live run). The daemon will start a new subprocess and insert a fresh `job_runs` row; the stale row remains in the table as historical evidence.
 
 Together these two paths ensure that a crashed or long-gone subprocess never permanently blocks a scheduled command.

@@ -64,6 +64,7 @@ esac
 # retention ran on the 14-day default and nothing was ever removed (2026-10-02). `find` counts
 # minutes, and the age is the file's own on this host's clock - no time zone enters it.
 age_test="-mtime +${retention_days}"
+retention_window="${retention_days}d"
 if [ -n "$retention_seconds" ]; then
     case "$retention_seconds" in
         *[!0-9]*) die "RETENTION_SECONDS must be a whole number of seconds: '${retention_seconds}'." ;;
@@ -71,6 +72,7 @@ if [ -n "$retention_seconds" ]; then
     [ "$retention_seconds" -ge 60 ] \
         || die "RETENTION_SECONDS must be at least 60: '${retention_seconds}'."
     age_test="-mmin +$(( retention_seconds / 60 ))"
+    retention_window="${retention_seconds}s"
 fi
 
 # $DOCKER_CONTAINER is optional since 0.21.0: set it for an instance inside a container, leave it
@@ -279,10 +281,15 @@ for db in $databases; do
     if [ -z "$newest_full" ]; then
         continue   # nothing to anchor retention to; keep everything
     fi
-    exec_here sh -c "
+    # -delete before -print: find names a file only once it is gone, so the run says what the
+    # window removed - PostgreSQL and Oracle always did, and this said nothing (0.27.0 item 1.91).
+    removed="$(exec_here sh -c "
         find '${db_dir}' -type f \\( -name '*.bak' -o -name '*.trn' \\) \
-             ${age_test} ! -newer '${newest_full}' -delete 2>/dev/null || true
-    "
+             ${age_test} ! -newer '${newest_full}' -delete -print 2>/dev/null | wc -l
+    " || true)"
+    printf 'retention: %s removed %s file(s) past the window (%s), below its newest full %s\n' \
+        "$db" "$(printf '%s' "${removed:-0}" | tr -d '[:space:]')" "$retention_window" \
+        "${newest_full##*/}"
 done
 
 # Readable by the SSH user that copies them to another machine, as the Oracle and PostgreSQL jobs

@@ -395,7 +395,8 @@ def close_orphaned_run(*, store: DbOpsStore, sql_run_id: int, reason: str, confi
     if row is None:
         return {"closed": False, "sql_run_id": sql_run_id,
                 "reason": "no running row with that id - finished, closed, or never existed"}
-    owner_pid, owner_host = run_claim.claim_owner(run_claim.row_metadata(row))
+    owner_pid, owner_host = run_claim.claim_owner(run_claim.row_metadata(row),
+                                                  host_fallback=run_claim.row_host(row))
     message = (f"SQL task {row['sql_code']} target {row['target_no']} closed by hand: "
                f"{reason.strip()} (claimed by pid {owner_pid} on {owner_host or 'unknown host'}).")
     closed = store.update_sql_run(
@@ -632,7 +633,9 @@ def mark_stale_running_sql_runs(
         # second copy is prevented the other way: the owner is stopped first (below). Inside its
         # timeout a row is judged as before - a dead pid frees it at once, a live one holds it.
         metadata = run_claim.row_metadata(row)
-        owner_pid, owner_host = run_claim.claim_owner(metadata)
+        # The row's own host column too, as the daemon's start-up reads it (0.27.0 item 1.96).
+        row_host = run_claim.row_host(row)
+        owner_pid, owner_host = run_claim.claim_owner(metadata, host_fallback=row_host)
         verdict = run_claim.reap_verdict(
             metadata=metadata,
             this_host=this_host,
@@ -642,6 +645,7 @@ def mark_stale_running_sql_runs(
                        if owner_pid is not None and owner_host == this_host else None),
             this_node=node_identity.current(),
             at_timeout=True,
+            host_fallback=row_host,
         )
         if not verdict.reap:
             continue
@@ -716,7 +720,7 @@ def _left_by_this_node(row: Any, *, this_host: str) -> bool:
     node = run_claim.claim_node(metadata)
     if node:
         return node == node_identity.current()
-    _pid, host = run_claim.claim_owner(metadata)
+    _pid, host = run_claim.claim_owner(metadata, host_fallback=run_claim.row_host(row))
     return bool(host) and host == this_host
 
 
@@ -920,9 +924,14 @@ def run_one_sql_task(
             # Before a single statement runs: a fetch that fails must cost nothing, and a task
             # that opened a transaction and then went to an HTTP API would hold one open for the
             # length of the fetch.
+            # The one login this run already holds, for a script that reaches the database itself
+            # (input.target_connection); built only when asked, so no other script's run carries it.
             payloads = _run_python_source(
                 command=command, target=target, data_dir=data_dir, metadata=metadata,
                 parameter_values=parameter_values, logger=logger,
+                connection=(task_connection(target=target, database=database,
+                                            credential=credential, password=password)
+                            if command.python_source.target_connection else None),
             )
         steps = build_execution_plan(
             sql_paths=sql_paths,

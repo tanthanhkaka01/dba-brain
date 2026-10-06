@@ -118,6 +118,9 @@ Registers WHAT a SQL task runs, in data/sql_commands.json. Where it runs is sql-
              "timeout_seconds": 600, "accept_exit_codes": [0]},
    "parameters": [{"name": "payload", "type": "nvarchar(max)"}]}
 
+A script that reaches the database itself adds "target_connection": true to "input" and reads
+{"connection": {...}} - its target's one login - from stdin. No script is handed DB_OPS_SECRET_KEY.
+
 Every script named must already exist: a command that points at a file nobody has written is a
 task that fails on its schedule rather than here. {name} in input.args must be a declared
 parameter, or one of the reserved target placeholders the runner fills per target:
@@ -225,6 +228,18 @@ def _check_input_block(raw: Any, parameters: list[dict[str, Any]], root: Path) -
     if not isinstance(codes, list) or not codes or any(not isinstance(c, int) for c in codes):
         raise SqlTaskAdminError("input.accept_exit_codes must be a non-empty array of integers.")
     block["accept_exit_codes"] = list(codes)
+
+    # Written only when true, so every command registered before it keeps its bytes.
+    target_connection = raw.get("target_connection")
+    if target_connection is None:
+        target_connection = False
+    if not isinstance(target_connection, bool):
+        raise SqlTaskAdminError(
+            f"input.target_connection must be true or false, got {target_connection!r}. true "
+            "writes the target's connection to the script's stdin - only for a program that "
+            "reaches the database itself.")
+    if target_connection:
+        block["target_connection"] = True
     return block
 
 

@@ -358,3 +358,99 @@ def test_the_fetcher_never_sees_the_master_passphrase(root, monkeypatch):
     rows = ps.run(source, tool_root=root).rows
 
     assert rows == [{"key": "", "other": "kept"}]
+
+
+CONNECTION = {"server_id": "ACME-192-0-2-111", "db_type": "sqlserver", "host": "192.0.2.111",
+              "port": 1433, "username": "drain_login", "password": "one-login-password"}
+
+READS_STDIN = ("import json, os, sys\n"
+               "document = json.loads(sys.stdin.read() or 'null')\n"
+               "print(json.dumps({'data': [{'stdin': document,\n"
+               "                            'key': os.environ.get('DB_OPS_SECRET_KEY', ''),\n"
+               "                            'argv': sys.argv[1:]}]}))\n")
+
+
+def test_a_program_that_reaches_the_database_itself_reads_its_connection_on_stdin(root, monkeypatch):
+    """SQLSERVER-030 runs a stored procedure per queue row on ten connections of its own. 0.26.0
+    withheld the passphrase and gave it nothing instead: every run on the worker failed with "No
+    decryption key provided" (2026-10-05). It now gets the one login it needs - never the key to
+    all of them, never on its command line, never in the environment its children inherit."""
+    monkeypatch.setenv("DB_OPS_SECRET_KEY", "the-master-key")
+    source = ps.PythonSource(script_path=write(root, "drain.py", READS_STDIN), target_connection=True)
+
+    row = ps.run(source, tool_root=root, connection=CONNECTION).rows[0]
+
+    assert row["stdin"] == {"connection": CONNECTION}
+    assert row["key"] == "", "the passphrase is still withheld"
+    assert "one-login-password" not in " ".join(row["argv"])
+
+
+def test_a_fetcher_is_given_neither_the_connection_nor_a_stdin_of_its_own(root):
+    """Not asked for, not sent - even when the runner has one. And an empty stdin rather than the
+    daemon's: a script that reads it gets end-of-file, on every host."""
+    source = ps.PythonSource(script_path=write(root, "fetch2.py", READS_STDIN))
+
+    row = ps.run(source, tool_root=root, connection=CONNECTION).rows[0]
+
+    assert row["stdin"] is None
+
+
+def test_asking_for_a_connection_the_runner_cannot_give_refuses_before_the_script_runs(root):
+    source = ps.PythonSource(script_path=write(root, "drain2.py", READS_STDIN), target_connection=True)
+
+    with pytest.raises(ps.PythonSourceError, match="asks for its target's connection"):
+        ps.run(source, tool_root=root, connection=None)
+
+
+def test_asking_for_the_connection_is_read_off_the_command():
+    assert ps.parse({"script": "a.py", "target_connection": True},
+                    command_name="TEST-099").target_connection is True
+    assert ps.parse({"script": "a.py"}, command_name="TEST-099").target_connection is False
+    assert ps.parse({"script": "a.py", "target_connection": None},
+                    command_name="TEST-099").target_connection is False
+
+
+@pytest.mark.parametrize("spelling", ["yes", "true", 1, 0])
+def test_only_a_boolean_asks_for_the_connection(spelling):
+    """A "yes" read as true would hand a login out on a spelling."""
+    with pytest.raises(ps.PythonSourceError, match="target_connection must be true or false"):
+        ps.parse({"script": "a.py", "target_connection": spelling}, command_name="TEST-099")
+
+
+@pytest.mark.parametrize("asks", [True, False])
+def test_the_runner_hands_over_the_login_it_resolved_and_only_when_asked(tmp_path, monkeypatch, asks):
+    """The runner has resolved the target's login for the task's own SQL before the script runs;
+    that one connection is what reaches the script - built only for a command that asks."""
+    import dataclasses
+
+    from conftest import patch_sql_runner
+    from test_sql_task_claims import (RecordingSqlRunStore, inventory_and_credentials, sql_command,
+                                      sql_target)
+
+    from db_ops.sql_tasks import runner
+
+    data_dir = tmp_path / "data"
+    (data_dir / "sql").mkdir(parents=True)
+    (data_dir / "sql" / "load.sql").write_text("SELECT 1;", encoding="utf-8")
+    command = dataclasses.replace(
+        sql_command(script_files=("sql/load.sql",)),
+        python_source=ps.PythonSource(script_path="drain.py", target_connection=asks))
+    handed = []
+    patch_sql_runner(monkeypatch, "_run_python_source",
+                     lambda **kwargs: handed.append(kwargs.get("connection")) or ["[]"])
+    patch_sql_runner(monkeypatch, "execute_sql", lambda **_: {"row_count": 0, "result_sets": []})
+    patch_sql_runner(monkeypatch, "log_event", lambda *args, **kwargs: None)
+    patch_sql_runner(monkeypatch, "enqueue_sql_task_message", lambda **_: None)
+    inventory, credentials = inventory_and_credentials()
+    target = sql_target()
+
+    assert runner.run_one_sql_task(
+        store=RecordingSqlRunStore(), data_dir=data_dir, telegram_groups={}, command=command,
+        target=target, inventory=inventory, credentials=credentials, secrets={},
+        logger=None) is True
+
+    if asks:
+        assert handed[0]["server_id"] == target.server_id
+        assert "password" in handed[0]
+    else:
+        assert handed == [None]

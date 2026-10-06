@@ -66,12 +66,15 @@ def resolve_ubuntu_login(target: str, *, data_dir=None) -> dict:
     """
     from db_ops.lib.data_sources import load_remote_credentials, resolve_target_instance
     from db_ops.lib.cmd_access import resolve_cmd_access, resolve_cmd_credential, resolve_platform
+    from db_ops.lib import stated_facts
 
     text = str(target or "").strip()
     if not text:
         raise RemoteHostError("a target is required (a server_id or an ip from db_instances.json).")
     try:
         instance = resolve_target_instance(text, data_dir=data_dir)
+        # Its platform and SSH's auth_type are stated, never guessed (rules R50).
+        stated_facts.require_instance_facts(instance, facts=stated_facts.HOST_FACTS)
         platform = resolve_platform(instance)
         block = resolve_cmd_access(instance, platform=platform, host=str(instance.get("ip") or ""))
         credential = resolve_cmd_credential(block, load_remote_credentials(data_dir))

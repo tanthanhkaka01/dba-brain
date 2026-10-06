@@ -13,6 +13,7 @@ from typing import Any
 
 from db_ops.lib import sql_access
 from db_ops.lib import data_sources
+from db_ops.lib import stated_facts
 from db_ops.lib.cmd_access import (
     SUPPORTED_CMD_ACCESS_METHODS,
     SUPPORTED_PLATFORMS,
@@ -114,7 +115,15 @@ def load_metric_targets(
         # raised when a cmd metric actually tries to run, so it still surfaces loudly, as one
         # failing target instead of an estate-wide outage.
         cmd_access_error = ""
+        # A fact the record leaves to a default refuses this target alone (rules R50): reaching the
+        # host here, connecting to the engine below - the rest of the scan runs (R26).
+        host_gaps = stated_facts.instance_gaps(item, facts=stated_facts.HOST_FACTS)
+        sql_gaps = (stated_facts.instance_gaps(
+            {**item, "port": port_value, "service_name": service_name}, facts=stated_facts.SQL_FACTS)
+            if item_db_type and item_db_type != "host" else [])
         try:
+            if host_gaps:
+                raise stated_facts.FactNotStated(stated_facts.sentence(host_gaps))
             cmd_access = _resolve_cmd_access(item, platform=platform, host=ip)
             cmd_credential = _resolve_cmd_credential(cmd_access, remote_credentials)
         except RuntimeError as exc:
@@ -154,6 +163,7 @@ def load_metric_targets(
                     f"{item_db_type}_major_version": major_version,
                     "database": item.get("database") or service_name or db_name,
                     "database_names": database_names,
+                    **({"error": stated_facts.sentence(sql_gaps)} if sql_gaps else {}),
                 },
                 credential=credential,
                 metrics_config=dict(metrics_cfg) if isinstance(metrics_cfg, dict) else {},

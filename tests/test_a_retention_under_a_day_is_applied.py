@@ -119,6 +119,20 @@ def test_sqlserver_on_windows_follows_the_same_rule():
     assert "$_.LastWriteTime -lt $newestFull.LastWriteTime" in text
 
 
+def test_sqlserver_says_what_its_window_removed_on_both_platforms():
+    """PostgreSQL prints `retention: removing <dir>` and Oracle `Deleted n objects`; the SQL Server
+    job deleted silently, so only the host could show the window had been applied (0.27.0 item
+    1.91). A file is counted once it is gone: `-delete -print`, and on Windows a file still there
+    after Remove-Item is not counted."""
+    linux = _script("sqlserver/mssql_backup_database.sh")
+    assert "! -newer '${newest_full}' -delete -print 2>/dev/null | wc -l" in linux
+    assert "retention: %s removed %s file(s) past the window (%s), below its newest full %s" in linux
+    windows = _script("sqlserver/mssql_backup_database.ps1")
+    assert "if (-not (Test-Path -LiteralPath $file.FullName)) { $removed++ }" in windows
+    assert ('"retention: $db removed $removed file(s) past the window ($retentionWindow), below its '
+            'newest full $($newestFull.Name)"') in windows
+
+
 def test_postgresql_drops_whole_chains_on_a_nearer_cutoff_not_single_backups():
     text = _script("postgresql/pg_basebackup_database.sh")
     assert 'retention_window="${retention_seconds} seconds ago"' in text
@@ -133,6 +147,21 @@ def test_the_postgresql_wal_archive_is_trimmed_by_pg_archivecleanup_not_by_age()
     # age is only the fallback before the first base backup exists - and it reads the seconds too
     assert "find '${wal_dir}' -type f ${age_test} -delete" in text
     assert 'age_test="-mmin +$(( retention_seconds / 60 ))"' in text
+
+
+def test_the_backup_history_files_go_with_the_wal_they_describe():
+    """Each base backup leaves `<segment>.<offset>.backup`, and pg_archivecleanup keeps those unless
+    told - 129 on the lab after three days, and `wal_files_kept=` read as WAL growing when only they
+    were (0.27.0 item 1.90). Read on the lab before this was written: `-n -b` and the name-ordered
+    cut below choose the same 129 files and no segment, and keep the retained chains' five."""
+    text = _script("postgresql/pg_archive_wal.sh")
+    # PostgreSQL 17 and later: the tool does it, when it says it can
+    assert "pg_archivecleanup --help 2>&1 | grep -q -- --clean-backup-history" in text
+    assert "pg_archivecleanup -b '${wal_dir}' '${start_wal}'" in text
+    # before 17: the same cut by hand, on the name without its timeline, as the tool compares
+    assert r"substr(\$0, 9, 16) < substr(cut, 9, 16)" in text
+    # and the run says what went
+    assert "backup_history_removed=%s backup_history_kept=%s" in text
 
 
 def test_oracle_removes_backups_through_rman_only_after_a_level_zero_that_succeeded():

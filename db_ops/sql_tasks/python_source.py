@@ -106,7 +106,8 @@ class PythonResult:
         }
 
 
-#: Never handed to an `input` script.
+#: Never handed to an `input` script. One that reaches the database itself is given its target's
+#: connection on stdin instead (`input.target_connection`) - one login, not the key to all of them.
 _WITHHELD_FROM_FETCHERS = ("DB_OPS_SECRET_KEY", "DB_OPS_KEY_BASE64", "SQLCMDPASSWORD")
 
 
@@ -157,11 +158,17 @@ def substitute(args: tuple[str, ...], values: dict[str, Any]) -> list[str]:
 
 def run(source: PythonSource, *, tool_root: Path,
         parameter_values: dict[str, Any] | None = None,
-        target: dict[str, str] | None = None) -> PythonResult:
+        target: dict[str, str] | None = None,
+        connection: dict[str, Any] | None = None) -> PythonResult:
     """Run the script and return its rows. Raises :class:`PythonSourceError` with the reason.
 
     ``target`` fills the reserved ``{target_server_id}`` / ``{target_database}`` placeholders from
     the sql_targets entry the task runs on. A task parameter of the same name wins.
+
+    ``connection`` is the target's connection as the runner resolved it - login included. It is
+    written to the script's stdin as ``{"connection": ...}`` when the command says
+    ``input.target_connection: true``, and goes nowhere otherwise: never an argument (``ps`` shows
+    those) and never the environment (every process the script starts inherits that).
     """
     import time
 
@@ -171,9 +178,19 @@ def run(source: PythonSource, *, tool_root: Path,
     environment = dict(os.environ)
     # The fetcher is an HTTP client or vendor code: it never needs the passphrase that decrypts
     # every credential in the estate, which the daemon put in this process's environment
-    # (review 0.25.0, F4.2).
+    # (review 0.25.0, F4.2). A program that does its database work itself asks for its target's
+    # connection instead (`input.target_connection`), and gets it on stdin below.
     for name in _WITHHELD_FROM_FETCHERS:
         environment.pop(name, None)
+    # An empty stdin unless the connection goes there: a script that reads stdin gets end-of-file
+    # at once, not whatever the daemon's own stdin happens to be on that host.
+    stdin_text = ""
+    if source.target_connection:
+        if not connection:
+            raise PythonSourceError(
+                f"{script.name} asks for its target's connection (input.target_connection) and "
+                "the runner has none to give it, so it did not run.")
+        stdin_text = json.dumps({"connection": connection}, ensure_ascii=False, default=str)
     # Pinned for the same reason `transport.common_cli.spawn` pins it, and this end matters more: the
     # script prints JSON with `ensure_ascii=False`, so a Vietnamese name reaches stdout as UTF-8
     # bytes. Left to `locale.getpreferredencoding()` the child would encode cp1252 on this
@@ -184,7 +201,7 @@ def run(source: PythonSource, *, tool_root: Path,
     started = time.monotonic()
     try:
         completed = subprocess.run(
-            [sys.executable, str(script), *args],
+            [sys.executable, str(script), *args], input=stdin_text,
             cwd=str(tool_root), env=environment, capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=source.timeout_seconds,
         )

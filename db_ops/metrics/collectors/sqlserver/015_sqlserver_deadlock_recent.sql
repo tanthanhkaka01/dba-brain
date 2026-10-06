@@ -11,7 +11,10 @@ WITH deadlocks AS
 events AS
 (
     SELECT
-        DATEADD(hour, DATEDIFF(hour, GETUTCDATE(), GETDATE()),
+        -- The event's UTC stamp moved by the server's offset, read once: the difference of two
+        -- clock calls counted in hours was an hour off when one turned between them, and wrong
+        -- by the half hour in a +05:30 zone (0.27.0).
+        DATEADD(MINUTE, DATEPART(TZOFFSET, SYSDATETIMEOFFSET()),
             n.value('(event/@timestamp)[1]', 'datetime2')
         ) AS event_time
     FROM deadlocks

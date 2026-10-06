@@ -31,7 +31,8 @@ def data_dir(tmp_path):
          "platform": "linux", "instance_name": "MSSQLSERVER", "database": "a-service-label",
          "default_credential_name": "lab_dba",
          "cmd_access": {"method": "ssh", "auth_type": "password", "credential_name": "lab_os"}},
-        {"server_id": "LAB-NO-ACCESS", "ip": "10.0.0.9", "db_type": "postgresql", "platform": "linux"},
+        {"server_id": "LAB-NO-ACCESS", "ip": "10.0.0.9", "db_type": "postgresql", "platform": "linux",
+         "port": 5432, "database_name": "postgres"},
     ]}), encoding="utf-8")
     (tmp_path / "users.json").write_text(json.dumps({
         "database_credentials": [{"server_id": "LAB-10-0-0-5", "db_type": "sqlserver", "credentials": [

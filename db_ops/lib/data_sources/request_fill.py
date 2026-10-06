@@ -24,6 +24,7 @@ from typing import Any, Mapping
 
 from db_ops.lib import confirmation_ladder
 from db_ops.lib import sql_access as sql_access_rules
+from db_ops.lib import stated_facts
 from db_ops.lib.cmd_access import resolve_cmd_access, resolve_cmd_credential, resolve_platform
 from db_ops.lib.data_sources import (
     _resolve_data_dir, find_database_credential, load_credentials, load_db_instances,
@@ -74,6 +75,10 @@ def sql_connection(target: str, *, credential_name: str = "", data_dir: str | Pa
     db_type = normalize_db_type(instance.get("db_type"))
     server_id = str(instance.get("server_id") or target).strip()
     try:
+        stated_facts.require_instance_facts(instance, facts=stated_facts.SQL_FACTS)
+    except stated_facts.FactNotStated as exc:
+        raise RequestFillError(str(exc)) from exc
+    try:
         credential = find_database_credential(
             load_credentials(db_type, data_dir), server_id=server_id,
             credential_name=str(credential_name or "").strip()
@@ -91,7 +96,11 @@ def connection_from(instance: Mapping[str, Any], credential: Mapping[str, Any], 
 
     For a caller that has both in hand - the SQL task runner resolves them itself - so the block is
     built one way whoever read the files (rules R11).
+
+    The record states its port and its database (rules R50): a connection is never built on the
+    engine's default port or on a service label taken for a database - :class:`stated_facts.FactNotStated`.
     """
+    stated_facts.require_instance_facts(dict(instance), facts=stated_facts.SQL_FACTS)
     db_type = normalize_db_type(instance.get("db_type"))
     block: dict[str, Any] = {
         "db_type": db_type,
@@ -130,6 +139,8 @@ def host_access(target: str, *, data_dir: str | Path | None = None,
     instance = _host_instance(str(target), data_dir=data_dir)
     label = str(instance.get("server_id") or target)
     try:
+        # The record states its platform and SSH's auth_type (rules R50) - neither is guessed.
+        stated_facts.require_instance_facts(instance, facts=stated_facts.HOST_FACTS)
         platform = resolve_platform(instance)
         block = resolve_cmd_access(instance, platform=platform, host=str(instance.get("ip") or ""))
         if not block or not block.get("enabled", True):
@@ -140,6 +151,8 @@ def host_access(target: str, *, data_dir: str | Path | None = None,
         credential = resolve_cmd_credential(block, load_remote_credentials(data_dir) if needs_groups else [])
     except RequestFillError:
         raise
+    except stated_facts.FactNotStated as exc:
+        raise RequestFillError(str(exc)) from exc   # it names the record already
     except Exception as exc:  # noqa: BLE001 - an unknown method, a credential that is not there.
         raise RequestFillError(f"{label}: {exc}") from exc
     access = {key: value for key, value in block.items() if key != "credential_name"}

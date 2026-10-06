@@ -82,6 +82,10 @@ def prepare_sql(
     words: no credential, then a password that does not resolve, then a credential without a
     username - all connect-phase, because there is no way to open a session.
     """
+    if target.connection_info.get("error"):
+        # A fact the record leaves to a default (rules R50), found at load: this target's metric
+        # fails here, before anything is sent, and the rest of the scan runs.
+        raise errors.InvalidConfig(str(target.connection_info["error"]))
     if not sql_access.is_legacy(target.sql_access):
         # The legacy bridge builds its own connect string from the credential; only a direct
         # connection needs one here.

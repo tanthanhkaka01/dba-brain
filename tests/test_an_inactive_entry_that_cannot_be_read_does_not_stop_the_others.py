@@ -15,6 +15,10 @@ The rule is kept where it protects something:
   (``ScriptRestores.unusable``), ``list-restores`` shows it, and asking for it by id answers with
   that reason, not "no such entry";
 * the entry being **registered** is held to the rule whether it is active or not.
+
+The SMB entries (the SQL Server engine path, ``config.load_restore_configs``) kept refusing their
+whole file for an inactive entry until 0.27.0 - no entry on this estate tripped it, so it was read
+and left on 2026-10-02 (review 0.25.0, U5). The same rule holds there now (``RestoreConfigs``).
 """
 
 from __future__ import annotations
@@ -24,7 +28,8 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.backup_restore import cli, registration, restore_by_id, restore_script
+from db_ops.backup_restore import cli, registration, restore_by_id, restore_script, workflow
+from db_ops.backup_restore import config as config_module
 
 
 def _entry(restore_id: str, **fields) -> dict:
@@ -168,3 +173,89 @@ def test_an_entry_being_registered_inactive_and_incomplete_is_refused(tmp_path):
 
     with pytest.raises(ValueError, match="RETIRED_DRILL requires target_server_id"):
         registration._load_every_restore(path, registering="RETIRED_DRILL")
+
+
+# --------------------------------------------------------------------------- #
+# The SMB entries - the same rule (0.27.0)
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def no_estate_defaults(tmp_path, monkeypatch):
+    """The SMB loader takes every entry's defaults from the node's own restore file; without this
+    it would read this repository's estate entries into the test's."""
+    absent = tmp_path / "no_default_restore_config.json"
+    monkeypatch.setattr(config_module, "DEFAULT_RESTORE_CONFIG_PATH", absent)
+    monkeypatch.setattr(restore_script, "DEFAULT_RESTORE_CONFIG_PATH", absent, raising=False)
+
+
+def _smb(restore_id: str, **fields) -> dict:
+    entry = {
+        "restore_id": restore_id, "server_id": "SRC", "target_server_id": "DST",
+        "cleanup_retention": 86400,
+        "source": {"backup_share": "//192.0.2.10/SQLBK"},
+        "target": {"vm_platform": "linux", "vm_import_linux_path": f"/opt/restore/import/{restore_id}",
+                   "restore_data_dir": "/var/opt/mssql/data"},
+        "database_mappings": [{"source_database": "APPDB", "target_database": "APPDB"}],
+    }
+    entry.update(fields)
+    return entry
+
+
+#: Retired, and its share long gone from the file.
+RETIRED_SMB = _smb("RETIRED_SMB", active=False, source={})
+
+
+def test_a_retired_smb_entry_with_no_share_is_kept_out_and_the_live_one_loads(tmp_path, no_estate_defaults):
+    configs = config_module.load_restore_configs(_file(tmp_path, RETIRED_SMB, _smb("LIVE_SMB")))
+
+    assert [config.restore_id for config in configs] == ["LIVE_SMB"]
+    assert "RETIRED_SMB" in configs.unusable["RETIRED_SMB"]
+    assert "prod_backup_share" in configs.unusable["RETIRED_SMB"]
+
+
+def test_the_same_smb_entry_switched_on_is_refused_with_the_whole_file(tmp_path, no_estate_defaults):
+    with pytest.raises(ValueError, match="missing required field"):
+        config_module.load_restore_configs(
+            _file(tmp_path, {**RETIRED_SMB, "active": True}, _smb("LIVE_SMB")))
+
+
+def test_an_smb_entry_that_says_nothing_about_active_is_active(tmp_path, no_estate_defaults):
+    silent = {key: value for key, value in RETIRED_SMB.items() if key != "active"}
+
+    with pytest.raises(ValueError, match="missing required field"):
+        config_module.load_restore_configs(_file(tmp_path, silent))
+
+
+def test_the_listing_names_an_incomplete_smb_entry_too(tmp_path, no_estate_defaults):
+    path = _file(tmp_path, RETIRED_SMB, _smb("LIVE_SMB"))
+
+    listing = cli._format_restore_list(config_module.load_restore_configs(path),
+                                       restore_script.load_script_restores(path))
+
+    assert listing.splitlines()[0] == "Restore IDs (1):"
+    assert "Inactive and incomplete (1) - not usable until fixed:" in listing
+    assert "RETIRED_SMB" in listing
+
+
+def test_restore_by_id_answers_an_incomplete_smb_entry_with_its_reason(tmp_path, no_estate_defaults):
+    config = _file(tmp_path, RETIRED_SMB, _smb("LIVE_SMB"))
+
+    with pytest.raises(restore_by_id.RestoreByIdError, match="prod_backup_share"):
+        restore_by_id.restore_by_id({"restore_id": "RETIRED_SMB", "config": config, "dry_run": True})
+
+
+def test_the_workflow_answers_an_incomplete_smb_entry_with_its_reason(tmp_path, no_estate_defaults):
+    """Before any store is opened: the reason is the whole answer."""
+    config = _file(tmp_path, RETIRED_SMB, _smb("LIVE_SMB"))
+
+    with pytest.raises(ValueError, match="prod_backup_share"):
+        workflow.run_scheduled_restores(app_config=None, config_path=config, restore_id="RETIRED_SMB")
+
+
+def test_an_old_unusable_smb_entry_does_not_block_a_new_one(tmp_path, no_estate_defaults):
+    registration._load_every_restore(Path(_file(tmp_path, RETIRED_SMB, _smb("NEW_SMB"))),
+                                     registering="NEW_SMB")
+
+
+def test_an_smb_entry_being_registered_inactive_and_incomplete_is_refused(tmp_path, no_estate_defaults):
+    with pytest.raises(ValueError, match="prod_backup_share"):
+        registration._load_every_restore(Path(_file(tmp_path, RETIRED_SMB)), registering="RETIRED_SMB")

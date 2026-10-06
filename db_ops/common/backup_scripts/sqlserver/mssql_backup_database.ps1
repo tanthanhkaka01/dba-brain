@@ -291,16 +291,24 @@ foreach ($db in $databases) {
 # backup set that looks present and cannot be used. The rule is the Linux script's: keep everything
 # at or newer than the newest FULL, whatever its age, and apply the age cut only below that.
 $cutoff = if ($retentionSeconds) { (Get-Date).AddSeconds(-1 * [int]$retentionSeconds) } else { (Get-Date).AddDays(-1 * $retentionDays) }
+$retentionWindow = if ($retentionSeconds) { "${retentionSeconds}s" } else { "${retentionDays}d" }
 foreach ($db in $databases) {
     $dbDir = "$backupDir\$db"
     if (-not (Test-Path -LiteralPath $dbDir)) { continue }
     $newestFull = Get-ChildItem -LiteralPath "$dbDir\FULL" -Filter '*.bak' -File -ErrorAction SilentlyContinue |
                   Sort-Object LastWriteTime -Descending | Select-Object -First 1
     if (-not $newestFull) { continue }   # nothing to anchor retention to; keep everything
-    Get-ChildItem -LiteralPath $dbDir -Recurse -File -ErrorAction SilentlyContinue |
+    $aged = @(Get-ChildItem -LiteralPath $dbDir -Recurse -File -ErrorAction SilentlyContinue |
         Where-Object { $_.Extension -in @('.bak', '.trn') } |
-        Where-Object { $_.LastWriteTime -lt $cutoff -and $_.LastWriteTime -lt $newestFull.LastWriteTime } |
-        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+        Where-Object { $_.LastWriteTime -lt $cutoff -and $_.LastWriteTime -lt $newestFull.LastWriteTime })
+    # Counted as they go, so the run says what the window removed - the Linux script's line
+    # (0.27.0 item 1.91). A file that could not be removed is not counted.
+    $removed = 0
+    foreach ($file in $aged) {
+        Remove-Item -LiteralPath $file.FullName -Force -ErrorAction SilentlyContinue
+        if (-not (Test-Path -LiteralPath $file.FullName)) { $removed++ }
+    }
+    "retention: $db removed $removed file(s) past the window ($retentionWindow), below its newest full $($newestFull.Name)"
 }
 
 if ($failed -ne 0) { Die "one or more $level backups failed." }

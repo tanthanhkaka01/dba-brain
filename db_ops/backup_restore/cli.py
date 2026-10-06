@@ -9,6 +9,7 @@ import os
 import re
 import sys
 import time
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -241,7 +242,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                                        "Default: each entry's cleanup_retention.")
     restore_workflow.add_argument("--delete-hours", type=int, default=None,
                                   help="Deprecated spelling of --delete-retention-seconds, in hours.")
-    restore_workflow.add_argument("--dry-run", action="store_true", help="Dry-run restore-latest during the workflow.")
+    restore_workflow.add_argument(
+        "--dry-run", action="store_true",
+        help="Rehearse without writing: the space check runs (it only reads), the copy is not run, "
+             "the restore and the cleanup are dry runs over what is staged now.")
     restore_workflow.add_argument("--force", action="store_true", help="Force copy even if files already exist in the target.")
     restore_workflow.add_argument(
         "--point-in-time",
@@ -296,9 +300,11 @@ def _format_restore_list(
     """
     configs, hidden_configs = active_only(restore_configs)
     scripts, hidden_scripts = active_only(script_jobs or [])
-    # Inactive entries the loader could not read (`ScriptRestores.unusable`): they stop nothing, and
-    # they are said here, each with what it lacks, because this is where an operator looks first.
-    unusable = dict(getattr(script_jobs, "unusable", {}) or {})
+    # Inactive entries a loader could not read (`RestoreConfigs.unusable`, `ScriptRestores.unusable`):
+    # they stop nothing, and they are said here, each with what it lacks, because this is where an
+    # operator looks first.
+    unusable = {**(getattr(restore_configs, "unusable", {}) or {}),
+                **(getattr(script_jobs, "unusable", {}) or {})}
     incomplete = ([f"Inactive and incomplete ({len(unusable)}) - not usable until fixed:"]
                   + [f"- {reason}" for _restore_id, reason in sorted(unusable.items())]) if unusable else []
     total = len(configs) + len(scripts)
@@ -702,6 +708,7 @@ def main(argv: list[str]) -> int:
         # restore_id: --restore-id flag takes precedence; positional restore_id_pos is the shorthand.
         restore_id_filter = getattr(args, "restore_id", None) or getattr(args, "restore_id_pos", None)
         if restore_id_filter:
+            smb_why_not = unusable_reason(restore_configs, restore_id_filter)
             restore_configs = [config for config in restore_configs if config.restore_id == restore_id_filter]
             if not restore_configs:
                 # A script-driven entry (one that declares `script`: the Oracle, PostgreSQL and
@@ -710,7 +717,7 @@ def main(argv: list[str]) -> int:
                 # found" sent an operator looking for a config problem that did not exist, on an
                 # entry sitting in the file they were reading. Name the command that runs it.
                 script_jobs = load_script_restores(resolved_config_path)
-                why_not = unusable_reason(script_jobs, restore_id_filter)
+                why_not = smb_why_not or unusable_reason(script_jobs, restore_id_filter)
                 if why_not:
                     # An inactive entry the loader could not read: its own reason, not "no entry".
                     raise ValueError(why_not)
@@ -1194,7 +1201,8 @@ def run_restore_workflow(
                 # unless the copy is forced, which writes those files again (§1.76).
                 measured = (dataclasses.replace(config, copy_window_end_utc=point_in_time_utc)
                             if point_in_time_utc is not None else config)
-                override = run_target_preflight(measured, logger=logger, recopy=force)
+                override = run_target_preflight(measured, logger=logger, recopy=force,
+                                                dry_run=dry_run)
                 _preflighted.append(override if override is not None else config)
         restore_configs = _preflighted
 
@@ -1222,10 +1230,20 @@ def run_restore_workflow(
         ):
             pass
         copy_outputs = []
-        _say("COPY_START", f"Restore {restore_configs[0].restore_id or restore_configs[0].source_id}: "
-                           f"copy started ({len(restore_configs)} source(s)).")
+        if dry_run:
+            # **A dry run copies nothing** (0.27.0 item 1.93). It ran the whole copy until then -
+            # tens of GB over SMB onto the target - and rehearsed only the restore. The space check
+            # in the preflight has already said what the copy would write; the restore below is
+            # rehearsed on what is staged now.
+            if logger:
+                log_event(logger, level="logging",
+                          message=f"{_rid}restore-workflow dry run: the copy is not run")
+            summary["copy-backup"] = {"status": "DRY_RUN", "sources": []}
+        if not dry_run:
+            _say("COPY_START", f"Restore {restore_configs[0].restore_id or restore_configs[0].source_id}: "
+                               f"copy started ({len(restore_configs)} source(s)).")
         with _workflow_phase(logger, f"{_rid}restore-workflow copy-backup", summary=summary, current_phase="copy-backup", source_count=len(restore_configs)):
-            for config in restore_configs:
+            for config in ([] if dry_run else restore_configs):
                 copy_window_start = _window_start(config)
                 step_config = dataclasses.replace(
                     config,
@@ -1256,13 +1274,14 @@ def run_restore_workflow(
                         f"window_end_utc={copy_window_end.isoformat() if copy_window_end is not None else 'unbounded'}"
                         + newest_backup_hint(step_config)
                     )
-        summary["copy-backup"] = {"status": "SUCCESS", "sources": copy_outputs}
-        _copied = sum(int(o.get("copied") or 0) for o in copy_outputs)
-        _skipped = sum(int(o.get("skipped") or 0) for o in copy_outputs)
-        _say("COPY_DONE",
-             f"Restore {restore_configs[0].restore_id or restore_configs[0].source_id}: "
-             f"copy finished - {_copied} file(s), {_skipped} already present.",
-             {"copied": _copied, "skipped": _skipped})
+        if not dry_run:
+            summary["copy-backup"] = {"status": "SUCCESS", "sources": copy_outputs}
+            _copied = sum(int(o.get("copied") or 0) for o in copy_outputs)
+            _skipped = sum(int(o.get("skipped") or 0) for o in copy_outputs)
+            _say("COPY_DONE",
+                 f"Restore {restore_configs[0].restore_id or restore_configs[0].source_id}: "
+                 f"copy finished - {_copied} file(s), {_skipped} already present.",
+                 {"copied": _copied, "skipped": _skipped})
 
         with _workflow_phase(logger, f"{_rid}restore-workflow restore-preparation", summary=summary, current_phase="restore-preparation", source_count=len(restore_configs)):
             restore_inputs = list(restore_configs)
@@ -1320,14 +1339,16 @@ def run_restore_workflow(
                     _verify_unavailable = sanitize_text(str(exc))
                 else:
                     _verify_unavailable = ""
-                for config in restore_configs:
-                    request = _verify_request(config, verify_secrets)
+                # Each entry with its own restore's answer: one that states restore_all_databases is
+                # checked on every database its run restored, by the backup's name (1.101).
+                for config, restore_output in zip(restore_inputs, restore_outputs):
+                    request, why_not = _verify_plan(config, verify_secrets,
+                                                    _restored_databases(restore_output))
                     if request is None:
                         verify_outputs.append({
                             "restore_id": config.restore_id, "target_id": config.target_id,
                             "status": "SKIPPED",
-                            "reason": _verify_unavailable
-                            or "no target login configured for this entry",
+                            "reason": _verify_unavailable or why_not,
                         })
                         continue
                     outcome = common_cli.run("verify-restore", request)
@@ -1518,11 +1539,16 @@ def _summarize_restore_sources(source_outputs: list[dict[str, object]]) -> dict[
     }
 
 
-def _verify_targets(config: Any) -> list[str]:
+def _verify_targets(config: Any, restored: Iterable[str] = ()) -> list[str]:
     """The names to look for on the TARGET, which are not always the names on the source.
 
     A drill commonly restores `SALES` as `SALES_STG`. Verifying the source name asks the target
     about a database it was never asked to create, and reports the drill broken when it worked.
+
+    **Only what the entry states** (the operator, 2026-10-06, 0.27.0 1.101): its `database_mappings`,
+    or - when it states `restore_all_databases: true`, every database on the share under its
+    backup's name - ``restored``, the databases this run restored. An entry that states neither has
+    nothing here: the loader refuses it, and this answers empty rather than guess.
     """
     names: list[str] = []
     # `target_database` / `source_database` are DatabaseRestoreMapping's fields. This asked for
@@ -1534,26 +1560,46 @@ def _verify_targets(config: Any) -> list[str]:
         name = mapping.target_database or mapping.source_database
         if name and name not in names:
             names.append(str(name))
+    if not names and getattr(config, "restore_all_databases", False) is True:
+        for name in restored:
+            if name and str(name) not in names:
+                names.append(str(name))
     return names
 
 
-def _verify_request(config: Any, secrets: dict[str, str]) -> dict[str, Any] | None:
-    """The `verify-restore` request for one entry, or ``None`` when this entry cannot be checked.
+def _restored_databases(output: object) -> list[str]:
+    """The databases one entry's restore reported restored this run, by the target's name."""
+    per_database = output.get("per_database_restore_status") if isinstance(output, dict) else None
+    if not isinstance(per_database, dict):
+        return []
+    return [str(name) for name, status in per_database.items() if str(status) == "SUCCESS"]
+
+
+def _verify_plan(config: Any, secrets: dict[str, str],
+                 restored: Iterable[str] = ()) -> tuple[dict[str, Any] | None, str]:
+    """The `verify-restore` request for one entry - or ``None`` and the reason it cannot be checked.
 
     ``None`` is a *state*, not a failure: an entry that names no target login is not a broken
     restore, it is one this node was never given the credentials to look at. It is reported as
     skipped, with the reason, rather than counted against the run - the rule the whole app follows
-    for "not configured".
+    for "not configured". The reason is the one that applies: every skip read "no target login
+    configured" until 0.27.0, which sent the reader to a login that was configured.
     """
     host = str(getattr(config, "vm_credential_target", "") or "").strip()
     username = str(getattr(config, "restore_sql_username", "") or "").strip()
     password_ref = str(getattr(config, "restore_sql_password_env", "") or "").strip()
-    databases = _verify_targets(config)
-    if not (host and username and password_ref and databases):
-        return None
+    databases = _verify_targets(config, restored)
+    if not host:
+        return None, "no target host configured for this entry (target.credential_target)"
+    if not (username and password_ref):
+        return None, ("no target login configured for this entry "
+                      "(target.sql_username and target.sql_password_ref)")
+    if not databases:
+        return None, ("no database to check: the entry states no database_mappings, or states "
+                      "restore_all_databases and the run restored none")
     password = secrets.get(password_ref)
     if not password:
-        return None
+        return None, f"the target login's secret {password_ref} is not in this node's secret store"
     # **The port comes from the entry, and did not until 2026-09-19.** It was 1433 unconditionally,
     # while the restore writes wherever `sql_instance` says. On this estate that entry restores into
     # `localhost,1453` - the container MSSQL_192_0_2_115_1453 - and the check asked
@@ -1569,10 +1615,17 @@ def _verify_request(config: Any, secrets: dict[str, str]) -> dict[str, Any] | No
         # hand a driver. Substituting the default would ask a different server and report its answer
         # as this drill's verdict, which is the failure above wearing different numbers. Skipped
         # with a reason, the way every other "cannot check this" is.
-        return None
-    return {"db_type": "sqlserver", "database_names": databases,
-            "target": {"host": host, "port": address.port,
-                       "username": username, "password": password}}
+        return None, ("the target instance names no port (target.sql_instance): a named "
+                      "instance's port is found only at connect time")
+    return ({"db_type": "sqlserver", "database_names": databases,
+             "target": {"host": host, "port": address.port,
+                        "username": username, "password": password}}, "")
+
+
+def _verify_request(config: Any, secrets: dict[str, str],
+                    restored: Iterable[str] = ()) -> dict[str, Any] | None:
+    """The `verify-restore` request for one entry, or ``None`` (see :func:`_verify_plan`)."""
+    return _verify_plan(config, secrets, restored)[0]
 
 
 #: A per-database outcome that is not a failure. `SKIPPED` is here because a database the run had

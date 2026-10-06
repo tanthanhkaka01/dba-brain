@@ -401,13 +401,23 @@ had left mid-restore and nobody could open:
    database with a real query rather than reading a state column, because a database can read
    ONLINE and still refuse one while it finishes an upgrade step. It asks about the name on the
    **target** (`restore_database_name`), not the source's — a drill that restores `SALES` as
-   `SALES_STG` would otherwise be asked about a database it was never told to create.
+   `SALES_STG` would otherwise be asked about a database it was never told to create. **It asks
+   about what the entry states** (0.27.0, the operator, 2026-10-06): its `database_mappings`, or -
+   with **`restore_all_databases: true`**, every database whose FULL is on the share, each under its
+   backup's own name - the databases that run restored. A SQL Server entry states one of the two
+   (rules R50): an empty list alone restored whatever FULL it found, and a production restore of 13
+   databases read *0 database(s) checked, 1 entry(ies) skipped* every night, under a reason that
+   blamed a configured login. Not both, and not `restore_all_databases` with `restore_database_name`
+   (every database under one name). PostgreSQL and Oracle restores are script-driven and restore
+   the instance: they state neither.
 
 **Both stop before the retention cleanup, deliberately.** A restore drill is what proves the
 backups are restorable; pruning them in the same run that failed to restore one is exactly
 backwards.
 
-**An entry this node holds no target login for is `SKIPPED`, with the reason** — not failed. "Not
+**An entry this node cannot check is `SKIPPED`, with the reason that applies** — no target host,
+no target login, no database to ask about, a secret the store does not hold, an instance with no
+port — not failed. "Not
 configured" is a state, and a check that cannot run is not evidence of a broken restore. The same
 applies when the secret store cannot be read at all: the restore itself got its credentials some
 other way, and this check must not be more fragile than the work it is checking.
@@ -464,6 +474,9 @@ python -m db_ops.backup_restore.cli restore-latest --config config.json --source
 python -m db_ops.backup_restore.cli restore-workflow --config config.json
 python -m db_ops.backup_restore.cli restore-workflow --config config.json --restore-id ACME_TO_SQLSERVER_192_168_18_31
 python -m db_ops.backup_restore.cli restore-workflow --config config.json --restore-id ACME_TO_SQLSERVER_192_168_18_31 --force
+# Rehearse without writing: the space check runs (it only reads - its `space check:` line is the
+# answer before a first night), the copy is NOT run, the restore and cleanup are dry runs over what
+# is staged now. Until 0.27.0 a dry run copied the whole chain for real.
 python -m db_ops.backup_restore.cli restore-workflow --config config.json --restore-id ACME_TO_SQLSERVER_192_168_18_31 --dry-run
 
 # Point-in-time restore (PITR) — requires FULL + LOG backups covering the target time
@@ -1318,6 +1331,22 @@ or a two-level staging folder, stopped every script-driven restore on the node -
 pass, the listing, and registering a new entry. Where an active entry and an inactive one share a
 staging folder, the inactive one yields. An entry being registered (`restore-add`) is held to the
 table whether it is active or not. A duplicate `restore_id` is still refused for the whole file.
+**The SMB entries follow the same rule since 0.27.0** (`RestoreConfigs.unusable`): an inactive one
+missing a required field (`source.backup_share`, the target's import path, `restore_data_dir`) is
+kept out with its reason, listed, and named when asked for by id - it refused the whole file until
+then, and with it every SQL Server restore on the node.
+
+**An entry states its login, its container's `sqlcmd` and its certificate token (rules R50, 0.27.0).**
+A script-driven SQL Server entry with no `env.MSSQL_USER` (it logged in as `sa`), an SMB entry into a
+container with no `target.sqlcmd_path` (it was inferred) and one with a `certificate_api_url` but no
+`certificate_api_token_ref` (a built-in ref answered) are refused like an entry missing a required
+field - with the file when active, kept out with the reason when not. The rule reads the file as
+written: the parser's own defaults (`sqlcmd_path: "sqlcmd"`) never answer for an entry. **`target.
+sqlcmd_path` is where it is stated** (`/opt/mssql-tools18/bin/sqlcmd` in Microsoft's image) - a
+`restore_target` field since 0.27.0; until then the loader dropped it silently, because it passes an
+unmapped target key through only when the entry has no value yet and the parser's default always was
+one.
+`restore-add` writes no such entry.
 
 Optional, on an entry whose target is another machine: **`copy_mode`** - `auto` (the default: one
 `tar` stream, and file by file over SFTP when tar cannot be used on either end), `tar` or `sftp`.
@@ -1687,8 +1716,8 @@ two environment variables, neither a second setting — both are read-only views
 
 | Engine | Its own way | Under a day |
 | --- | --- | --- |
-| SQL Server | file age, and never past the newest FULL of that database (`find … ! -newer <newest full>`; the PowerShell twin on Windows) | the age is counted in minutes (`-mmin`) on the host's own clock |
-| PostgreSQL | **whole chains**: a `_FULL` and the `_INCR`s after it go together, once the newest member is past the cutoff, judged on the UTC stamps in their names. The WAL archive is trimmed by `pg_archivecleanup` against the oldest base backup that remains | the same sweep with a nearer cutoff; the WAL follows on the WAL job's next run |
+| SQL Server | file age, and never past the newest FULL of that database (`find … ! -newer <newest full>`; the PowerShell twin on Windows); each run prints `retention: <db> removed N file(s) past the window (<window>), below its newest full <file>` | the age is counted in minutes (`-mmin`) on the host's own clock |
+| PostgreSQL | **whole chains**: a `_FULL` and the `_INCR`s after it go together, once the newest member is past the cutoff, judged on the UTC stamps in their names. The WAL archive is trimmed by `pg_archivecleanup` against the oldest base backup that remains, its backup-history files (`<segment>.<offset>.backup`) with it - `-b` from PostgreSQL 17, the same name-ordered cut by hand before - and the run prints `backup_history_removed=` | the same sweep with a nearer cutoff; the WAL follows on the WAL job's next run |
 | Oracle | RMAN: `CONFIGURE RETENTION POLICY TO RECOVERY WINDOW OF n DAYS` and `DELETE OBSOLETE` | RMAN's window is whole days, so the policy is **1 day** and the window itself is applied by `DELETE BACKUP COMPLETED BEFORE 'SYSDATE-<RETENTION_SECONDS>/86400-<this run so far>/86400'` - the configured window, never a literal - whole backup sets and their catalogue records together. **Only after a level 0 that succeeded in the same run**, and counted back from the start of that run: the newest level 0 is always newer than what is removed, and a level 0 that takes longer than the window keeps its own first sets; a level 1 run removes nothing. Archived logs leave the disk on the same window once backed up; their *backups* wait for that level 0 sweep |
 
 Until 0.26.0 a window under a day reached no script at all: handed nothing, each kept its own

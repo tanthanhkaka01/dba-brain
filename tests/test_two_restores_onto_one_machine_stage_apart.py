@@ -35,6 +35,8 @@ def _entry(restore_id: str, target: str, folder: str, **fields) -> dict:
         "cleanup_retention": 7200,
     }
     entry.update(fields)
+    if entry["db_type"] == "sqlserver":
+        entry.setdefault("env", {"MSSQL_USER": "sa"})   # stated, as rules R50 requires
     return entry
 
 

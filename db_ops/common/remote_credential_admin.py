@@ -186,6 +186,13 @@ def add_remote_credential(request: dict[str, Any] | None = None, *,
     if platform and platform not in SUPPORTED_PLATFORMS:
         raise InstanceAdminError(
             f"platform must be one of {sorted(SUPPORTED_PLATFORMS)}, got {platform!r}.")
+    if method and not platform:
+        # Before anything is written (rules R50): a cmd_access block on a record that states no
+        # platform has it guessed from `os` or the transport, and is refused where it is used.
+        raise InstanceAdminError(
+            f"{server_id} states no platform, and a cmd_access block needs one - give platform "
+            f"(windows | linux): it is not guessed from os or the transport (rules R50). Nothing "
+            "was written.")
 
     credential_name = str(payload.get("credential_name") or "").strip() or \
         _default_credential_name(host, username)

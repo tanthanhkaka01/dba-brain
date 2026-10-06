@@ -9,11 +9,11 @@ The check refuses what the reference says is wrong - a value of the wrong kind o
 required field absent - with the field named and the kind ``request``. It does not refuse what the
 reference only measures: an unknown key, a deprecated spelling, a blank optional field.
 
-**It refuses only once ``request_check.REFUSING`` is on.** The first node to run it refused every
+**It refuses since 0.27.0** (``request_check.REFUSING``). The first node to run it refused every
 SQL task within a minute: the reference called ``run-sql``'s ``capture`` a boolean, and the runner
 sends ``"all"``. The reference was wrong, and the suite could not see it - most app tests fake the
-transport. Until a node's measurement of real requests is empty, every finding is measured and
-nothing is refused; the refusal tests below switch it on.
+transport. So it measured first, and switched on once a node's 24 hours of real requests held no
+finding (the 0.26.0 soak). The measuring mode is kept, and tested with the switch off.
 """
 
 from __future__ import annotations
@@ -128,7 +128,14 @@ def test_the_reference_is_the_packaged_copy_never_a_node_s_data() -> None:
     assert request_check.reference() == shared_objects.load(PACKAGED_CATALOGUE)
 
 
-def test_until_it_refuses_a_wrong_value_is_measured_and_the_command_runs(capsys, tmp_path, monkeypatch) -> None:
+def test_this_version_refuses() -> None:
+    """The operator, 2026-10-05: switched on for 0.27.0, after a day of real requests measured
+    clean - a reference still wrong somewhere shows on the soak as a refusal naming the field."""
+    assert request_check.REFUSING is True
+
+
+def test_with_the_switch_off_a_wrong_value_is_measured_and_the_command_runs(capsys, tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(request_check, "REFUSING", False)
     log = tmp_path / "request_check.jsonl"
     monkeypatch.setenv("DB_OPS_REQUEST_CHECK_LOG", str(log))
     request = {"prompt": "Go on?", "tries": "twice"}

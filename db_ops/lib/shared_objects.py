@@ -125,9 +125,9 @@ VIOLATION_KINDS = ("missing", "value", "unknown")
 #: reported 110 routing levels as deprecated.
 DEPRECATED_KIND = "deprecated"
 UNLISTED_KIND = "unlisted"
-#: ``FALLBACK_KIND`` - a record that leaves which-thing facts to a default (``lib.stated_facts``):
-#: reported in this release, refused in the next (the owner's no-fallback rule, phase 1).
-NOTICE_KINDS = (DEPRECATED_KIND, UNLISTED_KIND, FALLBACK_KIND)
+#: ``FALLBACK_KIND`` - a record that leaves which-thing facts to a default (``lib.stated_facts``) -
+#: was a notice in 0.26.0 (phase 1) and is a violation since 0.27.0 (phase 2, rules R50).
+NOTICE_KINDS = (DEPRECATED_KIND, UNLISTED_KIND)
 
 _TRUE_TEXT = {"1", "true", "yes", "y", "on"}
 _FALSE_TEXT = {"0", "false", "no", "n", "off"}
@@ -488,7 +488,8 @@ def check_data_dir(data_dir: str | Path | None = None) -> dict[str, Any]:
                                          reference=reference):
                     (notices if item["kind"] in NOTICE_KINDS else findings).append(item)
 
-    notices.extend(fallbacks(root))
+    # A violation since 0.27.0 (rules R50): the record is refused where it is used.
+    findings.extend(fallbacks(root))
     return {
         "data_dir": str(root),
         "records_walked": checked_records,

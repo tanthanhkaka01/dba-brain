@@ -175,8 +175,24 @@ if [ -n "$oldest_base" ]; then
     start_wal="$(run_db "grep -m1 -o '[0-9A-F]\{24\}' '${oldest_base}/backup_label' 2>/dev/null" | tr -d '\r')"
     if [ -n "$start_wal" ]; then
         printf 'wal_cleanup_floor=%s from=%s\n' "$start_wal" "$oldest_base"
-        run_db "pg_archivecleanup '${wal_dir}' '${start_wal}' 2>&1" \
-            || printf 'warning: pg_archivecleanup reported an error\n' >&2
+        # The backup-history file each base backup leaves (<segment>.<offset>.backup) is removed by
+        # the same cut - without it they stayed for ever: 129 on the lab after three days, and the
+        # count below read as WAL growing when only they were (0.27.0 item 1.90). pg_archivecleanup
+        # removes them itself from PostgreSQL 17 (-b); before that, the same name-ordered cut by
+        # hand, compared without the timeline as the tool compares.
+        history_before="$(run_db "ls -1 '${wal_dir}' 2>/dev/null | grep -c '\.backup\$'" | tr -d '[:space:]')"
+        if run_db "pg_archivecleanup --help 2>&1 | grep -q -- --clean-backup-history"; then
+            run_db "pg_archivecleanup -b '${wal_dir}' '${start_wal}' 2>&1" \
+                || printf 'warning: pg_archivecleanup reported an error\n' >&2
+        else
+            run_db "pg_archivecleanup '${wal_dir}' '${start_wal}' 2>&1" \
+                || printf 'warning: pg_archivecleanup reported an error\n' >&2
+            run_db "cd '${wal_dir}' && ls -1 | grep '\.backup\$' | awk -v cut='${start_wal}' 'substr(\$0, 9, 16) < substr(cut, 9, 16)' | xargs -r rm -f --" \
+                || printf 'warning: removing old backup-history files reported an error\n' >&2
+        fi
+        history_after="$(run_db "ls -1 '${wal_dir}' 2>/dev/null | grep -c '\.backup\$'" | tr -d '[:space:]')"
+        printf 'backup_history_removed=%s backup_history_kept=%s\n' \
+            "$(( ${history_before:-0} - ${history_after:-0} ))" "${history_after:-0}"
     else
         printf 'skipping WAL cleanup: no START WAL in %s/backup_label\n' "$oldest_base"
     fi

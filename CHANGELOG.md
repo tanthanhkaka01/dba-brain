@@ -15,6 +15,103 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-10-06
+
+### Changed
+
+- **A record that leaves a which-thing fact to a default is refused where it is used** (rules R50,
+  phase 2 of the owner's no-fallback rule; 0.26.0 reported these as `fallback` notices). An instance
+  states `platform` when it reaches its host and SSH's `cmd_access.auth_type`; its `port`; a
+  PostgreSQL / MySQL `database_name`, an Oracle `service_name`. A script SQL Server restore states
+  `env.MSSQL_USER`, an SMB restore into a container `target.sqlcmd_path`, one with a certificate API
+  its `certificate_api_token_ref` (no built-in ref). The record fails alone, naming the field;
+  `check-objects` counts it as a violation; `instance-add` and `remote-credential-add` refuse to
+  write one.
+- **A `common.cli` request with a wrong value or a missing required field is refused** (rules R49):
+  `error_kind` `request`, the field named, nothing run. It was only measured in 0.26.0, and a day of
+  real requests on a node held no such finding. An unknown key and a deprecated spelling are still
+  only measured (`DB_OPS_REQUEST_CHECK_LOG`).
+
+### Fixed
+
+- **A SQL task whose Python program reaches the database itself can run again.** 0.26.0 took
+  `DB_OPS_SECRET_KEY` out of every `input` script's environment - right for a fetcher, which never
+  needs the key to every credential - and gave a program that opens its own connections nothing in
+  its place: such a task failed every run with *No decryption key provided*. Its command now says
+  `"input": {..., "target_connection": true}`, and the runner writes the connection of the target
+  it runs for - the one login it has already resolved for the task's own SQL - to the script's
+  stdin as `{"connection": {...}}`. Never an argument, never the environment; the passphrase is
+  still withheld from every script. Only a boolean counts; `sql-command-add` keeps the field and
+  refuses any other spelling. A script that asks for nothing now reads an empty stdin, not the
+  daemon's.
+- **`worker-run` no longer prints the passphrase.** The line it echoes (`[remote] $ ...`) and the one
+  a failure names showed `--key-base64 <key>` and `-e DB_OPS_SECRET_KEY="$(echo <key> | base64 -d)"`
+  in clear on the master's console. Every passphrase in a shown line is now `***`; the line run on
+  the host is unchanged.
+- **The PostgreSQL WAL archive no longer keeps every backup-history file.** Each base backup leaves
+  a `<segment>.<offset>.backup` file, and `pg_archivecleanup` keeps those unless told; they piled up
+  for as long as the archive existed, and `wal_files_kept=` read as WAL growing when only they were.
+  They now go with the WAL they describe (`-b` on PostgreSQL 17+, the same cut by hand before), and
+  the WAL job prints `backup_history_removed=`.
+- **The SQL Server backup job says what its retention removed**: `retention: <db> removed N
+  file(s) past the window (<window>), below its newest full <file>`, on Linux and Windows alike.
+  It deleted silently, so only the host could show the window had been applied.
+- **`restore-workflow --dry-run` copies nothing.** It ran the whole copy - tens of GB over SMB onto
+  the target - and dry-ran only the restore. Now the space check runs (it only reads, and its
+  `space check:` line is the answer a dry run is for; a refusal is reported as what the real run
+  would meet), the copy is skipped, nothing is prepared on a Windows target, and the restore and
+  cleanup are dry runs over what is staged now. `restore-latest --dry-run` never copied, and still
+  says nothing of the space check: it restores what is already there.
+- **`upgrade-config` moves the catalogue's field names with the records'.** `config_catalog.json`
+  labels each synced record by a field; a node given its catalogue before 0.22.0 still labelled SQL
+  tasks by `sql_name`, so their labels read empty there while the master's gave the display name,
+  and every sync from either side rewrote all 30 records with nothing in them changed. The
+  shipped catalogue itself still named SLA policies by `name` and Docker connections by `engine`;
+  both corrected, and the `field-names` step now renames `label_field` / `key_fields` too.
+- **A daemon starting against a shared store no longer closes another node's live runs.** Its
+  start-up recovery reconciles only the commands its own `node_role` runs; it reads a row's owner
+  from the row's `host_name` too, so a row an older build wrote is another host's, not "pid gone";
+  and a service is closed only when it is this host's with no live process. A daemon started on a
+  master against the worker's store had closed the worker's web host and two runs two seconds old.
+- **The SQL-task and backup/restore sweeps read a run's owner with its `host_name` column too**, as
+  the start-up does: a row an older build wrote was judged on age alone there - this host's dead
+  run waited for its timeout, and another host's restore was closed at its timeout rather than
+  after the grace.
+- **One retired SMB restore entry no longer stops every SQL Server restore.** An inactive entry
+  missing a required field refused the whole file - the scheduled pass, `list-restores`,
+  `restore-add`. It is kept out with its reason and listed under *Inactive and incomplete*, as the
+  script-driven entries have been since 0.26.0; an active one is still refused with the file.
+- **A skipped restore check says why.** Every skip of the check that opens the restored databases
+  read *no target login configured* - also over an entry whose login was there and whose
+  `database_mappings` was empty. It now names what is missing: the host, the login, the databases,
+  the secret, a port.
+- **`restore_all_databases`** on a SQL Server restore entry: every database whose FULL is on the
+  share, each under its backup's name, and each one opened after the run. An empty
+  `database_mappings` implied this and checked nothing; it is stated now, or the databases are
+  named. PostgreSQL and Oracle restore the instance and take neither.
+- **A restore target's `sqlcmd_path` is read.** Stated under `target`, it was silently dropped and
+  the path inside the container inferred; it is a described `restore_target` field now.
+- **The Query Store metric reports a frequent plan regression at CRITICAL when it is one**, not as
+  the single-metric WARNING the same plan also met. Its windows, and the deadlock count's, take the
+  server's UTC offset in one reading (`DATEPART(TZOFFSET, SYSDATETIMEOFFSET())`); the difference of
+  two clock calls could move them by a minute, or by an hour in the deadlock count.
+
+### Upgrading
+
+- **Your own scripts that call `common.cli`**: run them once with `DB_OPS_REQUEST_CHECK_LOG` set on
+  0.26.0, or read their answers on 0.27.0 - a request the reference says is wrong now answers
+  `error_kind: request` naming the field, where it used to run.
+- A SQL task whose `input` script opens its own database connection - it calls
+  `request_fill.sql_connection` or otherwise reads `data/encrypted_secret_text.json` - fails on
+  0.26.0. Give its command `"target_connection": true` and have the script read
+  `json.load(sys.stdin)["connection"]` and pass it to `sql_run.resolve_stated_connection`.
+- A script that ran `restore-workflow --dry-run` to stage the files stages nothing now: run
+  `copy-backup --restore-id <id>` for that.
+- A SQL Server restore entry with an empty `database_mappings` and no `restore_all_databases: true`
+  is refused - state the databases, or the flag (`restore-add` with `"replace": true`).
+- **Run `check-objects` before upgrading**: every `fallback` notice it lists on 0.26.0 is a record
+  0.27.0 refuses. State the field it names until it lists none.
+
 ## [0.26.0] - 2026-10-01
 
 ### Added

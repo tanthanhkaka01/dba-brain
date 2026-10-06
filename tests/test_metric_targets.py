@@ -89,7 +89,9 @@ def test_load_metric_targets_skips_metrics_disabled_target(tmp_path, monkeypatch
     assert [target.ip for target in targets] == ["192.0.2.116"]
 
 
-def test_load_metric_targets_infers_platform_from_os_and_loads_local_cmd_access(tmp_path, monkeypatch):
+def test_load_metric_targets_reads_the_stated_platform_and_loads_local_cmd_access(tmp_path, monkeypatch):
+    """The platform is the record's own. It was inferred from `os` until 0.27.0; a record reaching
+    its host without one is now refused there (rules R50 - its own test file)."""
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     (data_dir / "db_instances.json").write_text(
@@ -100,8 +102,10 @@ def test_load_metric_targets_infers_platform_from_os_and_loads_local_cmd_access(
               "site": "ACME",
               "ip": "192.0.2.115",
               "db_type": "sqlserver",
+              "port": 1433,
               "service_name": "ERP",
               "os": "Windows Server 2019 Datacenter",
+              "platform": "windows",
               "enabled": true,
               "metrics": {"enabled": true},
               "cmd_access": {"enabled": true, "method": "local", "shell": "powershell"}

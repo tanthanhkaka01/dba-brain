@@ -95,9 +95,10 @@ def test_the_port_defaults_per_engine_rather_than_to_one_number(tmp_path):
         root = _root(tmp_path / db_type)
         instance_admin.add_instance(
             # db_name only matters to postgresql/mysql, which refuse without one; the other two
-            # ignore it, so passing it everywhere keeps this test about the port.
+            # ignore it, so passing it everywhere keeps this test about the port. Oracle states its
+            # service, as it must (rules R50).
             {"server_id": f"T-{db_type}", "db_type": db_type, "ip": "192.0.2.10",
-             "db_name": "postgres"},
+             "db_name": "postgres", **({"service_name": "FREEPDB1"} if db_type == "oracle" else {})},
             data_dir=root, key=KEY)
         assert _instances(root)[0]["port"] == port
 

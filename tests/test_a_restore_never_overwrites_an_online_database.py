@@ -68,7 +68,8 @@ def _entry(**over) -> dict:
     entry = {"restore_id": "LAB_TO_LAB", "db_type": "sqlserver", "server_id": "SRC",
              "target_server_id": "TGT", "backup_dir": "/out", "script": "sqlserver",
              "target_backup_dir": "/opt/db_ops/staging/lab", "source_backup_host_dir": "/opt/out",
-             "cleanup_retention": 86400, "time_window": {"from_hour": 0, "to_hour": 23}}
+             "cleanup_retention": 86400, "time_window": {"from_hour": 0, "to_hour": 23},
+             "env": {"MSSQL_USER": "sa"}}   # stated: an entry without it is refused (rules R50)
     entry.update(over)
     return entry
 
@@ -109,11 +110,8 @@ def test_the_script_path_passes_the_entry_s_word(planned):
     assert not any(step["op"] == "warning" for step in steps)
 
 
-def test_an_unnamed_login_still_runs_as_sa_and_says_so(planned):
-    steps = planned(env={}, overwrite_existing=False)
-
-    warning = next(step["warning"] for step in steps if step["op"] == "warning")
-    full = next(step for step in steps if step["op"] == "restore-full")
-    assert "env.MSSQL_USER" in warning and "G2.11" in warning
-    assert full["request"]["target"]["username"] == "sa"
-    assert full["request"]["overwrite_existing"] is False
+def test_an_unnamed_login_is_refused_and_never_runs_as_sa(planned):
+    """0.26.0 ran it as `sa` and said so in the answer (G2.11, phase 1); 0.27.0 refuses it (rules
+    R50) - before a single step is planned."""
+    with pytest.raises(restore_by_id.RestoreByIdError, match="env.MSSQL_USER is not stated"):
+        planned(env={}, overwrite_existing=False)

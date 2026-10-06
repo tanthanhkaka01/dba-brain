@@ -274,6 +274,7 @@ class SqlRunsMixin:
                     duration_ms,
                     row_count,
                     error_text,
+                    host_name,
                     metadata_json
                 FROM sql_runs
                 WHERE status = 'running'

@@ -157,7 +157,7 @@ def run_scheduled_restores(
     script_jobs = load_script_restores(config_path)
     if restore_id:
         # An inactive entry the loader could not read is not "missing": it says what it lacks.
-        why_not = unusable_reason(script_jobs, restore_id)
+        why_not = unusable_reason(configs, restore_id) or unusable_reason(script_jobs, restore_id)
         configs = [item for item in configs if item.restore_id == restore_id]
         script_jobs = [item for item in script_jobs if item.restore_id == restore_id]
         if why_not:

@@ -798,7 +798,7 @@ def test_a_sqlserver_entry_that_declares_a_script_is_script_driven_too(tmp_path)
     # drill reuses the Oracle/PostgreSQL machinery and carries none of the SMB/.bak fields.
     registration.add_restore(
         _script_restore(restore_id="ACME_MSSQL_TO_DRILL", db_type="sqlserver",
-                        env={"MSSQL_PORT": "11433"}),
+                        env={"MSSQL_PORT": "11433", "MSSQL_USER": "sa"}),
         data_dir=tmp_path, key=KEY)
 
     written = json.loads((tmp_path / "restore_config.json")

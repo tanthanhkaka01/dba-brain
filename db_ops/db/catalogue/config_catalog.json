@@ -95,7 +95,7 @@
           "key_fields": [
             "policy_id"
           ],
-          "label_field": "name"
+          "label_field": "display_name"
         }
       ]
     },
@@ -228,7 +228,7 @@
           "key_fields": [
             "id"
           ],
-          "label_field": "engine"
+          "label_field": "db_type"
         }
       ]
     },

@@ -104,6 +104,7 @@ def _run_python_source(
     metadata: dict[str, Any],
     parameter_values: dict[str, Any] | None,
     logger: Any,
+    connection: dict[str, Any] | None = None,
 ) -> list[str]:
     """Run the task's ``input_type: "python"`` step and return its rows, batched as JSON.
 
@@ -133,7 +134,8 @@ def _run_python_source(
         produced = python_source_module.run(
             source, tool_root=tool_root, parameter_values=parameter_values,
             target={"target_server_id": target.server_id,
-                    "target_database": target.database_name})
+                    "target_database": target.database_name},
+            connection=connection)
     except PythonSourceError as exc:
         metadata["input"] = {"type": command.input_type, "script": source.script_path,
                              "status": "failed", "error": str(exc)}

@@ -99,6 +99,18 @@ for the contract in full. Its four rules:
    partial pull — the case this feature invites, because a fetcher that gives up on half its pages
    and still prints what it got produces a load that looks exactly like a complete one.
 
+**The program is never handed the passphrase.** `DB_OPS_SECRET_KEY`, `DB_OPS_KEY_BASE64` and
+`SQLCMDPASSWORD` are taken out of its environment (review 0.25.0, F4.2): a fetcher is an HTTP client
+or vendor code and never needs the key to every credential. A program that does the database work
+itself - SQLSERVER-030, `calculate_working_hour_queue.py`, which runs a stored procedure per queue
+row on ten connections - asks for **its target's connection** instead:
+`"input": {..., "target_connection": true}`. The runner, which has already resolved that target's
+login for the task's own SQL, writes `{"connection": {...}}` to the program's **stdin** - one login,
+never an argument (`ps` shows those), never the environment (everything the program starts would
+inherit it). The program hands it to `sql_run.resolve_stated_connection` and connects. On 0.26.0,
+which had neither, such a program failed every run with *No decryption key provided*. Only `true`
+counts; anything but a boolean is refused, by `sql-command-add` and by the runner.
+
 **Batching is not optional.** Each batch of `batch_rows` rows is one execution of the SQL, with the
 JSON array bound to the parameter named in `input.parameter` — which must also appear in
 `parameters` (type `nvarchar(max)`), because that entry is what writes the `DECLARE` the script
@@ -461,6 +473,11 @@ ever (three September runs on the 0.26 soak store, closed by hand). Such a row i
 other, with the default timeout (`DEFAULT_SQL_TIMEOUT_SECONDS`), and its message says the task is
 gone - but only a row this node started (its `claim_node`, or, on a row without one, its host
 name): a shared store's other node may still run that task, with a timeout this one cannot know.
+
+**A row's owner is read with its `host_name` column too (0.27.0)**, as the daemon's start-up reads
+it ([03](03_app_command_daemon.md), *It closes only this node's rows*); the backup/restore sweep does
+the same. A row an older build wrote keeps its `pid` in the metadata and its host only there; read
+without it, that row was judged on age alone here and on its owner at start-up.
 
 It reads **every** `running` row (`store.fetch_running_sql_runs`), not the newest one per
 run_key. Until 2026-09-04 it read `fetch_latest_done_or_running_sql_runs_by_run_key`, which is the

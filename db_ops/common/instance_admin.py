@@ -32,6 +32,7 @@ from db_ops.lib import data_sources
 from db_ops.lib import field_names
 from db_ops.lib import secret_text as _secret_text
 from db_ops.lib import sql_access as _sql_access
+from db_ops.lib import stated_facts
 from db_ops.lib.file_lock import FileLock
 from db_ops.lib.json_io import atomic_write_text
 
@@ -249,6 +250,13 @@ def add_instance(request: dict[str, Any] | None = None, *,
     record["db_type"] = db_type
     record.setdefault("port", DEFAULT_PORTS.get(db_type, 0) or None)
     record.setdefault("active", True)
+    # A record that would leave a fact to a default is refused before anything is written (rules
+    # R50): the loaders refuse it where it is used, so writing it would register a target that
+    # never runs. An inactive one runs nothing, and is held to it when switched on.
+    if record.get("active") is not False:
+        gaps = stated_facts.instance_gaps(record)
+        if gaps:
+            raise InstanceAdminError(f"{stated_facts.sentence(gaps)} Nothing was written.")
     if username:
         record["default_credential_name"] = credential_name
 

@@ -97,6 +97,31 @@ def test_the_reserved_target_placeholders_need_no_parameter(estate):
     assert outcome["input_type"] == "python"
 
 
+def test_a_program_that_asks_for_its_connection_keeps_asking_once_registered(estate):
+    """The registrar builds the input block field by field; a field it does not copy is a field the
+    runner never sees - and SQLSERVER-030 would fail every run with "No decryption key provided"."""
+    add_command(estate, input_type="python", input={
+        "script": "assets/tasks/python/drain.py", "target_connection": True},
+        parameters=[{"name": "payload", "type": "nvarchar(max)"}])
+
+    assert read(estate, "sql_commands.json")["sql_commands"][0]["input"]["target_connection"] is True
+
+
+def test_a_program_that_does_not_ask_is_written_as_before(estate):
+    """Off is not written, so every command registered before the field keeps its bytes."""
+    add_command(estate, input_type="python", input={"script": "assets/tasks/python/drain.py"},
+                parameters=[{"name": "payload", "type": "nvarchar(max)"}])
+
+    assert "target_connection" not in read(estate, "sql_commands.json")["sql_commands"][0]["input"]
+
+
+def test_asking_for_the_connection_by_any_spelling_but_a_boolean_is_refused(estate):
+    with pytest.raises(sql_task_admin.SqlTaskAdminError, match="target_connection must be true or false"):
+        add_command(estate, input_type="python", input={
+            "script": "assets/tasks/python/drain.py", "target_connection": "yes"},
+            parameters=[{"name": "payload", "type": "nvarchar(max)"}])
+
+
 def test_an_input_parameter_the_command_does_not_declare_is_refused(estate):
     """The runner writes the DECLARE from `parameters`; without the entry the SQL has no @payload."""
     with pytest.raises(sql_task_admin.SqlTaskAdminError, match="must also appear in parameters"):

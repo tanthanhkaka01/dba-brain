@@ -92,11 +92,32 @@ def test_a_small_query_on_a_worse_plan_run_often_is_a_finding(sql):
     finding needs all three legs; drop any one and it is either blind again or fires on noise."""
     assert "'QUERY_PLAN_REGRESSED_FREQUENT'" in sql
     assert "'query_store_plan_regressed_frequent'" in sql
-    leg = sql.split("THEN 'QUERY_PLAN_REGRESSED_FREQUENT'", 1)[0].rsplit("WHEN", 1)[1]
+    leg = sql.split("THEN 'QUERY_PLAN_REGRESSED_FREQUENT'")[-2].rsplit("WHEN", 1)[1]   # its warning legs
     assert "p.recent_executions >= @p_FreqMinExecutions" in leg
     assert "qb.query_bad_cpu_sec >= @p_FreqWarnTotalCpuSec" in leg
     assert "p.cpu_ratio >= @p_FreqWarnCpuRatio" in leg
     assert "cpu_ratio = p.recent_avg_cpu_sec / NULLIF(b.best_avg_cpu_sec, 0)" in sql
+
+
+def _case(sql: str, name: str) -> str:
+    """The text of `detail`'s `<name> = CASE ... END` column - to its own END, which is indented
+    less than the END of the CASE nested in it."""
+    column = sql.split(f"\n        {name} =\n", 1)[1]
+    return column.split("\n            END", 1)[0]
+
+
+def test_a_frequent_regression_at_its_critical_legs_outranks_a_single_metric_warning(sql):
+    """Both CASEs stop at their first match. The frequent finding's CRITICAL came after every
+    WARNING in the severity list, so a plan that was both - 1,800 s of CPU in one run and ten times
+    its cheapest plan's average over thousands - was reported as the WARNING, and the CRITICAL was
+    lost (read 2026-10-02, review 0.25.0 U5; fixed in 0.27.0). Every CRITICAL now comes before the
+    first WARNING, and the finding's kind follows its severity."""
+    severity = _case(sql, "severity")
+    # The wait/blocked branch's own CASE says `ELSE 'WARNING'`: the first `THEN 'WARNING'` is the
+    # first warning branch of the list.
+    assert severity.index("p.cpu_ratio >= @p_FreqCritCpuRatio") < severity.index("THEN 'WARNING'")
+    kind = _case(sql, "issue_type")
+    assert kind.index("p.cpu_ratio >= @p_FreqCritCpuRatio") < kind.index("-- single metric warning")
 
 
 def test_the_cpu_leg_is_the_querys_bad_plans_together_reported_once(sql):
@@ -109,7 +130,7 @@ def test_the_cpu_leg_is_the_querys_bad_plans_together_reported_once(sql):
     assert "SUM(recent_total_cpu_sec) OVER (PARTITION BY database_name, query_id)" in bad
     assert "WHERE recent_executions >= @p_FreqMinExecutions" in bad
     assert "AND cpu_ratio >= @p_FreqWarnCpuRatio" in bad
-    assert sql.count("AND qb.bad_rank = 1") == 3          # the kind, and both severities
+    assert sql.count("AND qb.bad_rank = 1") == 4          # the kind at each level, and both severities
     assert "query_bad_plan_count=" in sql and "query_bad_cpu_sec=" in sql
     # The candidates for the baseline read are chosen by the same sum, or a query whose bad plans
     # are each under the threshold would never get a baseline to be compared with.
@@ -132,7 +153,14 @@ def test_the_windows_follow_the_servers_own_clock(sql):
     """Query Store stores UTC. A named time zone in the SQL is right on one estate and silently
     shifts every window on a server that lives anywhere else."""
     assert "AT TIME ZONE" not in sql
-    assert "DATEDIFF(MINUTE, GETUTCDATE(), GETDATE())" in sql
+    assert "@p_UtcOffsetMin    int      = DATEPART(TZOFFSET, SYSDATETIMEOFFSET())" in sql
+
+
+def test_the_offset_is_one_reading_of_the_clock(sql):
+    """`DATEDIFF(MINUTE, GETUTCDATE(), GETDATE())` is two calls: when a minute turns between them
+    the difference counts it, and every window moves by a minute."""
+    assert "GETUTCDATE()" not in sql.split("DECLARE @sql", 1)[0].replace(
+        "GETUTCDATE() and GETDATE() are two calls", "")
 
 
 def test_the_scan_does_not_read_query_text(sql):

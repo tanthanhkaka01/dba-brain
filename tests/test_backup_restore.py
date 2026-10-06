@@ -817,6 +817,7 @@ def test_parse_restore_config_reads_source_certificate_api_url(tmp_path):
                 "id": "ACME-192-0-2-250",
                 "backup_share": r"\\192.0.2.250\SQLBK",
                 "api_link_get_cer": "https://vault/v1/secret/data/sqlserver/cert.json",
+                "certificate_api_token_ref": "VAULT_TOKEN_REF",
             },
             "target": {
                 "vm_import_unc": str(tmp_path / "import_unc"),
@@ -828,7 +829,9 @@ def test_parse_restore_config_reads_source_certificate_api_url(tmp_path):
     )
 
     assert config.certificate_api_url == "https://vault/v1/secret/data/sqlserver/cert.json"
-    assert config.certificate_api_token_ref == "TOKEN_192_0_2_112_VAULT"
+    # The entry's own ref: there is no built-in one since 0.27.0 (rules R50), and the loader
+    # refuses an entry with a certificate API that names none.
+    assert config.certificate_api_token_ref == "VAULT_TOKEN_REF"
 
 
 def test_parse_restore_config_target_sql_instance_overrides_default(tmp_path):
@@ -1860,7 +1863,7 @@ def test_load_restore_configs_reads_active_flag_from_restores(tmp_path):
     "restores": [
       {
         "cleanup_retention": 691200, "restore_id": "RESTORE_ACTIVE",
-        "active": true,
+        "active": true, "restore_all_databases": true,
         "prod_backup_share": "\\\\\\\\source\\\\SQLBK",
         "vm_import_unc": "\\\\\\\\target\\\\SQLBK_IMPORT\\\\active",
         "vm_import_local": "C:\\\\SQLBK_IMPORT\\\\active",
@@ -1869,7 +1872,7 @@ def test_load_restore_configs_reads_active_flag_from_restores(tmp_path):
       },
       {
         "cleanup_retention": 691200, "restore_id": "RESTORE_INACTIVE",
-        "active": false,
+        "active": false, "restore_all_databases": true,
         "prod_backup_share": "\\\\\\\\source\\\\SQLBK",
         "vm_import_unc": "\\\\\\\\target\\\\SQLBK_IMPORT\\\\inactive",
         "vm_import_local": "C:\\\\SQLBK_IMPORT\\\\inactive",
@@ -2547,20 +2550,22 @@ def test_restore_workflow_hands_dry_run_to_every_step(tmp_path, monkeypatch):
     parameter to receive one, so all three delete engines removed files. The step is guarded now,
     but a guard nothing reaches is the defect all over again, so what is pinned here is the *call*.
 
-    **`run_copy_backup` still has no `dry_run` either**, so a dry run of this workflow really does
-    pull the files across. That is additive rather than destructive and it is four engines' worth
-    of change, so it is recorded as open rather than half-fixed — and it is why this asserts the
-    delete link only. When copy grows the parameter, add it here.
+    **And the copy is not run at all** (0.27.0 item 1.93). It had no `dry_run`, so a dry run of
+    this workflow pulled the files across - tens of GB over SMB onto the target - and rehearsed only
+    the restore. The space check in the preflight says what it would write, and the preflight is
+    told it is a dry run so it prepares nothing.
     """
     from db_ops.backup_restore import cli as cli_module
 
     seen: dict[str, object] = {}
 
     def fake_copy(step_config, logger=None, force=False):
-        # copied=1: the workflow refuses a run that selected no files, which is exactly what the
-        # drill in this estate hit for two days once its backup stopped producing any.
+        seen["copy"] = "ran"
         return CopyBackupResult(returncode=0, source_backup_dir=tmp_path, local_import_dir=tmp_path,
                                 files_considered=1, copied=1, skipped=0, file_results=())
+
+    def fake_preflight(config, logger=None, recopy=False, dry_run=False):
+        seen["preflight"] = dry_run
 
     def fake_restore(config, db_ops_config, dry_run, logger, point_in_time_utc):
         seen["restore"] = dry_run
@@ -2576,18 +2581,54 @@ def test_restore_workflow_hands_dry_run_to_every_step(tmp_path, monkeypatch):
     monkeypatch.setattr(cli_module, "run_copy_backup", fake_copy)
     monkeypatch.setattr(cli_module, "run_restore_all_latest", fake_restore)
     monkeypatch.setattr(cli_module, "run_delete_backup", fake_delete)
-    monkeypatch.setattr(cli_module, "run_target_preflight", lambda config, logger=None, **_: None)
+    monkeypatch.setattr(cli_module, "run_target_preflight", fake_preflight)
 
     cfg, _ = _make_two_target_configs(tmp_path)
     app_config = DbOpsConfig(log_dir=tmp_path / "logs", runtime_dir=tmp_path / "runtime",
                              sqlite_path=tmp_path / "runtime" / "db_ops.sqlite")
 
-    cli_module.run_restore_workflow(
+    summary = cli_module.run_restore_workflow(
         restore_configs=[cfg], app_config=app_config, dry_run=True, logger=None,
     )
 
-    assert seen == {"restore": True, "delete": True}, (
-        f"a step was not told this is a dry run: {seen}")
+    assert seen == {"preflight": True, "restore": True, "delete": True}, (
+        f"a step was not told this is a dry run, or the copy ran: {seen}")
+    assert summary["copy-backup"]["status"] == "DRY_RUN"
+
+
+def test_a_dry_run_reports_the_refusal_the_real_run_would_meet_and_prepares_nothing(tmp_path, monkeypatch):
+    """The question a dry run answers before a first night is the space check's line (0.26.0's
+    release note, *Upgrading* 6). A refusal is that answer, said - not an error that hides the rest
+    of the rehearsal; and nothing is created on a Windows target to find it out."""
+    from db_ops.backup_restore import preflight
+    from db_ops.backup_restore.space import RestoreSpaceRefused
+
+    said = []
+    monkeypatch.setattr(preflight, "check_free_space",
+                        lambda config, log=None, recopy=False: (_ for _ in ()).throw(
+                            RestoreSpaceRefused("restore_id=X will not fit: 60 GiB to copy, x2 = 120 GiB needed, 40 GiB free")))
+    monkeypatch.setattr(preflight, "_log", lambda logger, message: said.append(message))
+    monkeypatch.setattr(preflight, "_run_windows_unc_preflight",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("prepared a share")))
+    config = dataclasses.replace(make_config(tmp_path), vm_platform="windows")
+
+    assert preflight.run_target_preflight(config, dry_run=True) is None
+    assert any("the real run would be refused here" in line and "will not fit" in line for line in said)
+
+    with pytest.raises(preflight.PreflightError, match="will not fit"):
+        preflight.run_target_preflight(config, dry_run=False)
+
+
+def test_a_dry_run_that_fits_still_creates_nothing_on_a_windows_target(tmp_path, monkeypatch):
+    from db_ops.backup_restore import preflight
+
+    monkeypatch.setattr(preflight, "check_free_space", lambda config, log=None, recopy=False: {"checked": True})
+    monkeypatch.setattr(preflight, "_run_windows_unc_preflight",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("prepared a share")))
+    monkeypatch.setattr(preflight.os, "name", "nt")
+    config = dataclasses.replace(make_config(tmp_path), vm_platform="windows")
+
+    assert preflight.run_target_preflight(config, dry_run=True) is None
 
 
 def test_run_delete_backup_rejects_target_overlapping_source(tmp_path):

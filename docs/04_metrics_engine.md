@@ -172,6 +172,11 @@ have ≥ 20 executions. It is the cheapest plan, so a query with a legitimately 
 parameters and an expensive one for others can show up here — the message names both plan ids
 (`plan_id`, `best_cpu_plan_id`) so that is checkable.
 
+**At its CRITICAL legs it outranks a single-metric WARNING** (0.27.0). Both the kind and the
+severity are `CASE` lists that stop at the first match, and this finding's CRITICAL came after every
+WARNING: a plan that was both - one long execution and a frequent regression - was reported as the
+WARNING. Every CRITICAL now comes before the first WARNING, and the kind follows.
+
 Four defects in the same file were fixed with it:
 
 - **Findings are judged on the recent rows, not the six-hour maxima.** The alert filter only asked
@@ -182,7 +187,10 @@ Four defects in the same file were fixed with it:
   start of that interval, not further.
 - **Averages are weighted by executions.** `AVG(avg_cpu_sec)` over interval rows gave an hour with
   one execution the same say as an hour with ten thousand.
-- **The windows follow the server's own UTC offset**, not a named time zone written into the SQL.
+- **The windows follow the server's own UTC offset**, not a named time zone written into the SQL -
+  read once, `DATEPART(TZOFFSET, SYSDATETIMEOFFSET())`, since 0.27.0: the difference of
+  `GETUTCDATE()` and `GETDATE()` is two calls, and counted a minute (metric 23) or an hour
+  (metric 15, the deadlock count) when one turned between them.
 - **The query text is no longer read.** It was copied into `#qs_raw` once per runtime-stats row and
   never reached the message; the scan now joins two catalog views instead of four.
 
@@ -823,9 +831,18 @@ entirely and connects by **service**.
 | Engine | Connects to | Set by |
 | --- | --- | --- |
 | `sqlserver` | `master`, always | fixed; metric SQL does its own `USE` |
-| `postgresql` | `database_name` from the inventory, else `postgres` | `db_instances.json` → `database_name` |
-| `mysql` | `database_name` from the inventory, else `information_schema` | `db_instances.json` → `database_name` |
-| `oracle` | the **service**, not a database | `service_name`, else `database_name` |
+| `postgresql` | `database_name` from the inventory | `db_instances.json` → `database_name` |
+| `mysql` | `database_name` from the inventory | `db_instances.json` → `database_name` |
+| `oracle` | the **service**, not a database | `service_name` |
+
+**Stated, never defaulted (rules R50, 0.27.0).** A target whose record leaves its `port`, its
+`database_name` (PostgreSQL, MySQL) or its `service_name` (Oracle) to a default keeps its place in
+the scan, and each of its SQL metrics fails before anything is sent, naming the field
+(`connection_info["error"]`, raised in `executor.prepare_sql`); one that reaches its host with no
+`platform`, or over SSH with no `cmd_access.auth_type`, fails its host metrics the same way
+(`cmd_access["error"]`). The rest of the scan runs (R26). Until 0.27.0 these were the engine's
+default port, a label taken for a database, a platform guessed from `os` - reported as `fallback`
+notices in 0.26.0.
 
 ## Data Flow
 

@@ -82,7 +82,8 @@ def sql_target(*, sql_id=9, target_no=1, database_name="APPDB", repeat_interval=
 
 def inventory_and_credentials():
     return (
-        [{"server_id": "server", "ip": "127.0.0.1", "databases": [{"db_type": "sqlserver", "service_name": "svc", "instance_name": "inst"}]}],
+        # The record states its port, as every instance must (rules R50).
+        [{"server_id": "server", "ip": "127.0.0.1", "databases": [{"db_type": "sqlserver", "service_name": "svc", "instance_name": "inst", "port": 1433}]}],
         [{"server_id": "server", "db_type": "sqlserver", "service_name": "svc", "instance_name": "inst", "credentials": [{"credential_name": "cred", "username": "user", "password": "pass"}]}],
     )
 

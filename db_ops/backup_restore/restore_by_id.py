@@ -265,20 +265,22 @@ def _logs_through(files: list[dict[str, Any]], moment: str) -> list[dict[str, An
 def _plan_sqlserver(job: Any, secrets: dict[str, str], *, point_in_time: str,
                     host: dict[str, Any], data_dir: Any, dry_run: bool = False) -> list[dict[str, Any]]:
     _UNREADABLE.clear()  # this plan's listings only - never a previous restore's
+    # The login is stated (rules R50, G2.11): it ran as `sa` when the entry said nothing until
+    # 0.27.0, with a warning in the answer. The loader refuses such an entry; this is the same rule
+    # for a job built any other way.
+    username = str(job.env.get("MSSQL_USER") or "").strip()
+    if not username:
+        raise RestoreByIdError(
+            f"{job.restore_id}: env.MSSQL_USER is not stated - the restore would log in as sa; "
+            "state it - a record without it is refused (rules R50, G2.11).")
     directory = _visible_dir(job)
     target = {
         "host": host["host"], "port": _sqlserver_port(job, data_dir=data_dir),
-        # Phase 1 of the owner's no-fallback rule (G2.11): an entry that names no login still runs
-        # as `sa` in this release, and says so in the answer; the next one refuses it.
-        "username": job.env.get("MSSQL_USER", "sa"),
+        "username": username,
         "password": _secret(job.env_secrets.get("MSSQL_PASSWORD", ""), secrets,
                             where=f"{job.restore_id}.env_secrets.MSSQL_PASSWORD"),
     }
     steps: list[dict[str, Any]] = []
-    if not str(job.env.get("MSSQL_USER") or "").strip():
-        steps.append({"op": "warning", "warning": (
-            f"{job.restore_id}: env.MSSQL_USER is not stated, so the restore logs in as sa. State "
-            "the login on the entry - the next release refuses an entry without it (G2.11).")})
 
     cert_password = _secret(job.env_secrets.get("BACKUP_ENCRYPTION_PASSWORD", ""), secrets,
                             where=f"{job.restore_id}.env_secrets.BACKUP_ENCRYPTION_PASSWORD") \
@@ -562,7 +564,11 @@ def restore_by_id(request: dict[str, Any], *, data_dir: Any = None,
         # restore-workflow's, which composes its steps through the same common commands.
         from db_ops.backup_restore.config import load_restore_configs
 
-        if any(c.restore_id == restore_id for c in load_restore_configs(config_path)):
+        smb_entries = load_restore_configs(config_path)
+        smb_why_not = unusable_reason(smb_entries, restore_id)
+        if smb_why_not:
+            raise RestoreByIdError(smb_why_not)
+        if any(c.restore_id == restore_id for c in smb_entries):
             raise RestoreByIdError(
                 f"{restore_id} is an SMB entry (it declares no `script`): restore-workflow "
                 f"--restore-id {restore_id} restores it - latest, or --point-in-time.")

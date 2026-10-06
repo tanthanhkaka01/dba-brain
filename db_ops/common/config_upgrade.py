@@ -54,7 +54,8 @@ Steps, in order (each one idempotent - a file already moved plans nothing):
                       older copy does not know the new names and reports every moved field
   field-names         enabled->active, env->environment, ord/app_ord/menu_order->sort_order,
                       database/db_name->database_name, sql_name->display_name, a restore's
-                      databases->database_mappings, ... (the table: db_ops/lib/field_names.py)
+                      databases->database_mappings, ... (the table: db_ops/lib/field_names.py);
+                      config_catalog.json's label_field / key_fields follow the same renames
   restore-machine-ids a restore's source.id / target.id -> server_id / target_server_id on the entry
   telegram-active     a Telegram group's or user's status "active" -> active true (anything else ->
                       false), the switch every other record carries

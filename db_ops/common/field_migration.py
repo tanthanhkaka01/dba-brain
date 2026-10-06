@@ -53,7 +53,8 @@ is not written at all, and the answer names the record. Fix it by hand, then run
 
 The rename table is db_ops/lib/field_names.py; where each record lives is the reference's used_in
 (data/shared_config_objects.json) - the same walk check-objects makes. After a write, check-objects
-reports no `deprecated` field for these names.
+reports no `deprecated` field for these names. config_catalog.json names record fields too
+(label_field, key_fields): they follow the same renames ({"file": "config_catalog.json"} alone).
 
 data: {"dry_run", "files": [{"file", "records_changed", "changes", "conflicts", "written"}],
        "records_changed", "conflicts"}
@@ -167,14 +168,82 @@ def _migrate_file(path: Path, file_sites: list[tuple[str, str]], *,
             "conflicts": conflicts, "written": written}
 
 
+#: The file that says how each data file's records are keyed and labelled in the runtime store. It
+#: names record FIELDS, so a rename moves there too.
+CATALOGUE_FILE = "config_catalog.json"
+
+
+def _objects_of(sites: dict[str, list[tuple[str, str]]], source_file: str,
+                collection: str) -> list[str]:
+    """The record kinds a catalogue collection holds: the reference's paths for that file, read
+    the way the catalogue names them (``sql_commands[]`` is the collection ``sql_commands``)."""
+    return [object_name for site_path, object_name in sites.get(source_file, [])
+            if re.sub(r"(\[\]|\{\})$", "", site_path) == collection]
+
+
+def _migrate_catalogue(path: Path, sites: dict[str, list[tuple[str, str]]], *,
+                       dry_run: bool) -> dict[str, Any]:
+    """A catalogue collection's ``label_field`` and ``key_fields`` follow the records' renames.
+
+    The records of ``sql_commands.json`` moved ``sql_name`` -> ``display_name`` in 0.22.0 and the
+    catalogue a node was given before that still labelled them by ``sql_name``: every record's label
+    read empty on that node while the master's catalogue gave the display name, so each sync from one
+    side rewrote all 30 records the other had written - content unchanged - and every worker upgrade
+    reported "30 updated" for a drift that was never there (0.27.0 item 1.95).
+    """
+    raw = path.read_bytes().decode("utf-8-sig")
+    document = json.loads(raw)
+    changes: list[dict[str, Any]] = []
+    text = raw
+    whole = False
+    for source_index, source in enumerate(document.get("config_sources") or []):
+        if not isinstance(source, dict):
+            continue
+        for collection_index, collection in enumerate(source.get("collections") or []):
+            if not isinstance(collection, dict):
+                continue
+            objects = _objects_of(sites, str(source.get("file") or ""),
+                                  str(collection.get("collection") or ""))
+            where = f"config_sources[{source_index}].collections[{collection_index}]"
+            label = collection.get("label_field")
+            if isinstance(label, str) and label:
+                standard = next((field_names.standard_of(name, label) for name in objects
+                                 if field_names.standard_of(name, label) != label), label)
+                if standard != label:
+                    changes.append({"where": where, "field": "label_field", "from": label,
+                                    "to": standard, "action": "renamed"})
+                    collection["label_field"] = standard
+                    text = re.sub(
+                        rf'("collection"\s*:\s*"{re.escape(str(collection.get("collection")))}"[^{{}}]*?'
+                        rf'"label_field"\s*:\s*)"{re.escape(label)}"',
+                        lambda match, new=standard: f'{match.group(1)}"{new}"', text, count=1)
+            keys = collection.get("key_fields")
+            if isinstance(keys, list):
+                moved = [next((field_names.standard_of(name, str(key)) for name in objects
+                               if field_names.standard_of(name, str(key)) != key), key) for key in keys]
+                if moved != keys:
+                    changes.append({"where": where, "field": "key_fields", "from": keys,
+                                    "to": moved, "action": "renamed"})
+                    collection["key_fields"] = moved
+                    whole = True  # a key list's layout varies too much to patch in the text
+    written = bool(changes) and not dry_run
+    if written:
+        if whole or json.loads(text) != document:
+            text = json.dumps(document, ensure_ascii=False, indent=indent_of(path)) + "\n"
+        atomic_write_text(path, text)
+    return {"file": path.name, "records_changed": len(changes), "changes": changes,
+            "conflicts": [], "written": written}
+
+
 def standardize(request: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     root = shared_objects.data_root(request.get("data_dir") or None)
     dry_run = request.get("dry_run", True) is not False
     only = str(request.get("file") or "").strip()
     sites = _sites()
-    if only and only.replace(".example.json", ".json") not in sites:
+    only_file = only.replace(".example.json", ".json")
+    if only and only_file not in sites and only_file != CATALOGUE_FILE:
         raise ValueError(f"{only} holds no record with a renamed field; the files that do are: "
-                         + ", ".join(sorted(sites)))
+                         + ", ".join(sorted(sites) + [CATALOGUE_FILE]))
 
     files: list[dict[str, Any]] = []
     for file_name, file_sites in sorted(sites.items()):
@@ -184,6 +253,11 @@ def standardize(request: dict[str, Any]) -> tuple[str, dict[str, Any]]:
             path = root / candidate
             if path.is_file():
                 files.append(_migrate_file(path, file_sites, dry_run=dry_run))
+    if not only or only_file == CATALOGUE_FILE:
+        for candidate in (CATALOGUE_FILE, CATALOGUE_FILE.replace(".json", ".example.json")):
+            path = root / candidate
+            if path.is_file():
+                files.append(_migrate_catalogue(path, sites, dry_run=dry_run))
 
     records = sum(item["records_changed"] for item in files)
     conflicts = sum(len(item["conflicts"]) for item in files)

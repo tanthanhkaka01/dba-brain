@@ -96,7 +96,7 @@ R38-R45 keep their numbers and stand with the other layer rules; R43 is R11's si
 | R15 | [Every answer is one envelope, nothing else on stdout](#r15) | absolute | - |
 | R16 | [Every request and answer is described in the reference](#r16) | absolute | - |
 | R48 | [Every error carries its kind; nothing raises a bare `RuntimeError`](#r48) | absolute | - |
-| R49 | [A `common.cli` request is held to its reference before it is read](#r49) | measured | - |
+| R49 | [A `common.cli` request is held to its reference before it is read](#r49) | absolute | - |
 
 ### 3. Configuration and data
 
@@ -123,6 +123,7 @@ R38-R45 keep their numbers and stand with the other layer rules; R43 is R11's si
 | R29 | [The Telegram queue moves one row per call](#r29) | absolute | - |
 | R30 | [An `async` run never repeats claimed work](#r30) | absolute | - |
 | R47 | [A restore names its target; nothing about it is taken from the source](#r47) | absolute | - |
+| R50 | [A record states which thing is acted on; one left to a default is refused where it is used](#r50) | absolute | - |
 
 ### 5. Code, tests and documentation
 
@@ -477,7 +478,7 @@ Every `common` and `db` command answers in one envelope - `success`, `operation`
 
 ### R49
 
-**A `common.cli` request is held to its reference before the command reads it** - measured today, refused once real requests measure clean (see the mark). The reader (`common/cli_request.py::_read_json_request`, called through `cli.main`) checks the request against its command's `input_` entry in the **packaged** reference (`lib.request_check`, never a node's `data/` copy - R09): a value of the wrong kind or out of its range, and a required field left out, are refused with the field named and `error_kind` `request` (R15, R48). An unknown key, a deprecated spelling, an unlisted value of an open list and a blank optional field are not refused - a blank optional string is how code says "not given"; unknown keys and deprecated spellings are measured, one JSON line each, into the file `DB_OPS_REQUEST_CHECK_LOG` names.
+**A `common.cli` request is held to its reference before the command reads it** - refused since 0.27.0 (see the mark). The reader (`common/cli_request.py::_read_json_request`, called through `cli.main`) checks the request against its command's `input_` entry in the **packaged** reference (`lib.request_check`, never a node's `data/` copy - R09): a value of the wrong kind or out of its range, and a required field left out, are refused with the field named and `error_kind` `request` (R15, R48). An unknown key, a deprecated spelling, an unlisted value of an open list and a blank optional field are not refused - a blank optional string is how code says "not given"; unknown keys and deprecated spellings are measured, one JSON line each, into the file `DB_OPS_REQUEST_CHECK_LOG` names.
 
 **Guard:**
 
@@ -486,7 +487,7 @@ Every `common` and `db` command answers in one envelope - `success`, `operation`
 - `tests/test_a_request_is_checked_against_the_reference.py::test_an_unknown_key_is_measured_and_not_refused`
 - `tests/test_a_request_is_checked_against_the_reference.py::test_the_reference_is_the_packaged_copy_never_a_node_s_data`
 
-**Mark:** measured, not yet refusing (`lib.request_check.REFUSING` is off). It shipped refusing on 2026-10-03 and the first node to run it refused every SQL task within a minute: the reference called `run-sql`'s `capture` a boolean, the runner sends `"all"` - the reference was wrong, and the suite could not see it, since most app tests fake the transport. So every finding is measured into `DB_OPS_REQUEST_CHECK_LOG` until a node's log of real requests holds no `value` or `missing` finding; then `REFUSING` goes on, and the unknown keys follow. The refusal path is tested with it switched on.
+**Mark:** absolute since 0.27.0 (`lib.request_check.REFUSING` on, the operator's word of 2026-10-05; the 0.26.0 soak node's 24 hours of real requests held no `value` or `missing` finding). It shipped refusing on 2026-10-03 and the first node to run it refused every SQL task within a minute: the reference called `run-sql`'s `capture` a boolean, the runner sends `"all"` - the reference was wrong, and the suite could not see it, since most app tests fake the transport. So every finding was measured into `DB_OPS_REQUEST_CHECK_LOG` until a node's log of real requests held no `value` or `missing` finding. Unknown keys and deprecated spellings are still measured, not refused - refusing them follows when their log is empty too. The measuring mode is kept and tested with the switch off.
 
 ## 3. Configuration and data
 
@@ -667,6 +668,22 @@ A restore names its target - `target_server_id`, and for an in-place restore `ta
 - `tests/test_a_restore_never_takes_the_source_as_its_target.py::test_the_host_block_never_falls_back_to_the_source`
 
 **Mark:** absolute - the owner's decision of 2026-10-01 (review 0.25.0, B4.5 / G2). Before it, an entry with only `target_container` meant "a container on the source host", and the SQL Server plan connected to the source host's own port and ran `RESTORE ... REPLACE` on the source instance.
+
+### R50
+
+**A record states every fact that says which thing is acted on; one that leaves a fact to a default is refused where it is used**, naming the field - and alone: the rest of a scan runs (R26). The facts (`lib.stated_facts`): an instance reaching its host states `platform`, and over SSH `cmd_access.auth_type`; an instance with an engine states `port`, a PostgreSQL / MySQL one `database_name`, an Oracle one `service_name`; a script SQL Server restore states `env.MSSQL_USER`; an SMB (SQL Server) restore states its databases - `database_mappings`, or `restore_all_databases: true` for every one on the share under its backup's name - and into a container `target.sqlcmd_path`, and with a certificate API its `certificate_api_token_ref`. PostgreSQL and Oracle restores are script-driven and restore the instance. Where each is held: a connection (`request_fill.connection_from` / `sql_connection` - SQL tasks, the apps' `run-sql`), reaching a host (`request_fill.host_access`, `sre.remote`), a metric target (its SQL or host metrics fail, the scan runs), the two restore loaders (an active entry refuses the file, an inactive one is kept out with its reason), the restore plan; `instance-add` and `remote-credential-add` write no such active record, and `check-objects` counts each as a violation.
+
+**Guard:**
+
+- `tests/test_a_record_that_leaves_a_fact_to_a_default_is_refused.py::test_check_objects_counts_them_as_violations`
+- `tests/test_a_record_that_leaves_a_fact_to_a_default_is_refused.py::test_a_connection_is_never_built_on_a_default_port`
+- `tests/test_a_record_that_leaves_a_fact_to_a_default_is_refused.py::test_a_host_is_never_reached_on_a_guess`
+- `tests/test_a_record_that_leaves_a_fact_to_a_default_is_refused.py::test_one_metric_target_with_a_gap_fails_alone`
+- `tests/test_a_record_that_leaves_a_fact_to_a_default_is_refused.py::test_the_parser_s_own_sqlcmd_default_does_not_answer_for_the_entry`
+- `tests/test_a_record_that_leaves_a_fact_to_a_default_is_refused.py::test_instance_add_refuses_an_oracle_target_with_no_service`
+- `tests/test_a_record_that_leaves_a_fact_to_a_default_is_refused.py::test_the_shipped_examples_state_every_fact`
+
+**Mark:** absolute since 0.27.0 - the owner's decision of 2026-10-01 (review 0.25.0, G3 phase 2) and the operator's word of 2026-10-06 (*add the full configuration - code that guesses for itself gets it wrong easily*). 0.26.0 reported these records as `fallback` notices so a node could be completed first; the worker's and the master's `check-objects` read 0 of them before this was switched on. What this rule does not cover yet: a `common.cli` request built by hand, whose own defaults (an SSH block's `auth_type`, `sqlcmd`'s path in a container, a default port) are the request contract's (R49) - the apps no longer reach them with a record that states nothing.
 
 ### R31
 

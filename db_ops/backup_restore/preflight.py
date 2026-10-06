@@ -27,9 +27,14 @@ def run_target_preflight(
     *,
     logger: object | None = None,
     recopy: bool = False,
+    dry_run: bool = False,
 ) -> BackupRestoreConfig | None:
     """
     Validate (and where possible, prepare) the restore target before the workflow runs.
+
+    ``dry_run`` measures and prepares nothing: the space check runs - it only reads - and a refusal
+    is reported as what the real run would meet rather than raised; the Windows share is not
+    created (0.27.0 item 1.93).
 
     ``recopy`` says the copy that follows is forced: the files it would find staged are written
     again, so the space check counts room for them.
@@ -64,9 +69,15 @@ def run_target_preflight(
     try:
         check_free_space(config, log=lambda message: _log(logger, message), recopy=recopy)
     except RestoreSpaceRefused as exc:
+        if dry_run:
+            # The answer a dry run is asked for: what the real run would meet, and the rest shown.
+            _log(logger, f"dry run: the real run would be refused here - {exc}")
+            return None
         # Raised as the preflight's own error so every caller that already stops on a preflight
         # failure stops on this one too, rather than each learning about a new exception type.
         raise PreflightError(str(exc)) from None
+    if dry_run:
+        return None   # the Windows path below creates a folder and a share
     if config.is_linux:
         return None
     if os.name != "nt":

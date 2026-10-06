@@ -345,7 +345,8 @@ def main(argv: list[str]) -> int:
             os.environ[node_identity.ENV_VAR] = _identity
         record_node_timezone(store=store, config=config, logger=logger)
         _startup_commands = load_app_commands(data_dir / "app_commands.json", logger=logger)
-        recover_stale_running_jobs(store=store, app_commands=_startup_commands, config=config, logger=logger)
+        recover_stale_running_jobs(store=store, app_commands=_startup_commands, config=config,
+                                   logger=logger, node_role=getattr(config, "node_role", None))
 
         _db_lock_retries = 0
         store_waiter = store_outage.OutageWaiter()
@@ -1191,6 +1192,7 @@ def recover_stale_running_jobs(
     app_commands: dict[str, AppCommand],
     config: Any,
     logger: Any,
+    node_role: str | None = None,
 ) -> None:
     """
     On daemon startup, detect job_runs rows with status='running' that have elapsed longer
@@ -1217,8 +1219,15 @@ def recover_stale_running_jobs(
     status is an error status after ``retry_interval``, which is 0 for the web host. Any other
     status would read as "finished successfully, never repeat" and the service would never come
     back up.
+
+    **Only this node's rows** (0.27.0 item 1.96). ``node_role`` names the commands this daemon runs;
+    a row of a command for another role is another node's, and is left to it. On 2026-09-30 a
+    daemon started on the master against the worker's store closed the worker's live web host and
+    two runs that had started two seconds earlier. A row of a command this file no longer holds is
+    left alone when its claim names another node, for the same reason.
     """
     now = datetime.now(timezone.utc)
+    this_host = socket.gethostname()
     recovered = 0
     fresh_crashes: list[str] = []
     backlog = 0
@@ -1237,7 +1246,13 @@ def recover_stale_running_jobs(
             # existed, so it stayed `running` until it was archived (review 0.25.0, B2.5). This is
             # start-up - its daemon is gone - so it is closed now. Rows other apps write into
             # job_runs (a backup's, a restore's) carry no `app_command_id` and are left to them.
-            if app_command_id and str(run_claim.row_metadata(row).get("app_command_id") or "") == app_command_id:
+            # A row whose claim names ANOTHER node is that node's: a master's file need not hold
+            # the worker's commands. A row with no identity is closed as before - it is what a
+            # recreated container of this node left under its old host name.
+            claimed_by = run_claim.claim_node(run_claim.row_metadata(row))
+            another_node = bool(claimed_by) and claimed_by != node_identity.current()
+            if (not another_node and app_command_id
+                    and str(run_claim.row_metadata(row).get("app_command_id") or "") == app_command_id):
                 try:
                     store.update_job_run(
                         log_id=int(row["log_id"]),
@@ -1253,6 +1268,8 @@ def recover_stale_running_jobs(
                 except Exception:  # noqa: BLE001 - one row that cannot be closed stops nothing.
                     pass
             continue
+        if node_role is not None and not _command_runs_on_node(app_command, node_role):
+            continue   # another role's command: its rows are another node's (docstring)
 
         last_run = row_time(row)
         if last_run is None:
@@ -1268,9 +1285,8 @@ def recover_stale_running_jobs(
         # 2026-09-19 left APP-SQL_TASKS blocked for 30 minutes and APP-METRICS for 40, on rows
         # whose processes had been gone the whole time. Another host's row is still judged on age.
         metadata = run_claim.row_metadata(row)
-        this_host = socket.gethostname()
-        owner_pid, owner_host = run_claim.claim_owner(
-            metadata, host_fallback=str(row["host_name"] or "") if "host_name" in row.keys() else "")
+        row_host = run_claim.row_host(row)
+        owner_pid, owner_host = run_claim.claim_owner(metadata, host_fallback=row_host)
         verdict = run_claim.startup_verdict(
             metadata=metadata,
             this_host=this_host,
@@ -1279,10 +1295,13 @@ def recover_stale_running_jobs(
             pid_alive=(process_liveness.is_pid_alive(owner_pid)
                        if owner_pid is not None and owner_host == this_host else None),
             this_node=node_identity.current(),
+            host_fallback=row_host,
         )
-        # A service (timeout 0) is still closed here whatever its age, as it always was: this is
-        # startup, and its daemon is gone. Only a live pid holds it.
-        if not verdict.reap and not app_command.timeout_disabled:
+        # A service (timeout 0) left by THIS host is closed whatever its age: this is startup, and
+        # its daemon is gone - the verdict says so. Only a live pid holds it, and another host's
+        # row is that host's: closing a service regardless of the verdict is what closed the
+        # worker's live web host from the master's daemon (0.27.0 item 1.96).
+        if not verdict.reap:
             log_app_event(
                 logger,
                 "app.daemon.startup.running_within_timeout",

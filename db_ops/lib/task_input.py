@@ -76,6 +76,13 @@ class PythonSource:
     batch_rows: int = DEFAULT_BATCH_ROWS
     timeout_seconds: int = DEFAULT_FETCH_TIMEOUT_SECONDS
     accept_exit_codes: tuple[int, ...] = (0,)
+    #: Write the target's connection - the one login this run uses, as the runner resolved it - to
+    #: the script's stdin as ``{"connection": {...}}``. For a program that does the task's database
+    #: work itself: 0.26.0 withholds the passphrase from every script (review 0.25.0, F4.2), so such
+    #: a program could no longer decrypt a login, and SQLSERVER-030 failed every run on the worker
+    #: with "No decryption key provided" (2026-10-05). Handing it the passphrase would undo F4.2
+    #: for every credential in the estate; handing it the one connection it needs does not.
+    target_connection: bool = False
 
 
 def parse(block: dict[str, Any], *, command_name: str) -> PythonSource:
@@ -111,6 +118,16 @@ def parse(block: dict[str, Any], *, command_name: str) -> PythonSource:
         raise PythonSourceError(
             f"SQL command {command_name} input.batch_rows must be at least 1.")
 
+    # A boolean or nothing: "yes" or 1 read as true would hand out a login on a spelling.
+    target_connection = block.get("target_connection")
+    if target_connection is None:
+        target_connection = False
+    if not isinstance(target_connection, bool):
+        raise PythonSourceError(
+            f"SQL command {command_name} input.target_connection must be true or false, got "
+            f"{target_connection!r}. true writes the target's connection to the script's stdin - "
+            "only for a program that reaches the database itself.")
+
     return PythonSource(
         script_path=script_path,
         args=tuple(str(value) for value in raw_args),
@@ -119,4 +136,5 @@ def parse(block: dict[str, Any], *, command_name: str) -> PythonSource:
         batch_rows=batch_rows,
         timeout_seconds=int(block.get("timeout_seconds") or DEFAULT_FETCH_TIMEOUT_SECONDS),
         accept_exit_codes=accept,
+        target_connection=target_connection,
     )

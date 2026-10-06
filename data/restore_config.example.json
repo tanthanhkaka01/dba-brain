@@ -199,6 +199,7 @@
                     "sql_password_ref": "MSSQL_192_0_2_40_SA",
                     "restore_data_dir": "/var/opt/mssql/data",
                     "sql_container": "MSSQL_DRILL_1433",
+                    "sqlcmd_path": "/opt/mssql-tools18/bin/sqlcmd",
                     "vm_import_linux_path": "/opt/restore/import/ACME-192-0-2-10",
                     "vm_import_linux_log_path": "/opt/restore/import/ACME-192-0-2-10"
                 },

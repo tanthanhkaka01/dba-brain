@@ -23,7 +23,9 @@ DECLARE @p_BaselineFromLocal datetime = DATEADD(DAY, -7, GETDATE());
 
 -- Query Store keeps its times in UTC. The offset is taken from the server's own clock instead of a
 -- named time zone: a hard-coded zone silently shifts every window on a server that lives elsewhere.
-DECLARE @p_UtcOffsetMin    int      = DATEDIFF(MINUTE, GETUTCDATE(), GETDATE());
+-- One reading, not the difference of two: GETUTCDATE() and GETDATE() are two calls, and when a
+-- minute turns between them DATEDIFF counts it, and every window moves by a minute (0.27.0).
+DECLARE @p_UtcOffsetMin    int      = DATEPART(TZOFFSET, SYSDATETIMEOFFSET());
 DECLARE @p_FromUtc         datetime = DATEADD(MINUTE, -@p_UtcOffsetMin, @p_FromLocal);
 DECLARE @p_ToUtc           datetime = DATEADD(MINUTE, -@p_UtcOffsetMin, @p_ToLocal);
 DECLARE @p_BaselineFromUtc datetime = DATEADD(MINUTE, -@p_UtcOffsetMin, @p_BaselineFromLocal);
@@ -421,6 +423,15 @@ detail AS
                 WHEN p.max_duration_sec >= 3600
                 THEN 'QUERY_LONG_DURATION_OTHER'
 
+                -- small query, worse plan(s), executed often, at its CRITICAL legs: before the
+                -- single-metric warnings, as its severity is below - after them, a plan that was
+                -- both was reported as the WARNING and the CRITICAL was lost (0.27.0)
+                WHEN p.recent_executions >= @p_FreqMinExecutions
+                     AND p.cpu_ratio >= @p_FreqCritCpuRatio
+                     AND qb.bad_rank = 1
+                     AND qb.query_bad_cpu_sec >= @p_FreqCritTotalCpuSec
+                THEN 'QUERY_PLAN_REGRESSED_FREQUENT'
+
                 -- single metric warning
                 WHEN p.max_cpu_sec >= 1800
                 THEN 'QUERY_HEAVY_CPU'
@@ -470,6 +481,13 @@ detail AS
                 WHEN p.max_duration_sec >= 3600
                 THEN 'CRITICAL'
 
+                -- every CRITICAL before the first WARNING (0.27.0)
+                WHEN p.recent_executions >= @p_FreqMinExecutions
+                     AND p.cpu_ratio >= @p_FreqCritCpuRatio
+                     AND qb.bad_rank = 1
+                     AND qb.query_bad_cpu_sec >= @p_FreqCritTotalCpuSec
+                THEN 'CRITICAL'
+
                 WHEN p.max_duration_sec >= 1800
                      AND p.max_cpu_sec >= 300
                      AND p.max_logical_io_reads >= 300000000
@@ -489,12 +507,6 @@ detail AS
 
                 WHEN p.max_duration_sec >= 1800
                 THEN 'WARNING'
-
-                WHEN p.recent_executions >= @p_FreqMinExecutions
-                     AND p.cpu_ratio >= @p_FreqCritCpuRatio
-                     AND qb.bad_rank = 1
-                     AND qb.query_bad_cpu_sec >= @p_FreqCritTotalCpuSec
-                THEN 'CRITICAL'
 
                 WHEN p.recent_executions >= @p_FreqMinExecutions
                      AND p.cpu_ratio >= @p_FreqWarnCpuRatio

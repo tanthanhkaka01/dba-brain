@@ -35,6 +35,7 @@ from pathlib import Path
 from collections.abc import Callable
 from typing import Any
 
+from db_ops.lib import errors, stated_facts
 from db_ops.backup_restore.events import announce
 from db_ops.backup_restore import schedule
 from db_ops.backup_restore.backup import (
@@ -206,6 +207,10 @@ def load_script_restores(config_path: str | Path | None = None) -> ScriptRestore
             raise ValueError(f"Duplicate restore_id: {restore_id}.")
         seen.add(restore_id)
         try:
+            # The facts it must state (rules R50) - the login, for a SQL Server restore.
+            unstated = stated_facts.restore_gaps({}, entry)
+            if unstated:
+                raise errors.ConfigError(stated_facts.sentence(unstated))
             jobs.append(_script_restore(index, entry, restore_id))
         except ValueError as exc:
             if bool(entry.get("active", True)):

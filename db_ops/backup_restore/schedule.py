@@ -182,7 +182,9 @@ def reap_stale_runs(
             # second restore began 47 minutes into the first. A live pid on this host holds its
             # claim whatever the clock says; another host's row waits for a long grace, because
             # this host cannot see that host's processes.
-            owner_pid, owner_host = run_claim.claim_owner(metadata)
+            # The row's own host column too, as the daemon's start-up reads it (0.27.0 item 1.96).
+            row_host = run_claim.row_host(row)
+            owner_pid, owner_host = run_claim.claim_owner(metadata, host_fallback=row_host)
             this_host = socket.gethostname()
             verdict = run_claim.reap_verdict(
                 metadata=metadata,
@@ -192,6 +194,7 @@ def reap_stale_runs(
                 pid_alive=(process_liveness.is_pid_alive(owner_pid)
                            if owner_pid is not None and owner_host == this_host else None),
                 this_node=node_identity.current(),
+                host_fallback=row_host,
             )
             if not verdict.reap:
                 continue

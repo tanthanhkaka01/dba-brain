@@ -1519,7 +1519,7 @@
             "legacy_fields": {
                 "databases": "database_mappings"
             },
-            "field_count": 18,
+            "field_count": 19,
             "required_field_count": 1,
             "fields": [
                 {
@@ -1598,7 +1598,7 @@
                     "field": "database_mappings",
                     "type": "array",
                     "required": false,
-                    "default": "empty - the script decides what it restores",
+                    "default": "empty - with restore_all_databases: true, every database on the share; a script-driven entry restores its instance",
                     "range_text": "mappings {source_database, target_database}",
                     "constraint": {
                         "kind": "array",
@@ -1708,6 +1708,20 @@
                     "measured_against": "not a time value",
                     "purpose": "SQL Server: allow a full restore over a database that is ONLINE on the target. Without it such a restore is refused before anything runs - REPLACE overwrites the database, users and all (0.26.0, owner decision G2.10). A drill that runs again over its own last restore states true.",
                     "rule": "Only ONLINE is refused; a database RESTORING from an earlier run, or absent, is restored as before"
+                },
+                {
+                    "field": "restore_all_databases",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "false",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "SQL Server, an SMB entry: restore EVERY database whose FULL backup is on the share, each under its backup's own name, and open each one after the restore. Stated, never implied: an entry states either its database_mappings or this (0.27.0, 1.101) - an empty list restored whatever it found, and the check after it had no name to ask about.",
+                    "rule": "Not with database_mappings, and not with restore_database_name (it would restore every database under one name). PostgreSQL and Oracle restore the instance and do not take it."
                 },
                 {
                     "field": "note",
@@ -2046,7 +2060,7 @@
                     "type": "object",
                     "required": false,
                     "default": "none",
-                    "range_text": "for input_type python: {script, args, rows_path, parameter, batch_rows, timeout_seconds, accept_exit_codes}",
+                    "range_text": "for input_type python: {script, args, rows_path, parameter, batch_rows, timeout_seconds, accept_exit_codes, target_connection (true only for a program that reaches the database itself; it then reads its target's connection, one login, from stdin)}",
                     "constraint": {
                         "kind": "object",
                         "nullable": true,
@@ -4996,7 +5010,7 @@
                 "restore_sql_username": "sql_username",
                 "id": "target_server_id"
             },
-            "field_count": 19,
+            "field_count": 20,
             "required_field_count": 1,
             "fields": [
                 {
@@ -5117,6 +5131,21 @@
                     "measured_against": "not a time value",
                     "purpose": "The container the target's SQL Server runs in: every sqlcmd of the restore runs inside it (docker exec), for a target host with no sqlcmd of its own.",
                     "rule": "Its backup folder must be bound at the same path inside, so a staged path is the path RESTORE reads."
+                },
+                {
+                    "field": "sqlcmd_path",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - required with sql_container",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Where sqlcmd is inside sql_container - Microsoft's image puts it at /opt/mssql-tools18/bin/sqlcmd, not on PATH.",
+                    "rule": "Required with sql_container (rules R50): the path is stated, never inferred. Read from target, as sql_container is."
                 },
                 {
                     "field": "restore_data_dir",

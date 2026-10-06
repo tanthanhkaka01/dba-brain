@@ -24,6 +24,7 @@ from pathlib import Path
 from db_ops.lib.config import DEFAULT_CONFIG_PATH, load_config
 from db_ops.lib.paths import TOOL_ROOT
 from db_ops.lib.remote_host import RemoteError, RemoteHost
+from db_ops.lib.secret_text import redact_key_arguments
 
 # The project root, resolved once in db_ops/lib/paths.py rather than re-derived here from
 # __file__ — that idiom answers "where is my config" with "where is my code", which is only
@@ -204,19 +205,23 @@ def ssh_run(client: RemoteHost, command: str, *, sudo: bool = False,
     remote argv. The output arrives when the command ends rather than as it is written: the price
     of going through ``run-cmd``, visible on a long ``docker load`` and nowhere else.
     """
+    # Shown, never run, with its passphrases hidden: an operator types `--key-base64 <key>` or
+    # `-e DB_OPS_SECRET_KEY="$(echo <key> | base64 -d)"` into a remote line, and this echo and the
+    # failure message below printed it back in clear (0.27.0 item 1.92).
+    shown = redact_key_arguments(command)
     if not quiet:
-        _emit(f"[remote] $ {'sudo ' if sudo else ''}{command}\n")
+        _emit(f"[remote] $ {'sudo ' if sudo else ''}{shown}\n")
     try:
         result = client.run(command, sudo=sudo)
     except RemoteError as exc:
-        raise SystemExit(str(exc)) from exc
+        raise SystemExit(redact_key_arguments(str(exc))) from exc
     if not quiet:
         if result.stdout:
             _emit(result.stdout if result.stdout.endswith("\n") else result.stdout + "\n")
         if result.stderr.strip():
             _emit(result.stderr if result.stderr.endswith("\n") else result.stderr + "\n", err=True)
     if check and result.exit_code != 0:
-        raise SystemExit(f"Remote command failed (exit {result.exit_code}): {command}")
+        raise SystemExit(f"Remote command failed (exit {result.exit_code}): {shown}")
     return result.exit_code
 
 

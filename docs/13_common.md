@@ -842,7 +842,7 @@ into this module's error type.
 
 | Module | Responsibility | Key public API |
 | --- | --- | --- |
-| `cli.py` and what it was split into (2026-10-03, Q11) | `cli.py` is the entry point: `main` (every failure answered in the envelope, with its kind), `_dispatch` (every command name, in one place - two guards read it there), and the commands that read or write configuration (the registrars, `secret-set`, `rotate-password`, `check-secret`, `check-identifiers`, `check-secret-literals`, `metric-severity`, `list-targets`, `inventory-summary`, `self-status`, and `lift-example` beside `secret-set`). What reads nothing but its request moved out: `cli_usage.py` (the help text), `cli_request.py` (the request reader), `cli_sql.py` (`run-sql`, `trace-session`, `db-status`), `cli_host.py` (`run-cmd`, the four file transfers, `probe-host`), and `cli_gate.py` (the gated operations, `authorize`, `ask`). Those five are named config-free in `tests/test_common_layers.py`; `cli.py` re-exports every name they hold. `main` names the command it answers (`cli_request.COMMAND`), and the reader holds every request to that command's reference entry before the command sees it - a wrong value or a missing required field is measured today and refused with `error_kind` `request` once `request_check.REFUSING` is on (rules R49, `lib/request_check.py`). | `main`, `_dispatch`, `_read_json_request` |
+| `cli.py` and what it was split into (2026-10-03, Q11) | `cli.py` is the entry point: `main` (every failure answered in the envelope, with its kind), `_dispatch` (every command name, in one place - two guards read it there), and the commands that read or write configuration (the registrars, `secret-set`, `rotate-password`, `check-secret`, `check-identifiers`, `check-secret-literals`, `metric-severity`, `list-targets`, `inventory-summary`, `self-status`, and `lift-example` beside `secret-set`). What reads nothing but its request moved out: `cli_usage.py` (the help text), `cli_request.py` (the request reader), `cli_sql.py` (`run-sql`, `trace-session`, `db-status`), `cli_host.py` (`run-cmd`, the four file transfers, `probe-host`), and `cli_gate.py` (the gated operations, `authorize`, `ask`). Those five are named config-free in `tests/test_common_layers.py`; `cli.py` re-exports every name they hold. `main` names the command it answers (`cli_request.COMMAND`), and the reader holds every request to that command's reference entry before the command sees it - a wrong value or a missing required field is refused with `error_kind` `request`, the field named (rules R49, `lib/request_check.py`; on since 0.27.0 - measured only before). | `main`, `_dispatch`, `_read_json_request` |
 | `shell.py` | Resolve the PowerShell executable at runtime so the same code runs on Windows and inside the Linux container. Prefers cross-platform `pwsh`, then `powershell.exe`. | `powershell_executable()`, `is_powershell_executable(name)`; env override `DB_OPS_POWERSHELL` |
 | `secret_text.py` | Encrypt/decrypt the secret file at rest. PBKDF2-HMAC-SHA256 → 32-byte key, sealed with Fernet (AES-128-CBC + HMAC), random per-file salt. The passphrase is supplied at runtime; never stored. | `encrypt_secret_text`, `decrypt_secret_text`, `resolve_key`, `resolve_cli_key`, `decode_key_base64`, `set_key_env`; env `DB_OPS_SECRET_KEY` |
 | `sql_execution.py` | SQL Server connection helpers: driver selection (ODBC 18/17/…), TLS-error fallback, the pymssql cursor adapter, output converters for types pyodbc cannot decode (`datetimeoffset`), batch splitting, JSON-safe row coercion, and credential/secret loading. It executes nothing since 0.25.0: its batch reader, `execute_cursor_batches`, was the metrics' second reader beside `sql_run.execute_capture` and is gone (rules R11). | `connect_sqlserver`, `build_sqlserver_conn_str`, `choose_sqlserver_driver`, `sqlserver_driver_candidates`, `register_output_converters`, `decode_timestampoffset`, `split_sql_batches`, `make_json_safe`, `resolve_password`, `load_credentials_file`, `load_secret_text`; `MAX_RESULT_ROWS`, `SQL_SS_TIMESTAMPOFFSET` |
@@ -2615,7 +2615,7 @@ Three questions that had no answer a program could ask for:
 | `check-objects` | does this node's own `data/*.json` obey the reference | that file, and every file it names |
 | `check-references` | which pointer between two config files lands nowhere | `data/config_references.json`, and every file it names |
 | `upgrade-config` | after `pip install --upgrade`: every config migration this version carries, in order - the shipped reference files (replaced when they say something else, compared as documents, so a copy `init` wrote with another layout is current), the field renames, a restore's machine ids, a Telegram record's switch, the inventory into the reports, a command line that moved to another CLI, and the console apps this version lists and the node's `webhost_config.json` does not (added, never changed - 2026-10-03, after a node filled by bundle was found without the `transport` app) - then `check-objects` and `check-references`; a plan unless `dry_run: false`, each written file copied to `runtime/config_upgrade/<stamp>/` first | the reference this version ships, and every file it names |
-| `standardize-field-names` | moves `data/*.json` to the standard field names (stage C of one name per concept); a plan unless `dry_run: false` | the reference's `used_in`, and every file it names with its `.example.json` |
+| `standardize-field-names` | moves `data/*.json` to the standard field names (stage C of one name per concept), and `config_catalog.json`'s `label_field` / `key_fields` with them - a catalogue still naming `sql_name` labelled every SQL task empty on the worker and made each sync rewrite 30 unchanged records (0.27.0); a plan unless `dry_run: false` | the reference's `used_in`, and every file it names with its `.example.json` |
 
 `due-check` calls `db_ops.lib.time_window.explain_due` — **the same function the schedulers call** —
 so its explanation cannot disagree with the behaviour. It is not how the daemon checks due-ness: the
@@ -2624,15 +2624,19 @@ imported there. A subprocess per verdict would cost more than the work it schedu
 `lib` / `common` split in one sentence. `check-objects` exits 1 when it finds a violation, so it can
 stand in a gate.
 
-**`fallback` notices - phase 1 of the owner's no-fallback rule** (0.26.0, review notes G). An active
-record that leaves a which-thing fact to a default is reported, with the field to add and what is
-assumed until then: an instance reaching its host with no `platform` (guessed from `os` or the
-transport, G3.2), an SSH `cmd_access` with no `auth_type` (`key`, G3.3), no `port` (the engine's,
-G3.9), a PostgreSQL / MySQL instance with no `database_name` or an Oracle one with no `service_name`
-(taken from a label, G3.8), a script SQL Server restore with no `env.MSSQL_USER` (`sa`, G2.11), a
-restore into a container with no `sqlcmd_path`, a certificate API with no
-`certificate_api_token_ref`. A notice, not a violation: nothing stops today. The next release
-refuses these records. The rules are `db_ops.lib.stated_facts`.
+**`fallback` violations - the owner's no-fallback rule** (rules R50; review notes G). An active
+record that leaves a which-thing fact to a default is a violation, with the field to add: an
+instance reaching its host with no `platform` (it was guessed from `os` or the transport, G3.2), an
+SSH `cmd_access` with no `auth_type` (`key`, G3.3), no `port` (the engine's, G3.9), a PostgreSQL /
+MySQL instance with no `database_name` or an Oracle one with no `service_name` (taken from a label,
+G3.8), a script SQL Server restore with no `env.MSSQL_USER` (`sa`, G2.11), an SMB (SQL Server)
+restore that names no database and does not state `restore_all_databases: true` (it restored whatever
+FULL it found), a restore into a container with no `sqlcmd_path`, a certificate API with no
+`certificate_api_token_ref` (a built-in ref). 0.26.0
+reported them as notices (phase 1); **since 0.27.0 they are violations, and the record is refused
+where it is used** (phase 2) - see R50 for each place. `instance-add` and `remote-credential-add`
+write no such active record: they refuse it before anything is written. The rules are
+`db_ops.lib.stated_facts`.
 
 **What the reference describes: 153 entries in four families.** The CONFIG a node reads (60 - every
 `data/` file the catalogue calls `config`, and every block between a file's root and its records),

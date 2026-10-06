@@ -194,7 +194,7 @@ def test_an_entry_states_the_pair_and_the_target_container(tmp_path):
                    "password_ref": "VM_REF", "sql_instance": "localhost,1433", "sql_username": "sa",
                    "sql_password_ref": "SA_REF", "restore_data_dir": "/var/opt/mssql/data",
                    "vm_import_linux_path": "/opt/db_ops/backup/SQLBK_IMPORT/SRC",
-                   "sql_container": "MSSQL_1433"},
+                   "sql_container": "MSSQL_1433", "sqlcmd_path": "/opt/mssql-tools18/bin/sqlcmd"},
         "database_mappings": [{"source_database": "APPDB", "target_database": "AppDb"}],
     }
     path.write_text(json.dumps({"backup_restore": {"restores": [entry]}}), encoding="utf-8")
@@ -210,6 +210,7 @@ def test_a_pair_without_its_passphrase_ref_is_refused_when_the_entry_is_read(tmp
         "restore_id": "R1", "server_id": "S", "target_server_id": "T", "cleanup_retention": 86400,
         "source": {"backup_share": "\\\\h\\s", "backup_certificate": {"name": "c"}},
         "target": {"vm_platform": "linux", "vm_import_linux_path": "/i", "restore_data_dir": "/d"},
+        "restore_all_databases": True,
     }]}}), encoding="utf-8")
     with pytest.raises(ValueError, match="backup_certificate.password_ref is required"):
         load_restore_configs(path)
