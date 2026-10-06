@@ -22258,31 +22258,29 @@
                 },
                 {
                     "field": "logging_on_run",
-                    "type": "object",
+                    "type": "boolean",
                     "required": false,
-                    "default": "none - optional",
-                    "range_text": "an object",
+                    "default": "true",
+                    "range_text": "true | false",
                     "constraint": {
-                        "kind": "object",
-                        "nullable": true,
-                        "free_form": true
+                        "kind": "boolean",
+                        "nullable": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "Legacy notify rule."
+                    "purpose": "The flat form: send a message when each run starts, to logging_chat. A boolean - the parser reads it as one; the whole block goes under notify. Described as an object until 0.27.0, so R49 refused the form the command's own usage shows."
                 },
                 {
                     "field": "alert_on_error",
-                    "type": "object",
+                    "type": "boolean",
                     "required": false,
-                    "default": "none - optional",
-                    "range_text": "an object",
+                    "default": "true",
+                    "range_text": "true | false",
                     "constraint": {
-                        "kind": "object",
-                        "nullable": true,
-                        "free_form": true
+                        "kind": "boolean",
+                        "nullable": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "Legacy notify rule."
+                    "purpose": "The flat form: send a message when a run fails, to error_chat. A boolean - the parser reads it as one; the whole block goes under notify. Described as an object until 0.27.0, so R49 refused the form the command's own usage shows."
                 },
                 {
                     "field": "logging_chat",

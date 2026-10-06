@@ -91,6 +91,8 @@ do about it. Not the internal refactor that made it possible.
   named. PostgreSQL and Oracle restore the instance and take neither.
 - **A restore target's `sqlcmd_path` is read.** Stated under `target`, it was silently dropped and
   the path inside the container inferred; it is a described `restore_target` field now.
+- **`sql-target-add` takes the flat `logging_on_run` / `alert_on_error` booleans its usage shows**:
+  the reference called them objects, and with R49 refusing, the documented form was refused.
 - **The Query Store metric reports a frequent plan regression at CRITICAL when it is one**, not as
   the single-metric WARNING the same plan also met. Its windows, and the deadlock count's, take the
   server's UTC offset in one reading (`DATEPART(TZOFFSET, SYSDATETIMEOFFSET())`); the difference of
