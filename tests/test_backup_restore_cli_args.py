@@ -76,6 +76,7 @@ def _config_with_script_restore(tmp_path):
         "source_backup_host_dir": "/opt/backup/dbops",
         "target_backup_dir": "/opt/db_ops/stage",
         "script": "assets/restore/sqlserver/mssql_restore.sh",
+        "env": {"MSSQL_USER": "sa"},
     }]}}), encoding="utf-8")
     return config
 
