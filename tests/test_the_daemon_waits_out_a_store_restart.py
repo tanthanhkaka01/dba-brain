@@ -243,6 +243,34 @@ def test_a_self_referential_chain_terminates():
     assert store_outage.sqlstate(error) == ""
 
 
+def test_a_store_connect_that_timed_out_is_waited_out():
+    """The 0.27.0 soak, 2026-10-06T08:40:14Z: one ten-second connect timeout ended the daemon.
+
+    pg8000 wraps every socket failure while connecting in one sentence and raises it ``from`` the
+    socket error, and the store wraps that again. The SQLSTATE walk finds no code anywhere in the
+    chain - a socket that never connected has no server to send one - so the text decides, and the
+    socket's own words ("timed out") are two links down where the text match does not read. The
+    sentence itself is what has to be known. Measured on the node: sixteen hours dead for an outage
+    the store had recovered from within minutes.
+    """
+    message = ("Can't create a connection to host 192.0.2.115 and port 5433 "
+               "(timeout is 10 and source_address is None).")
+    try:
+        try:
+            try:
+                raise TimeoutError("timed out")
+            except TimeoutError as socket_error:
+                raise ConnectionError(message) from socket_error
+        except ConnectionError as driver:
+            raise RuntimeError(
+                f"Could not connect to PostgreSQL store postgres@192.0.2.115:5433/db_ops: {driver}"
+            ) from driver
+    except RuntimeError as wrapped:
+        assert store_outage.sqlstate(wrapped) == ""
+        assert store_outage.is_transient(wrapped)
+        assert store_outage.OutageWaiter().wait_for(wrapped) == 2
+
+
 def test_the_other_wording_of_57P03_is_in_the_phrase_list():
     """Second-line defence, for a driver that carries no mapping at all. The server said "in
     recovery mode" on 2026-09-22; the list only had "starting up"."""

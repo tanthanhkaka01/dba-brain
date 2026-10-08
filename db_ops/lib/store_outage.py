@@ -67,6 +67,12 @@ TRANSIENT_PHRASES: tuple[str, ...] = (
     "no route to host",
     "timed out",
     "timeout expired",
+    # pg8000's sentence for EVERY socket failure while connecting - refused, timed out, no route -
+    # raised `from` the socket error, so the words above sit one link down in `__cause__`, where
+    # this text match never looks. Without it a store connect that timed out read as permanent: on
+    # 2026-10-06 the 0.27.0 soak's daemon exited on one ten-second timeout at hour 1.5 and the node
+    # stood dead for sixteen hours, the store answering again within minutes.
+    "can't create a connection to host",
 )
 
 #: How long the daemon may wait in total for one outage before letting the error out.

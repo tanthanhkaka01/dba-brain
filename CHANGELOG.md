@@ -97,6 +97,10 @@ do about it. Not the internal refactor that made it possible.
   the single-metric WARNING the same plan also met. Its windows, and the deadlock count's, take the
   server's UTC offset in one reading (`DATEPART(TZOFFSET, SYSDATETIMEOFFSET())`); the difference of
   two clock calls could move them by a minute, or by an hour in the deadlock count.
+- **The daemon waits out a store connect that timed out or was refused**, as it waits out a restart.
+  pg8000 raises one sentence for every such connect - *Can't create a connection to host ...* - with
+  the socket's own words one link below it, so the daemon read the failure as permanent and exited
+  on the first ten-second timeout.
 
 ### Upgrading
 
