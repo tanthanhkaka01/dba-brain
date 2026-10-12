@@ -34,6 +34,18 @@ from db_ops.reports.server_series import metric_catalog
 AT = "2026-10-09T04:20:00Z"
 
 
+@pytest.fixture(autouse=True)
+def _the_catalogue_that_ships(shipped_metric_catalog):
+    """Every test here reads the metric catalogue the package ships.
+
+    Left to its default, `metric_catalog()` - and the areas built from it - reads
+    `data/metric_definitions.json`, a node's own file that a public checkout does not have. This
+    file passed here and failed eleven tests in `dba-brain` on 0.28.0's release day, each on an
+    empty catalogue.
+    """
+    return shipped_metric_catalog
+
+
 def _row(value, unit, message, status="OK"):
     return {"metric_value": value, "metric_unit": unit, "message": message, "status": status,
             "collected_at": AT}
