@@ -707,6 +707,63 @@ three concerns, kept separate so nothing is double-collected:
 So a DB-in-Docker target collects `sql` + `docker`; the shared host OS lives on the VM target;
 OS (`cmd`) metrics are turned off on the container targets with `metrics.disabled_collector_types: ["cmd"]`.
 
+## A scan that must not always run, and a threshold that is configuration (0.28.0)
+
+`LOCK_TRANSACTION_HOLDERS` starts by reading `sys.dm_tran_locks` whole, and enumerating the lock
+manager takes latches on the lock manager. On 2026-10-07 one session on an ERP server held
+1,137,515 locks in a transaction 44 hours old; the metric's scan outlived its 60-second timeout and
+became the head of **68 waiting sessions**. The monitoring query was the incident's head blocker,
+and nothing bounded the scan by the size of what it scanned.
+
+**The size is read first, and above the limit the scan is not run.** Both variants (2012 and later,
+and `legacy_2008r2/`) open with the same block, word for word:
+
+| | |
+| --- | --- |
+| What is read | `Lock Owner Blocks` from `sys.dm_os_performance_counters` - the locks in use now, which is what a scan would have to walk. One row, nothing enumerated |
+| Why not the lock manager's memory | that store keeps its pages after the locks are gone. Measured 2026-10-09 on the server of the incident: **3,700 MB** with **800** locks in use (798 rows in `sys.dm_tran_locks`). A limit in megabytes would have stayed CRITICAL for good |
+| Above the limit | no scan. One row, item `lock_scan_skipped`, **CRITICAL**: the count, the limit, and the sessions most likely to hold the locks |
+| Who is named | the open transactions, from the transaction DMVs (they do not touch the lock manager), largest first by log written - up to five, plus the oldest. Each is a row `SPID=n` with login, host, `client_ip`, program, database, the transaction's age and its log. **Two are CRITICAL: the largest writer and the oldest open transaction** - one of them is the holder whether it changed a million rows or only read them under an isolation level that keeps its shared locks. The rest are WARNING |
+| What it cannot say | a session's lock count. That is the scan |
+| What it does not do | create a temp table (the scan below does): a server in this state is the last place to create one |
+
+Where the counters are not available the block reads 0 and the scan runs as it always did - the
+guard fails open. One SQL Server 2012 instance of this estate reads 0 for every lock counter.
+
+**The limit is `sql_settings.lock_scan_skip_above`, 500,000.** Read on 2026-10-09 across fourteen
+SQL Server targets, the locks in use ranged from 2,500 to 96,000; the scan has been measured at
+1.2 s for 260,000 rows; 1.2 million stalled a server. Half a million is five times the largest
+normal reading and under half of the incident's.
+
+### `sql_settings` - a number the SQL takes from configuration
+
+A collector's thresholds are literals in its SQL, which was the one place a threshold could not be
+configured: the limit above depends on the estate, and the only way to change it was to edit a
+shipped file. A metric may now state
+
+```json
+"sql_settings": {"lock_scan_skip_above": 500000}
+```
+
+and its SQL declares the same name with its default, on a line of its own:
+
+```sql
+DECLARE @lock_scan_skip_above bigint = 500000;
+```
+
+`lib.sql_text.apply_sql_settings` writes the configured number into that `DECLARE` before the file
+is prepared. The file stays runnable by hand as it is - the default is in it.
+
+Deliberately narrow, because this writes into SQL text:
+
+- **a number and nothing else** - a string is refused whatever it holds, and so is `true`. There is
+  no quoting to get wrong because nothing that needs quoting is accepted;
+- **a name the file declares, exactly once, in exactly that shape.** A setting the file does not
+  declare fails the metric: an operator who raised a limit that no SQL reads would believe it was
+  raised;
+- every variant of the metric has to declare it - `tests/test_a_lock_manager_too_large_to_scan_is_not_scanned.py`
+  applies each metric's settings to each of its supported variant files.
+
 ## Supported Database Engines
 
 SQL collectors dispatch by the `db_type` in `db_instances.json`; each engine uses its own driver and per-engine SQL variant under `db_ops/metrics/collectors/<engine>/`:
@@ -751,6 +808,56 @@ no address. Both join the request's own connection now (`c.connection_id = r.con
 the guard holds every collector whose live SQL writes `host=` to write `client_ip=` too.
 Verify with `run-sql` and `"autocommit": true` against a real instance of that version — see
 [`13_common.md`](./13_common.md).
+
+### What `INSTANCE_STATUS` says about a server, engine by engine (0.28.0)
+
+`INSTANCE_STATUS` is one row per instance, and its `message` carries what the server says about
+itself as `key=value` pairs - the facts the fleet page prints before anything else about a server
+(`reports/inventory_health.py::build_instance_health`). Until 0.28.0 SQL Server's message held
+nineteen pairs, Oracle's two, PostgreSQL's three: not because those engines say less, but because
+their collectors asked less.
+
+| | SQL Server | Oracle (10g and later) | Oracle 8i | PostgreSQL |
+| --- | --- | --- | --- | --- |
+| Name and host | `server`, `instance`, `machine`, `physical`, `clustered` | `instance`, `machine`, `rac` | `instance`, `host`, `machine`, `rac` | none - PostgreSQL has no machine name to ask for |
+| Build | `version`, `level`, `CU`, `update` | `version`, `banner` (the full release) | `version`, `banner` | `version`, `build` |
+| Edition | `edition`, `engine` | `edition` (read from the banner) | `edition` | none |
+| Platform | - | `platform` | - | `platform` |
+| Listening on | `ip`, `port`, `transport`, `protocol`, `auth` | none - these views do not state the listener | none | `ip`, `port`, `transport`, `ssl` |
+| Database and role | - | `database`, `unique_name`, `role`, `open_mode`, `database_status`, `instance_role` | `database`, `open_mode` | `role` (primary / standby), `connected_database` |
+| Text | `collation` | `charset` | `charset` | `encoding`, `database_collation` |
+| Log / WAL | - | `log_mode`, `archiver` | `log_mode`, `archiver` | `wal_level`, `archive_mode` |
+| Others | `pid` | `logins` | `logins` | `timezone`, `max_connections`, `uptime_seconds` |
+| Started | `started` | `started` | `started` | `started` |
+
+Four rules the three files keep, and a fifth for whoever adds a key:
+
+- **Each engine in its own words.** A role, a log mode, a character set are shown under the name
+  that engine uses. Nothing is mapped across: PostgreSQL gets no `edition=N/A`, Oracle no `CU`.
+  An absent key means *this engine has no such thing*; `unknown` means it has one and the query
+  could not read it (an Oracle banner that names no edition).
+- **No value may hold `;` or `,`.** The report reads each pair up to either separator
+  (`parse_kv_any`). An Oracle 23ai banner ends *Develop, Learn, and Run for Free* and PostgreSQL's
+  `version()` holds *compiled by gcc ..., 64-bit*: the first has both characters removed, the second
+  is cut into `build` and `platform`.
+- **Every part that can be NULL is wrapped.** One NULL in a `||` chain makes the whole message NULL
+  on PostgreSQL - and a NULL message is an instance with no facts at all. `inet_server_addr()` is
+  NULL on a unix socket; `pg_stat_ssl` has no row before 9.5.
+- **PostgreSQL's collation is its database's.** A cluster has no single one, so the message says
+  `database_collation` beside `connected_database`, and the page prints *Database collation* with
+  the database's name - never *Server collation*.
+- **A key the report reads is a key a test pins.** `tests/test_inventory_instance_info.py` holds
+  each collector's SQL to the keys of a message captured from a real server, so a key renamed in a
+  file fails there instead of going blank on the page.
+
+`ip` and `port` are the server's own end of the connection. In a container that is the container's
+address and port, not the published ones - on PostgreSQL as on SQL Server.
+
+No new privilege: PostgreSQL reads settings, `pg_stat_ssl` for its own session and `pg_database`;
+Oracle reads `v$instance`, `v$database`, `v$version` and `nls_database_parameters`, which
+`SELECT_CATALOG_ROLE` covers. Run on 2026-10-09 against Oracle 26ai Free (23.26.3), Oracle 8.1.7
+through the bridge, and PostgreSQL 18.6; the Oracle file uses only columns that exist from 10g on,
+and no Oracle between 8i and 23 was at hand to run it on.
 
 ### Oracle 8i (`legacy_8i/`) — what it collects and what it deliberately does not
 

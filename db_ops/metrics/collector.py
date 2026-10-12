@@ -23,6 +23,7 @@ from db_ops.lib.event_policy import (
     normalize_error_type,
     resolve_failure_phase,
 )
+from db_ops.lib.sql_text import apply_sql_settings
 from db_ops.lib.target_profile import TargetProfile, candidate_variants, select_variant, version_matches
 from db_ops.lib.time_window import is_time_window_open, job_due
 from db_ops.lib.timezone import to_display
@@ -559,6 +560,10 @@ def _prepare_sql_file(*, metric: MetricDefinition, target: MetricTarget, secrets
     if path is None:
         raise errors.InvalidConfig(f"Metric SQL path is not resolved: {metric.metric_code}")
     sql_text = Path(path).read_text(encoding="utf-8-sig")
+    # The numbers configuration states for this metric, written into the DECLAREs that carry
+    # their defaults. A setting the file does not declare raises - and is recorded on this
+    # metric for this target, like any other failure to prepare it.
+    sql_text = apply_sql_settings(sql_text, metric.sql_settings)
     sql = prepare_sql(
         target=target,
         sql_text=sql_text,

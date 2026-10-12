@@ -15,6 +15,92 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-10-09
+
+### Added
+
+- **The project has a page of its own: <https://dbabrain.dev/>.** What the tool does, what it
+  produces and how it is put together, on one page, before anyone opens a README. The package's
+  `Homepage` on PyPI now leads there; `Repository` and `Changelog` still lead to GitHub.
+- **The README shows the output instead of only describing it.** Four screenshots of the showcase
+  pages (fleet inventory, per-server metrics, SLA / SLO, index usage), a *What it does* table, a
+  *How it works* section - one run end to end as a diagram, the answer envelope, the path from a
+  measurement to an alert and from a backup to a proven restore - a diagram of who may call whom,
+  and how to reach the maintainer about a donation, sponsorship or investment. The pictures are in
+  `docs/img/` and travel in the source distribution with the docs.
+- **An Oracle or PostgreSQL server says who and what it is.** `INSTANCE_STATUS` carried nineteen
+  facts for SQL Server, two for Oracle and three for PostgreSQL. Oracle now states its machine,
+  edition, full banner, database and unique name, role, open mode, log mode and archiver, platform,
+  character set, RAC and start time (8i: what 8i has - no role, platform or unique name);
+  PostgreSQL its build, platform, role, address and port, SSL, encoding, the connected database's
+  collation, WAL level and archive mode, time zone, `max_connections` and start time. The fleet
+  page's server detail prints them, each under its engine's own name - nothing is borrowed from SQL
+  Server's vocabulary, and a fact an engine does not have gets no row. No new privilege is needed.
+  An 8i server's machine name, collected since the 8i variant existed and never shown, appears too.
+- **An Oracle or PostgreSQL server is reported in the metrics it has.** Both report pages were
+  written around SQL Server's metrics: an Oracle 8i server had 26 metric codes collected and the
+  fleet page read 9, a PostgreSQL server 22 and 9.
+  - *Fleet page, server detail*: one row per engine metric, in the collector's own words - for
+    Oracle the sessions and processes against their limits, dead sessions, tablespace free
+    space, pool free memory, buffer cache hit ratio, rollback contention, invalid objects,
+    unusable indexes, the index inventory, the largest segments; for PostgreSQL the wraparound
+    horizon, dead tuples awaiting vacuum, bloat, long transactions, database activity,
+    replication and slots, the WAL archive, invalid indexes. An Oracle database gains a size
+    and a recovery model (its log mode).
+  - *Per-server page*: nine health tiles for those questions, each shown only on the engine
+    that has the metric. A SQL Server page is unchanged.
+  - A tile with no row now says which of three things is true: `OK - none found` where its
+    collector ran clean (Oracle's and PostgreSQL's blocking and long-query collectors write a
+    row only when there is something to report, and those tiles read *not collected*), *no
+    such metric* where none exists (TempDB on PostgreSQL), and *not collected* only
+    where something could have been.
+
+### Changed
+
+- **A metric's SQL can take a number from configuration: `sql_settings`.** A metric definition
+  may state `"sql_settings": {"name": number}`, and the number is written into the
+  `DECLARE @name <type> = <default>;` its SQL file carries. Only a number, only into a name the
+  file declares; anything else fails the metric with the reason. `LOCK_TRANSACTION_HOLDERS`
+  is the first to use it. If you copied `metric_definitions.json` into your own `data/`, the
+  metric runs with the default in its file until you add the field - nothing to do unless you
+  want another limit.
+
+### Fixed
+
+- **A request the tool writes itself is no longer refused.** 0.27.0 began refusing a `common.cli`
+  request whose value disagrees with its reference (rules R49), and the reference described two
+  fields wrongly: `run-sql`'s `prelude` as an array - it is SQL text - and `authorized_by` as text -
+  it is an object such as `{"channel": "telegram"}` - on `authorize`, on the emergency operations
+  and on `run-cmd`. On 0.27.0 that refused, with *The request does not match its reference* and
+  nothing run:
+  - every SQL Server task that takes a parameter;
+  - a forced run of a SQL task over Telegram (`/spbot_run_sql_task`), after the `yes` was given;
+  - the bot's `/spbot_kill_spid`, `/spbot_shrink_log`, `/spbot_start_job`, `/spbot_disable_job`
+    and `/spbot_restart_server`.
+
+  All of them run again. **If you call one of those commands yourself and send
+  `"authorized_by": "a name"`, send an object instead** (`{"channel": "..."}`): text there was
+  never read, and is now refused with the field named.
+- **`LOCK_TRANSACTION_HOLDERS` no longer scans a lock manager that is too large to scan.** The
+  metric reads `sys.dm_tran_locks` whole, which latches the lock manager; with over a million
+  locks held by one transaction its scan outlived the 60-second timeout and became the head of
+  68 waiting sessions. It now reads the number of locks in use first, from a performance
+  counter, and above `sql_settings.lock_scan_skip_above` (500,000) does not scan: it answers one
+  **CRITICAL** row, `lock_scan_skipped`, and names the sessions most likely to hold the locks -
+  the open transactions, largest first by log written, and the oldest - each with its login,
+  host, client address, program and database. SQL Server 2008 R2 has the same guard.
+- **The fleet page no longer prints a zero for a number nobody measured.** An Oracle or PostgreSQL
+  server showed *PLE 0* - page life expectancy is SQL Server's metric - under a red badge, and an
+  Oracle 8i instance *0 sessions* while holding hundreds: its collector counts under
+  `session_count` and the page asked for `server`. A number that was not collected is now a dash
+  (`n/a` in the summary) with a neutral badge, and the session count is the collector's own value
+  on every engine - on Oracle it had been only the sessions whose status is `ACTIVE`. A
+  PostgreSQL database no longer shows compatibility level `0`.
+- **`build-showcase` takes its `extra_terms` again.** The reference described the field as an
+  array; the command reads an object of term to kind (`{"SITECODE": "database"}`), as the
+  shipped `data/showcase.example.json` writes it. On 0.27.0 `build-showcase @data/showcase.json`
+  was refused before it read a page.
+
 ## [0.27.0] - 2026-10-06
 
 ### Changed

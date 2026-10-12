@@ -159,6 +159,28 @@ PUBLIC_PATHS: tuple[str, ...] = (
     "docker-compose.yml",
 )
 
+#: Files the export's text rule does not cover and that ship anyway, each with the reason.
+#:
+#: The export copies a file only when its suffix is known to be text (`03-16`): a scanner reads a
+#: picture as empty and passes it, so a rule stands in for the reading. That rule had no exception
+#: until 0.28.0, when the README began to show what the tool produces (the operator, 2026-10-09:
+#: the pictures of the project's page ship with the product). Each one is named here rather than
+#: its suffix being trusted, so the next picture is a decision somebody makes in this table, with
+#: where it came from - which is the only thing that can vouch for a file nothing can read.
+#:
+#: The four screenshots are pictures of pages `examples/showcase/` already ships: the scrub that
+#: certified those pages is what certifies these, and a screenshot is retaken from that folder,
+#: never from a node's own pages. The two diagrams are drawings; they name components and nothing
+#: of anybody's estate.
+PUBLIC_BINARIES: dict[str, str] = {
+    "docs/img/fleet-inventory.jpg": "screenshot of the showcase's fleet inventory page",
+    "docs/img/server-metrics.jpg": "screenshot of one of the showcase's per-server metrics pages",
+    "docs/img/sla.jpg": "screenshot of the showcase's SLA / SLO page",
+    "docs/img/index-usage.jpg": "screenshot of one of the showcase's index usage pages",
+    "docs/img/one-run-end-to-end.svg": "diagram: the path of one run, drawn for the README",
+    "docs/img/who-may-call-whom.svg": "diagram: which component may import or start which",
+}
+
 #: Paths that never leave this repository, each with the reason. `G-10` is this table.
 #:
 #: Several are already git-ignored and so cannot be copied anyway; they are named regardless,
@@ -301,4 +323,4 @@ PRIVATE_TESTS: dict[str, str] = {
 #: version is immutable** — it cannot be re-uploaded after deletion, so the mistake is permanent.
 #: The public tree starts where a first release starts.
 PUBLIC_DISTRIBUTION_NAME = "dbabrain"
-PUBLIC_VERSION = "0.27.0"
+PUBLIC_VERSION = "0.28.0"

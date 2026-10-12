@@ -21,7 +21,8 @@ improvising.
 **It refuses binaries by extension** (`03-16`). `scripts/archive/` holds two `.xlsx` files of real
 exported Oracle data and a public key naming a host and a cloud tenancy — all of which a text
 scanner reads as empty and passes. A rule beats a reading, so anything not known to be text has to
-be allow-listed by hand.
+be allow-listed by hand: `--allow-binary` for one run, `distribution.PUBLIC_BINARIES` for the
+pictures the README shows, each named with where it came from.
 
 **And it runs the identifier scan over the result.** `check-identifiers` exists precisely so that
 this step is a gate rather than a report: a tree with a real hostname in it does not get written.
@@ -41,15 +42,18 @@ from db_ops.lib.distribution import (
     PRIVATE_PATHS,
     is_private_subpath,
     PRIVATE_TESTS,
+    PUBLIC_BINARIES,
     PUBLIC_PATHS,
     private_docs,
 )
 
-#: File types the export will copy. Anything else must be named in ``allow_binaries``.
+#: File types the export will copy. Anything else must be named in ``allow_binaries`` for one run,
+#: or in ``distribution.PUBLIC_BINARIES`` for every run.
 #:
 #: An allow list rather than a deny list for the same reason the path plan is: a new binary format
-#: added to the tree must be a decision. `.png` and `.ico` are absent deliberately — the moment
-#: this project ships an image, somebody should have to say so here.
+#: added to the tree must be a decision. `.png`, `.jpg`, `.svg` and `.ico` are absent deliberately:
+#: the project ships pictures since 0.28.0, and each one is named in `PUBLIC_BINARIES` with where
+#: it came from, so a suffix never lets one through.
 TEXT_SUFFIXES: frozenset[str] = frozenset({
     ".py", ".sql", ".sh", ".ps1", ".bat", ".cmd",
     ".json", ".yml", ".yaml", ".toml", ".cfg", ".ini", ".conf",
@@ -288,6 +292,10 @@ def build_plan(root: Path, *, allow_binaries: frozenset[str] | set[str] = frozen
     plan = ExportPlan()
     dropped_docs = set(private_docs())
     in_flight = _uncommitted_files(root)
+    # The files decided once, for every run, plus the ones this run was told about. Without the
+    # first a release would have to repeat `--allow-binary` for each picture, and the run that
+    # forgot one would refuse a tree nothing had changed in.
+    allow_binaries = frozenset(allow_binaries) | frozenset(PUBLIC_BINARIES)
 
     for name in PUBLIC_PATHS:
         source = root / name

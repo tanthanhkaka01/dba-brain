@@ -23,7 +23,7 @@ license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Trieu Tan Thanh" }]
 keywords = ["dba", "database", "sqlserver", "oracle", "postgresql", "mysql", "monitoring", "operations"]
-version = "0.27.0"
+version = "0.28.0"
 
 # Measured 2026-08-21, not guessed (D-05):
 #
@@ -106,8 +106,11 @@ db-ops = "db_ops.cli:main"
 # it is in every runbook, every dated record and every operator's notes.
 dbabrain = "db_ops.cli:main"
 
+# `Homepage` is the project's own page since 0.28.0 (it went live on 2026-10-09). Until then it
+# repeated `Repository`, so PyPI's sidebar showed two links to one place and none to the page that
+# says what the tool is before anyone reads a README.
 [project.urls]
-Homepage = "https://github.com/tanthanhkaka01/dba-brain"
+Homepage = "https://dbabrain.dev/"
 Repository = "https://github.com/tanthanhkaka01/dba-brain"
 Changelog = "https://github.com/tanthanhkaka01/dba-brain/blob/main/CHANGELOG.md"
 

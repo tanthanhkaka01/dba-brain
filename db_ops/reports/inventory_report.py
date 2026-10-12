@@ -294,6 +294,56 @@ def _build_disks(server) -> list:
     return out
 
 
+def _engine_own_facts(inst) -> list:
+    """What Oracle and PostgreSQL state about themselves, as ``[label, value]`` rows (0.28.0).
+
+    Until then an Oracle or PostgreSQL server's detail stopped at its version, beside a dozen rows
+    for SQL Server - not because the engines say less, but because their collectors asked less.
+    Each row appears only where the engine stated the fact. A blank row would read as a zero, and
+    a SQL Server label over an Oracle value as a claim nobody measured: a role, a log mode and a
+    character set are each engine's own word and are shown under it.
+    """
+    out = []
+    if inst.get("banner"):
+        out.append(["Engine banner", inst["banner"]])
+    database = " · ".join(dict.fromkeys(
+        x for x in (inst.get("database_name"), inst.get("unique_name")) if x))
+    if database:
+        out.append(["Database name", database])
+    # Oracle 8i states an open mode and no role: under "Role" its READ WRITE would read as one.
+    role = " · ".join(x for x in (inst.get("role"), inst.get("open_mode")) if x)
+    if role:
+        out.append(["Role" if inst.get("role") else "Open mode", role])
+    if inst.get("platform"):
+        out.append(["Platform", inst["platform"]])
+    if inst.get("charset"):
+        out.append(["Character set", inst["charset"]])
+    if inst.get("database_collation"):
+        of = f" (database {inst['connected_database']})" if inst.get("connected_database") else ""
+        out.append(["Database collation", inst["database_collation"] + of])
+    log_bits = [inst.get("log_mode"),
+                f"archiver {inst['archiver']}" if inst.get("archiver") else ""]
+    log = " · ".join(x for x in log_bits if x)
+    if log:
+        out.append(["Log mode", log])
+    wal_bits = [f"wal_level {inst['wal_level']}" if inst.get("wal_level") else "",
+                f"archive_mode {inst['archive_mode']}" if inst.get("archive_mode") else ""]
+    wal = " · ".join(x for x in wal_bits if x)
+    if wal:
+        out.append(["WAL", wal])
+    if inst.get("rac"):
+        out.append(["RAC", inst["rac"]])
+    if inst.get("logins"):
+        out.append(["Logins", inst["logins"]])
+    setting_bits = [f"max_connections {inst['max_connections']}" if inst.get("max_connections") else "",
+                    f"timezone {inst['timezone']}" if inst.get("timezone") else "",
+                    f"ssl {inst['ssl']}" if inst.get("ssl") else ""]
+    settings = " · ".join(x for x in setting_bits if x)
+    if settings:
+        out.append(["Server settings", settings])
+    return out
+
+
 def _build_detail(server, db0) -> list:
     """Extra structured fields surfaced in Server Detail that the template's base schema
     doesn't already render (database sizes, FCI mapping, governance extras, deployment,
@@ -327,6 +377,16 @@ def _build_detail(server, db0) -> list:
             out.append(["Server collation", inst["collation"]])
         if inst.get("started_at"):
             out.append(["Engine started", inst["started_at"]])
+        out.extend(_engine_own_facts(inst))
+
+    # What the engine collects under its own name - the process ceiling, the tablespaces, the
+    # wraparound horizon. One row per metric, in the collector's words, with its status in front
+    # when it is not OK. Empty for SQL Server: every code behind it is exclusive to its engine.
+    for fact in server.get("engine_facts") or []:
+        status = str(fact.get("status") or "OK")
+        text = str(fact.get("text") or "")
+        out.append([str(fact.get("label") or fact.get("code") or ""),
+                    text if status == "OK" else f"{status} · {text}"])
 
     if db0.get("server_name"):
         out.append(["Server name", db0["server_name"]])

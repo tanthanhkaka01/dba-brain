@@ -318,7 +318,7 @@ were valid, and nothing in the tree compared one against the other.
 | `run_mode.py` | whether the daemon waits for an app command to finish before starting it again: `sync` (the default, and what every command did before the field existed) or `async` with a `max_parallel` cap. An `async` command **must** refuse its own duplicate work, because the daemon will not — which is safe only because each unit of work claims a `running` row the store's unique index will not issue twice |
 | `telegram_severity.py` | the severity emoji, applied once at the send layer |
 | `powershell.py` | quoting, encoding, and the `Invoke-Command` wrapper |
-| `sql_text.py` | SQL text and result limits — the parts of running a query that are not the running |
+| `sql_text.py` | SQL text and result limits — the parts of running a query that are not the running. Since 0.28.0 also `apply_sql_settings`: a metric's `sql_settings` written into the `DECLARE`s its SQL file carries - a number only, into a name the file declares exactly once |
 | `sqlserver_certificate.py` | **the one batch that makes a backup-encryption certificate available on SQL Server** (`import_batch`, and `parse_marker` for its answer): by thumbprint - the SHA-1 of the `.cer` - and never dropping one; a taken name becomes `<name>_<8 hex digits>`. `restore-key`, the SMB restore and (written out) the shell restore send it (0.24.0) |
 | `mssql_ddl.py` | SQL Server DDL rendered from catalogue rows - pure text in and out, no connection; the counterpart of `common.schema_catalog`, which reads `sys.*` |
 | `name_filter.py` | which names a request selected, and which of its patterns matched nothing (`select`, `unused_patterns`) - the third answer is the one that kept being forgotten |
@@ -354,7 +354,7 @@ continuation by the `[part i/n]` marker that the splitter writes.
 | `config_bundle.py` | what a portable configuration bundle *is* — one JSON file that carries a whole estate to a machine that has never seen this project. See below |
 | `deploy_selection.py` | which files a *partial* deploy ships — the rules for `deploy --type/--file-name`, with no transport in them. See below |
 | `workflow_steps.py` | one step of a Telegram conversation: what may be answered, what may be skipped, where Back goes, and the keyboard the operator sees. See below |
-| `distribution.py` | what the public distribution contains and what stays behind (`is_public`, `public_package_globs`); `PUBLIC_VERSION`, the released number, edited by hand |
+| `distribution.py` | what the public distribution contains and what stays behind (`is_public`, `public_package_globs`); `PUBLIC_BINARIES`, the pictures that ship although the export's text rule cannot read them, each named with where it came from; `PUBLIC_VERSION`, the released number, edited by hand |
 | `packaging.py` | what to tell a reader to `pip install` when an optional driver is missing - the distribution name differs between the repository and the public package (`install_hint`) |
 
 #### `data_files.py` — the list every transfer reads first

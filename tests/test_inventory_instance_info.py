@@ -7,6 +7,8 @@ even loaded, and compatibility_level was read only from the SQL-Server-only DATA
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from db_ops.reports.inventory_health import (
@@ -16,6 +18,9 @@ from db_ops.reports.inventory_health import (
     parse_kv,
     parse_kv_any,
 )
+from db_ops.reports.inventory_report import _build_detail
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # The real shape emitted by 001: leading prose, ';' separators, 'N/A' placeholders, and an
 # edition containing a colon, a comma-free parenthesis and spaces.
@@ -163,3 +168,155 @@ def test_an_unknown_engine_version_flags_nothing():
     code_map = _code_map("version=18.4 (Debian)")
     code_map[("DATABASE_STATUS", "postgres")] = _database("postgres", 80)
     assert not [w for w in build_config_warnings(code_map) if "compatibility level" in w]
+
+
+# --------------------------------------------------------------------------- #
+# Oracle and PostgreSQL, in their own words (0.28.0)
+# --------------------------------------------------------------------------- #
+# Until 0.28.0 an Oracle or PostgreSQL server's INSTANCE_STATUS said three things, beside nineteen
+# for SQL Server - not because those engines say less, but because their collectors asked less.
+# These are the messages the three collectors wrote on 2026-10-09 against a 26ai lab, an 8.1.7
+# instance and a PostgreSQL 18 server, with the names replaced.
+ORACLE_MESSAGE = (
+    "Oracle instance status=OPEN; instance=FREE; machine=oralab01; version=23.0.0.0.0; "
+    "edition=Free; banner=Oracle AI Database 26ai Free Release 23.26.3.0.0 - Develop Learn and "
+    "Run for Free; database=FREE; unique_name=FREE; role=PRIMARY; open_mode=READ WRITE; "
+    "log_mode=ARCHIVELOG; platform=Linux x86 64-bit; charset=AL32UTF8; rac=NO; logins=ALLOWED; "
+    "archiver=STARTED; database_status=ACTIVE; instance_role=PRIMARY_INSTANCE; "
+    "started=2026-10-02 09:38:03"
+)
+ORACLE_8I_MESSAGE = (
+    "instance=orcl, status=OPEN, version=8.1.7.0.0, host=ORA8I01, machine=ORA8I01, "
+    "edition=Standard, banner=Oracle8i Release 8.1.7.0.0 - Production, database=ORCL, "
+    "open_mode=READ WRITE, log_mode=NOARCHIVELOG, charset=WE8ISO8859P1, rac=NO, logins=ALLOWED, "
+    "archiver=STOPPED, started=2026-10-05 14:28:49"
+)
+ORACLE_8I_MESSAGE_UNTIL_0_28 = "instance=orcl, status=OPEN, version=8.1.7.0.0, host=ORA8I01"
+POSTGRESQL_MESSAGE = (
+    "PostgreSQL connection available. version=18.6 (Debian 18.6-1.pgdg13+2); "
+    "build=PostgreSQL 18.6 (Debian 18.6-1.pgdg13+2); platform=x86_64-pc-linux-gnu; role=primary; "
+    "ip=192.0.2.10; port=5432; transport=TCP; ssl=off; connected_database=postgres; "
+    "database_collation=en_US.utf8; encoding=UTF8; timezone=Etc/UTC; max_connections=100; "
+    "wal_level=replica; archive_mode=on; started=2026-10-02 09:37:10; uptime_seconds=584549"
+)
+
+COLLECTORS = REPO_ROOT / "db_ops" / "metrics" / "collectors"
+
+
+def _detail(message):
+    return dict(_build_detail({"instance_health": build_instance_health(_code_map(message))}, {}))
+
+
+def test_an_oracle_instance_says_who_and_what_it_is():
+    instance = build_instance_health(_code_map(ORACLE_MESSAGE))
+
+    assert instance["machine_name"] == "oralab01"
+    assert instance["product_version"] == "23.0.0.0.0"
+    assert instance["edition"] == "Free"
+    assert instance["banner"].startswith("Oracle AI Database 26ai Free Release 23.26.3.0.0")
+    assert (instance["database_name"], instance["unique_name"]) == ("FREE", "FREE")
+    assert (instance["role"], instance["open_mode"]) == ("PRIMARY", "READ WRITE")
+    assert (instance["log_mode"], instance["archiver"]) == ("ARCHIVELOG", "STARTED")
+    assert instance["platform"] == "Linux x86 64-bit"
+    assert instance["charset"] == "AL32UTF8"
+    assert instance["started_at"] == "2026-10-02 09:38:03"
+
+
+def test_a_postgresql_server_says_who_and_what_it_is():
+    instance = build_instance_health(_code_map(POSTGRESQL_MESSAGE))
+
+    assert instance["product_version"] == "18.6 (Debian 18.6-1.pgdg13+2)"
+    assert instance["banner"] == "PostgreSQL 18.6 (Debian 18.6-1.pgdg13+2)"
+    assert instance["platform"] == "x86_64-pc-linux-gnu"
+    assert instance["role"] == "primary"
+    assert (instance["listen_ip"], instance["listen_port"]) == ("192.0.2.10", "5432")
+    assert instance["charset"] == "UTF8"
+    assert (instance["wal_level"], instance["archive_mode"]) == ("replica", "on")
+    assert instance["started_at"] == "2026-10-02 09:37:10"
+
+
+def test_nothing_is_borrowed_from_another_engines_vocabulary():
+    """A PostgreSQL server has no machine name to ask for and no edition; Oracle no WAL level.
+
+    Blank, not 'N/A' under SQL Server's name and not a guess: the page shows a row only for what
+    the engine stated.
+    """
+    postgresql = build_instance_health(_code_map(POSTGRESQL_MESSAGE))
+    oracle = build_instance_health(_code_map(ORACLE_MESSAGE))
+
+    assert (postgresql["machine_name"], postgresql["edition"], postgresql["log_mode"]) == ("", "", "")
+    assert (postgresql["cumulative_update"], postgresql["collation"]) == ("", "")
+    assert (oracle["wal_level"], oracle["listen_ip"], oracle["collation"]) == ("", "", "")
+    assert "Server collation" not in _detail(POSTGRESQL_MESSAGE)
+    assert "WAL" not in _detail(ORACLE_MESSAGE) and "Log mode" not in _detail(POSTGRESQL_MESSAGE)
+
+
+def test_a_postgresql_collation_is_shown_as_its_databases_not_the_servers():
+    """A cluster has no single collation; the one collected is the connected database's."""
+    assert _detail(POSTGRESQL_MESSAGE)["Database collation"] == "en_US.utf8 (database postgres)"
+
+
+def test_each_engine_gets_rows_in_its_own_words():
+    oracle, postgresql = _detail(ORACLE_MESSAGE), _detail(POSTGRESQL_MESSAGE)
+
+    assert oracle["Role"] == "PRIMARY · READ WRITE"
+    assert oracle["Log mode"] == "ARCHIVELOG · archiver STARTED"
+    assert oracle["Character set"] == "AL32UTF8"
+    assert oracle["Instance host"] == "oralab01"
+    assert postgresql["Role"] == "primary"
+    assert postgresql["WAL"] == "wal_level replica · archive_mode on"
+    assert postgresql["Listening on"] == "192.0.2.10:5432 · TCP"
+    assert postgresql["Server settings"] == "max_connections 100 · timezone Etc/UTC · ssl off"
+
+
+def test_an_8i_instance_states_an_open_mode_and_no_role():
+    """8i has no database role; its READ WRITE under "Role" would read as one."""
+    detail = _detail(ORACLE_8I_MESSAGE)
+
+    assert detail["Open mode"] == "READ WRITE" and "Role" not in detail
+    assert detail["Edition"] == "Standard"
+    assert detail["Log mode"] == "NOARCHIVELOG · archiver STOPPED"
+
+
+def test_an_8i_row_collected_before_0_28_still_names_its_machine():
+    """The 8i variant wrote `host=` and the report read `machine=`: collected, never shown."""
+    instance = build_instance_health(_code_map(ORACLE_8I_MESSAGE_UNTIL_0_28))
+
+    assert instance["machine_name"] == "ORA8I01"
+    assert instance["banner"] == "" and instance["charset"] == ""
+
+
+def test_the_sql_server_rows_are_the_ones_they_were():
+    assert list(_detail(INSTANCE_MESSAGE)) == [
+        "Engine build", "Edition", "Instance host", "Listening on", "Server collation",
+        "Engine started"]
+
+
+@pytest.mark.parametrize(("sql_file", "message"), [
+    ("oracle/001_oracle_instance_status.sql", ORACLE_MESSAGE),
+    ("oracle/legacy_8i/001_oracle_instance_status.sql", ORACLE_8I_MESSAGE),
+    ("postgresql/001_postgresql_instance_status.sql", POSTGRESQL_MESSAGE),
+])
+def test_the_message_pinned_here_is_the_one_its_collector_writes(sql_file, message):
+    """The fixtures above are only worth anything while the collectors still write those keys.
+
+    Each key of the pinned message has to appear in the SQL as the literal that writes it, so a
+    key renamed in a collector fails here instead of going blank on the page.
+    """
+    sql = (COLLECTORS / sql_file).read_text(encoding="utf-8")
+    missing = [key for key in parse_kv_any(message) if f"{key}=" not in sql]
+
+    assert missing == [], f"{sql_file} no longer writes: {missing}"
+
+
+@pytest.mark.parametrize("sql_file", [
+    "oracle/001_oracle_instance_status.sql",
+    "oracle/legacy_8i/001_oracle_instance_status.sql",
+    "postgresql/001_postgresql_instance_status.sql",
+])
+def test_no_comment_in_a_collector_holds_a_semicolon_or_a_quote(sql_file):
+    """What each file's own header promises: no client has to parse a comment to find the end."""
+    lines = (COLLECTORS / sql_file).read_text(encoding="utf-8").splitlines()
+    comments = [line for line in lines if line.lstrip().startswith("--")]
+
+    assert comments and not [line for line in comments if any(c in line for c in ";'\"")]

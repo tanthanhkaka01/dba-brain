@@ -5,7 +5,7 @@ A command that omits `data` when it has none, or reports a failure only through 
 makes each of them handle that command specially, and the special case is discovered in production
 by the caller that did not.
 
-So the five keys are always present, `success` describes the *work* rather than the process, and
+So the seven keys are always present, `success` describes the *work* rather than the process, and
 the exit code is a summary of the response rather than a second opinion on it.
 """
 

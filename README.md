@@ -1,5 +1,8 @@
 # DBA Brain
 
+**[dbabrain.dev](https://dbabrain.dev/)** · [PyPI](https://pypi.org/project/dbabrain/) ·
+[Downloads](https://pypistats.org/packages/dbabrain) · `pip install dbabrain`
+
 **A database operations toolkit for people who are on call.** It collects health metrics from your
 SQL Server, Oracle, PostgreSQL and MySQL instances, grades them against policies you write, runs
 your scheduled SQL, takes backups and *proves them by restoring them*, checks objectives against
@@ -10,12 +13,24 @@ monitored machine.
 connects to the databases and hosts you list, and — only if you turn it on and give it a token —
 to a chat service. Nothing else.
 
+| What it does | |
+| --- | --- |
+| **Health metrics** | Around ninety metrics across four engines: availability, capacity, performance, recoverability, security, maintenance. Collected and normalised into one shape. |
+| **Graded, not dumped** | Every measurement is graded against a policy you wrote. You read a verdict (OK, WARNING, CRITICAL) and pull the evidence only for what came back bad. |
+| **Backups proven by restore** | Runs backups, restores them onto a disposable target, verifies the result and records what was proven and when. The restore is the proof. |
+| **Scheduled SQL** | Your own SQL, on a schedule or on request, against approved targets, delivered as text or a spreadsheet. The SQL is a reviewable file, never a string in configuration. |
+| **Reports** | Fleet inventory, per-server metrics, index usage and SLA pages, with a freshness gate so a stale number is never reported as a current one. |
+| **SLA / SLO** | Indicators computed from stored measurement history, objectives evaluated with an error budget, and how much of it is left. |
+| **Alerts and chat commands** | Telegram delivery, one message at a time. Commands people send back are gated by the person's clearance *and* the chat's. |
+| **Configuration as code** | Every decision is a JSON file you keep in version control. A threshold change is a diff and a review, not an edit to somebody's script. |
+| **Secrets kept encrypted** | PBKDF2-HMAC-SHA256 and Fernet. The passphrase is supplied at run time and never written to disk, a log or the store. A password travels on stdin, never as a command-line word. |
+
 **Two ways to read what it is, and both are accurate:**
 
 | | |
 | --- | --- |
 | **A database tool for SRE / DevOps** | Nothing is installed on a monitored machine — it reaches instances and hosts the way an operator does, over a connection and a credential you already have. Every decision is a JSON file you keep in version control, so a threshold change is a diff and a review rather than an edit to somebody's script. It schedules itself, or your scheduler drives it. |
-| **A database operations layer for an AI agent** | Every capability is one command that takes **one JSON object and answers with one**, with five keys always present. There is no natural-language layer to translate through and no separate agent API: the command a person runs is byte-for-byte the command an agent runs. |
+| **A database operations layer for an AI agent** | Every capability is one command that takes **one JSON object and answers with one**, with the same seven keys always present. There is no natural-language layer to translate through and no separate agent API: the command a person runs is byte-for-byte the command an agent runs. |
 
 The second is not a later ambition. It is why the shape is what it is — and it is the **supported
 path today**, because the console that would let a person add an instance in a browser is not
@@ -118,6 +133,48 @@ that exist: each one reviewed when it was written, each one logged the way a hum
 
 ---
 
+## How it works
+
+### One run, end to end
+
+Whoever starts it — the daemon, a person, a chat command or an AI agent — a run takes the same
+path. The app hands one JSON request to `transport`, which starts the shared operations CLI; that
+CLI reaches the database or host and answers with one JSON envelope. Results land in the runtime
+store, and reports and alerts are built from there.
+
+<!-- Every picture in this file is named by its full URL, on purpose: PyPI shows this page too, and
+     a relative image path renders there as a broken picture.
+     `tests/test_the_readme_shows_pictures_that_ship.py` holds each URL to a file under docs/img. -->
+![One run, end to end: a caller starts an app, the app asks transport, transport starts common.cli, common.cli reaches your estate; results land in the runtime store, and reports are built from it](https://raw.githubusercontent.com/tanthanhkaka01/dba-brain/main/docs/img/one-run-end-to-end.svg)
+
+Every command answers in the same envelope, whether the work succeeded or not:
+
+```json
+{
+  "success": true,
+  "operation": "restore-full",
+  "message": "Restored SALESDB_STG to 2026-08-07 01:40:00.",
+  "error": null,
+  "error_kind": null,
+  "data": { },
+  "metrics": { "duration_ms": 41230 }
+}
+```
+
+### From a measurement to an alert
+
+| 1. Collect | 2. Normalise | 3. Grade | 4. Store | 5. Report / alert / SLA |
+| --- | --- | --- | --- | --- |
+| around ninety metrics, four engines | one shape for every engine | against your policy in `data/*.json` | the runtime store | by severity and error budget |
+
+### A backup is proven by restoring it
+
+| 1. Backup | 2. Copy | 3. Restore | 4. Verify | 5. Record | 6. Clean up |
+| --- | --- | --- | --- | --- | --- |
+| full / diff / log | to a disposable target | latest or a point in time | the result | what was proven, and when | and apply retention |
+
+---
+
 ## Capabilities
 
 Ordered to match the reference docs; the **ORD** number links to each one.
@@ -194,6 +251,28 @@ Before installing anything, look at the output. **[`examples/showcase/`](./examp
 the four report families a live estate publishes — fleet inventory, per-server metrics, index usage,
 SLA — captured whole, with every name that belongs to that estate replaced by a stable fake one.
 Real fleets, real fragmentation, real verdicts; nothing invented and nothing traceable.
+
+Four of those pages, as pictures — click one to open it full size:
+
+[![Fleet inventory and health report: server counts per engine, critical findings ordered by severity with a recommended action](https://raw.githubusercontent.com/tanthanhkaka01/dba-brain/main/docs/img/fleet-inventory.jpg)](https://raw.githubusercontent.com/tanthanhkaka01/dba-brain/main/docs/img/fleet-inventory.jpg)
+
+*Fleet inventory: every instance, its health, and a priority list of what to act on first, each
+with a recommended next step.*
+
+[![Per-server metrics page: health score, status cards for availability, CPU, memory, disk, backup and security, and a list of problems](https://raw.githubusercontent.com/tanthanhkaka01/dba-brain/main/docs/img/server-metrics.jpg)](https://raw.githubusercontent.com/tanthanhkaka01/dba-brain/main/docs/img/server-metrics.jpg)
+
+*Server metrics: one card per health area, showing the worst reading, the rule that graded it and
+what it means.*
+
+[![SLA / SLO compliance page with the overall verdict and one card per engine](https://raw.githubusercontent.com/tanthanhkaka01/dba-brain/main/docs/img/sla.jpg)](https://raw.githubusercontent.com/tanthanhkaka01/dba-brain/main/docs/img/sla.jpg)
+
+*SLA / SLO compliance: a verdict per engine, computed from stored history with no database
+connections.*
+
+[![Index usage report for one SQL Server instance: total, unused, cold and droppable indexes](https://raw.githubusercontent.com/tanthanhkaka01/dba-brain/main/docs/img/index-usage.jpg)](https://raw.githubusercontent.com/tanthanhkaka01/dba-brain/main/docs/img/index-usage.jpg)
+
+*Index usage: total, unused, cold and droppable indexes per instance, with how long the counters
+cover.*
 
 A repository cannot show you an HTML page — GitHub renders `.html` as source — so they are published
 as a site by [`.github/workflows/pages.yml`](./.github/workflows/pages.yml), or you can serve the
@@ -477,6 +556,8 @@ intended and a test describes what is true this morning.
 > No app imports another app.
 > No shared layer imports an app.
 
+![Who may call whom: the ten apps import transport, db, logging_ops and lib; transport starts common.cli as a process; common and transport import lib](https://raw.githubusercontent.com/tanthanhkaka01/dba-brain/main/docs/img/who-may-call-whom.svg)
+
 See **[`docs/architecture.md`](./docs/architecture.md)**.
 
 ---
@@ -533,6 +614,21 @@ why you can refactor with it.
 
 Tests read as prose — a module docstring explaining *why the behaviour matters*, then test names
 that are sentences.
+
+## Contact: donations and investment
+
+DBA Brain is free, open source, and maintained by one person. If you would like to **donate**,
+**sponsor** the project, or talk about **investment or partnership**, please get in touch directly:
+
+| | |
+| --- | --- |
+| Website | [dbabrain.dev](https://dbabrain.dev/) |
+| Email | [tanthanhkaka01@dbabrain.dev](mailto:tanthanhkaka01@dbabrain.dev) |
+| Email | [tanthanhkaka01@gmail.com](mailto:tanthanhkaka01@gmail.com) |
+| Phone | +84 888 783 789 (0888 783 789) |
+
+For bugs and feature requests, please use GitHub issues. For a security problem, follow
+[`SECURITY.md`](./SECURITY.md) rather than email.
 
 ## License
 

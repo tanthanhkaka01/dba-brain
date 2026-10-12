@@ -255,7 +255,8 @@ _WINRM = {"method": "winrm", "host": "127.0.0.1", "port": 1, "username": "u", "p
 _RULES = {"level": 10, "confirmations": 0, "challenge": "", "effects": []}
 #: A share nothing serves, reached the UNC way - a fetch that finds nothing is an answer (exit 1).
 _NO_SHARE = {"host": "127.0.0.1", "share": "no_such_share", "backend": "unc", "timeout_seconds": 5}
-_CONFIRMED = {"confirm": True, "assume_yes": True, "authorized_by": "guard", "reason": "the R09 guard"}
+_CONFIRMED = {"confirm": True, "assume_yes": True, "authorized_by": {"channel": "guard"},
+              "reason": "the R09 guard"}
 _SQL_REACHED = "reached:connect to 127.0.0.1:1"
 _SSH_REACHED = "reached:SSH connection to 127.0.0.1:1"
 

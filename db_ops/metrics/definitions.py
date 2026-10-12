@@ -185,6 +185,7 @@ def load_metric_definitions(
                 connection_error_severity=connection_error_severity,
                 execution_error_severity=execution_error_severity,
                 max_rows=int(item.get("max_rows") or 0),
+                sql_settings=dict(item.get("sql_settings") or {}),
                 report_policy=item.get("report_policy") if isinstance(item.get("report_policy"), dict) else {},
                 path=path,
                 variants=variants,

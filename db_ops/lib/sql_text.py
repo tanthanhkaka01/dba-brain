@@ -555,3 +555,55 @@ def oracle_statement(batch: str) -> str:
     if is_plsql_block(text):
         return text
     return text.rstrip(";").rstrip()
+
+
+class SqlSettingError(errors.InvalidConfig):
+    """A metric's ``sql_settings`` names something its SQL file cannot take."""
+
+
+#: ``DECLARE @name <type> = <number>;`` on a line of its own - the one shape a setting may fill.
+_SQL_SETTING_DECLARE = r"^(?P<head>[ \t]*DECLARE[ \t]+@{name}[ \t]+[A-Za-z][A-Za-z0-9(), \t]*=[ \t]*)(?P<value>-?[0-9][0-9.]*)(?P<tail>[ \t]*;)"
+
+
+def apply_sql_settings(sql_text: str, settings: "dict[str, Any] | None") -> str:
+    """``sql_text`` with each configured number written into the ``DECLARE`` that states its default.
+
+    A collector's thresholds were literals in its SQL, which is the one place a threshold could not
+    be configuration: `LOCK_TRANSACTION_HOLDERS` needed a limit that depends on the estate (how
+    many locks is too many to enumerate), and the only way to change it was to edit a shipped file.
+    So a metric may state ``"sql_settings": {"name": number}`` and its SQL declares the same name
+    with its default::
+
+        DECLARE @lock_scan_skip_above bigint = 500000;
+
+    The file stays runnable by hand exactly as it is - the default is in it - and a node that
+    states another number runs with that one.
+
+    Deliberately narrow, because this writes into SQL text:
+
+    - **a number and nothing else.** ``bool`` is refused although Python calls it an ``int``; a
+      string is refused whatever it holds. There is no quoting to get wrong because nothing that
+      needs quoting is accepted.
+    - **a name is an identifier**, and it must be declared in the file in exactly that shape, once.
+      A setting the file does not declare is an error, not a value quietly unused: an operator who
+      raised a limit that no SQL reads would believe it was raised.
+    """
+    text = str(sql_text or "")
+    for name, value in (settings or {}).items():
+        key = str(name)
+        if not _SQL_IDENTIFIER_RE.fullmatch(key):
+            raise SqlSettingError(
+                f"sql_settings name {key!r}: letters, digits and underscore only.")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise SqlSettingError(
+                f"sql_settings.{key} must be a number; got {type(value).__name__} {value!r}.")
+        number = repr(int(value)) if float(value).is_integer() else repr(float(value))
+        pattern = re.compile(_SQL_SETTING_DECLARE.format(name=re.escape(key)),
+                             re.IGNORECASE | re.MULTILINE)
+        found = pattern.findall(text)
+        if len(found) != 1:
+            raise SqlSettingError(
+                f"sql_settings.{key}: the SQL file must declare it exactly once as "
+                f"'DECLARE @{key} <type> = <number>;' on its own line; found {len(found)}.")
+        text = pattern.sub(lambda match: match.group("head") + number + match.group("tail"), text)
+    return text

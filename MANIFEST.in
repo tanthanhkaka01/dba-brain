@@ -13,6 +13,9 @@ include CHANGELOG.md
 include LICENSE
 include NOTICE
 recursive-include docs *.md
+# The pictures the README and the docs show (0.28.0): four screenshots of the showcase pages and
+# two diagrams. `*.md` alone would ship pages whose pictures are missing from the same archive.
+recursive-include docs/img *.jpg *.svg
 
 # The worked examples, and the showcase of real published pages inside them. Added for 0.15.0,
 # when the operator ruled that `examples/` ships with every public release: a reader who takes the

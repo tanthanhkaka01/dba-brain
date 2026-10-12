@@ -348,7 +348,8 @@ def _holds(body: dict, command: str) -> None:
 _SQL = {"db_type": "sqlserver", "host": "192.0.2.10", "port": 1433, "username": "u", "password": "p",
         "server_id": "LAB"}
 _RULES = {"level": 10, "confirmations": 0, "challenge": "", "effects": []}
-_CONFIRMED = {"confirm": True, "assume_yes": True, "authorized_by": "guard", "reason": "the R16 guard"}
+_CONFIRMED = {"confirm": True, "assume_yes": True, "authorized_by": {"channel": "guard"},
+              "reason": "the R16 guard"}
 _EMERGENCY = {"target": "LAB", "connection": _SQL, "rules": _RULES, **_CONFIRMED}
 _DATABASE_COLUMNS = ["name", "database_id", "state", "recovery_model", "compatibility_level",
                      "collation", "is_read_only", "is_system", "has_access"]

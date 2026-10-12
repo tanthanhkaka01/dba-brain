@@ -52,7 +52,7 @@ is no second API: **the CLI is the API**, and its input is a JSON object.
 
 ### Every command returns the same JSON response
 
-**Input is a JSON object; output is a JSON object with a fixed shape.** Always these five keys,
+**Input is a JSON object; output is a JSON object with a fixed shape.** Always these seven keys,
 always present even when empty, always on stdout, whether the work succeeded or not:
 
 ```json
@@ -61,6 +61,7 @@ always present even when empty, always on stdout, whether the work succeeded or 
   "operation": "restore-full",
   "message": "Restored SALESDB_STG to 2026-08-07 01:40:00.",
   "error": null,
+  "error_kind": null,
   "data": { },
   "metrics": { "duration_ms": 41230 }
 }
@@ -72,6 +73,7 @@ always present even when empty, always on stdout, whether the work succeeded or 
 | `operation` | Which command answered. In the body, so a stored or forwarded response is still self-describing. |
 | `message` | One line for a human — what a Telegram message or log line quotes. |
 | `error` | `null` on success; the reason on failure, in the words the operator needs. |
+| `error_kind` | `null` on success; on failure which *kind* of failure it was - `request`, `not_configured`, `refused`, `unreachable`, `failed`, `config` or `internal` - so a caller decides by the kind and never by matching the sentence. |
 | `data` | The result proper. Shape is per command, documented at that command. |
 | `metrics` | Numbers about the run: durations, counts, bytes. Charted; kept out of `data`. |
 

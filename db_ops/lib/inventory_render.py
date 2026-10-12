@@ -45,6 +45,16 @@ ONLINE_DATABASE_STATES = frozenset({
 })
 
 
+def _measured(value) -> str:
+    """A measured number as text, or ``n/a`` for one nobody collected (0.28.0).
+
+    ``None`` is how the fleet page's performance block says an engine has no such metric - page
+    life expectancy and the deadlock count are SQL Server's, and an Oracle or PostgreSQL server has
+    neither. Printed raw it wrote the word None into the summary; printed as 0 it was a reading.
+    """
+    return "n/a" if value is None else str(value)
+
+
 def is_database_online(state) -> bool:
     """Whether a collected ``DATABASE_STATUS`` value means the database is usable.
 
@@ -154,6 +164,10 @@ def merged_sql_resources(server):
 DEFAULT_INVENTORY = TOOL_ROOT / "data" / "database-inventory.json"
 
 HEALTH_BLOCKS = ["instance_health", "metric_severity", "metric_problems", "metric_freshness",
+                 # What Oracle and PostgreSQL collect under their own names (0.28.0). Listed for
+                 # the reason `workload` is, below: a block that is not named here reaches the
+                 # overlay and stops there.
+                 "engine_facts",
                  "backup_jobs", "backup_policy",
                  "database_health", "disk_health", "backup_by_database", "backup_evidence",
                  "sql_governance", "sql_agent_job_health", "performance_health", "index_health",
@@ -550,8 +564,9 @@ def _render_markdown(data, date_iso, exclude_ip_prefixes=EXCLUDE_IP_PREFIXES):
         ph = s.get("performance_health") or {}
         lines.append(
             f"| `{s.get('server_id')}` | {online}/{len(dh)} | {checkdb_unknown} | {disk_warn} | {no_backup} "
-            f"| {ph.get('page_life_expectancy', '')} | {ph.get('blocking_count', '')} "
-            f"| {ph.get('deadlock_count_24h', '')} | {ph.get('active_session_count', '')} "
+            f"| {_measured(ph.get('page_life_expectancy', ''))} | {ph.get('blocking_count', '')} "
+            f"| {_measured(ph.get('deadlock_count_24h', ''))} "
+            f"| {_measured(ph.get('active_session_count', ''))} "
             f"| {len(s.get('config_warnings') or [])} |")
     lines += ["", "## Server Detail\n"]
     for s in servers:
@@ -624,9 +639,11 @@ def _render_markdown(data, date_iso, exclude_ip_prefixes=EXCLUDE_IP_PREFIXES):
                          f"({info.get('free_percent')}%){fs_txt} — {info.get('status')}")
         ph = s.get("performance_health") or {}
         if ph:
-            lines.append(f"- Performance: PLE={ph.get('page_life_expectancy', '')}, "
-                         f"blocking={ph.get('blocking_count', '')}, deadlocks_24h={ph.get('deadlock_count_24h', '')}, "
-                         f"sessions={ph.get('active_session_count', '')}, cpu={ph.get('cpu_status', '')}")
+            lines.append(f"- Performance: PLE={_measured(ph.get('page_life_expectancy', ''))}, "
+                         f"blocking={ph.get('blocking_count', '')}, "
+                         f"deadlocks_24h={_measured(ph.get('deadlock_count_24h', ''))}, "
+                         f"sessions={_measured(ph.get('active_session_count', ''))}, "
+                         f"cpu={ph.get('cpu_status', '')}")
         # Counts only. The metric behind this also stores one row per index (~29k on a large
         # database); a page that listed them would be unreadable and would take minutes to build.
         ix = s.get("index_health") or {}

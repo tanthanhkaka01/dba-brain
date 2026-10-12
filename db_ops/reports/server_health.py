@@ -8,7 +8,13 @@ every name, so no import changes.
 from __future__ import annotations
 import datetime
 from db_ops.lib import health_model
-from db_ops.reports.server_series import SEVERITY_RANK, _is_percent_unit, severity_of
+from db_ops.reports.server_series import (
+    SEVERITY_RANK,
+    _is_percent_unit,
+    metric_catalog,
+    metric_label,
+    severity_of,
+)
 
 
 # A collection older than this means the page is describing the past, not the present. The
@@ -88,12 +94,12 @@ AREAS: list[dict] = [
      "note": "How hard the storage is being worked. A high queue with low throughput is a storage "
              "limit; high throughput on its own is just a busy server.",
      "report_judged": True},
-    {"key": "blocking", "label": "Blocking",
+    {"key": "blocking", "label": "Blocking", "empty_is_ok": True,
      "selectors": [{"code": "LOCK_BLOCKING_SESSIONS"}, {"code": "LOCK_DEADLOCK_RECENT"},
                    {"code": "LOCK_TRANSACTION_HOLDERS"}],
      "threshold": "WARN any blocked session · CRITICAL ≥ 10 blocked or blocked ≥ 300 s",
      "note": "One session holding a lock can stall an application entirely; find the head blocker."},
-    {"key": "long_queries", "label": "Long-running queries",
+    {"key": "long_queries", "label": "Long-running queries", "empty_is_ok": True,
      "selectors": [{"code": "QUERY_LONG_RUNNING"},
                    {"code": "QUERY_LONG_WAITING_OR_ROLLBACK_REQUESTS"}],
      "threshold": "WARN ≥ 900 s · CRITICAL ≥ 3600 s",
@@ -130,6 +136,89 @@ AREAS: list[dict] = [
      "note": "A replica that stopped synchronising is not a replica: failover would lose data. "
              "AVAILABILITY_DATABASE_HEALTH reads Always On DMVs only — on a Failover Cluster "
              "Instance it reports NOT_CONFIGURED, which is not an FCI health verdict."},
+    # --- What an engine measures under its own name (0.28.0) --------------------------------
+    #
+    # The thirteen areas above are SQL Server's questions, and an Oracle or PostgreSQL page
+    # answered most of them "not collected" while the store held that engine's own answers: the
+    # process ceiling, the tablespaces, the wraparound horizon, the vacuum backlog. Each area
+    # below is one of those questions.
+    #
+    # ``only_when_collected`` is how a page stays its engine's own without the builder being told
+    # which engine it is looking at - the rule the Oracle sections further down the page already
+    # follow. Every code here is exclusive to one engine, so the tile exists exactly where the
+    # metric does: a SQL Server page gains nothing, an Oracle page no PostgreSQL tile. (The
+    # thirteen keep printing "not collected" for every engine, as they did.)
+    #
+    # ``empty_is_ok`` is for an area whose collectors return a row only when something is wrong -
+    # a blocked session, a long transaction, an invalid index. Oracle's and PostgreSQL's do; SQL
+    # Server's write a zero row instead. With no row to show, such an area printed "not
+    # collected" for a metric that had run a minute before and found nothing, which is the
+    # healthy answer. Where the metric's own freshness says it ran clean, the tile says so.
+    #
+    # ``lowest_is_worst`` turns the last tie-break round: among rows of equal status these areas
+    # show the *smallest* value, because the tablespace to look at is the one with the least free
+    # space - "the fullest disk wins" is the same rule, read on a metric that counts what is left.
+    {"key": "oracle_processes", "label": "Sessions and processes", "only_when_collected": True,
+     "selectors": [{"code": "PROCESS_LIMIT"}, {"code": "PROCESS_DEAD_WEIGHT"}],
+     "threshold": "WARN ≥ 80% of the processes / sessions limit · CRITICAL ≥ 90% — dead weight: "
+                  "WARN ≥ 10% of the process limit held by killed sessions or orphaned threads · "
+                  "CRITICAL ≥ 20%",
+     "note": "At the limit Oracle refuses every new connection (ORA-00020). A killed session or a "
+             "thread with no session still holds its slot, so the ceiling can be reached by "
+             "sessions that do no work."},
+    {"key": "oracle_tablespaces", "label": "Tablespaces", "only_when_collected": True,
+     "lowest_is_worst": True,
+     "selectors": [{"code": "TABLESPACE_FREE_SPACE"}, {"code": "SEGMENT_EXTENT_LIMIT"}],
+     "threshold": "free space counting autoextend: WARN < 500 MB or < 5% · CRITICAL < 100 MB or "
+                  "< 2% — a segment at ≥ 90% of its extent limit is CRITICAL",
+     "note": "A tablespace with no room fails the next insert into anything stored in it "
+             "(ORA-01653); a segment at its extent limit fails the same way with space to spare."},
+    {"key": "oracle_sga", "label": "SGA memory", "only_when_collected": True,
+     "lowest_is_worst": True,
+     # The shared pool's free memory only: the java and large pools are logged, not judged, and a
+     # large pool at half a megabyte free is its normal state.
+     "selectors": [{"code": "SHARED_POOL_FREE", "items": ("shared pool:free memory",)},
+                   {"code": "BUFFER_CACHE_HIT"}],
+     "threshold": "shared pool free: WARN < 25 MB · CRITICAL < 10 MB — buffer cache hit ratio: "
+                  "WARN < 90%",
+     "note": "A shared pool with nothing free ends in ORA-04031: statements can no longer be "
+             "parsed. A low buffer cache hit ratio means blocks are read from disk again and "
+             "again."},
+    {"key": "oracle_rollback", "label": "Rollback segments", "only_when_collected": True,
+     "selectors": [{"code": "ROLLBACK_SEGMENT_CONTENTION"}],
+     "threshold": "waits per get: WARN ≥ 1% · CRITICAL ≥ 5%",
+     "note": "Transactions queueing for a rollback segment header: there are too few segments "
+             "for the number of concurrent writers."},
+    {"key": "oracle_objects", "label": "Invalid objects", "only_when_collected": True,
+     "empty_is_ok": True,
+     "selectors": [{"code": "INVALID_OBJECTS"}, {"code": "INDEX_UNUSABLE"}],
+     "threshold": "WARN any invalid object · CRITICAL any unusable index",
+     "note": "Invalid code raises ORA-04068 when it is called, not when it broke; an unusable "
+             "index fails every DML on its table unless SKIP_UNUSABLE_INDEXES is on."},
+    {"key": "postgres_wraparound", "label": "Transaction ID wraparound",
+     "only_when_collected": True,
+     "selectors": [{"code": "POSTGRES_XID_WRAPAROUND"}],
+     "threshold": "XID age: WARN ≥ 75% of autovacuum_freeze_max_age · CRITICAL ≥ 90%",
+     "note": "Past the freeze horizon PostgreSQL forces an aggressive vacuum, and at the hard "
+             "limit it stops accepting writes until one finishes. The oldest database decides."},
+    {"key": "postgres_vacuum", "label": "Vacuum and bloat", "only_when_collected": True,
+     "selectors": [{"code": "POSTGRES_VACUUM_HEALTH"}, {"code": "POSTGRES_TABLE_BLOAT"}],
+     "threshold": "dead tuples in one table: WARN ≥ 100,000 · CRITICAL ≥ 1,000,000 — bloat: WARN "
+                  "any table ≥ 20% dead with over 10,000 rows · CRITICAL ≥ 40%",
+     "note": "Dead tuples are space vacuum has not reclaimed: scans read them and indexes point "
+             "at them. A table that keeps growing here is one autovacuum cannot keep up with."},
+    {"key": "postgres_transactions", "label": "Long transactions", "only_when_collected": True,
+     "empty_is_ok": True,
+     "selectors": [{"code": "POSTGRES_LONG_TRANSACTIONS"}],
+     "threshold": "a transaction open: WARN ≥ 5 minutes · CRITICAL ≥ 30 minutes",
+     "note": "An open transaction holds back vacuum for the whole cluster and keeps its locks; "
+             "idle in transaction is the usual culprit."},
+    {"key": "postgres_indexes", "label": "Invalid indexes", "only_when_collected": True,
+     "empty_is_ok": True,
+     "selectors": [{"code": "POSTGRES_INVALID_INDEXES"}],
+     "threshold": "CRITICAL any index left invalid or not ready",
+     "note": "An invalid index is what a failed CREATE INDEX CONCURRENTLY leaves behind: it is "
+             "maintained on every write and used by no query. Drop it and build it again."},
 ]
 
 #: Every metric code any area selects. ``build_problems`` uses it to find an entry's area.
@@ -277,6 +366,18 @@ def build_areas(series: list[dict], *, backup: dict | None = None,
     """
     stale_codes = {row["code"] for row in (freshness or {}).get("metrics", [])
                    if row.get("state") in ("LATE", "FAILED")}
+    # The metrics that ran on time and without an error - whether or not they returned a row.
+    ran_clean = {row["code"] for row in (freshness or {}).get("metrics", [])
+                 if row.get("state") == "OK"}
+    # Every metric this target has or should have: what it produced, plus what the catalogue
+    # says fits its engine and produced nothing. An area built only from SQL metrics none of
+    # which is in this set is not a gap in collection - the engine has no such metric (TempDB
+    # on PostgreSQL, the Agent's jobs on Oracle), and "not collected" sends a reader looking
+    # for a collector that does not exist. Known only where freshness was computed.
+    fits_target = ({row["code"] for row in (freshness or {}).get("metrics", [])}
+                   | {row["code"] for row in (freshness or {}).get("notCollected", [])})
+    sql_codes = {entry["code"] for entry in metric_catalog()
+                 if entry["collector_type"] == "sql"} if fits_target else set()
 
     areas = []
     for spec in AREAS:
@@ -286,8 +387,30 @@ def build_areas(series: list[dict], *, backup: dict | None = None,
             areas.append({**base, **_backup_area_state(backup)})
             continue
         members = area_members(spec, series)
+        if not members and spec.get("empty_is_ok"):
+            ran = sorted(ran_clean.intersection(
+                selector["code"] for selector in spec["selectors"]))
+            if ran:
+                areas.append({
+                    **base, "status": "OK", "value": "none found",
+                    "detail": ", ".join(metric_label(code) for code in ran)
+                              + " ran and returned no rows",
+                    "sourceCode": ran[0], "sourceItem": "", "collectedAt": None,
+                    "stale": False, "downgradedFrom": ""})
+                continue
+        if not members and spec.get("only_when_collected"):
+            # An engine's own area on a server that is not that engine: no tile at all. "Not
+            # collected" would be a gap on the page for a metric the server does not have.
+            continue
         if not members:
-            areas.append({**base, "status": "UNKNOWN", "value": "not collected", "detail": "",
+            codes = {selector["code"] for selector in spec["selectors"]}
+            no_such_metric = bool(codes) and codes <= sql_codes and not codes & fits_target
+            # The value is two words on purpose: it sits beside the tile's title, and a whole
+            # sentence there wrapped the title at 1366 px. The sentence is the detail line.
+            areas.append({**base, "status": "UNKNOWN",
+                          "value": "no such metric" if no_such_metric else "not collected",
+                          "detail": ("this engine has no metric for this area"
+                                     if no_such_metric else ""),
                           "sourceCode": "", "sourceItem": "", "collectedAt": None, "stale": False,
                           "downgradedFrom": ""})
             continue
@@ -295,11 +418,14 @@ def build_areas(series: list[dict], *, backup: dict | None = None,
         # is what keeps a silenced finding from being hidden by a genuinely healthy neighbour: a
         # CPU area holding a downgraded-from-CRITICAL cpu_usage and an OK load_average must show
         # the one somebody decided not to alert on, not the one that had nothing to say.
+        # The last key is "the fullest disk wins" - and for an area that counts what is *left*
+        # (free megabytes, a hit ratio) the fullest is the smallest number, so the sign turns.
+        direction = -1 if spec.get("lowest_is_worst") else 1
         priority, worst = max(
             members,
             key=lambda pair: (SEVERITY_RANK[series_severity(pair[1])],
                               SEVERITY_RANK.get(series_downgraded(pair[1]), 0), -pair[0],
-                              pair[1].get("last") or 0),
+                              direction * (pair[1].get("last") or 0)),
         )
         status = series_severity(worst)
         not_ok = sum(1 for _priority, entry in members if series_severity(entry) != "OK")

@@ -11,10 +11,11 @@ So every command prints exactly this, on stdout, whether it worked or not::
      "operation": "restore-full",
      "message": "Restored SALESDB_STG to 2026-08-07 01:40:00.",
      "error": null,
+     "error_kind": null,
      "data": {...},
      "metrics": {"duration_ms": 41230, ...}}
 
-The five keys are always present, even when empty. A caller writing ``result["data"]`` must not
+The seven keys are always present, even when empty. A caller writing ``result["data"]`` must not
 have to guard for a key that some commands omit - an absent key and an empty one are the same
 fact, and making them look different is how callers grow branches nobody tests.
 

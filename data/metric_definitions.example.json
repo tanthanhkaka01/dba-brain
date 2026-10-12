@@ -2423,6 +2423,9 @@
       "category": "lock",
       "default_importance": 4,
       "empty_result_is_ok": true,
+      "sql_settings": {
+          "lock_scan_skip_above": 500000
+      },
       "active": true,
       "connection_error_severity": "WARNING",
       "execution_error_severity": "WARNING",

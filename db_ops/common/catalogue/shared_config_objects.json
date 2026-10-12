@@ -3467,7 +3467,7 @@
                 "retry_interval_seconds": "time_window",
                 "default_timeout": "time_window"
             },
-            "field_count": 17,
+            "field_count": 18,
             "required_field_count": 5,
             "fields": [
                 {
@@ -3713,6 +3713,21 @@
                     "measured_against": "not a time value",
                     "purpose": "The one file of a metric with no variants.",
                     "rule": "A variant's own file wins for that variant"
+                },
+                {
+                    "field": "sql_settings",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - the SQL file runs with the defaults it declares",
+                    "range_text": "{name: number} - each name a DECLARE of the metric's SQL file",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Numbers this metric's SQL takes from configuration instead of from a literal in the file.",
+                    "rule": "Each name must be declared in the SQL file exactly once as DECLARE @name <type> = <number>; and only a number is written into it (lib.sql_text.apply_sql_settings). A name the file does not declare fails the metric instead of being ignored."
                 },
                 {
                     "field": "report_policy",
@@ -16363,17 +16378,17 @@
                 },
                 {
                     "field": "authorized_by",
-                    "type": "string",
+                    "type": "object",
                     "required": false,
                     "default": "none - optional",
-                    "range_text": "text",
+                    "range_text": "an object describing the authorizing channel",
                     "constraint": {
-                        "kind": "string",
+                        "kind": "object",
                         "nullable": true,
-                        "allow_empty": true
+                        "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "Who approved it."
+                    "purpose": "Who approved it, for example {\"channel\": \"telegram\"}."
                 },
                 {
                     "field": "reason",
@@ -16705,17 +16720,17 @@
                 },
                 {
                     "field": "authorized_by",
-                    "type": "string",
+                    "type": "object",
                     "required": false,
                     "default": "none - optional",
-                    "range_text": "text",
+                    "range_text": "an object describing the authorizing channel",
                     "constraint": {
-                        "kind": "string",
+                        "kind": "object",
                         "nullable": true,
-                        "allow_empty": true
+                        "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "Who approved it."
+                    "purpose": "Who approved it, for example {\"channel\": \"telegram\"}."
                 },
                 {
                     "field": "reason",
@@ -16966,17 +16981,17 @@
                 },
                 {
                     "field": "authorized_by",
-                    "type": "string",
+                    "type": "object",
                     "required": false,
                     "default": "none - optional",
-                    "range_text": "text",
+                    "range_text": "an object describing the authorizing channel",
                     "constraint": {
-                        "kind": "string",
+                        "kind": "object",
                         "nullable": true,
-                        "allow_empty": true
+                        "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "Who approved it."
+                    "purpose": "Who approved it, for example {\"channel\": \"telegram\"}."
                 },
                 {
                     "field": "reason",
@@ -17252,17 +17267,17 @@
                 },
                 {
                     "field": "authorized_by",
-                    "type": "string",
+                    "type": "object",
                     "required": false,
                     "default": "none - optional",
-                    "range_text": "text",
+                    "range_text": "an object describing the authorizing channel",
                     "constraint": {
-                        "kind": "string",
+                        "kind": "object",
                         "nullable": true,
-                        "allow_empty": true
+                        "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "Who approved it."
+                    "purpose": "Who approved it, for example {\"channel\": \"telegram\"}."
                 },
                 {
                     "field": "reason",
@@ -17538,17 +17553,17 @@
                 },
                 {
                     "field": "authorized_by",
-                    "type": "string",
+                    "type": "object",
                     "required": false,
                     "default": "none - optional",
-                    "range_text": "text",
+                    "range_text": "an object describing the authorizing channel",
                     "constraint": {
-                        "kind": "string",
+                        "kind": "object",
                         "nullable": true,
-                        "allow_empty": true
+                        "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "Who approved it."
+                    "purpose": "Who approved it, for example {\"channel\": \"telegram\"}."
                 },
                 {
                     "field": "reason",
@@ -23454,16 +23469,16 @@
                 },
                 {
                     "field": "prelude",
-                    "type": "array",
+                    "type": "string",
                     "required": false,
                     "default": "none - optional",
-                    "range_text": "a list",
+                    "range_text": "SQL text prepended to every batch",
                     "constraint": {
-                        "kind": "array",
+                        "kind": "string",
                         "nullable": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "Statements first."
+                    "purpose": "SQL text prepended to each batch."
                 },
                 {
                     "field": "named_params",
@@ -23783,17 +23798,17 @@
                 },
                 {
                     "field": "authorized_by",
-                    "type": "string",
+                    "type": "object",
                     "required": false,
                     "default": "none - optional",
-                    "range_text": "text",
+                    "range_text": "an object describing the authorizing channel",
                     "constraint": {
-                        "kind": "string",
+                        "kind": "object",
                         "nullable": true,
-                        "allow_empty": true
+                        "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "Who approved it."
+                    "purpose": "Who approved it, for example {\"channel\": \"telegram\"}."
                 },
                 {
                     "field": "reason",
@@ -24846,16 +24861,17 @@
                 },
                 {
                     "field": "extra_terms",
-                    "type": "array",
+                    "type": "object",
                     "required": false,
                     "default": "none - optional",
-                    "range_text": "a list",
+                    "range_text": "an object of term to kind",
                     "constraint": {
-                        "kind": "array",
-                        "nullable": true
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "More terms."
+                    "purpose": "More terms, each with its kind, for example {\"SITECODE\": \"database\"}."
                 },
                 {
                     "field": "force",

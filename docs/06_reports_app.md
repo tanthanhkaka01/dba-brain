@@ -808,6 +808,79 @@ The statement text is read with `_tail_field`, not the shared `key=value` parser
 full of commas and that parser ends a value at the first one, so every multi-column SELECT
 rendered as its first column. Both variants write `sql=` **last** for exactly this reason.
 
+## An engine in its own metrics - Oracle and PostgreSQL on both pages (0.28.0)
+
+Both pages were written in SQL Server's vocabulary: page life expectancy, TempDB, the Agent's jobs.
+Measured on 2026-10-09 against the store: an Oracle 8i server had **26** metric codes collected and
+the fleet page loaded **9**; a PostgreSQL server **22**, and **9**. What those engines collect under
+their own names was stored every few minutes with a status and a sentence each, and summarised on
+neither page. Three rules now decide what such a server shows.
+
+**1. The fleet page quotes each engine's own metrics** - `inventory_health.build_engine_facts`,
+carried as the `engine_facts` block and printed in the server's detail, one row per metric:
+
+| Engine | Rows |
+| --- | --- |
+| Oracle | Sessions and processes · Dead sessions and threads · Tablespace free space · Segments near their extent limit · Pool free memory · Buffer cache hit ratio · Library cache reloads · Rollback segment contention · Invalid objects · Unusable indexes · Indexes · Largest segments |
+| PostgreSQL | Role and identity · Transaction ID wraparound · Dead tuples awaiting vacuum · Table bloat · Long transactions · Database activity · Replication · Replication slots · WAL archive · Invalid indexes |
+
+A row is the collector's own words - its item, its value, then the message it wrote, which already
+carries the numbers that decided its status. Nothing is re-derived here: a second copy of each
+collector's logic would drift the first time one changes. Which rows speak for a metric is stated
+per metric in `ENGINE_FACTS`, because "the largest number" is the wrong row as often as the right
+one: free space is spoken for by the tablespace with the **least**, an XID age by the **oldest**
+database, a ranking by its three largest, an index inventory by its summary row and never its
+detail rows. Three states are kept apart:
+
+- **no row at all** for this server - not collected here, and no line is written;
+- the collector **ran and returned nothing** - *none found*, which for invalid objects or long
+  transactions is the good answer;
+- the collector **failed** - the line is the head of its error, with its status.
+
+Every code in `ENGINE_FACTS` is exclusive to one engine, so a SQL Server record gains no row - held
+by `tests/test_an_engine_is_reported_in_its_own_metrics.py`, which also holds the three lists that
+have to agree (`ENGINE_FACTS`, `HEALTH_CODES`, `inventory_render.HEALTH_BLOCKS`).
+
+On the database row an Oracle database now has a **size** (the sum of its data files - Oracle has
+no `DATABASE_DATA_SIZE`) and a **recovery model** (its log mode, `ARCHIVELOG` / `NOARCHIVELOG`),
+and a PostgreSQL database has **no compatibility level** where it had `0`.
+
+**2. The per-server page has a tile for each of those questions** (`server_health.AREAS`):
+
+| Tile | Metrics | Shown |
+| --- | --- | --- |
+| Sessions and processes | `PROCESS_LIMIT`, `PROCESS_DEAD_WEIGHT` | Oracle |
+| Tablespaces | `TABLESPACE_FREE_SPACE`, `SEGMENT_EXTENT_LIMIT` - the tablespace with the least free | Oracle |
+| SGA memory | `SHARED_POOL_FREE` (the shared pool only), `BUFFER_CACHE_HIT` | Oracle |
+| Rollback segments | `ROLLBACK_SEGMENT_CONTENTION` | Oracle |
+| Invalid objects | `INVALID_OBJECTS`, `INDEX_UNUSABLE` | Oracle |
+| Transaction ID wraparound | `POSTGRES_XID_WRAPAROUND` | PostgreSQL |
+| Vacuum and bloat | `POSTGRES_VACUUM_HEALTH`, `POSTGRES_TABLE_BLOAT` | PostgreSQL |
+| Long transactions | `POSTGRES_LONG_TRANSACTIONS` | PostgreSQL |
+| Invalid indexes | `POSTGRES_INVALID_INDEXES` | PostgreSQL |
+
+They are marked `only_when_collected`: the tile exists where the metric does, which is how the
+Oracle sections lower on the page already stay off a SQL Server page - the builder is never told
+which engine it is looking at. `lowest_is_worst` turns the last tie-break round for an area that
+counts what is *left*.
+
+**3. "Not collected" is said only where something could have been collected.** The thirteen
+original tiles stay on every page, and now read one of three things when they have no row:
+
+| Tile says | When |
+| --- | --- |
+| `OK` · *none found* | the area's collectors report only trouble (`empty_is_ok`: Blocking, Long-running queries, and the engine tiles for invalid objects, long transactions, invalid indexes) and the metric's own freshness says it ran clean. Oracle's and PostgreSQL's blocking collectors write a row only when something is blocked; SQL Server's write a zero row |
+| *no such metric* | every metric of the area is a SQL metric and none of them fits this target - TempDB on PostgreSQL, the Agent's jobs on Oracle. There is no collector to go looking for |
+| *not collected* | anything else: a metric fits the target and produced nothing, or the area is fed by the operating system (CPU exists on every server; with no host login it is simply not collected) |
+
+Read on the real store, one server per engine: an Oracle 8i server's 13 tiles, 8 of them without
+a reading, became 18 with 6; a PostgreSQL server's 13 with 6 became 17 with 4; a SQL Server's 13
+stayed 13, with the same values (Backup, which is decided by policy, is left out of the count).
+
+**Not done:** an Oracle from 10g on has no `PROCESS_LIMIT` / `TABLESPACE_FREE_SPACE` collector at
+all (those are 8i files), so its page gains what it collects and no more; MySQL is untouched; the
+index and SLA pages are as they were.
+
 ## Which rows a level report is allowed to mark as reported
 
 The warning and critical reports both read **unreported** rows only (`daily_report_created = 0`),

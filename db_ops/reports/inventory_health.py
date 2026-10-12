@@ -77,6 +77,22 @@ HEALTH_CODES = [
     "OS_INFO", "OS_CPU_USAGE", "OS_MEMORY_USAGE", "OS_DISK_USAGE", "OS_NETWORK",
     "OS_UPTIME", "OS_SERVICE_STATUS", "OS_PROCESS_TOP_CPU", "OS_PROCESS_TOP_MEMORY",
     "OS_EVENTLOG_CRITICAL", "OS_REBOOT_PENDING",
+    # What Oracle and PostgreSQL collect under their own names (0.28.0). This list was written in
+    # SQL Server's vocabulary: an Oracle 8i server had 26 metric codes in the store and the page
+    # loaded 9 of them, a PostgreSQL server 22 and 9 - the process ceiling, the tablespaces, the
+    # wraparound horizon and the vacuum backlog were collected every few minutes and shown nowhere
+    # on the fleet page. Each of these is exclusive to its engine, so a SQL Server record gains no
+    # row from them (see ENGINE_FACTS below).
+    "PROCESS_LIMIT", "PROCESS_DEAD_WEIGHT", "TABLESPACE_FREE_SPACE", "SEGMENT_EXTENT_LIMIT",
+    "SHARED_POOL_FREE", "BUFFER_CACHE_HIT", "LIBRARY_CACHE", "ROLLBACK_SEGMENT_CONTENTION",
+    "INVALID_OBJECTS", "INDEX_UNUSABLE", "INDEX_INVENTORY", "TOP_SEGMENT_SIZE",
+    "POSTGRES_IDENTITY_ROLE", "POSTGRES_XID_WRAPAROUND", "POSTGRES_VACUUM_HEALTH",
+    "POSTGRES_TABLE_BLOAT", "POSTGRES_LONG_TRANSACTIONS", "POSTGRES_DATABASE_HEALTH",
+    "POSTGRES_REPLICATION", "POSTGRES_REPLICATION_SLOTS", "POSTGRES_WAL_ARCHIVE",
+    "POSTGRES_INVALID_INDEXES",
+    # An Oracle database's size is the sum of its data files: it has no DATABASE_DATA_SIZE, so
+    # its row on the page said "-" beside SQL Server's and PostgreSQL's gigabytes.
+    "STORAGE_DATA_FILE_SPACE",
 ]
 
 
@@ -123,6 +139,32 @@ def _num_or_str(value):
     if n is None:
         return value if value not in (None, "") else 0
     return int(n) if n == int(n) else n
+
+
+def _stated_or_none(value):
+    """A stated value as a number or text, and ``None`` - never 0 - for one that was not stated."""
+    return None if value in (None, "") else _num_or_str(value)
+
+
+def _datafile_size_gb(code_map):
+    """An Oracle database's size: the sum of its data files, or ``None`` when no file says one.
+
+    Oracle has no DATABASE_DATA_SIZE - a database *is* its tablespaces' files - so its row on the
+    fleet page showed no size at all. STORAGE_DATA_FILE_SPACE names each file with its tablespace
+    and its size (``size_mb`` on 8i, ``current_mb`` from 10g on). Only a row that names a
+    ``tablespace`` counts: SQL Server and PostgreSQL write this metric too, in other shapes, and
+    have a size metric of their own.
+    """
+    total_mb, files = 0.0, 0
+    for _item, row in items_for(code_map, "STORAGE_DATA_FILE_SPACE"):
+        fields = parse_kv(row.get("message") or "")
+        if not fields.get("tablespace"):
+            continue
+        size = as_float(fields.get("size_mb") or fields.get("current_mb"))
+        if size is not None:
+            total_mb += size
+            files += 1
+    return round(total_mb / 1024, 2) if files else None
 
 
 def parse_kv(message):
@@ -296,6 +338,7 @@ def build_database_health(code_map):
         # about one is visible.
         names = sorted(current | {name for name in names if name in SYSTEM_DATABASE_NAMES})
     users = build_database_users(code_map)
+    datafile_size_gb = _datafile_size_gb(code_map)
     out = []
     for db in names:
         status_row = one(code_map, "DATABASE_STATUS", db)
@@ -317,21 +360,27 @@ def build_database_health(code_map):
             "database_id": _to_int_or_none(
                 cfg_kv.get("database_id") or status_kv.get("database_id")),
             "state": (status_row["metric_value"] if status_row else cfg_kv.get("state", "")) or "",
-            "recovery_model": (cfg_row["metric_value"] if cfg_row else "") or "",
+            # Oracle's DATABASE_STATUS states its log mode (ARCHIVELOG / NOARCHIVELOG) - the same
+            # question SQL Server's recovery model answers, whether a point in time can be
+            # recovered - and the column was blank for it because only DATABASE_CONFIG was read.
+            "recovery_model": (cfg_row["metric_value"] if cfg_row
+                               else status_kv.get("log_mode", "")) or "",
             # DATABASE_CONFIG is SQL-Server-only, so on any other engine this column was blank.
             # DATABASE_STATUS now carries the same fact for every engine that has one -
             # 'compatibility_level' on SQL Server, 'compatible' on Oracle (its COMPATIBLE
             # parameter) - so fall back to it rather than leaving the column empty.
-            "compatibility_level": _num_or_str(
+            # None where the engine states none: PostgreSQL has no compatibility level, and
+            # `_num_or_str("")` is 0 - the page printed "0" for every PostgreSQL database.
+            "compatibility_level": _stated_or_none(
                 cfg_kv.get("compatibility_level")
                 or status_kv.get("compatibility_level")
                 or status_kv.get("compatible")
-                or ""
             ),
             "is_read_only": _to_int(status_kv.get("read_only", cfg_kv.get("is_read_only", "0"))),
             "page_verify_option": cfg_kv.get("page_verify", ""),
             "last_good_checkdb": (chk_row["metric_value"] if chk_row else "") or "",
-            "data_size_gb": as_float(data_row["metric_value"]) if data_row else None,
+            "data_size_gb": (as_float(data_row["metric_value"]) if data_row
+                             else (datafile_size_gb if len(names) == 1 else None)),
             "log_size_gb": as_float(log_row["metric_value"]) if log_row else None,
             "log_used_percent": as_float(logspace_row["metric_value"]) if logspace_row else None,
             # Why the log cannot truncate — LOG_BACKUP here plus a stale log backup age is the
@@ -982,6 +1031,30 @@ def _blocking(code_map) -> dict:
     }
 
 
+def _session_count(code_map, conn, conn_kv):
+    """How many sessions the instance holds, or None when no collector counted them.
+
+    Every engine's INSTANCE_CONNECTIONS answers this, under three shapes, and until 0.28.0 the page
+    read one of them:
+
+    - SQL Server, Oracle and PostgreSQL write item ``server`` whose **value** is the count. The
+      value is read first because it means the same thing on all three; the message's
+      ``active_sessions`` does not - on SQL Server it is the same number, on Oracle it is only the
+      sessions whose status is ACTIVE, so an Oracle server with 400 logins showed a handful.
+    - Oracle 8i writes item ``session_count`` (beside ``process_count``). The page asked for
+      ``server``, found nothing and printed **0 sessions** for two production instances that hold
+      several hundred - the number their whole process-ceiling history is about.
+    - A row with no usable value falls back to the message, which is where the count first lived.
+    """
+    for row in (conn, one(code_map, "INSTANCE_CONNECTIONS", "session_count")):
+        value = (row or {}).get("metric_value")
+        if value not in (None, ""):
+            return _num_or_str(value)
+    if conn_kv.get("active_sessions") not in (None, ""):
+        return _num_or_str(conn_kv["active_sessions"])
+    return None
+
+
 def build_performance_health(code_map):
     def val(code, item):
         row = one(code_map, code, item)
@@ -1000,17 +1073,22 @@ def build_performance_health(code_map):
     conn = one(code_map, "INSTANCE_CONNECTIONS", "server")
     conn_kv = parse_kv(conn["message"]) if conn else {}
     blocking = _blocking(code_map)
+    # A number nobody measured is None, never 0 (0.28.0). Page life expectancy and the deadlock
+    # count are SQL Server's metrics; an Oracle or PostgreSQL server has neither, and "or 0" printed
+    # PLE 0 for it - which the fleet page badges red, a memory emergency in SQL Server's terms.
+    ple = val("PAGE_LIFE_EXPECTANCY", "page_life_expectancy")
+    deadlocks = val("LOCK_DEADLOCK_RECENT", "deadlock")
     return {
         "cpu_status": status("SYSTEM_CPU_MEMORY", "cpu"),
         "memory_status": status("SYSTEM_CPU_MEMORY", "memory"),
-        "page_life_expectancy": _num_or_str(val("PAGE_LIFE_EXPECTANCY", "page_life_expectancy") or 0),
+        "page_life_expectancy": None if ple is None else _num_or_str(ple),
         "blocking_count": blocking["count"],
         "blocking_status": blocking["status"],
         "blocking_by_database": blocking["by_database"],
         "blocking_max_wait_seconds": blocking["max_wait_seconds"],
-        "deadlock_count_24h": _num_or_str(val("LOCK_DEADLOCK_RECENT", "deadlock") or 0),
+        "deadlock_count_24h": None if deadlocks is None else _num_or_str(deadlocks),
         "long_running_query_count": _num_or_str(val("QUERY_LONG_RUNNING", "server") or 0),
-        "active_session_count": _num_or_str(conn_kv.get("active_sessions", val("INSTANCE_CONNECTIONS", "server") or 0)),
+        "active_session_count": _session_count(code_map, conn, conn_kv),
         "tempdb_usage_status": status("STORAGE_TEMP_SPACE", "tempdb"),
         "log_reuse_wait": ", ".join(log_waits),
         "top_waits": top_waits,
@@ -1143,7 +1221,9 @@ def build_instance_health(code_map):
         "patch": patch,
         "edition": kv.get("edition", ""),
         "engine_edition": kv.get("engine", ""),
-        "machine_name": kv.get("machine", ""),
+        # `host` is what the Oracle 8i variant wrote until 0.28.0, and what its rows still in the
+        # store say: an 8i server's machine name was collected for months and never shown.
+        "machine_name": kv.get("machine") or kv.get("host", ""),
         "physical_name": _blank_na(kv.get("physical")),
         "clustered": kv.get("clustered", ""),
         "collation": kv.get("collation", ""),
@@ -1153,6 +1233,31 @@ def build_instance_health(code_map):
         "auth_scheme": _blank_na(kv.get("auth")),
         "transport": _blank_na(kv.get("transport")),
         "process_id": kv.get("pid", ""),
+        # What Oracle and PostgreSQL state about themselves, each under the name that engine uses
+        # (0.28.0). Blank where an engine has no such thing: an Oracle instance has no WAL level
+        # and a PostgreSQL server no open mode, and nothing is carried across from one engine's
+        # vocabulary to fill another's gap.
+        "banner": kv.get("banner") or kv.get("build", ""),
+        "role": kv.get("role", ""),
+        "open_mode": kv.get("open_mode", ""),
+        "database_name": kv.get("database", ""),
+        "unique_name": kv.get("unique_name", ""),
+        "platform": kv.get("platform", ""),
+        "charset": kv.get("charset") or kv.get("encoding", ""),
+        "log_mode": kv.get("log_mode", ""),
+        "archiver": kv.get("archiver", ""),
+        "rac": kv.get("rac", ""),
+        "logins": kv.get("logins", ""),
+        "wal_level": kv.get("wal_level", ""),
+        "archive_mode": kv.get("archive_mode", ""),
+        "ssl": _blank_na(kv.get("ssl")),
+        "timezone": kv.get("timezone", ""),
+        "max_connections": kv.get("max_connections", ""),
+        # PostgreSQL has no server-wide collation: this is the one of the database the collector
+        # is connected to, and it is carried with that database's name so it cannot be read as
+        # the server's.
+        "connected_database": kv.get("connected_database", ""),
+        "database_collation": _blank_na(kv.get("database_collation")),
         "as_of": row.get("collected_at") or "",
     }
 
@@ -1320,6 +1425,147 @@ def build_os_health(code_map):
     }
 
 
+#: The metrics an engine collects under its own name, and how each is said in one line on the fleet
+#: page: ``(metric code, label, what its rows are, which rows speak for it)``.
+#:
+#: **Every code here is exclusive to one engine** - no SQL Server variant exists - so the block
+#: these build is empty for a SQL Server record by construction, and that page stays as it was
+#: without the builder being told which engine it is looking at.
+#:
+#: The last field decides which rows are quoted, because "the largest number" is the wrong answer
+#: as often as the right one: the tablespace to read about is the one with the *least* free, the
+#: database closest to wraparound the one with the *oldest* XID.
+#:
+#: - ``each``    - every row (a handful: sessions and processes, each pool)
+#: - ``lowest``  - the worst status, then the smallest value (free space)
+#: - ``highest`` - the worst status, then the largest value (an age, a contention ratio)
+#: - ``top``     - the three largest values, without their messages (a ranking)
+#: - ``summary`` - the collector's own aggregate row (unit ``summary``), never its detail rows
+ENGINE_FACTS: tuple[tuple[str, str, str, str], ...] = (
+    # Oracle
+    ("PROCESS_LIMIT", "Sessions and processes", "resources", "each"),
+    ("PROCESS_DEAD_WEIGHT", "Dead sessions and threads", "kinds", "each"),
+    ("TABLESPACE_FREE_SPACE", "Tablespace free space", "tablespaces", "lowest"),
+    ("SEGMENT_EXTENT_LIMIT", "Segments near their extent limit", "segments", "highest"),
+    ("SHARED_POOL_FREE", "Pool free memory", "pools", "each"),
+    ("BUFFER_CACHE_HIT", "Buffer cache hit ratio", "ratios", "each"),
+    ("LIBRARY_CACHE", "Library cache reloads", "namespaces", "top"),
+    ("ROLLBACK_SEGMENT_CONTENTION", "Rollback segment contention", "rollback segments", "highest"),
+    ("INVALID_OBJECTS", "Invalid objects", "owner and type groups", "top"),
+    ("INDEX_UNUSABLE", "Unusable indexes", "indexes", "top"),
+    ("INDEX_INVENTORY", "Indexes", "indexes", "summary"),
+    ("TOP_SEGMENT_SIZE", "Largest segments", "segments", "top"),
+    # PostgreSQL
+    ("POSTGRES_IDENTITY_ROLE", "Role and identity", "facts", "each"),
+    ("POSTGRES_XID_WRAPAROUND", "Transaction ID wraparound", "databases", "highest"),
+    ("POSTGRES_VACUUM_HEALTH", "Dead tuples awaiting vacuum", "tables", "top"),
+    ("POSTGRES_TABLE_BLOAT", "Table bloat", "rows", "each"),
+    ("POSTGRES_LONG_TRANSACTIONS", "Long transactions", "transactions", "highest"),
+    ("POSTGRES_DATABASE_HEALTH", "Database activity", "databases", "highest"),
+    ("POSTGRES_REPLICATION", "Replication", "rows", "each"),
+    ("POSTGRES_REPLICATION_SLOTS", "Replication slots", "slots", "highest"),
+    ("POSTGRES_WAL_ARCHIVE", "WAL archive", "rows", "each"),
+    ("POSTGRES_INVALID_INDEXES", "Invalid indexes", "indexes", "top"),
+)
+
+#: How many rows ``each`` quotes before it becomes a count with its worst row.
+ENGINE_FACT_EACH_LIMIT = 4
+#: How much of a collector's own sentence one quoted row keeps.
+ENGINE_FACT_MESSAGE_LIMIT = 150
+
+_FACT_SEVERITY = {"CRITICAL": 4, "ERROR": 4, "WARNING": 3, "LOGGING": 2, "NO_DATA": 1}
+
+
+def _fact_rank(row) -> int:
+    return _FACT_SEVERITY.get(str(row.get("status") or "").upper(), 0)
+
+
+def _fact_value_text(item, row) -> str:
+    return " ".join(str(part) for part in (item, row.get("metric_value"), row.get("metric_unit"))
+                    if part not in (None, ""))
+
+
+def _fact_row_text(item, row) -> str:
+    """One row in the collector's own words: its item and value, then the sentence it wrote.
+
+    The value comes first because not every message repeats it - the buffer cache row's sentence
+    is the three counters behind the ratio, and without the value the line named everything but
+    the ratio.
+    """
+    message = " ".join(str(row.get("message") or "").split())
+    if len(message) > ENGINE_FACT_MESSAGE_LIMIT:
+        message = message[:ENGINE_FACT_MESSAGE_LIMIT].rstrip(" ,;") + "…"
+    head = _fact_value_text(item, row)
+    return f"{head} — {message}" if message else head
+
+
+def build_engine_facts(code_map) -> list[dict]:
+    """What Oracle and PostgreSQL collect under their own names, one line per metric.
+
+    The fleet page's blocks are SQL Server's questions - page life expectancy, TempDB, the Agent's
+    jobs - and an Oracle or PostgreSQL record answered almost none of them. Not because nothing was
+    known: the process ceiling, the tablespaces, the wraparound horizon and the vacuum backlog were
+    in the store, collected every few minutes, with a status and a sentence each. This reads them.
+
+    Deliberately generic, and deliberately quoting: a row's ``message`` is what the collector's
+    author decided an operator needs to see in an alert, with the numbers that decided the status
+    in it. Re-deriving a nicer sentence per metric here would be a second copy of each collector's
+    logic that drifts the first time one of them changes.
+
+    Three states are kept apart, because they are three different facts:
+
+    - the metric has **no row at all** for this server - not collected here; no line is written,
+      so a SQL Server record gets none of these and an Oracle record gets no PostgreSQL ones;
+    - the collector **ran and returned nothing** - for an "invalid objects" or "unusable indexes"
+      metric that is the good answer, and it is said as *none found*;
+    - the collector **failed** - the line says so, with the head of its error.
+    """
+    facts = []
+    for code, label, noun, how in ENGINE_FACTS:
+        every = [(item, row) for (metric, item), row in code_map.items() if metric == code]
+        if not every:
+            continue
+        as_of = max(str(row.get("collected_at") or "") for _item, row in every)
+        named = [(item, row) for item, row in every if item not in (None, "")]
+        if how == "summary":
+            named = [(item, row) for item, row in named
+                     if str(row.get("metric_unit") or "").lower() == "summary"] or named
+        if not named:
+            marker = max((row for _item, row in every), key=_fact_rank)
+            status = str(marker.get("status") or "").upper() or "OK"
+            text = "none found" if status == "OK" else _error_summary(marker.get("message"))
+            facts.append({"code": code, "label": label, "status": status, "text": text,
+                          "as_of": as_of})
+            continue
+
+        status = str(max((row for _item, row in named), key=_fact_rank).get("status") or "OK").upper()
+        counts: dict[str, int] = {}
+        for _item, row in named:
+            name = str(row.get("status") or "OK").upper()
+            counts[name] = counts.get(name, 0) + 1
+        not_ok = ", ".join(f"{count} {name}" for name, count in
+                           sorted(counts.items(), key=lambda pair: -_FACT_SEVERITY.get(pair[0], 0))
+                           if name != "OK")
+        head = f"{len(named)} {noun}" + (f" ({not_ok})" if not_ok else "")
+
+        if how == "summary":
+            text = " ".join(str(named[0][1].get("message") or "").split())
+        elif how == "each" and len(named) <= ENGINE_FACT_EACH_LIMIT:
+            ordered = sorted(named, key=lambda pair: (-_fact_rank(pair[1]), str(pair[0])))
+            text = " · ".join(_fact_row_text(item, row) for item, row in ordered)
+        elif how == "top":
+            ranked = sorted(named, key=lambda pair: (-_fact_rank(pair[1]),
+                                                     -(as_float(pair[1].get("metric_value")) or 0)))
+            text = head + " · " + " · ".join(_fact_value_text(item, row) for item, row in ranked[:3])
+        else:
+            sign = 1 if how == "lowest" else -1
+            picked = min(named, key=lambda pair: (-_fact_rank(pair[1]),
+                                                  sign * (as_float(pair[1].get("metric_value")) or 0)))
+            text = head + " · " + _fact_row_text(*picked)
+        facts.append({"code": code, "label": label, "status": status, "text": text, "as_of": as_of})
+    return facts
+
+
 def build_server_overlay(server_id, ip, code_map, severity=None, problems=None,
                          freshness=None, workload_rows=None):
     # When these blocks were true. Everything below is derived from metrics, so one stamp
@@ -1346,6 +1592,7 @@ def build_server_overlay(server_id, ip, code_map, severity=None, problems=None,
         "metric_problems": problems or [],
         "metric_freshness": freshness or {},
         "instance_health": build_instance_health(code_map),
+        "engine_facts": build_engine_facts(code_map),
         "database_health": build_database_health(code_map),
         "disk_health": build_disk_health(code_map),
         "backup_policy": policy_result,

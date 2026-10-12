@@ -81,6 +81,10 @@ class MetricDefinition:
     # truncating it to 100 silently turns a complete picture into an arbitrary sample. So the cap
     # is per metric rather than global: raising it globally would change every metric at once.
     max_rows: int = 0
+    # Numbers this metric's SQL takes from configuration instead of from a literal in the file
+    # (lib.sql_text.apply_sql_settings): the file declares each with its default, and a node
+    # that states another runs with that one.
+    sql_settings: dict[str, Any] = field(default_factory=dict)
     report_policy: dict[str, Any] = field(default_factory=dict)
     path: Path | None = None
     # Optional allowed collection window (from_hour/to_hour etc.). When set, the collector only

@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 350" width="960" height="350" role="img" aria-labelledby="title desc">
+  <title id="title">Who may call whom</title>
+  <desc id="desc">Layering: the ten apps import transport, db, logging_ops and lib, and never common. Transport starts the common CLI as a process. Common and transport import lib, which imports nothing from the rest and runs nothing.</desc>
+  <!--
+    The same fixed palette as one-run-end-to-end.svg, for the same reason: shown through an <img>,
+    no stylesheet outside this file applies to it.
+  -->
+  <style>
+    .bg { fill: #ffffff; }
+    .box { fill: #f5f7ff; stroke: #898ea4; stroke-width: 1.5; }
+    .hl { fill: #f5f7ff; stroke: #0d47a1; stroke-width: 2; }
+    text { fill: #212121; font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 15px; }
+    .t { font-weight: bold; }
+    .s { fill: #585858; font-size: 12.5px; }
+    .m { fill: #585858; font-size: 12.5px; font-family: ui-monospace, Consolas, Menlo, monospace; }
+    .ln { stroke: #585858; stroke-width: 1.5; fill: none; }
+    .dash { stroke-dasharray: 6 4; }
+    .ah { fill: #585858; }
+  </style>
+  <defs>
+    <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+  </defs>
+  <rect class="bg" x="0" y="0" width="960" height="350"/>
+
+  <rect class="hl" x="230" y="20" width="500" height="64" rx="5"/>
+  <text class="t" x="250" y="42">10 apps</text>
+  <text class="m" x="250" y="62">jobs &#183; metrics &#183; sql_tasks &#183; reports &#183; telegram</text>
+  <text class="m" x="250" y="78">backup_restore &#183; sla &#183; sre &#183; control &#183; webhost</text>
+
+  <line class="ln" x1="300" y1="84" x2="160" y2="148" marker-end="url(#a2)"/>
+  <line class="ln" x1="400" y1="84" x2="380" y2="148" marker-end="url(#a2)"/>
+  <line class="ln" x1="480" y1="84" x2="480" y2="268" marker-end="url(#a2)"/>
+  <line class="ln" x1="560" y1="84" x2="580" y2="148" marker-end="url(#a2)"/>
+  <text class="s" x="488" y="118">import</text>
+
+  <rect class="box" x="40" y="150" width="200" height="56" rx="5"/><text class="t" x="56" y="176">transport</text><text class="s" x="56" y="196">the one client</text>
+  <rect class="box" x="300" y="150" width="160" height="56" rx="5"/><text class="t" x="316" y="176">db</text><text class="s" x="316" y="196">runtime store</text>
+  <rect class="box" x="500" y="150" width="160" height="56" rx="5"/><text class="t" x="516" y="176">logging_ops</text><text class="s" x="516" y="196">logs, job_runs</text>
+  <rect class="box" x="720" y="150" width="200" height="56" rx="5"/><text class="t" x="736" y="176">common</text><text class="s" x="736" y="196">operations, CLI only</text>
+
+  <polyline class="ln dash" points="100,206 100,240 860,240 860,208" marker-end="url(#a2)"/>
+  <text class="s" x="690" y="232">starts common.cli</text>
+  <line class="ln" x1="200" y1="206" x2="300" y2="270" marker-end="url(#a2)"/>
+  <line class="ln" x1="890" y1="206" x2="684" y2="298" marker-end="url(#a2)"/>
+
+  <rect class="hl" x="280" y="272" width="400" height="56" rx="5"/>
+  <text class="t" x="296" y="298">lib</text>
+  <text class="s" x="296" y="318">pure rules: imported everywhere, runs nothing</text>
+</svg>
